@@ -6,7 +6,7 @@ on the LiteLLM gateway. Blocks or alerts when unregistered servers are found.
 """
 
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
 
@@ -20,6 +20,9 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+
+if TYPE_CHECKING:
+    from litellm.caching.caching import DualCache
 
 
 class MCPSecurityGuardrail(CustomGuardrail):
@@ -40,7 +43,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: Any,
+        cache: "DualCache",
         data: dict,
         call_type: str,
     ) -> Exception | str | dict | None:
@@ -101,12 +104,23 @@ class MCPSecurityGuardrail(CustomGuardrail):
         if not requested_servers:
             return frozenset()
 
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy.proxy_server import prisma_client
 
         async with global_mcp_server_manager.catalog.operation():
-            registry: Final = global_mcp_server_manager.get_registry()
-            registered_names: Final = set(registry.keys())
-
-            return frozenset(requested_servers - registered_names)
+            not_servers: Final = frozenset(
+                name
+                for name in requested_servers
+                if global_mcp_server_manager.get_mcp_server_by_identifier(name) is None
+            )
+            if prisma_client is None:
+                return not_servers
+            return frozenset(
+                [
+                    name
+                    for name in not_servers
+                    if await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name) is None
+                ]
+            )

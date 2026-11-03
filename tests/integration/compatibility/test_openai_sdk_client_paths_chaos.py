@@ -128,7 +128,7 @@ class _Observations:
             payload: Final = JSON_OBJECT.validate_python(client.get(f"{self.url}/__observations").json())
         requests: Final = payload.get("requests")
         assert isinstance(requests, list)
-        self.items = (*self.items, *(object_value(item) for item in requests if isinstance(item, dict)))
+        self.items = tuple(object_value(item) for item in requests if isinstance(item, dict))
         return self.items
 
 

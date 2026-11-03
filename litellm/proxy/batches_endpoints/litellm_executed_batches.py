@@ -35,6 +35,7 @@ from litellm.repositories.managed_batch_repository import ManagedBatchRepository
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest, OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import LITELLM_EXECUTED_BATCH_PROVIDERS, ExtractedFileData, LiteLLMBatch, LlmProviders
+from litellm.utils import aresolve_api_key_secret_reference
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -226,7 +227,7 @@ async def upstream_lacks_files_api(api_base: str, api_key: str | None, http_clie
     return response.status_code == httpx.codes.NOT_FOUND
 
 
-def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str, str | None] | None:
+async def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str, str | None] | None:
     model: Final = credentials.get("model")
     api_base: Final = credentials.get("api_base")
     api_key: Final = credentials.get("api_key")
@@ -241,7 +242,11 @@ def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str,
         )
     except Exception:  # noqa: BLE001  # get_llm_provider raises on a model it cannot map, which means nothing to probe
         return None
-    return None if resolved_api_base is None else (resolved_api_base, resolved_api_key)
+    if resolved_api_base is None:
+        return None
+    return resolved_api_base, await aresolve_api_key_secret_reference(
+        resolved_api_key, model=model, llm_provider=provider, upstream=credentials
+    )
 
 
 async def litellm_executed_provider_for(
@@ -250,7 +255,7 @@ async def litellm_executed_provider_for(
     provider: Final = litellm_executed_provider_of(credentials)
     if provider is None:
         return None
-    upstream: Final = _upstream_of(credentials, provider)
+    upstream: Final = await _upstream_of(credentials, provider)
     if upstream is None:
         return None
     return provider if await lacks_files_api(*upstream) else None
@@ -262,7 +267,7 @@ async def resolve_litellm_executed_provider(
     team_id: str | None,
     lacks_files_api: FilesApiProbe = upstream_lacks_files_api,
 ) -> str | None:
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model, team_id=team_id)
+    credentials: Final = llm_router.registry().credentials(model, form="with_provider", team_id=team_id)
     return None if credentials is None else await litellm_executed_provider_for(credentials, lacks_files_api)
 
 
@@ -451,7 +456,7 @@ class LiteLLMExecutedBatchRunner:
         if isinstance(parsed, InvalidBatchInput):
             raise batch_error(400, f"Invalid batch input file: {parsed.describe()}")
         llm_batch_id: Final = f"{LITELLM_EXECUTED_BATCH_ID_PREFIX}{uuid_module.uuid4().hex}"
-        model_id: Final = next(iter(self.llm_router.get_model_ids(model_name=model)), model)
+        model_id: Final = next(iter(self.llm_router.registry().names(model, kind="ids")), model)
         unified_batch_id: Final = self.managed_files.get_unified_batch_id(batch_id=llm_batch_id, model_id=model_id)
         now: Final = time.time()
         created_at: Final = int(now)
@@ -656,6 +661,7 @@ class LiteLLMExecutedBatchRunner:
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(run.user_api_key_dict),
             "user_api_end_user_max_budget": run.user_api_key_dict.end_user_max_budget,
             "tags": list(run.request_tags),
+            "inherited_tags": LiteLLMProxyRequestSetup.get_inherited_tags(run.user_api_key_dict),
             "batch_id": run.unified_batch_id,
         }
 

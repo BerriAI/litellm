@@ -20,9 +20,10 @@ from typing import TYPE_CHECKING, Annotated, Final
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._internal_context import with_service_target
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
@@ -114,6 +115,9 @@ def _sign_connect_code(master_key: str, moyai_url: str, user_id: str | None) -> 
     return f"{_b64url(payload)}.{_b64url(signature)}"
 
 
+_DECODED_CONNECT_PAYLOAD: Final = TypeAdapter(object)
+
+
 def _decode_connect_code(master_key: str, code: str) -> _MoyaiConnectCode:
     try:
         payload_b64, signature_b64 = code.split(".", 1)
@@ -125,18 +129,23 @@ def _decode_connect_code(master_key: str, code: str) -> _MoyaiConnectCode:
     if not hmac.compare_digest(signature, expected):
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
     try:
-        payload: Final = json.loads(payload_raw)
+        payload: Final = as_str_mapping(_DECODED_CONNECT_PAYLOAD.validate_python(json.loads(payload_raw)))
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
-    if not isinstance(payload, dict) or not isinstance(payload.get("exp"), int) or payload["exp"] < int(time.time()):
+    if payload is None:
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
-    if not isinstance(payload.get("moyai_origin"), str) or not isinstance(payload.get("nonce"), str):
+    exp: Final = payload.get("exp")
+    if not isinstance(exp, int) or exp < int(time.time()):
+        raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
+    moyai_origin: Final = payload.get("moyai_origin")
+    nonce: Final = payload.get("nonce")
+    if not isinstance(moyai_origin, str) or not isinstance(nonce, str):
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
     user_id: Final = payload.get("user_id")
     return _MoyaiConnectCode(
-        moyai_origin=payload["moyai_origin"],
-        nonce=payload["nonce"],
-        exp=payload["exp"],
+        moyai_origin=moyai_origin,
+        nonce=nonce,
+        exp=exp,
         user_id=user_id if isinstance(user_id, str) else None,
     )
 

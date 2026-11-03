@@ -1,4 +1,6 @@
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::CredentialPlacement;
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool},
@@ -104,6 +106,7 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _optional_params: &MessagesOptionalParams,
         _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -298,6 +301,7 @@ mod tests {
                 .collect(),
             api_key,
             "deepseek-v4-pro",
+            &MessagesOptionalParams::default(),
             &LitellmParams::default(),
             env,
         )

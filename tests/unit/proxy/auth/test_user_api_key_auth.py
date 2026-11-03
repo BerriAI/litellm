@@ -5,7 +5,7 @@
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-from typing import Dict, Final, List, Optional
+from typing import Dict, Final, List, Mapping, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1311,6 +1311,33 @@ async def test_auth_rejects_wrong_or_empty_present_custom_header(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [None, ""], ids=["no_key", "no_bearer_prefix"])
+async def test_auth_rejection_without_a_usable_key_has_a_json_null_param(
+    api_key: str | None, monkeypatch: pytest.MonkeyPatch
+):
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    request = Request(
+        scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []},
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"", "more_body": False}),
+    )
+    request._url = URL(url="/chat/completions")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key=api_key)
+
+    body = json.loads(json.dumps({"error": exc_info.value.to_dict()}))
+    assert body["error"]["code"] == "401"
+    assert body["error"]["type"] == ProxyErrorTypes.auth_error.value
+    assert body["error"]["param"] is None
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_from_query_param():
     """Ensure user_api_key_auth reads API key from `key` query parameter."""
     from fastapi import Request
@@ -1367,7 +1394,9 @@ async def test_check_user_model_budget(user_id, user_model_max_budget, expected_
     calls = []
 
     class _Limiter:
-        async def is_user_within_model_budget(self, user_id, user_model_max_budget, model):
+        async def is_user_within_model_budget(
+            self, user_id: str, user_model_max_budget: Mapping[str, object], model: str, team_id: str | None = None
+        ) -> bool:
             calls.append((user_id, user_model_max_budget, model))
             return True
 
@@ -2031,9 +2060,9 @@ async def test_user_api_key_auth_websocket_rejection_adds_no_traceback_for_other
     assert rejection.value.status_code == 403
     assert "expired key" in str(rejection.value.detail).lower()
     assert sent == [{"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION, "reason": ""}]
-    proxy_records: Final = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
+    proxy_records: Final = [record for record in caplog.records if record.name.startswith(verbose_proxy_logger.name)]
     assert [record.getMessage() for record in proxy_records if record.exc_info is not None] == []
-    assert [record.levelno for record in proxy_records if record.levelno >= logging.WARNING] == [logging.ERROR]
+    assert [record.levelno for record in proxy_records if record.levelno >= logging.WARNING] == [logging.WARNING]
 
 
 @pytest.mark.asyncio
@@ -2102,3 +2131,183 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
 
     assert result.user_id == "jwt-user"
     assert user_model_budget_check.await_count == (1 if expect_user_model_budget_check else 0)
+
+
+def _qa_websocket(messages):
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        messages.append(message)
+
+    return WebSocket(
+        {
+            "type": "websocket",
+            "path": "/v1/responses",
+            "scheme": "ws",
+            "server": ("localhost", 4000),
+            "query_string": b"model=qa-model",
+            "headers": [(b"authorization", b"Bearer qa-key")],
+        },
+        receive=receive,
+        send=send,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_on_auth_error", [True, False])
+async def test_websocket_inference_is_denied_when_a_required_baggage_mapping_is_configured(close_on_auth_error):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
+
+    messages = []
+    with (
+        patch.dict(
+            litellm.proxy.proxy_server.general_settings,
+            {
+                "request_tag_mappings": [
+                    {"key": "region", "tag_prefix": "region:"},
+                    {"key": "entrypoint", "tag_prefix": "usecase:", "required": True},
+                ]
+            },
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+            new=AsyncMock(return_value=UserAPIKeyAuth(api_key="qa-key")),
+        ),
+    ):
+        with pytest.raises(HTTPException, match="WebSocket inference is disabled") as error:
+            await user_api_key_auth_websocket_for_model(
+                _qa_websocket(messages), "qa-model", close_on_auth_error=close_on_auth_error
+            )
+    assert error.value.status_code == 403
+    assert messages == ([{"type": "websocket.close", "code": 1008, "reason": ""}] if close_on_auth_error else [])
+
+
+@pytest.mark.asyncio
+async def test_websocket_invalid_key_is_rejected_before_the_required_baggage_mapping_denial():
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
+
+    with (
+        patch.dict(
+            litellm.proxy.proxy_server.general_settings,
+            {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "required": True}]},
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+            new=AsyncMock(side_effect=HTTPException(status_code=401, detail="Invalid proxy server token passed")),
+        ),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await user_api_key_auth_websocket_for_model(_qa_websocket([]), "qa-model", close_on_auth_error=False)
+    assert error.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_websocket_inference_is_allowed_when_no_baggage_mapping_is_required():
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
+
+    messages = []
+    authorized = UserAPIKeyAuth(api_key="qa-key")
+    with (
+        patch.dict(
+            litellm.proxy.proxy_server.general_settings,
+            {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "require_budgeted_tag": True}]},
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", new=AsyncMock(return_value=authorized)
+        ) as http_auth,
+    ):
+        result = await user_api_key_auth_websocket_for_model(_qa_websocket(messages), "qa-model")
+    assert result is authorized
+    assert http_auth.await_args.kwargs["api_key"] == "Bearer qa-key"
+    assert messages == []
+
+
+async def _auth_then_serve_chat(monkeypatch, general_settings, body, headers):
+    import copy
+
+    from fastapi import Request as FastAPIRequest
+    from fastapi import Response
+
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.proxy_server import chat_completion
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "tags": ["usecase:a"], "mock_response": "hi"},
+                "model_info": {"id": "usecase-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o-mini", "tags": ["default"], "mock_response": "hi"},
+                "model_info": {"id": "default-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
+
+    async def receive():
+        return {"type": "http.request", "body": json.dumps(body).encode()}
+
+    request = FastAPIRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), *headers],
+        },
+        receive,
+    )
+    auth = await user_api_key_auth(request=request, api_key=f"Bearer {MASTER_KEY}")
+    cached_body = copy.deepcopy(await read_request_body(request))
+    response = Response()
+    await chat_completion(request=request, fastapi_response=response, user_api_key_dict=auth)
+    return cached_body, response.headers["x-litellm-model-id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings",
+    [{}, {"request_tag_mappings": [{"key": "region", "tag_prefix": "region:"}]}],
+    ids=["no_mappings", "mapped_baggage"],
+)
+async def test_auth_header_tag_merge_keeps_json_string_metadata_tags_routable(monkeypatch, general_settings):
+    body = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": json.dumps({"tags": ["usecase:a"]}),
+    }
+    cached_body, served_by = await _auth_then_serve_chat(
+        monkeypatch, general_settings, body, [(b"x-litellm-tags", b"other"), (b"baggage", b"region=sg")]
+    )
+    assert served_by == "usecase-deployment"
+    assert cached_body["metadata"] == {"tags": ["usecase:a", "other"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_metadata", ["run-123", 42, ["x"]])
+@pytest.mark.parametrize(
+    "baggage",
+    [[], [(b"baggage", b"region=sg")], [(b"baggage", b"entrypoint=a")]],
+    ids=["no_baggage", "unmapped_baggage", "mapped_baggage"],
+)
+async def test_non_object_metadata_is_served_like_unset_mappings_whatever_the_baggage_maps(
+    monkeypatch, client_metadata, baggage
+):
+    body = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "metadata": client_metadata}
+    headers = [(b"x-litellm-tags", b"usecase:a"), *baggage]
+    unset = await _auth_then_serve_chat(monkeypatch, {}, body, headers)
+    mapped = await _auth_then_serve_chat(
+        monkeypatch, {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]}, body, headers
+    )
+    assert mapped == unset
+    assert mapped[1] == "usecase-deployment"

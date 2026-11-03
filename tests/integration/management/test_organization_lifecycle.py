@@ -179,6 +179,7 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
                 response: Final = _chat(proxy, model, key, text)
                 assert response.status_code == 200, response.text
                 assert _observed(upstream) == [_observation(text)]
+                upstream.delete("/__observations").raise_for_status()
 
         deleted: Final = gateway.request("DELETE", "/organization/delete", {"organization_ids": [organization_id]})
         assert deleted.status_code == 200, deleted.text
@@ -207,6 +208,7 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
             response: Final = _chat(proxy, model, other_key, text)
             assert response.status_code == 200, response.text
             assert _observed(upstream) == [_observation(text)]
+            upstream.delete("/__observations").raise_for_status()
 
         hashed: Final = tuple(sha256(key.encode()).hexdigest() for key in (organization_key, team_key))
         assert _key_rows(*hashed) == []

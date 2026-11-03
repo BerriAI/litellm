@@ -3,6 +3,7 @@ import json
 import threading
 import uuid
 from collections.abc import Callable
+from itertools import chain
 from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
@@ -13,9 +14,10 @@ from hypothesis import Phase, example, given, settings
 from hypothesis import strategies as st
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
-from openai import OpenAI
+from openai import OpenAI, omit
+from openai.types.chat import ChatCompletionChunk
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -197,6 +199,7 @@ def test_proxy_stream_usage_visibility_keeps_exact_persisted_charge(gateway: Gat
                 assert {chunk.id for chunk in chunks} == {identity}
                 usages: Final = tuple(chunk.usage for chunk in chunks if chunk.usage is not None)
                 assert len(usages) == (1 if include else 0)
+                assert [len(chunk.choices) for chunk in chunks if chunk.usage is not None] == ([0] if include else [])
                 if include:
                     assert usages[0].prompt_tokens == 11 and usages[0].completion_tokens == 4
                 requests: Final = wire.drain()
@@ -212,6 +215,119 @@ def test_proxy_stream_usage_visibility_keeps_exact_persisted_charge(gateway: Gat
                 )
                 assert rows[0]["prompt_tokens"] == 11 and rows[0]["completion_tokens"] == 4
                 assert float(rows[0]["spend"]) == pytest.approx(0.019)
+
+
+_STREAM_USAGE_INJECTED_FLAG: Final = "_litellm_stream_usage_injected"
+
+
+def _registered_model_names(gateway: Gateway) -> tuple[JsonValue, ...]:
+    entries: Final = gateway.get("/model/info")["data"]
+    assert isinstance(entries, list), entries
+    return tuple(object_value(entry).get("model_name") for entry in entries)
+
+
+def _registered(gateway: Gateway, model: str) -> None:
+    eventually(lambda: _registered_model_names(gateway), lambda model_names: model in model_names, seconds=60)
+
+
+def _sdk_stream(
+    gateway: Gateway,
+    route_prefix: str,
+    model: str,
+    identity: str,
+    *,
+    include_usage: bool | None,
+    extra_body: dict[str, JsonValue],
+) -> tuple[ChatCompletionChunk, ...]:
+    with OpenAI(
+        api_key=gateway.key,
+        base_url=str(gateway.client.base_url).rstrip("/") + route_prefix,
+        timeout=30,
+        max_retries=0,
+    ) as client:
+        stream: Final = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": identity}],
+            stream=True,
+            stream_options=omit if include_usage is None else {"include_usage": include_usage},
+            extra_body=extra_body,
+        )
+        with stream:
+            return tuple(stream)
+
+
+def _streamed_text(chunks: tuple[ChatCompletionChunk, ...]) -> str:
+    choices: Final = chain.from_iterable(chunk.choices for chunk in chunks)
+    return "".join(choice.delta.content or "" for choice in choices)
+
+
+def _usage_chunk_shapes(chunks: tuple[ChatCompletionChunk, ...]) -> list[tuple[int, int]]:
+    return [(len(chunk.choices), chunk.usage.total_tokens) for chunk in chunks if chunk.usage is not None]
+
+
+@pytest.mark.parametrize(
+    ("route_prefix", "sends", "extra_body"),
+    [pytest.param("/v1", 2, {}, id="chat_miss_then_cache_hit"), pytest.param("/queue", 1, {"priority": 0}, id="queue")],
+)
+def test_caller_requested_stream_usage_has_no_choices_even_with_a_client_sent_injection_flag(
+    gateway: Gateway, route_prefix: str, sends: int, extra_body: dict[str, JsonValue]
+) -> None:
+    identity: Final = "stream-usage-flag-" + uuid.uuid4().hex
+    with (
+        wire_server(lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=wire.url + "/v1")
+        _registered(gateway, model)
+        streams: Final = tuple(
+            _sdk_stream(
+                gateway,
+                route_prefix,
+                model,
+                identity,
+                include_usage=True,
+                extra_body={**extra_body, _STREAM_USAGE_INJECTED_FLAG: True},
+            )
+            for _ in range(sends)
+        )
+        assert [_streamed_text(chunks) for chunks in streams] == ["Hello 雪 café"] * sends
+        assert [_usage_chunk_shapes(chunks) for chunks in streams] == [[(0, 15)]] * sends
+        requests: Final = wire.drain()
+        assert len(requests) == 1
+        assert _STREAM_USAGE_INJECTED_FLAG not in json.loads(requests[0].body)
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_stream_usage_the_deployment_adds_keeps_one_empty_choice(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "deployment-stream-usage-" + uuid.uuid4().hex
+    with wire_server(lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))) as wire:
+        shared_config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config: Final = {
+            **shared_config,
+            "model_list": [
+                {
+                    "model_name": "deployment-usage",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "synthetic-deployment-usage-key",
+                        "api_base": wire.url + "/v1",
+                        "stream_options": {"include_usage": True},
+                    },
+                }
+            ],
+            "general_settings": {**shared_config["general_settings"], "always_include_stream_usage": False},
+        }
+        path: Final = tmp_path / "deployment-stream-usage.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate:
+            chunks: Final = _sdk_stream(
+                candidate, "/v1", "deployment-usage", identity, include_usage=None, extra_body={}
+            )
+        assert _streamed_text(chunks) == "Hello 雪 café"
+        assert _usage_chunk_shapes(chunks) == [(1, 15)]
+        requests: Final = wire.drain()
+        assert len(requests) == 1
+        assert json.loads(requests[0].body)["stream_options"]["include_usage"] is True
 
 
 @pytest.mark.covers("other.streaming.messages_bridge.empty_choices_usage_chunk_completes_stream")

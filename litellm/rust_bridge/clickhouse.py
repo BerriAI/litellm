@@ -1,12 +1,10 @@
 import os
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, Protocol, runtime_checkable
-
-from pydantic import ConfigDict, TypeAdapter
+from typing import Final
 
 from litellm.constants import DEFAULT_AGENT_TRACING_RETENTION_DAYS, DEFAULT_CLICKHOUSE_DATABASE
-from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge import _native
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -14,27 +12,6 @@ class SpendStorageConfig:
     url: str
     database: str = DEFAULT_CLICKHOUSE_DATABASE
     retention_days: int = DEFAULT_AGENT_TRACING_RETENTION_DAYS
-
-
-class NativeSpendConfig(Protocol):
-    def __init__(self, database: str, url: str, retention_days: int) -> None: ...
-
-
-class NativeSpendStorage(Protocol):
-    def __init__(self, config: NativeSpendConfig) -> None: ...
-    def ensure_schema(self) -> Awaitable[None]: ...
-    def insert_rows(self, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
-
-
-@runtime_checkable
-class NativeSpendBridge(Protocol):
-    NativeClickHouseSpendConfig: type[NativeSpendConfig]
-    NativeClickHouseSpendStorage: type[NativeSpendStorage]
-
-
-_NATIVE: Final[TypeAdapter[NativeSpendBridge]] = TypeAdapter(
-    NativeSpendBridge, config=ConfigDict(arbitrary_types_allowed=True)
-)
 
 
 def spend_storage_config(environ: Mapping[str, str] = os.environ) -> SpendStorageConfig:
@@ -53,12 +30,8 @@ def spend_storage_config(environ: Mapping[str, str] = os.environ) -> SpendStorag
 
 class ClickHouseSpendStorage:
     def __init__(self, config: SpendStorageConfig) -> None:
-        bridge: Final = get_native_bridge()
-        if bridge is None:
-            raise RuntimeError("ClickHouse spend logging requires the Rust extension")
-        native: Final = _NATIVE.validate_python(bridge)
-        self._native: Final = native.NativeClickHouseSpendStorage(
-            native.NativeClickHouseSpendConfig(config.database, config.url, config.retention_days)
+        self._native: Final = _native.NativeClickHouseSpendStorage(
+            _native.NativeClickHouseSpendConfig(config.database, config.url, config.retention_days)
         )
 
     async def ensure_schema(self) -> None:

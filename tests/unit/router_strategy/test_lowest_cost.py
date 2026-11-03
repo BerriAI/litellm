@@ -112,6 +112,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -164,6 +165,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -183,6 +185,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -205,6 +208,7 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -234,6 +238,7 @@ async def test_get_available_deployments():
     print("selected model: ", selected_model)
 
     assert selected_model["model_info"]["id"] == "groq-llama"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -286,6 +291,7 @@ async def test_get_available_deployments_custom_price():
 
     assert selected_model["model_info"]["id"] == "chatgpt-v-1"
 
+
 async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
     kwargs = {
         "litellm_params": {
@@ -306,6 +312,7 @@ async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
         start_time=start_time,
         end_time=end_time,
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("ans_rpm", [1, 5])  # 1 should produce nothing, 10 should select first
@@ -357,3 +364,42 @@ async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     assert (d_ans and d_ans["model_info"]["id"]) == ans
 
     print("selected deployment:", d_ans)
+
+
+_TWO_DOLLARS_PER_TOKEN = {"input_cost_per_token": 1.0, "output_cost_per_token": 1.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "azure_litellm_params, base_model",
+    [
+        ({"model": "azure/my-gpt4-deploy"}, "azure/gpt-4.1"),
+        ({"model": "azure/gpt-4.1"}, "azure/not-a-real-model"),
+    ],
+    ids=["base_model_priced", "unmapped_base_model_falls_back_to_deployment_model"],
+)
+async def test_cost_based_routing_prices_an_azure_deployment_through_its_base_model(
+    azure_litellm_params: dict, base_model: str
+):
+    handler = LowestCostLoggingHandler(router_cache=DualCache())
+    healthy_deployments = [
+        {
+            "model_name": "gpt-4.1",
+            "litellm_params": {"model": "openai/gpt-4.1", **_TWO_DOLLARS_PER_TOKEN},
+            "model_info": {"id": "openai-two-dollars"},
+        },
+        {
+            "model_name": "gpt-4.1",
+            "litellm_params": azure_litellm_params,
+            "model_info": {"id": "azure-cost-map-priced", "base_model": base_model},
+        },
+    ]
+
+    picked = await handler.async_get_available_deployments(
+        model_group="gpt-4.1", healthy_deployments=healthy_deployments
+    )
+
+    assert picked is not None and picked["model_info"]["id"] == "azure-cost-map-priced", (
+        "a cost-map priced Azure deployment must beat a $2 per token deployment, "
+        "it loses only when it is scored at the $10 unmapped default"
+    )

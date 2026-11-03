@@ -254,6 +254,55 @@ def test_token_refresh_delegates_to_both_writer_and_reader():
     reader.stop_token_refresh_task.assert_awaited_once()
 
 
+def test_reader_token_refresh_stops_even_when_the_writer_task_failed() -> None:
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer: Final = MagicMock()
+    reader: Final = MagicMock()
+    writer.stop_token_refresh_task = AsyncMock(side_effect=RuntimeError("refresh failed"))
+    reader.stop_token_refresh_task = AsyncMock()
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    with pytest.raises(RuntimeError, match="refresh failed"):
+        asyncio.run(routing.stop_token_refresh_task())
+
+    reader.stop_token_refresh_task.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", (RuntimeError("refresh failed"), asyncio.CancelledError()))
+async def test_reader_cleanup_finishes_before_writer_stop_failure_propagates(error: BaseException) -> None:
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    reader_stopping: Final = asyncio.Event()
+    release_reader: Final = asyncio.Event()
+    reader_stopped: Final = asyncio.Event()
+
+    async def stop_reader() -> None:
+        reader_stopping.set()
+        await release_reader.wait()
+        reader_stopped.set()
+
+    writer: Final = MagicMock()
+    reader: Final = MagicMock()
+    writer.stop_token_refresh_task = AsyncMock(side_effect=error)
+    reader.stop_token_refresh_task = AsyncMock(side_effect=stop_reader)
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
+    stopping: Final = asyncio.create_task(routing.stop_token_refresh_task())
+    try:
+        await reader_stopping.wait()
+        await asyncio.sleep(0)
+        assert not stopping.done()
+        release_reader.set()
+        with pytest.raises(type(error)):
+            await stopping
+        assert reader_stopped.is_set()
+    finally:
+        release_reader.set()
+        stopping.cancel()
+        await asyncio.gather(stopping, return_exceptions=True)
+
+
 def test_routed_actions_falls_back_to_writer_for_unknown_methods():
     from litellm.proxy.db.routing_prisma_wrapper import _RoutedActions
 

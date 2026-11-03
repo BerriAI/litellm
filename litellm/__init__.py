@@ -38,6 +38,7 @@ from litellm._logging import (
     turn_on_json,
     log_level,
 )
+from litellm._logging import suppress_startup_output as suppress_startup_output
 import re
 from litellm.constants import (
     DEFAULT_BATCH_SIZE,
@@ -62,7 +63,6 @@ from litellm.constants import (
     modelscope_models,
     empower_models,
     together_ai_models,
-    baseten_models,
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
@@ -175,7 +175,7 @@ argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
 gcs_pub_sub_use_v1: Optional[bool] = False  # if you want to use v1 gcs pubsub logged payload
 generic_api_use_v1: Optional[bool] = False  # if you want to use v1 generic api logged payload
-argilla_transformation_object: Optional[Dict[str, Any]] = None
+argilla_transformation_object: Mapping[str, str] | None = None
 _async_input_callback: List[Union[str, Callable[..., object], "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -235,6 +235,7 @@ bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
+anthropic_messages_estimate_initial_input_tokens: bool = False
 # When True, strip the OpenAI-flavored `usage.total_tokens` field that
 # LiteLLM injects into non-streaming /v1/messages responses, bringing the
 # wire response into line with the Anthropic spec (matches the streaming
@@ -334,7 +335,7 @@ in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 # Proxy Authentication - auto-obtain/refresh OAuth2/JWT tokens for LiteLLM Proxy
-proxy_auth: Optional[Any] = None
+proxy_auth: _ProxyAuthHandlerType | None = None
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
@@ -355,6 +356,7 @@ llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
 reasoning_auto_summary: bool = False
+reasoning_effort_rounding: Literal["up", "down"] = "up"
 ### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
@@ -503,7 +505,7 @@ skill_search_embedding_model: Optional[str] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
 # New format: { "displayName": { "url": "...", "index": 0 } }
 # Old format: { "displayName": "url" } (for backward compatibility)
-public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
+public_model_groups_links: dict[str, str | dict[str, object]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
@@ -518,7 +520,7 @@ aiohttp_trust_env: bool = False  # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
 disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
-http2: bool = False
+http2: bool | None = None
 network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
@@ -548,9 +550,11 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
+from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
+apply_search_free_tier: bool = False
 cost_margin_config: Dict[
     str, Union[float, Dict[str, float]]
 ] = {}  # Provider-specific or global cost margins. Examples:
@@ -589,7 +593,7 @@ vertex_ai_safety_settings: Optional[dict] = None
 ####### COMPLETION MODELS ###################
 from typing import Set
 
-open_ai_chat_completion_models: Set = set()
+open_ai_chat_completion_models: Set[str] = set()
 open_ai_text_completion_models: Set = set()
 cohere_models: Set = set()
 cohere_chat_models: Set = set()
@@ -617,6 +621,8 @@ vertex_openai_models: Set = set()
 vertex_minimax_models: Set = set()
 vertex_moonshot_models: Set = set()
 vertex_zai_models: Set = set()
+vertex_qwen_models: Final[Set[str]] = set()
+vertex_ai_models: Final[Set[str]] = set()
 ai21_models: Set = set()
 ai21_chat_models: Set = set()
 nlp_cloud_models: Set = set()
@@ -625,13 +631,16 @@ bedrock_models: Set = set()
 bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
 fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
+baseten_models: Set[str] = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
+clf_ai_gateway_models: set[str] = set()  # mutable-ok: filled at import like sibling sets
 perplexity_models: Set = set()
 watsonx_models: Set = set()
 gemini_models: Set = set()
 xai_models: Set = set()
 zai_models: Set = set()
+bigmodel_models: Final[set[str]] = set()  # mutable-ok: provider registry is populated and extended at runtime
 deepseek_models: Set = set()
 tencent_models: Set = set()
 runwayml_models: Set = set()
@@ -678,8 +687,12 @@ moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
+kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
+streamlake_models: Final[Set[str]] = set()
+zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
+opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 lambda_ai_models: Set = set()
 inception_models: Set = set()
 hyperbolic_models: Set = set()
@@ -706,6 +719,7 @@ transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
 coralbricks_models: Set[str] = set()
+aiand_models: Set[str] = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -816,6 +830,10 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
         elif value.get("litellm_provider") == "vertex_ai-zai_models":
             key = key.replace("vertex_ai/", "")
             vertex_zai_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-qwen_models":
+            vertex_qwen_models.add(key.removeprefix("vertex_ai/"))
+        elif value.get("litellm_provider") == "vertex_ai":
+            vertex_ai_models.add(key.removeprefix("vertex_ai/"))
         elif value.get("litellm_provider") == "ai21":
             if value.get("mode") == "chat":
                 ai21_chat_models.add(key)
@@ -833,6 +851,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             bedrock_converse_models.add(key)
         elif value.get("litellm_provider") == "deepinfra":
             deepinfra_models.add(key)
+        elif value.get("litellm_provider") == "clf_ai_gateway":  # pyright: ignore[reportUnknownMemberType]  # raw cost map
+            clf_ai_gateway_models.add(key)  # pyright: ignore[reportUnknownArgumentType]  # raw cost map key
         elif value.get("litellm_provider") == "perplexity":
             perplexity_models.add(key)
         elif value.get("litellm_provider") == "watsonx":
@@ -843,6 +863,16 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
+        elif value.get("litellm_provider") == "together_ai":
+            if is_hidden_as_retired(value):
+                together_ai_models.discard(key)
+            elif not key.startswith("together-ai-"):
+                together_ai_models.add(key)
+        elif value.get("litellm_provider") == "baseten":
+            if is_hidden_as_retired(value):
+                baseten_models.discard(key)
+            else:
+                baseten_models.add(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key:
@@ -855,6 +885,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             xai_models.add(key)
         elif value.get("litellm_provider") == "zai":
             zai_models.add(key)
+        elif value.get("litellm_provider") == "bigmodel":
+            bigmodel_models.add(key)
         elif value.get("litellm_provider") == "fal_ai":
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
@@ -949,10 +981,18 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             darkbloom_models.add(key)
         elif value.get("litellm_provider") == "openinfer":
             openinfer_models.add(key)
+        elif value.get("litellm_provider") == "kyma":
+            kyma_models.add(key)
+        elif value.get("litellm_provider") == "streamlake":
+            streamlake_models.add(key)
+        elif value.get("litellm_provider") == "zerogpu":
+            zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
+        elif value.get("litellm_provider") == "opencode_go":
+            opencode_go_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.add(key)
         elif value.get("litellm_provider") == "inception":
@@ -1001,6 +1041,11 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
+        elif value.get("litellm_provider") == "aiand":
+            if is_hidden_as_retired(value):
+                aiand_models.discard(key)
+            else:
+                aiand_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1067,6 +1112,7 @@ model_list = list(
     | set(ollama_models)
     | bedrock_models
     | deepinfra_models
+    | clf_ai_gateway_models
     | perplexity_models
     | set(maritalk_models)
     | runwayml_models
@@ -1077,6 +1123,7 @@ model_list = list(
     | text_completion_inception_models
     | xai_models
     | zai_models
+    | bigmodel_models
     | fal_ai_models
     | deepseek_models
     | modelscope_models
@@ -1118,8 +1165,12 @@ model_list = list(
     | publicai_models
     | darkbloom_models
     | openinfer_models
+    | kyma_models
+    | streamlake_models
+    | zerogpu_models
     | v0_models
     | morph_models
+    | opencode_go_models
     | lambda_ai_models
     | inception_models
     | black_forest_labs_models
@@ -1137,6 +1188,7 @@ model_list = list(
     | reducto_models
     | bedrock_mantle_models
     | coralbricks_models
+    | aiand_models
     | set(clarifai_models)
 )
 
@@ -1170,13 +1222,23 @@ def _build_models_by_provider() -> dict:
         | vertex_deepseek_models
         | vertex_minimax_models
         | vertex_moonshot_models
-        | vertex_zai_models,
+        | vertex_zai_models
+        | vertex_qwen_models
+        | vertex_mistral_models
+        | vertex_llama3_models
+        | vertex_ai_ai21_models
+        | vertex_openai_models
+        | vertex_ai_image_models
+        | vertex_ai_video_models
+        | vertex_embedding_models
+        | vertex_ai_models,
         "ai21": ai21_models | ai21_chat_models,
         "bedrock": bedrock_models | bedrock_converse_models,
         "petals": petals_models,
         "ollama": ollama_models,
         "ollama_chat": ollama_models,
         "deepinfra": deepinfra_models,
+        "clf_ai_gateway": clf_ai_gateway_models,
         "perplexity": perplexity_models,
         "maritalk": maritalk_models,
         "watsonx": watsonx_models,
@@ -1187,6 +1249,7 @@ def _build_models_by_provider() -> dict:
         "text-completion-inception": text_completion_inception_models,
         "xai": xai_models,
         "zai": zai_models,
+        "bigmodel": bigmodel_models,
         "fal_ai": fal_ai_models,
         "deepseek": deepseek_models,
         "tencent": tencent_models,
@@ -1235,8 +1298,12 @@ def _build_models_by_provider() -> dict:
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
         "openinfer": openinfer_models,
+        "kyma": kyma_models,
+        "streamlake": streamlake_models,
+        "zerogpu": zerogpu_models,
         "v0": v0_models,
         "morph": morph_models,
+        "opencode_go": opencode_go_models,
         "lambda_ai": lambda_ai_models,
         "inception": inception_models,
         "hyperbolic": hyperbolic_models,
@@ -1260,6 +1327,7 @@ def _build_models_by_provider() -> dict:
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
         "coralbricks": coralbricks_models,
+        "aiand": aiand_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
@@ -1303,7 +1371,6 @@ all_embedding_models = (
 )
 
 ####### IMAGE GENERATION MODELS ###################
-openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 ####### VIDEO GENERATION MODELS ###################
 openai_video_generation_models = ["sora-2"]
@@ -1421,6 +1488,7 @@ from .exceptions import (
     Timeout,
     APIConnectionError,
     UnsupportedParamsError,
+    UnsupportedEndpointError as UnsupportedEndpointError,
     APIResponseValidationError,
     UnprocessableEntityError,
     InternalServerError,
@@ -1488,6 +1556,7 @@ from .rag.main import *
 from .sandbox.main import *
 from .decisions.main import *
 from .systemone.main import *
+from .extraction.main import *
 from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
 from .realtime_api.main import (
@@ -1579,6 +1648,7 @@ def set_global_gitlab_config(config: Mapping[str, object]) -> None:
 # Lazy loading system for heavy modules to reduce initial import time and memory usage
 
 if TYPE_CHECKING:
+    from . import guardrails as guardrails
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.types.utils import PriorityReservationSettings
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -1694,6 +1764,9 @@ if TYPE_CHECKING:
     from .llms.cloudflare.decisions.transformation import (
         CloudflareDecisionsConfig as CloudflareDecisionsConfig,
     )
+    from .llms.cloudflare.extraction.transformation import (
+        CloudflareExtractionConfig as CloudflareExtractionConfig,
+    )
     from .llms.strands_decider.decisions.transformation import (
         StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
     )
@@ -1703,14 +1776,26 @@ if TYPE_CHECKING:
     from .llms.hosted_vllm.decisions.transformation import (
         HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
     )
+    from .llms.lm_studio.decisions.transformation import (
+        LMStudioDecisionsConfig as LMStudioDecisionsConfig,
+    )
+    from .llms.ollama.decisions.transformation import (
+        OllamaDecisionsConfig as OllamaDecisionsConfig,
+    )
     from .llms.laya.decisions.transformation import (
         LayaDecisionsConfig as LayaDecisionsConfig,
     )
     from .llms.bespoke.decisions.transformation import (
         BespokeDecisionsConfig as BespokeDecisionsConfig,
     )
+    from .llms.eu_jev.decisions.transformation import (
+        EuJevDecisionsConfig as EuJevDecisionsConfig,
+    )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
+    )
+    from .llms.azure.decisions.transformation import (
+        AzureDecisionsConfig as AzureDecisionsConfig,
     )
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
@@ -1756,10 +1841,10 @@ if TYPE_CHECKING:
         SagemakerNovaConfig as SagemakerNovaConfig,
     )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
-    from .llms.anthropic.pass_through.messages.transformation import (
+    from .llms.anthropic.messages.native.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
     )
-    from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    from .llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig as AmazonAnthropicClaudeMessagesConfig,
     )
     from .llms.bedrock.messages.mantle_transformation import (
@@ -1782,7 +1867,7 @@ if TYPE_CHECKING:
     from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
         VertexAIAnthropicConfig as VertexAIAnthropicConfig,
     )
-    from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
+    from .llms.vertex_ai.vertex_ai_partner_models.llama.transformation import (
         VertexAILlama3Config as VertexAILlama3Config,
     )
     from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
@@ -1809,10 +1894,10 @@ if TYPE_CHECKING:
     from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
         AmazonQwen3Config as AmazonQwen3Config,
     )
-    from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
+    from .llms.bedrock.chat.invoke_transformations.anthropic_legacy_text_completions_transformation import (
         AmazonAnthropicConfig as AmazonAnthropicConfig,
     )
-    from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from .llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig as AmazonAnthropicClaudeConfig,
     )
     from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
@@ -1974,7 +2059,7 @@ if TYPE_CHECKING:
         GradientAIConfig as GradientAIConfig,
     )
     from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as OpenAIGPTConfig
-    from .llms.openai.chat.gpt_5_transformation import (
+    from .llms.openai.chat.gpt_reasoning_transformation import (
         OpenAIGPT5Config as OpenAIGPT5Config,
     )
     from .llms.openai.transcriptions.whisper_transformation import (
@@ -2031,6 +2116,9 @@ if TYPE_CHECKING:
         LiteLLMProxyChatConfig as _LiteLLMProxyChatConfig,
     )
     from .llms.deepinfra.chat.transformation import DeepInfraConfig as _DeepInfraConfig
+    from .llms.clf_ai_gateway.chat.transformation import (
+        ClfAiGatewayConfig as _ClfAiGatewayConfig,
+    )
     from .llms.llamafile.chat.transformation import (
         LlamafileChatConfig as _LlamafileChatConfig,
     )
@@ -2060,6 +2148,7 @@ if TYPE_CHECKING:
     IBMWatsonXAIConfig: Type[_IBMWatsonXAIConfig]
     LiteLLMProxyChatConfig: Type[_LiteLLMProxyChatConfig]
     DeepInfraConfig: Type[_DeepInfraConfig]
+    ClfAiGatewayConfig: type[_ClfAiGatewayConfig]
     LlamafileChatConfig: Type[_LlamafileChatConfig]
     LMStudioChatConfig: Type[_LMStudioChatConfig]
     LmStudioEmbeddingConfig: Type[_LmStudioEmbeddingConfig]
@@ -2115,7 +2204,7 @@ if TYPE_CHECKING:
     from .llms.azure.chat.gpt_transformation import (
         AzureOpenAIConfig as AzureOpenAIConfig,
     )
-    from .llms.azure.chat.gpt_5_transformation import (
+    from .llms.azure.chat.gpt_reasoning_transformation import (
         AzureOpenAIGPT5Config as AzureOpenAIGPT5Config,
     )
     from .llms.azure.completion.transformation import (
@@ -2268,6 +2357,10 @@ if TYPE_CHECKING:
         LiteLLM_UpperboundKeyGenerateParams,
     )
     from litellm.utils import ModelResponseListIterator as _ModelResponseListIterator
+    from collections.abc import Awaitable
+    from litellm.types.utils import ModelResponse as _ModelResponseType
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper as _CustomStreamWrapperType
+    from litellm.proxy_auth import ProxyAuthHandler as _ProxyAuthHandlerType
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -2282,6 +2375,7 @@ if TYPE_CHECKING:
     supports_web_search: Callable[..., bool]
     supports_tool_search: Callable[..., bool]
     supports_url_context: Callable[..., bool]
+    supports_continuation: Callable[..., bool]
     supports_response_schema: Callable[..., bool]
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]
@@ -2291,7 +2385,7 @@ if TYPE_CHECKING:
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]
-    acreate: Callable[..., Any]
+    acreate: Callable[..., Awaitable[_ModelResponseType | _CustomStreamWrapperType]]
     get_max_tokens: Callable[..., int]
     get_model_info: Callable[..., _ModelInfoType]
     register_prompt_template: Callable[..., None]
@@ -2369,6 +2463,7 @@ _AGENT_EXPORTS: Final = frozenset(
         "ClaudeCodeOptions",
         "CodexOptions",
         "OpenCodeOptions",
+        "PiOptions",
         "DeepAgentsOptions",
         "ToolLoopOptions",
     }
@@ -2407,10 +2502,10 @@ def __getattr__(name: str) -> Any:
         handler_func: Final = registry[name]
         return handler_func(name)
 
-    if name == "proxy":
+    if name in ("proxy", "guardrails"):
         import importlib
 
-        return importlib.import_module("litellm.proxy")
+        return importlib.import_module(f"litellm.{name}")
 
     if name == "harness" or name in _AGENT_EXPORTS:
         import importlib
@@ -2588,8 +2683,10 @@ def __getattr__(name: str) -> Any:
             cancel_run,
             delete_run,
         )
+        from types import MappingProxyType
 
-        return locals()[name]
+        evals_exports: Final[Mapping[str, object]] = MappingProxyType(locals())
+        return evals_exports[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

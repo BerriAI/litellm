@@ -282,6 +282,12 @@ class TestCheckResponsesCost:
         client = MagicMock()
         client.db = MagicMock()
         client.db.litellm_managedobjecttable = MagicMock()
+        client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+        client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+        client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+        client.db.litellm_deprecatedverificationtoken.find_unique = AsyncMock(return_value=None)
+        client.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=None)
+        client.db.litellm_deletedteamtable.find_first = AsyncMock(return_value=None)
         return client
 
     @pytest.fixture

@@ -208,7 +208,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         if raw_response.status_code != 200:
             raise Exception(f"Error: {raw_response.status_code} {raw_response.text}")
 
-        _json_response: Final = raw_response.json()
+        _json_response: Final[MultimodalPredictions] = raw_response.json()
         if "predictions" not in _json_response:
             raise InternalServerError(
                 message=f"embedding response does not contain 'predictions', got {_json_response}",

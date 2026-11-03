@@ -8,8 +8,8 @@ new hook that deep-copies the request inline all land here as a new row. Runs on
 `PYTHONASYNCIODEBUG=1` and `LITELLM_EVENT_LOOP=asyncio` (uvloop reports nothing and crashed under debug locally),
 and the runner `E2E_PERF_EVENT_LOOP=1`, so the nightly build, which sets neither, skips it. The allowlist counts
 are twice the highest count any of ten back-to-back local runs showed on that row (rows that showed nothing in
-those ten but did in the earlier before/after legs for 46925 and 46967 get 2), so each run sits at or under half
-of every cap and a listed location doubling in frequency is a failure, not a flake. The
+those ten but did in the earlier before/after legs for 46925 and 46967, or in the first scheduled-lane run, get 2),
+so each run sits at or under half of every cap and a listed location doubling in frequency is a failure, not a flake. The
 `garbage collection` bucket is the gen-2 passes the collector logs in debug mode (0.6 to 0.7 s each, one every
 minute or two of this traffic, plus the ramp while the heap fills on a local whole-file run), which asyncio would
 otherwise charge to a random task; its count is the signal for a change that makes much more garbage."""
@@ -44,6 +44,7 @@ CASE: Final = replace(
             KnownStall("run_coroutine_job", max_count=2),
             KnownStall("user_api_key_auth.py", max_count=2),
             KnownStall("route_streaming_logging_to_handler", max_count=2),
+            KnownStall("TaskHandle._run_coro", max_count=2),
         ),
     ),
 )

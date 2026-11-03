@@ -1,13 +1,17 @@
 import json
 import os
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, Literal
 
 import anthropic
 import httpx
+from pydantic import JsonValue, TypeAdapter
 import pytest
+import yaml
 from integration._support.anthropic_sse import (
     LIFECYCLE,
     Attempts,
@@ -27,13 +31,14 @@ from integration._support.anthropic_sse import (
 )
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
-from pydantic import JsonValue
 from redis import Redis
 
 _MODEL: Final = "claude-sonnet-4-5-20250929"
 _API_KEY: Final = "synthetic-anthropic-key"
 _TEXT: Final = "Hello"
+_SINK_EVENT_BATCH_ADAPTER: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 FirstAttempt = Literal[
     "drop_after_headers",
@@ -127,24 +132,24 @@ def _stream(gateway: Gateway, body: Mapping[str, JsonValue]) -> tuple[int, tuple
     return response.status_code, parse_sse(response.text)
 
 
-def _rows(request_id: str) -> list[dict[str, JsonValue]]:
-    return read_rows('SELECT status, model_group FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,))
+def _rows(gateway: Gateway, request_id: str) -> list[dict[str, JsonValue]]:
+    return gateway.rows('SELECT status, model_group FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,))
 
 
-def _success_rows(request_id: str) -> list[dict[str, JsonValue]]:
-    return eventually(lambda: _rows(request_id), lambda rows: len(rows) >= 1, seconds=70)
+def _success_rows(gateway: Gateway, request_id: str) -> list[dict[str, JsonValue]]:
+    return eventually(lambda: _rows(gateway, request_id), lambda rows: len(rows) >= 1, seconds=70)
 
 
 def _assert_completed_by_retry(
-    status: int, events: tuple[SseEvent, ...], prompt: str, model: str, wire: Wire, *, attempts: int = 2
+    gateway: Gateway, status: int, events: tuple[SseEvent, ...], prompt: str, model: str, wire: Wire, *, attempts: int = 2
 ) -> None:
     assert status == 200, events
     assert event_types(events) == LIFECYCLE, events
     assert message_id(events) == _served_id(prompt, attempts), events
     assert delta_text(events) == _TEXT, events
     assert [request.target for request in wire.drain()] == ["/v1/messages"] * attempts
-    assert _success_rows(_served_id(prompt, attempts)) == [{"status": "success", "model_group": model}]
-    superseded_rows: Final = {attempt: _rows(_served_id(prompt, attempt)) for attempt in range(1, attempts)}
+    assert _success_rows(gateway, _served_id(prompt, attempts)) == [{"status": "success", "model_group": model}]
+    superseded_rows: Final = {attempt: _rows(gateway, _served_id(prompt, attempt)) for attempt in range(1, attempts)}
     assert not any(superseded_rows.values()), superseded_rows
 
 
@@ -183,7 +188,7 @@ def test_stream_failing_before_content_is_retried_on_the_same_group_and_complete
             **({"num_retries": 1} if source == "deployment" else {}),
         )
         status, events = _stream(gateway, _body(model, prompt, source))
-        _assert_completed_by_retry(status, events, prompt, model, wire)
+        _assert_completed_by_retry(gateway, status, events, prompt, model, wire)
 
 
 @pytest.mark.parametrize("source", ["deployment", "request"])
@@ -204,7 +209,7 @@ def test_stream_rejected_before_it_opens_is_retried_and_completes(
             **({"num_retries": 1} if source == "deployment" else {}),
         )
         status, events = _stream(gateway, _body(model, prompt, source))
-        _assert_completed_by_retry(status, events, prompt, model, wire)
+        _assert_completed_by_retry(gateway, status, events, prompt, model, wire)
 
 
 def _sdk(gateway: Gateway) -> anthropic.Anthropic:
@@ -232,7 +237,7 @@ def test_anthropic_sdk_sync_stream_completes_after_a_drop_following_message_star
         assert final.id == _served_id(prompt, 2), final
         assert [block.text for block in final.content if block.type == "text"] == [_TEXT], final
         assert [request.target for request in wire.drain()] == ["/v1/messages"] * 2
-        assert _success_rows(final.id) == [{"status": "success", "model_group": model}]
+        assert _success_rows(gateway, final.id) == [{"status": "success", "model_group": model}]
 
 
 async def test_anthropic_sdk_async_stream_completes_after_a_drop_following_message_start(gateway: Gateway) -> None:
@@ -321,7 +326,7 @@ def test_stream_error_frame_after_content_is_not_retried_and_keeps_its_spend_row
         assert message_id(events) == _served_id(prompt, 1), events
         assert delta_text(events) == _TEXT, events
         assert [request.target for request in wire.drain()] == ["/v1/messages"]
-        assert [row["model_group"] for row in _success_rows(_served_id(prompt, 1))] == [model]
+        assert [row["model_group"] for row in _success_rows(gateway, _served_id(prompt, 1))] == [model]
 
 
 def test_stream_rejected_with_401_before_it_opens_is_not_retried(gateway: Gateway) -> None:
@@ -393,6 +398,22 @@ def test_retry_rejected_before_it_opens_counts_against_the_same_budget(gateway: 
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         response: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "deployment"))
         _assert_rejected_before_content(response, wire, status=500, attempts=2, error="error")
+        rows: Final = eventually(
+            lambda: _request_rows(gateway, response.headers["x-litellm-call-id"]),
+            lambda values: len(values) >= 1,
+            seconds=70,
+        )
+        rejected: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "request", budget=0))
+        _assert_rejected_before_content(rejected, wire, status=500, attempts=1, error="error")
+        rejection_rows: Final = eventually(
+            lambda: _request_rows(gateway, rejected.headers["x-litellm-call-id"]),
+            lambda values: len(values) >= 1,
+            seconds=70,
+        )
+        estimated_input: Final = rejection_rows[0]["prompt_tokens"]
+        assert isinstance(estimated_input, int)
+        assert rejection_rows == [{"status": "failure", "prompt_tokens": estimated_input, "completion_tokens": 0}]
+        assert rows == [{"status": "failure", "prompt_tokens": 5 + estimated_input, "completion_tokens": 1}], rows
 
 
 def test_non_stream_messages_rejected_with_500_is_retried_per_the_deployment_budget(gateway: Gateway) -> None:
@@ -409,7 +430,7 @@ def test_non_stream_messages_rejected_with_500_is_retried_per_the_deployment_bud
         assert payload["id"] == _served_id(prompt, 2), response.text
         assert payload["content"] == [{"type": "text", "text": _TEXT}], response.text
         assert [request.target for request in wire.drain()] == ["/v1/messages"] * 2
-        assert _success_rows(_served_id(prompt, 2)) == [{"status": "success", "model_group": model}]
+        assert _success_rows(gateway, _served_id(prompt, 2)) == [{"status": "success", "model_group": model}]
 
 
 def test_retried_stream_response_headers_name_the_attempt(gateway: Gateway) -> None:
@@ -422,7 +443,7 @@ def test_retried_stream_response_headers_name_the_attempt(gateway: Gateway) -> N
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         response: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "deployment"))
         events: Final = parse_sse(response.text)
-        _assert_completed_by_retry(response.status_code, events, prompt, model, wire)
+        _assert_completed_by_retry(gateway, response.status_code, events, prompt, model, wire)
         assert response.headers.get("x-litellm-attempted-retries") == "1", dict(response.headers)
         assert response.headers.get("x-litellm-max-retries") == "1", dict(response.headers)
 
@@ -454,13 +475,121 @@ def test_retried_stream_spend_row_records_the_attempt_count(gateway: Gateway) ->
     ):
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         status, events = _stream(gateway, _body(model, prompt, "deployment"))
-        _assert_completed_by_retry(status, events, prompt, model, wire)
+        _assert_completed_by_retry(gateway, status, events, prompt, model, wire)
         rows: Final = read_rows(
             "SELECT metadata->>'attempted_retries' AS attempted, metadata->>'max_retries' AS budget "
             'FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
             (_served_id(prompt, 2),),
         )
         assert rows == [{"attempted": "1", "budget": "1"}], rows
+
+
+def _proxy_with_callback_sink(gateway: Gateway, tmp_path: Path, sink: Wire) -> AbstractContextManager[Gateway]:
+    loaded_config: Final = TypeAdapter(dict[str, object]).validate_python(
+        yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    )
+    litellm_settings: Final = TypeAdapter(dict[str, object]).validate_python(loaded_config["litellm_settings"])
+    config: Final = {
+        **loaded_config,
+        "litellm_settings": {
+            **litellm_settings,
+            "callbacks": ["generic_api"],
+            "DEFAULT_FLUSH_INTERVAL_SECONDS": 1,
+        },
+    }
+    path: Final = tmp_path / "callbacks.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return owned_proxy(
+        gateway,
+        tmp_path,
+        {"GENERIC_LOGGER_ENDPOINT": sink.url, "GENERIC_LOGGER_HEADERS": "Authorization=Bearer synthetic-sink-secret"},
+        config=path,
+    )
+
+
+def _sink_events(batches: Sequence[Request]) -> Iterator[dict[str, JsonValue]]:
+    for batch in batches:
+        yield from _SINK_EVENT_BATCH_ADAPTER.validate_python(json.loads(batch.body))
+
+
+class _SinkReader:
+    """Reads the callback sink across polls: drain() consumes the sink's queue, so earlier batches are kept here."""
+
+    def __init__(self, sink: Wire, model: str) -> None:
+        self._sink: Final = sink
+        self._model: Final = model
+        self._batches: tuple[Request, ...] = ()
+
+    def delivered_usage(self) -> tuple[tuple[str, int, int], ...]:
+        self._batches = (*self._batches, *self._sink.drain())
+        return tuple(
+            (str(event["status"]), int(event["prompt_tokens"]), int(event["completion_tokens"]))
+            for event in _sink_events(self._batches)
+            if event.get("model_group") == self._model
+        )
+
+
+def _request_rows(gateway: Gateway, call_id: str) -> list[dict[str, JsonValue]]:
+    return gateway.rows(
+        'SELECT status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s', (call_id,)
+    )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (_Failure("drop_after_message_start"), _Failure("error_frame_after_message_start", 500)),
+    ids=("transport-drop", "recoverable-error-frame"),
+)
+def test_superseded_attempt_and_its_retry_each_log_their_own_usage(
+    gateway: Gateway, tmp_path: Path, failure: _Failure
+) -> None:
+    prompt: Final = _prompt()
+    attempts: Final = Attempts()
+    with (
+        wire_server(_upstream(prompt, failure, attempts)) as wire,
+        wire_server(lambda request: Reply()) as sink,
+        _proxy_with_callback_sink(gateway, tmp_path, sink) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
+        status, events = _stream(candidate, _body(model, prompt, "deployment"))
+        _assert_completed_by_retry(candidate, status, events, prompt, model, wire)
+        delivered: Final = eventually(
+            _SinkReader(sink, model).delivered_usage, lambda values: len(values) >= 2, seconds=20
+        )
+        assert sorted(delivered) == [("failure", 5, 1), ("success", 5, 3)], delivered
+
+
+def test_every_dropped_attempt_logs_its_own_failure_and_the_request_row_still_bills_the_dropped_usage(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    prompt: Final = _prompt()
+    attempts: Final = Attempts()
+    with (
+        wire_server(_upstream(prompt, _Failure("drop_after_message_start"), attempts, failing_attempts=99)) as wire,
+        wire_server(lambda request: Reply()) as sink,
+        _proxy_with_callback_sink(gateway, tmp_path, sink) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
+        response: Final = candidate.request("POST", "/v1/messages", _body(model, prompt, "deployment"))
+        _assert_stream_failed_after_message_start(response.status_code, parse_sse(response.text), wire, attempts=2)
+        delivered: Final = eventually(
+            _SinkReader(sink, model).delivered_usage, lambda values: len(values) >= 2, seconds=20
+        )
+        assert delivered == (("failure", 5, 1), ("failure", 5, 1)), delivered
+        rows: Final = eventually(
+            lambda: _request_rows(candidate, response.headers["x-litellm-call-id"]),
+            lambda values: len(values) >= 1,
+            seconds=70,
+        )
+        assert rows == [
+            {
+                "status": "failure",
+                "prompt_tokens": sum(input_tokens for _, input_tokens, _ in delivered),
+                "completion_tokens": sum(output_tokens for _, _, output_tokens in delivered),
+            }
+        ], rows
 
 
 def _string_values(cache: Redis) -> tuple[bytes, ...]:
@@ -485,7 +614,7 @@ def test_retried_stream_is_cached_and_the_identical_request_is_served_without_th
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         body: Final = _body(model, prompt, "deployment")
         status, events = _stream(gateway, body)
-        _assert_completed_by_retry(status, events, prompt, model, wire)
+        _assert_completed_by_retry(gateway, status, events, prompt, model, wire)
         eventually(lambda: _cached_somewhere(_served_id(prompt, 2)), bool, seconds=30)
         replay_status, replay = _stream(gateway, body)
         assert replay_status == 200, replay

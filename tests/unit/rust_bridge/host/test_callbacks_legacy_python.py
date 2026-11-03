@@ -9,6 +9,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm._internal_context import is_internal_call
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge.host import callbacks_legacy_python as legacy
 from litellm.rust_bridge.host.callbacks_legacy_python import failure_handler, setup
@@ -165,6 +166,75 @@ def test_failure_handler_of_an_internal_call_leaves_the_outer_budget_reservation
     assert reservation["callback_bound"] is True
     assert pending is not None
     pending.close()
+
+
+class _Hooks(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hooks: list[str] = []
+
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.hooks.append("sync_success")
+
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.hooks.append("async_success")
+
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.hooks.append("sync_failure")
+
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.hooks.append("async_failure")
+
+
+def _logger_with_hooks(hooks: _Hooks) -> Logging:
+    logger: Final = Logging(
+        model="mistral/mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="aocr",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="hooks",
+        function_id="hooks",
+        dynamic_success_callbacks=[hooks],
+        dynamic_async_success_callbacks=[hooks],
+        dynamic_failure_callbacks=[hooks],
+        dynamic_async_failure_callbacks=[hooks],
+    )
+    logger.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    return logger
+
+
+@pytest.mark.asyncio
+async def test_failure_of_an_async_call_gives_a_logger_with_both_failure_hooks_only_the_async_one() -> None:
+    hooks: Final = _Hooks()
+    now: Final = datetime.datetime.now()
+    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_hooks(hooks)}
+    result: Final = setup("aocr", (), kwargs, now, asynchronous=True)
+
+    assert failure_handler(result.logger, RuntimeError("upstream refused"), now, now, asynchronous=False) is None
+    pending: Final = failure_handler(result.logger, RuntimeError("upstream refused"), now, now, asynchronous=True)
+    assert pending is not None
+    await pending
+
+    assert hooks.hooks == ["async_failure"]
+
+
+@pytest.mark.parametrize("earlier_async_call", [False, True])
+def test_failure_of_a_sync_call_keeps_the_sync_failure_hook(earlier_async_call: bool) -> None:
+    hooks: Final = _Hooks()
+    now: Final = datetime.datetime.now()
+    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_hooks(hooks)}
+    if earlier_async_call:
+        setup("aocr", (), kwargs, now, asynchronous=True)
+    result: Final = setup("ocr", (), kwargs, now, asynchronous=False)
+
+    assert failure_handler(result.logger, RuntimeError("upstream refused"), now, now, asynchronous=False) is None
+
+    assert hooks.hooks == ["sync_failure"]
 
 
 CONTRACT_PATH: Final = Path(__file__).parents[4] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"

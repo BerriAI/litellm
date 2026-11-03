@@ -6,6 +6,8 @@ import base64
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from datetime import datetime, timedelta
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -19,6 +21,7 @@ from typing import (
     TypedDict,
     Union,
     cast,
+    runtime_checkable,
 )
 from uuid import NAMESPACE_URL, uuid5
 
@@ -26,7 +29,7 @@ import httpx
 from fastapi import HTTPException
 from openai import APIConnectionError, AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Unpack
 
 import litellm
@@ -38,18 +41,20 @@ from litellm.constants import (
     BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS,
     BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
+    MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_FILE_LIST_LIMIT,
     PENDING_RESPONSE_STATUSES,
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
-from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
     build_owner_filter,
@@ -111,6 +116,7 @@ from litellm.types.utils import (
     LLMResponseTypes,
     SpecialEnums,
 )
+from litellm.utils import get_utc_datetime
 
 
 class _ManagedFileRetrieve(Protocol):
@@ -132,7 +138,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.proxy.utils import PrismaClient as _PrismaClient
 
-    Span = Union[_Span, Any]
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
     PrismaClient = _PrismaClient
 else:
@@ -240,7 +246,7 @@ def _provider_file_retrieve_credentials(
     if llm_router is None or model_id is None:
         return None
     try:
-        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id)
+        credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
     except Exception as error:
         verbose_logger.warning(
             "Failed to retrieve credentials for provider file "
@@ -304,6 +310,7 @@ def _is_xai_batch_output(
 class _ManagedFileRow(Protocol):
     unified_file_id: str
     file_object: OpenAIFileObject
+    model_mappings: Mapping[str, str]
     flat_model_file_ids: Sequence[str]
     storage_backend: Optional[str]
     storage_url: Optional[str]
@@ -357,6 +364,8 @@ class _ManagedResourceDatabase(Protocol):
     @property
     def litellm_managedfiletable(self) -> _ManagedFileTableActions: ...
 
+    async def query_raw(self, query: str, *args: object) -> object: ...
+
     @property
     def litellm_managedobjecttable(self) -> _ManagedObjectTableActions: ...
 
@@ -364,6 +373,12 @@ class _ManagedResourceDatabase(Protocol):
 class _ManagedResourcePrismaClient(Protocol):
     @property
     def db(self) -> _ManagedResourceDatabase: ...
+
+
+@runtime_checkable
+class _WriterRoutedDatabase(Protocol):
+    @property
+    def writer(self) -> _ManagedResourceDatabase: ...
 
 
 class _SchedulerWithJobLookup(Protocol):
@@ -380,8 +395,81 @@ class _RouterFileCallKwargs(TypedDict, total=False):
     custom_llm_provider: ReadOnly[str | None]
 
 
+def _managed_database(prisma_client: _ManagedResourcePrismaClient) -> _ManagedResourceDatabase:
+    return prisma_client.db
+
+
 def _managed_file_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedFileTableActions:
     return prisma_client.db.litellm_managedfiletable
+
+
+class _ListedFileRow(Protocol):
+    @property
+    def unified_file_id(self) -> str: ...
+
+    @property
+    def file_object(self) -> object: ...
+
+    @property
+    def model_mappings(self) -> Mapping[str, object]: ...
+
+    @property
+    def storage_backend(self) -> str | None: ...
+
+
+class _ScopedFileRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    unified_file_id: str
+    file_object: JsonValue = None
+    model_mappings: Mapping[str, JsonValue]
+    storage_backend: str | None = None
+
+
+_SCOPED_FILE_ROWS: Final = TypeAdapter(tuple[_ScopedFileRow, ...])
+
+
+def _owner_condition(owner_filter: Mapping[str, object]) -> tuple[str, tuple[str, ...]]:
+    match owner_filter:
+        case {"OR": [{"created_by": str() as user_id}, {"team_id": str() as team_id}]}:
+            return '("created_by" = $1 OR "team_id" = $2)', (user_id, team_id)
+        case {"created_by": str() as user_id}:
+            return '"created_by" = $1', (user_id,)
+        case {"team_id": str() as team_id}:
+            return '"team_id" = $1', (team_id,)
+        case _:
+            return ("FALSE", ()) if owner_filter else ("TRUE", ())
+
+
+async def _scoped_file_rows(
+    database: _ManagedResourceDatabase,
+    owner_filter: Mapping[str, object],
+    model_mapping_keys: frozenset[str],
+    cursor_id: str | None,
+    direction: Literal["asc", "desc"],
+    take: int,
+) -> tuple[_ScopedFileRow, ...]:
+    owner_condition, owner_params = _owner_condition(owner_filter)
+    keys_param: Final = len(owner_params) + 1
+    comparison: Final = "<" if direction == "desc" else ">"
+    cursor_condition: Final = (
+        f'AND ("created_at", "unified_file_id") {comparison} (SELECT "created_at", "unified_file_id" '
+        f'FROM "LiteLLM_ManagedFileTable" WHERE "unified_file_id" = ${keys_param + 1}) '
+        if cursor_id
+        else ""
+    )
+    order: Final = direction.upper()
+    rows: Final = await database.query_raw(
+        'SELECT "unified_file_id", "file_object", "model_mappings", "storage_backend" FROM "LiteLLM_ManagedFileTable" '
+        f'WHERE {owner_condition} AND ("model_mappings" ?| ${keys_param}::text[] OR "storage_backend" IS NOT NULL) '
+        f'{cursor_condition}ORDER BY "created_at" {order}, "unified_file_id" {order} '
+        f"LIMIT ${keys_param + (2 if cursor_id else 1)}",
+        *owner_params,
+        sorted(model_mapping_keys),
+        *((cursor_id,) if cursor_id else ()),
+        take,
+    )
+    return _SCOPED_FILE_ROWS.validate_python(rows)
 
 
 def _iter_provider_file_id_pairs(
@@ -396,6 +484,11 @@ def _iter_provider_file_id_pairs(
 
 def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedObjectTableActions:
     return prisma_client.db.litellm_managedobjecttable
+
+
+def _writer_database(db: _ManagedResourceDatabase) -> _ManagedResourceDatabase:
+    """Reads that feed a write must see the create that just happened; a lagging read replica may not"""
+    return db.writer if isinstance(db, _WriterRoutedDatabase) else db
 
 
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -429,6 +522,25 @@ def _without_model_output(
     return (
         file_object.model_copy(update={"output": []}) if isinstance(file_object, ResponsesAPIResponse) else file_object
     )
+
+
+def _with_model_id(
+    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse,
+    model_id: str | None,
+) -> LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse:
+    return file_object if model_id is None else file_object.model_copy(update={"model_id": model_id})
+
+
+async def _stored_model_id(managed_object_table: _ManagedObjectTableActions, unified_object_id: str) -> str | None:
+    row: Final = await managed_object_table.find_first(where={"unified_object_id": unified_object_id})
+    if row is None:
+        return None
+    try:
+        parsed: Final = _JSON_VALUE_ADAPTER.validate_python(_decode_json_blob(row.file_object))
+    except (json.JSONDecodeError, ValidationError):
+        return None
+    model_id: Final = parsed.get("model_id") if isinstance(parsed, dict) else None
+    return model_id if isinstance(model_id, str) and model_id else None
 
 
 def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, str]:
@@ -479,7 +591,22 @@ def _with_managed_background_marker(request: Mapping[str, object]) -> dict[str, 
 
 
 _MANAGED_FILES_TARGET: Final = "managed_files"
+_PROVIDER_FILE_ID_KWARGS: Final = MappingProxyType(
+    {
+        CallTypes.acreate_batch: ("input_file_id",),
+        CallTypes.acreate_fine_tuning_job: ("training_file", "validation_file"),
+    }
+)
+_PROVIDER_FILE_ID_KEYS: Final = tuple(dict.fromkeys(chain.from_iterable(_PROVIDER_FILE_ID_KWARGS.values())))
 _PROVIDER_FILE_RETRIEVE_RETRY_DELAYS_SECONDS: Final = (0.5, 1.0, 2.0)
+
+
+class _SupportsKeyedGet(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+def _keyed_get(source: object, key: str, default: object = None) -> object:
+    return require_attributes(source, _SupportsKeyedGet, "get").get(key, default)
 
 
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
@@ -490,10 +617,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         prisma_client: PrismaClient,
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], datetime] = get_utc_datetime,
     ):
         self.internal_usage_cache = internal_usage_cache
         self.prisma_client = prisma_client
         self._sleep = sleep
+        self._clock = clock
 
     @staticmethod
     def _get_prometheus_logger():
@@ -599,8 +728,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         persist_attribution: bool = False,
         create_if_missing: bool = True,
         batch_processed: bool = False,
+        creating_model_id: str | None = None,
     ) -> None:
         """Persist a managed object row, caching it and upserting it in the DB.
+
+        creating_model_id is the router deployment that created the object. It is kept
+        inside the stored file_object JSON as `model_id`, because the raw provider id an
+        unmanaged batch stores as unified_object_id says nothing about which deployment
+        made it, and the cost poller needs that deployment to read the result back. A
+        later observe of the row (create_if_missing=False) keeps the stored value rather
+        than overwriting it with whichever deployment served the retrieve.
 
         persist_attribution is set only by the batch and background response creates,
         the callers that can speak for the creator; it gates the api_key, request_tags, and,
@@ -622,7 +759,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         It is written only in the upsert create branch.
         """
         verbose_logger.info(f"Storing LiteLLM Managed {file_purpose} object with id={unified_object_id} in cache")
-        stored_object: Final = _without_model_output(file_object)
+        managed_database: Final = _managed_database(self.prisma_client)
+        managed_object_table: Final = managed_database.litellm_managedobjecttable
+        preserved_model_id: Final = (
+            creating_model_id
+            if creating_model_id is not None or create_if_missing
+            else await _stored_model_id(_writer_database(managed_database).litellm_managedobjecttable, unified_object_id)
+        )
+        stored_object: Final = _with_model_id(_without_model_output(file_object), preserved_model_id)
         litellm_managed_object = LiteLLM_ManagedObjectTable(
             unified_object_id=unified_object_id,
             model_object_id=model_object_id,
@@ -654,7 +798,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "status": file_object.status,
             "updated_by": user_api_key_dict.user_id,
         }
-        managed_object_table: Final = _managed_object_table(self.prisma_client)
         if not create_if_missing:
             await managed_object_table.update_many(
                 where={"unified_object_id": unified_object_id},
@@ -1562,6 +1705,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if isinstance(file_id, str) and file_id
             )
             await self.check_file_ids_access(fine_tuning_file_ids, user_api_key_dict)
+            if fine_tuning_file_ids:
+                data["model_file_id_mapping"] = await self.get_model_file_id_mapping(
+                    fine_tuning_file_ids, user_api_key_dict.parent_otel_span
+                )
 
         return data
 
@@ -1576,50 +1723,49 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if request_kwargs is None:
             return healthy_deployments
 
-        input_file_id = cast(Optional[str], request_kwargs.get("input_file_id"))
-        model_file_id_mapping = cast(
-            Optional[Dict[str, Dict[str, str]]],
-            request_kwargs.get("model_file_id_mapping"),
+        request: Final = cast(Mapping[str, object], request_kwargs)
+        model_file_id_mapping: Final = cast(Mapping[str, Mapping[str, str]], request.get("model_file_id_mapping") or {})
+        requested_file_ids: Final = (request.get(key) for key in _PROVIDER_FILE_ID_KEYS)
+        model_ids_per_file: Final = tuple(
+            frozenset(model_file_id_mapping[file_id])
+            for file_id in requested_file_ids
+            if isinstance(file_id, str) and file_id in model_file_id_mapping
         )
-        allowed_model_ids = []
-        if input_file_id and model_file_id_mapping:
-            model_id_dict = model_file_id_mapping.get(input_file_id, {})
-            allowed_model_ids = list(model_id_dict.keys())
+        allowed_model_ids: Final[frozenset[str]] = (
+            model_ids_per_file[0].intersection(*model_ids_per_file[1:]) if model_ids_per_file else frozenset()
+        )
 
         if len(allowed_model_ids) == 0:
             return healthy_deployments
 
-        return [
+        holders: Final[list[dict[str, object]]] = [
             deployment
             for deployment in healthy_deployments
             if deployment.get("model_info", {}).get("id") in allowed_model_ids
         ]
+        return holders if holders or "input_file_id" in request else healthy_deployments
 
     async def async_pre_call_deployment_hook(
-        self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
+        self, kwargs: dict[str, object], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
         """
         Allow modifying the request just before it's sent to the deployment.
         """
-        accessor_key: Optional[str] = None
-        if call_type and call_type == CallTypes.acreate_batch:
-            accessor_key = "input_file_id"
-        elif call_type and call_type == CallTypes.acreate_fine_tuning_job:
-            accessor_key = "training_file"
-        else:
+        accessor_keys: Final = _PROVIDER_FILE_ID_KWARGS.get(call_type) if call_type else None
+        if accessor_keys is None:
             return kwargs
 
-        if accessor_key:
+        model_file_id_mapping = cast(Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping"))
+        # model_info may be at top-level or nested under litellm_metadata
+        # (batch/file operations use litellm_metadata)
+        model_id = cast(Optional[str], _keyed_get(kwargs.get("model_info", {}), "id"))
+        if model_id is None:
+            model_id = cast(
+                Optional[str],
+                _keyed_get(_keyed_get(kwargs.get("litellm_metadata", {}), "model_info", {}), "id"),
+            )
+        for accessor_key in accessor_keys:
             input_file_id = cast(Optional[str], kwargs.get(accessor_key))
-            model_file_id_mapping = cast(Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping"))
-            # model_info may be at top-level or nested under litellm_metadata
-            # (batch/file operations use litellm_metadata)
-            model_id = cast(Optional[str], kwargs.get("model_info", {}).get("id", None))
-            if model_id is None:
-                model_id = cast(
-                    Optional[str],
-                    kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id", None),
-                )
             mapped_file_id: Optional[str] = None
             if input_file_id and model_file_id_mapping and model_id:
                 mapped_file_id = model_file_id_mapping.get(input_file_id, {}).get(model_id, None)
@@ -1813,7 +1959,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     ),
                 )
 
-    async def get_model_file_id_mapping(self, file_ids: List[str], litellm_parent_otel_span: Span) -> dict:
+    async def get_model_file_id_mapping(self, file_ids: Sequence[str], litellm_parent_otel_span: Span | None) -> dict:
         """
         Get model-specific file IDs for a list of proxy file IDs.
         Returns a dictionary mapping litellm_proxy/ file_id -> model_id -> model_file_id
@@ -1855,7 +2001,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Optional[Router],
         _create_file_request: CreateFileRequest,
         target_model_names_list: List[str],
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
     ) -> List[OpenAIFileObject]:
         if llm_router is None:
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
@@ -1871,7 +2017,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         create_file_request: CreateFileRequest,
         llm_router: Router,
         target_model_names_list: List[str],
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> OpenAIFileObject:
         responses = await self.create_file_for_each_model(
@@ -1938,7 +2084,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         file_objects: List[OpenAIFileObject],
         create_file_request: CreateFileRequest,
         internal_usage_cache: InternalUsageCache,
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
         target_model_names_list: List[str],
     ) -> OpenAIFileObject:
         ## GET THE FILE TYPE FROM THE CREATE FILE REQUEST
@@ -2069,6 +2215,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 request_tags=request_tags_from_metadata(request_metadata if isinstance(request_metadata, dict) else {}),
                 persist_attribution=is_batch_create,
                 create_if_missing=is_batch_create,
+                creating_model_id=model_id if is_batch_create else None,
             )
             if not is_batch_create:
                 await self.store_batch_output_file_ownership(
@@ -2240,14 +2387,23 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         user_api_key_dict: UserAPIKeyAuth,
         limit: Optional[int] = None,
         after: Optional[str] = None,
+        model_scope: Optional[FileListModelScope] = None,
+        before: Optional[str] = None,
         **data: Dict,
     ) -> FileListPage:
         """List the managed files the caller owns, newest first.
 
         Pagination is keyset based on ``unified_file_id`` so a key that owns
         every file on the proxy still reads one bounded page at a time.
-        ``purpose`` is applied after parsing, because the managed file table
-        keeps it inside the ``file_object`` blob instead of a column, and rows
+        ``after`` pages toward older files and ``before`` toward newer ones,
+        each page still ordered newest first.
+        ``model_scope`` is applied in the query, so only rows whose
+        ``model_mappings`` name one of its deployment ids or model names, and
+        storage-backed rows, leave the database; a storage-backed row then
+        stays only when its model name is one the router sends to the listed
+        provider. ``purpose`` is applied after parsing, because the managed
+        file table keeps it inside the ``file_object`` blob instead of a
+        column. Rows
         whose blob will not parse drop out there too, so a chunk of rows can
         yield fewer matches than the page holds. Successive chunks are read
         until the page is full or the caller's rows run out, which keeps
@@ -2256,9 +2412,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         scan has to continue past it, the chunk widens to
         ``FILE_LIST_CONTINUATION_CHUNK_SIZE``, so the walk costs one query per
         that many rows instead of one per page. That bound is per query, not
-        per request: the work is still linear in the rows the caller owns, and
-        a filter matching nothing reads every one of them, with no index
-        covering either the owner filter or the sort.
+        per request: a ``purpose`` filter matching nothing still reads every
+        row that passes the query.
         """
         validate_file_list_limit(limit)
         validate_file_list_purpose(purpose)
@@ -2267,36 +2422,60 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if owner_filter is None:
             return FileListPage.model_validate(build_list_page([]))
 
-        if after:
-            cursor_row = await _managed_file_table(self.prisma_client).find_first(
-                where={**owner_filter, "unified_file_id": after}
+        if after and before:
+            raise ProxyException(
+                message="Pass either 'after' (or 'after_id') or 'before_id' when listing files, not both.",
+                type="invalid_request_error",
+                param="before_id",
+                code=400,
+                openai_code="invalid_value",
+            )
+        cursor_param: Final = "before_id" if before else "after"
+        cursor: Final = before or after
+        database: Final = _managed_database(self.prisma_client)
+        if cursor:
+            cursor_row = await database.litellm_managedfiletable.find_first(
+                where={**owner_filter, "unified_file_id": cursor}
             )
             if cursor_row is None:
                 raise ProxyException(
-                    message=f"Invalid 'after' cursor: no file found with id '{after}'.",
+                    message=f"Invalid '{cursor_param}' cursor: no file found with id '{cursor}'.",
                     type="invalid_request_error",
-                    param="after",
+                    param=cursor_param,
                     code=400,
                     openai_code="invalid_value",
                 )
 
+        if model_scope is not None and not model_scope.model_mapping_keys:
+            return FileListPage.model_validate(build_list_page([]))
+
         page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)
         matches: Final[List[OpenAIFileObject]] = []
-        cursor_id = after
+        cursor_id = cursor
         chunk_size = page_size + 1
+        direction: Final[Literal["asc", "desc"]] = "asc" if before else "desc"
 
         while len(matches) <= page_size:
             cursor_args: _CursorPageArgs = {"cursor": {"unified_file_id": cursor_id}, "skip": 1} if cursor_id else {}
-            chunk = await _managed_file_table(self.prisma_client).find_many(
-                where=owner_filter,
-                take=chunk_size,
-                order=[{"created_at": "desc"}, {"unified_file_id": "desc"}],
-                **cursor_args,
+            chunk: Sequence[_ListedFileRow] = (
+                await _scoped_file_rows(
+                    database, owner_filter, model_scope.model_mapping_keys, cursor_id, direction, chunk_size
+                )
+                if model_scope is not None
+                else await database.litellm_managedfiletable.find_many(
+                    where=owner_filter,
+                    take=chunk_size,
+                    order=[{"created_at": direction}, {"unified_file_id": direction}],
+                    **cursor_args,
+                )
             )
             matches.extend(
                 _public_file_object(parsed_file_object, row.unified_file_id)
                 for row in chunk
-                if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
+                if (
+                    model_scope is None or model_scope.holds(row.model_mappings, stored=row.storage_backend is not None)
+                )
+                and (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
                 and (purpose is None or parsed_file_object.purpose == purpose)
             )
             if len(chunk) < chunk_size:
@@ -2304,7 +2483,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             cursor_id = chunk[-1].unified_file_id
             chunk_size = max(chunk_size, FILE_LIST_CONTINUATION_CHUNK_SIZE)
 
-        return FileListPage.model_validate(build_list_page(matches[:page_size], has_more=len(matches) > page_size))
+        page: Final = matches[:page_size]
+        return FileListPage.model_validate(
+            build_list_page(page[::-1] if before else page, has_more=len(matches) > page_size)
+        )
 
     def _is_batch_polling_enabled(self) -> bool:
         """
@@ -2367,12 +2549,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             where={
                 "file_purpose": "batch",
                 "batch_processed": False,
-                "status": {"not_in": ["failed", "expired", "cancelled"]},
+                "status": {"not_in": ["failed", "expired", "cancelled", "stale_expired"]},
             },
             take=MAX_MATCHES_TO_RETURN,
             order={"created_at": "desc"},
         )
 
+        input_file_cutoff: Final = self._clock() - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
         referencing_batches: Final[list[dict[str, object]]] = []
         for batch in batches:
             try:
@@ -2385,7 +2568,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 # Extract file IDs from batch
                 # Batches typically reference the unified file ID in input_file_id
                 # Output and error files are generated by the provider
-                input_file_id = batch_data.get("input_file_id")
+                input_file_id = batch_data.get("input_file_id") if batch.created_at >= input_file_cutoff else None
                 output_file_id = batch_data.get("output_file_id")
                 error_file_id = batch_data.get("error_file_id")
 
@@ -2513,7 +2696,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             k: v for k, v in data.items() if k not in ("model", "file_id", "_litellm_internal_model_credentials")
         }
         for model_id, model_file_id in specific_model_file_id_mapping.items():
-            credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+            credentials = llm_router.registry().credentials(model_id, form="with_provider")
             delete_data = {
                 **filtered_data,
                 **(
@@ -2557,7 +2740,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     # against the deployment's configured bucket, which they only
                     # trust from this immutable server-side snapshot, never from
                     # request params.
-                    credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+                    credentials = llm_router.registry().credentials(model_id, form="with_provider")
                     if credentials is not None:
                         data["_litellm_internal_model_credentials"] = cast(Dict, MappingProxyType(dict(credentials)))
                     else:
@@ -2641,7 +2824,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 # Continue with other files even if one fails
                 continue
 
-    def _get_content_type_from_file_object(self, file_object: Optional[Any]) -> str:
+    def _get_content_type_from_file_object(self, file_object: object) -> str:
         """
         Determine content type from file object.
 

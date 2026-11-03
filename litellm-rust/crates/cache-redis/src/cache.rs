@@ -141,7 +141,7 @@ where
             redis::Value::Nil => Ok(None),
             redis::Value::BulkString(bytes) => self.codec.decode(&bytes).map(Some),
             redis::Value::SimpleString(text) => self.codec.decode(text.as_bytes()).map(Some),
-            _ => Err(Error::InvalidEntry),
+            _ => Err(Error::InvalidEntry(None)),
         }
     }
 
@@ -152,7 +152,7 @@ where
         match self.decode_response(value) {
             Ok(Some(value)) => Ok(BatchEntry::Hit(value)),
             Ok(None) => Ok(BatchEntry::Miss),
-            Err(Error::InvalidEntry) => Ok(BatchEntry::Invalid),
+            Err(Error::InvalidEntry(_)) => Ok(BatchEntry::Invalid),
             Err(error) => Err(error),
         }
     }
