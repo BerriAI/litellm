@@ -204,9 +204,11 @@ class MCPServer(LiteLLMBaseModel):
     access_groups: list[str] | None = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
-    # Legacy opt-in to upstream-delegated authentication for ``oauth2``
-    # servers. LiteLLM admission still applies; use ``oauth_delegate`` for the
-    # supported client-forwarded OAuth flow.
+    # Deprecated opt-in to upstream-delegated authentication for ``oauth2``
+    # servers. A bare ``Authorization`` that is not a LiteLLM credential is the
+    # upstream token and is forwarded; see
+    # ``MCPRequestHandler._admit_legacy_delegate_bearer``. New servers should use
+    # ``true_passthrough`` or ``oauth_delegate``.
     #
     # Honored only for ``auth_type == oauth2``; ignored for any other
     # ``auth_type``. OAuth pass-through for non-oauth2 servers

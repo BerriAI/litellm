@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -138,6 +138,15 @@ def get_azure_ai_auth_headers(
 
 
 AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
+
+
+FOUNDRY_CLASSIC_AGENT_ID_PREFIX: Final = "asst_"
+
+
+def is_foundry_project_agent(model: str | None) -> bool:
+    if model is None or AzureFoundryModelInfo.get_azure_ai_route(model) != "agents":
+        return False
+    return not model.split("agents/", 1)[1].startswith(FOUNDRY_CLASSIC_AGENT_ID_PREFIX)
 
 
 def azure_ai_supports_native_responses(model: str | None, api_base: str | None) -> bool:
