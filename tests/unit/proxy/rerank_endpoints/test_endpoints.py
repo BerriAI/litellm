@@ -5,10 +5,13 @@ Tests for rerank_endpoints/endpoints.py response headers.
 import json
 import logging
 from collections.abc import Iterator
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException, Request, Response
+import respx
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.testclient import TestClient
 
 import litellm.proxy.common_request_processing as common_request_processing_mod
 import litellm.proxy.proxy_server as proxy_server_mod
@@ -209,3 +212,68 @@ async def test_a_rejection_raised_before_routing_keeps_its_own_status(monkeypatc
     error = await _rerank_failure(rejection, raised_before_routing=True, monkeypatch=monkeypatch)
 
     assert (error.type, error.param, error.code) == ("bad_request_error", "session_id", "400")
+
+
+def test_failed_rerank_spend_row_records_arerank(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    import litellm
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.proxy.utils import ProxyLogging
+
+    provider: Final = respx_mock.post(url__startswith="https://rerank-provider.example").respond(
+        400, json={"message": "invalid documents"}
+    )
+    cache: Final = UserApiKeyCache()
+    spend_writer: Final = MagicMock(update_database=AsyncMock())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    monkeypatch.setattr(proxy_server_mod, "general_settings", {})
+    monkeypatch.setattr(
+        proxy_server_mod,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "rerank-model",
+                    "litellm_params": {
+                        "model": "cohere/rerank-v3.5",
+                        "api_base": "https://rerank-provider.example",
+                        "api_key": "provider-key",
+                    },
+                }
+            ],
+            num_retries=0,
+        ),
+    )
+    monkeypatch.setattr(proxy_server_mod, "proxy_config", ProxyConfig())
+    monkeypatch.setattr(proxy_server_mod, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+    monkeypatch.setattr(proxy_server_mod, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server_mod, "user_model", None)
+    monkeypatch.setattr(proxy_server_mod, "version", "1.2.3")
+    app: Final = FastAPI()
+    app.include_router(rerank_router)
+    app.add_exception_handler(ProxyException, proxy_server_mod.openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test")
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = client.post(
+                "/v1/rerank", json={"model": "rerank-model", "query": "q", "documents": ["a", "b"]}
+            )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert (response.status_code, provider.call_count) == (400, 1), response.text
+    db_call: Final = spend_writer.update_database.call_args.kwargs
+    payload: Final = get_logging_payload(
+        kwargs=db_call["kwargs"],
+        response_obj=db_call["completion_response"],
+        start_time=db_call["start_time"],
+        end_time=db_call["end_time"],
+    )
+    assert (payload["status"], payload["call_type"]) == ("failure", "arerank")

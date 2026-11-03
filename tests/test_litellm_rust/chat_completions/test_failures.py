@@ -67,3 +67,16 @@ async def test_empty_messages_fail_before_provider_io(server: RecordingServer, a
         await call(server, asynchronous=asynchronous, messages=[])
 
     assert not server.requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_a_native_decline_reaches_the_dispatcher_before_provider_io(
+    server: RecordingServer, asynchronous: bool
+) -> None:
+    server.expected_requests = 0
+
+    with pytest.raises(RuntimeError, match="declined the request: native Python chat_completions streaming"):
+        await call(server, asynchronous=asynchronous, stream=True)
+
+    assert not server.requests

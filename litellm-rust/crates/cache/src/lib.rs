@@ -23,4 +23,4 @@ pub use codec::{CacheCodec, JsonCodec};
 pub use dual::{
     DEFAULT_DELETE_BATCH_SIZE, DualCache, ReadPolicy, RemoteFailurePolicy, WritePolicy,
 };
-pub use error::Error;
+pub use error::{Error, ShortBatch};

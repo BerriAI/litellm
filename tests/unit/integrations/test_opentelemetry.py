@@ -48,6 +48,7 @@ from litellm.integrations.opentelemetry import (
     RAW_REQUEST_SPAN_NAME,
     _normalize_team_metadata_keys,
 )
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy import proxy_server
 from litellm.proxy._types import ManagementEndpointLoggingPayload, ProxyException, SpanAttributes
@@ -343,6 +344,11 @@ def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metada
         "cause": "heuristic",
         "classifier_failure_reason": "timeout",
         "classifier_error_type": "TimeoutError",
+        "classifier_input_budget_tokens": 24576,
+        "classifier_input_tokens": 23000,
+        "classifier_input_count_method": "estimated_tokens",
+        "classifier_input_truncated": True,
+        "classifier_input_budget_status": "truncated",
         "classifier_cost": 0.001,
     }
     with provider.get_tracer(__name__).start_as_current_span("inference") as span:
@@ -1047,6 +1053,15 @@ class TestOpenTelemetrySemconvStability(unittest.TestCase):
         h = self._make(env="gen_ai_latest_experimental")
         kwargs = {"model": "claude-sonnet-4-5", "call_type": "unknown"}
         self.assertEqual(h._get_span_name(kwargs), "chat claude-sonnet-4-5")
+
+    def test_passthrough_operation_names_the_span(self) -> None:
+        h: Final = self._make(env="gen_ai_latest_experimental")
+        kwargs: Final = {
+            "model": "unknown",
+            "call_type": "pass_through_endpoint",
+            PASSTHROUGH_OPERATION_KEY: GenAIOperation.RETRIEVAL,
+        }
+        self.assertEqual(h._get_span_name(kwargs), "retrieval unknown")
 
     def test_generation_name_metadata_overrides_semconv_name(self):
         h = self._make(env="gen_ai_latest_experimental")

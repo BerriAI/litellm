@@ -142,6 +142,7 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/test",
         "/debug/memory/summary",
         "/api/event_logging/batch",
+        "/eu_jev/v1/systemone",
     }
 )
 

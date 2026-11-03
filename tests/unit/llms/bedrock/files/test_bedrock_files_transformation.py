@@ -4458,6 +4458,31 @@ class TestMalformedBatchJsonl:
 _VALID_BATCH_RECORD: Final = json.loads(_VALID_BATCH_LINE)
 
 
+def test_file_content_conversion_keeps_a_line_whose_json_holds_unicode_line_separators() -> None:
+    text: Final = "Hello\u2028from\u2029batch"
+    body: Final = {**_VALID_BATCH_RECORD["body"], "messages": [{"role": "user", "content": text}]}
+    record: Final = {**_VALID_BATCH_RECORD, "body": body}
+    file_content: Final = f"{json.dumps(record, ensure_ascii=False)}\n".encode()
+
+    bedrock_jsonl, _ = BedrockJsonlFilesTransformation().transform_openai_file_content_to_bedrock_file_content(
+        file_content
+    )
+
+    (bedrock_record,) = (json.loads(line) for line in bedrock_jsonl.split("\n"))
+    assert bedrock_record["modelInput"]["messages"] == [{"role": "user", "content": [{"text": text}]}]
+
+
+_CLAUDE_BODY_WITH_A_LIST_ROLE_BEFORE_A_SYSTEM_MESSAGE: Final = {
+    "model": "bedrock/us.anthropic.claude-haiku-5-5",
+    "max_tokens": 20,
+    "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": ["user"], "content": "ok"},
+        {"role": "system", "content": "Be terse."},
+    ],
+}
+
+
 def _batch_line(body: object) -> str:
     return json.dumps({**_VALID_BATCH_RECORD, "body": body})
 
@@ -4501,6 +4526,11 @@ def _batch_line_with_body(field: str, value: object) -> str:
             f"{_VALID_BATCH_LINE}\n{_batch_line_with_body('messages', 'hi')}\n".encode(),
             "Batch input file line 2 could not be converted to a Bedrock batch record",
             id="string-messages",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_batch_line(_CLAUDE_BODY_WITH_A_LIST_ROLE_BEFORE_A_SYSTEM_MESSAGE)}\n".encode(),
+            "Batch input file line 2 could not be converted to a Bedrock batch record",
+            id="claude-list-role-before-a-system-message",
         ),
         pytest.param(
             f"{_VALID_BATCH_LINE}\n{'[' * 1_000_000}{']' * 1_000_000}\n".encode(),
