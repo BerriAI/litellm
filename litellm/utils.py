@@ -467,6 +467,7 @@ if TYPE_CHECKING:
     )
     from litellm.llms.cohere.common_utils import CohereModelInfo
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.llms.custom_llm import CustomLLM
     from litellm.types.llms.anthropic import (
         ANTHROPIC_API_ONLY_HEADERS,
         AnthropicThinkingParam,
@@ -10952,10 +10953,9 @@ class ProviderConfigManager:
         provider: LlmProviders | str,
     ) -> BaseVideoConfig | None:
         if not isinstance(provider, LlmProviders):
-            if provider in litellm._custom_providers:
-                return ProviderConfigManager.get_custom_provider_video_config(provider)
-            if provider not in LlmProvidersSet:
-                return None
+            custom_video_config: Final = ProviderConfigManager.get_custom_provider_video_config(provider)
+            if custom_video_config is not None or provider not in LlmProvidersSet:
+                return custom_video_config
             return ProviderConfigManager.get_provider_video_config(model=model, provider=LlmProviders(provider))
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
@@ -11006,6 +11006,20 @@ class ProviderConfigManager:
 
             return VolcEngineVideoConfig()
         return None
+
+    @staticmethod
+    def get_custom_llm_handler(provider: str | None) -> CustomLLM | None:
+        """The `CustomLLM` registered for `provider` in `litellm.custom_provider_map`, if its handler is one."""
+        from litellm.llms.custom_llm import CustomLLM
+
+        return next(
+            (
+                item["custom_handler"]
+                for item in litellm.custom_provider_map
+                if item["provider"] == provider and isinstance(item["custom_handler"], CustomLLM)
+            ),
+            None,
+        )
 
     @staticmethod
     def get_custom_provider_video_config(provider: str) -> BaseVideoConfig | None:

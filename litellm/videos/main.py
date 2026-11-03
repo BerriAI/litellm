@@ -51,7 +51,7 @@ async def avideo_generation(
     size: str | None = None,
     user: str | None = None,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -181,7 +181,7 @@ def video_generation(
     size: str | None = None,
     user: str | None = None,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -467,7 +467,7 @@ async def avideo_remix(
     video_id: str,
     prompt: str,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -570,7 +570,7 @@ def video_remix(
     video_id: str,
     prompt: str,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -671,7 +671,7 @@ async def avideo_list(
     order: str | None = None,
     api_key: str | None = None,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -785,7 +785,7 @@ def video_list(
     limit: int | None = None,
     order: str | None = None,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -882,7 +882,7 @@ def video_list(
 async def avideo_status(
     video_id: str,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -981,7 +981,7 @@ def video_status(
 def video_status(
     video_id: str,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -1099,7 +1099,7 @@ async def avideo_create_character(
     name: str,
     video: FileTypes,
     timeout=600,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
@@ -1154,7 +1154,7 @@ def video_create_character(
     name: str,
     video: FileTypes,
     timeout=600,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
@@ -1229,7 +1229,7 @@ def video_create_character(
 async def avideo_get_character(
     character_id: str,
     timeout=600,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
@@ -1279,7 +1279,7 @@ async def avideo_get_character(
 def video_get_character(
     character_id: str,
     timeout=600,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
@@ -1354,7 +1354,7 @@ async def avideo_edit(
     video_id: str,
     prompt: str,
     timeout=600,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
@@ -1409,7 +1409,7 @@ def video_edit(
     video_id: str,
     prompt: str,
     timeout=600,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
@@ -1491,7 +1491,7 @@ async def avideo_extension(
     prompt: str,
     seconds: str,
     timeout=600,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
@@ -1545,7 +1545,7 @@ def video_extension(
     prompt: str,
     seconds: str,
     timeout=600,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
