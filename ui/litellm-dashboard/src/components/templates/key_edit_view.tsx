@@ -427,6 +427,10 @@ function KeyEditSession({
                     form.setValue("allowed_routes", "management_routes", { shouldDirty: true });
                     form.setValue("models", [], { shouldDirty: true });
                     break;
+                  case "read_only":
+                    form.setValue("allowed_routes", "info_routes", { shouldDirty: true });
+                    form.setValue("models", [], { shouldDirty: true });
+                    break;
                 }
               }}
             />

@@ -94,6 +94,19 @@ describe("ApiKeysDashboard", () => {
     );
   });
 
+  it("passes read-only key type URL prefill data to the create key action", () => {
+    renderWithProviders(<ApiKeysDashboard />, {
+      searchParams: "?create=true&key_type=read_only",
+    });
+
+    expect(createKeyProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        autoOpenCreate: true,
+        prefillData: expect.objectContaining({ key_type: "read_only" }),
+      }),
+    );
+  });
+
   it("hides Create Key for view-only roles", () => {
     authorizedSession.mockReturnValue(session({ isViewOnly: true }));
     renderWithProviders(<ApiKeysDashboard />);

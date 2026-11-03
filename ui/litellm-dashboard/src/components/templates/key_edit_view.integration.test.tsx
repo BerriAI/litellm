@@ -728,6 +728,61 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should show Read-only for keys with info routes", async () => {
+    const keyDataWithInfoRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["info_routes"],
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithInfoRoutes}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Key Type")).toHaveTextContent("Read-only");
+    });
+  });
+
+  it("should update the key to read-only routes and clear its models", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithLlmApiRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes"],
+      models: ["gpt-4"],
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithLlmApiRoutes}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await userEvent.click(await screen.findByLabelText("Key Type"));
+    await userEvent.click(await screen.findByRole("option", { name: /^Read-only/ }));
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalledWith(
+        expect.objectContaining({ allowed_routes: ["info_routes"], models: [] }),
+        expect.any(Array),
+      );
+    });
+  });
+
   it("should disable guardrails selector when user is not premium and has no write access role", async () => {
     renderWithProviders(
       <KeyEditView

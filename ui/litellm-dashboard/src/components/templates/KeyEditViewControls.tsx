@@ -28,6 +28,11 @@ const KEY_TYPE_OPTIONS = [
   { value: "default", label: "Full Access", hint: "Can call all routes (AI APIs, Management, and read-only)" },
   { value: "llm_api", label: "AI APIs", hint: "Can call only AI API routes (chat/completions, embeddings, etc.)" },
   { value: "management", label: "Management", hint: "Can call only management routes (user/team/key management)" },
+  {
+    value: "read_only",
+    label: "Read-only",
+    hint: "Can call only read routes (key, team, user, org and model info and list routes, health)",
+  },
 ];
 
 export const KeyTypeSelect = ({

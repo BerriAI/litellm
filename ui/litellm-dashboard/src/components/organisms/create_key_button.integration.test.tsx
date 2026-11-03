@@ -869,6 +869,16 @@ describe("CreateKey", () => {
 
       expect((await createdPayload()).key_type).toBe("management");
     });
+
+    it("prefills the read-only key type", async () => {
+      renderCreateKey({ autoOpenCreate: true, prefillData: { key_type: "read_only" } });
+
+      await screen.findByLabelText(/Key Name/);
+      await userEvent.type(await screen.findByLabelText(/Key Name/), "prefilled-read-only");
+      await submit();
+
+      expect((await createdPayload()).key_type).toBe("read_only");
+    });
   });
 
   describe("models dropdown team gating", () => {
@@ -1281,6 +1291,19 @@ describe("CreateKey", () => {
 
       const payload = await createdPayload();
       expect(payload.key_type).toBe("management");
+      expect(payload.models).toStrictEqual([]);
+    });
+
+    it("clears and disables models when a read-only key type is chosen", async () => {
+      await openModal();
+      await nameTheKey();
+
+      await userEvent.click(await screen.findByLabelText("Key Type"));
+      await userEvent.click(await screen.findByRole("option", { name: /^Read-only/ }));
+      await submit();
+
+      const payload = await createdPayload();
+      expect(payload.key_type).toBe("read_only");
       expect(payload.models).toStrictEqual([]);
     });
   });
