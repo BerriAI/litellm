@@ -31,6 +31,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
 from litellm.proxy.auth.login_throttle import LoginAttempt, LoginThrottle
 from litellm.proxy.auth.password_policy import is_breach_check_enabled, is_password_breached
+from litellm.proxy.common_utils.fips import openssl_enforces_fips
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -42,6 +43,7 @@ from litellm.proxy.utils import (
     PrismaClient,
     get_server_root_path,
     hash_password,
+    run_off_loop_if_fips,
     verify_password,
 )
 from litellm.repositories.user_repository import UserRepository
@@ -107,7 +109,7 @@ async def screen_login_password_for_breach(
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
     """Rehash legacy password (SHA256) to scrypt on successful login."""
-    if stored.startswith("scrypt:"):
+    if stored.startswith(("scrypt:", "pbkdf2:")):
         return
     from litellm.proxy.proxy_server import prisma_client
 
@@ -411,7 +413,10 @@ async def _sign_in(
                 code=401,
             )
 
-        if verify_password(password, _password):
+        password_matches: Final = await run_off_loop_if_fips(verify_password, password, _password)
+        if openssl_enforces_fips():
+            await attempt.refuse_if_blocked_while_waiting()
+        if password_matches:
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
             breached_now: Final = prisma_client is not None and await screen_login_password_for_breach(
                 user_id=_user_row.user_id,

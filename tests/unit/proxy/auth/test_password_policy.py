@@ -20,6 +20,7 @@ from litellm.proxy.auth.password_policy import (
     MIN_ALLOWED_LENGTH,
     PasswordPolicy,
     get_password_policy,
+    is_password_breached,
     validate_password_not_breached,
     validate_password_policy,
     validate_passwords_bulk,
@@ -355,3 +356,10 @@ async def test_validate_passwords_bulk_mixed_verdicts():
 async def test_validate_passwords_bulk_empty_batch_makes_no_lookups():
     verdicts = await validate_passwords_bulk((), {}, client=_client_never_called())
     assert verdicts == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_openssl")
+async def test_fips_mode_skips_the_breach_check() -> None:
+    client_says_breached = _client_returning(f"{_sha1_upper(STRONG_PASSWORD)[5:]}:1387")
+    assert await is_password_breached(STRONG_PASSWORD, {}, client_says_breached) is False

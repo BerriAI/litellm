@@ -1,7 +1,9 @@
 # conftest.py
 
+import _hashlib
 import asyncio
 import copy
+import hashlib
 import inspect
 import logging
 import os
@@ -514,3 +516,30 @@ def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=service_logging)):
         yield rendered
+
+
+@pytest.fixture
+def fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_new: Final = _hashlib.new
+
+    def new(name: str, data: bytes = b"", *, usedforsecurity: bool = True) -> _hashlib.HASH:
+        if name == "md5":
+            raise _hashlib.UnsupportedDigestmodError("unsupported hash type")
+        return real_new(name, data, usedforsecurity=usedforsecurity)
+
+    monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
+    monkeypatch.setattr(_hashlib, "new", new)
+
+
+@pytest.fixture
+def pbkdf2_on_event_loop(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """One entry per PBKDF2 call: whether it ran on the event loop's thread."""
+    real_pbkdf2: Final = hashlib.pbkdf2_hmac
+    on_event_loop: Final[list[bool]] = []
+
+    def recording_pbkdf2(hash_name: str, password: bytes, salt: bytes, iterations: int, dklen: int) -> bytes:
+        on_event_loop.append(asyncio._get_running_loop() is not None)
+        return real_pbkdf2(hash_name, password, salt, iterations, dklen)
+
+    monkeypatch.setattr(hashlib, "pbkdf2_hmac", recording_pbkdf2)
+    return on_event_loop

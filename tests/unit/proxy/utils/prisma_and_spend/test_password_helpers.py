@@ -4,6 +4,7 @@ Symbols pinned here:
   - ``hash_token``
   - ``hash_password``
   - ``verify_password``
+  - ``run_off_loop_if_fips``
   - ``migrate_passwords_to_scrypt_async``
   - ``_hash_token_if_needed``
   - ``PrismaClient._is_sha256_hex`` (a nested helper inside
@@ -13,9 +14,12 @@ Symbols pinned here:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import ssl
+import threading
 from types import SimpleNamespace
-from typing import List
+from typing import Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,8 +29,16 @@ from litellm.proxy.utils import (
     hash_password,
     hash_token,
     migrate_passwords_to_scrypt_async,
+    run_off_loop_if_fips,
     verify_password,
 )
+
+PASSWORD: Final = "Seed-Lamp-4-River"
+PBKDF2_ROW: Final = "pbkdf2:AAECAwQFBgcICQoLDA0OD+uxhNqRo/3ZFLEaKARqFBT+N3Kqek/SGM/5AvocSN0T"
+EIGHT_CHARACTER_PBKDF2_ROW: Final = "pbkdf2:AAECAwQFBgcICQoLDA0ODxhpezknSiGV0cY8wgaSXYf/xzxcPw49uGdOt/TBvPPH"
+SEVEN_CHARACTER_PBKDF2_ROW: Final = "pbkdf2:AAECAwQFBgcICQoLDA0ODxFIwl/XKIAeyWEnfqz8H9vNQX4uo7/u1HiJhB7Ro+N7"
+SCRYPT_ROW: Final = "scrypt:AAECAwQFBgcICQoLDA0OD7hIwlM/k8ytnffjFDt6AuO+BvqtmZvDkWXJP+A3bf0N"
+SHA256_ROW: Final = hashlib.sha256(PASSWORD.encode()).hexdigest()
 
 
 def test_hash_token_returns_sha256_hex_of_input() -> None:
@@ -217,3 +229,113 @@ async def test_migrate_passwords_raises_on_db_failure() -> None:
     pc.db.litellm_usertable.find_many = AsyncMock(side_effect=RuntimeError("db unavailable"))
     with pytest.raises(RuntimeError, match="db unavailable"):
         await migrate_passwords_to_scrypt_async(pc)
+
+
+@pytest.mark.usefixtures("fips_openssl")
+def test_fips_hash_is_pbkdf2_sha256_at_600k_salted_by_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ssl, "RAND_bytes", lambda size: bytes(range(size)))
+    assert hash_password(PASSWORD) == PBKDF2_ROW
+
+
+@pytest.mark.usefixtures("fips_openssl")
+def test_fips_hash_salts_every_row_and_verifies() -> None:
+    first, second = hash_password(PASSWORD), hash_password(PASSWORD)
+    assert first != second
+    assert verify_password(PASSWORD, first)
+
+
+@pytest.mark.usefixtures("fips_openssl")
+def test_fips_verify_needs_the_right_password_of_at_least_eight_characters() -> None:
+    outcome = {
+        "right": verify_password(PASSWORD, PBKDF2_ROW),
+        "wrong": verify_password("Seed-Lamp-4-Rivet", PBKDF2_ROW),
+        "lone_surrogate": verify_password("\ud800" + PASSWORD, PBKDF2_ROW),
+        "eight_characters": verify_password("Seed-Lam", EIGHT_CHARACTER_PBKDF2_ROW),
+        "seven_characters": verify_password("Seed-La", SEVEN_CHARACTER_PBKDF2_ROW),
+    }
+    assert outcome == {
+        "right": True,
+        "wrong": False,
+        "lone_surrogate": False,
+        "eight_characters": True,
+        "seven_characters": False,
+    }
+
+
+@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.parametrize(
+    "row",
+    [
+        SCRYPT_ROW,
+        SHA256_ROW,
+        PASSWORD,
+        "pbkdf2:",
+        PBKDF2_ROW[:-1],
+        PBKDF2_ROW + "A",
+        PBKDF2_ROW + "\n",
+        "pbkdf2:" + "@" * 64,
+        "pbkdf2:sha256:1000:AAECAwQFBgcICQoLDA0ODw==:67GE2pGj/dkUsRooBGoUFP43cqp6T9IYz/kC+hxI3RM=",
+    ],
+    ids=[
+        "scrypt",
+        "sha256",
+        "plaintext",
+        "prefix-only",
+        "short",
+        "long",
+        "newline",
+        "not-base64",
+        "stored-iterations",
+    ],
+)
+def test_fips_refuses_any_other_row_with_one_error_that_hides_it(caplog: pytest.LogCaptureFixture, row: str) -> None:
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        assert verify_password(PASSWORD, row) is False
+    assert [record.levelname for record in caplog.records] == ["ERROR"]
+    assert row not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "row, verifies",
+    [(SCRYPT_ROW, True), (SHA256_ROW, True), (PBKDF2_ROW, False)],
+    ids=["scrypt", "sha256", "pbkdf2"],
+)
+def test_standard_mode_verifies_the_rows_it_always_did(row: str, verifies: bool) -> None:
+    assert verify_password(PASSWORD, row) is verifies
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_openssl")
+async def test_fips_boot_migration_writes_no_row() -> None:
+    pc = MagicMock()
+    pc.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[_make_user("plaintext-user", PASSWORD), _make_user("fips-user", PBKDF2_ROW)]
+    )
+    pc.db.litellm_usertable.update = AsyncMock()
+
+    await migrate_passwords_to_scrypt_async(pc)
+
+    pc.db.litellm_usertable.update.assert_not_awaited()
+
+
+def _on_event_loop() -> bool:
+    return asyncio._get_running_loop() is not None
+
+
+@pytest.mark.asyncio
+async def test_password_kdf_runs_on_the_event_loop_in_standard_mode() -> None:
+    assert await run_off_loop_if_fips(_on_event_loop) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_openssl")
+async def test_password_kdfs_leave_the_event_loop_and_never_overlap_in_fips_mode() -> None:
+    second_started: Final = threading.Event()
+
+    def first() -> tuple[bool, bool]:
+        return _on_event_loop(), second_started.wait(timeout=0.2)
+
+    (first_on_event_loop, overlapped), _ = await asyncio.gather(
+        run_off_loop_if_fips(first), run_off_loop_if_fips(second_started.set)
+    )
+    assert (first_on_event_loop, overlapped) == (False, False)
