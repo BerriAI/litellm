@@ -37,7 +37,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm._internal_context import internal_parent_request_id, internal_sub_call
+from litellm._internal_context import internal_sub_call
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -6227,7 +6227,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            with internal_sub_call(internal_parent_request_id.get() or logging_obj.litellm_call_id):
+            with internal_sub_call(logging_obj.litellm_call_id):
                 response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
                     model=patch.model or model,
                     input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
@@ -6362,9 +6362,7 @@ class BaseLLMHTTPHandler:
             fingerprint=fingerprint,
         )
 
-        with internal_sub_call(
-            internal_parent_request_id.get() or (logging_obj.litellm_call_id if logging_obj is not None else None)
-        ):
+        with internal_sub_call(logging_obj.litellm_call_id if logging_obj is not None else None):
             response: Final = await litellm.acompletion(
                 model=full_model_name,
                 messages=patch.messages,
