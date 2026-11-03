@@ -92,6 +92,7 @@ class DescriptionRequest:
     logging_disabled: bool
     trace_id: str | None
     session_id: str | None
+    end_user_id: str | None = None
 
 
 class ImageDescriber(Protocol):
@@ -153,6 +154,8 @@ async def describe_with_proxy_child_request(request: DescriptionRequest) -> Desc
         "timeout": request.timeout,
         **({"litellm_trace_id": request.trace_id} if request.trace_id is not None else {}),
         **({"litellm_session_id": request.session_id} if request.session_id is not None else {}),
+        # The child authenticates again: naming the parent's end user restores its region and its budget there
+        **({"user": request.end_user_id} if request.end_user_id is not None else {}),
     }
     try:
         response: Final = await asyncio.wait_for(
@@ -212,6 +215,12 @@ def _request_auth(kwargs: Mapping[str, object]) -> "UserAPIKeyAuth | None":
         ),
         None,
     )
+
+
+def _end_user_id(kwargs: Mapping[str, object]) -> str | None:
+    """The end user that the parent request's auth resolved, from a header, the body or the key"""
+    auth: Final = _request_auth(kwargs)
+    return auth.end_user_id if auth is not None and auth.end_user_id else None
 
 
 def _tenant_scope(kwargs: Mapping[str, object]) -> str | None:
@@ -428,6 +437,7 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             logging_disabled=_logging_disabled(kwargs),
             trace_id=_nonempty_str(kwargs.get("litellm_trace_id")),
             session_id=_nonempty_str(kwargs.get("litellm_session_id")),
+            end_user_id=_end_user_id(kwargs),
         )
         scope: Final = _tenant_scope(kwargs)
         fetch_time_left = self.timeout  # rebind-ok: shrinks by the time each remote fetch takes

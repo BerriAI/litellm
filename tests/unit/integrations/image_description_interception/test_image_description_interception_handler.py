@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.hooks.prompt_injection_detection import _OPTIONAL_PromptInjectionDetection
 from litellm.proxy.child_request import ChildResponse, chat_child_request
+from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
@@ -385,7 +386,6 @@ async def test_an_oversized_remote_image_becomes_a_placeholder_without_being_rea
     assert (len(served_chunks), describer.requests) == (3, [])
 
 
-
 @pytest.mark.asyncio
 async def test_slow_remote_images_share_one_fetch_deadline_and_inline_images_still_get_described(
     monkeypatch: pytest.MonkeyPatch,
@@ -431,7 +431,9 @@ async def test_slow_remote_images_share_one_fetch_deadline_and_inline_images_sti
 @pytest.mark.asyncio
 async def test_describing_does_not_use_the_fetch_time_of_later_remote_images(monkeypatch: pytest.MonkeyPatch):
     def serve(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers={"content-type": "image/png"}, content=IMAGE_BYTES + request.url.path.encode())
+        return httpx.Response(
+            200, headers={"content-type": "image/png"}, content=IMAGE_BYTES + request.url.path.encode()
+        )
 
     monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.MockTransport(serve)))
     monkeypatch.setattr(litellm, "user_url_validation", False)
@@ -495,7 +497,7 @@ def _child_payload_text(payload: Mapping[str, object]) -> str:
     return json.dumps(payload, sort_keys=True)
 
 
-def _description_request(logging_disabled: bool = False) -> DescriptionRequest:
+def _description_request(logging_disabled: bool = False, end_user_id: str | None = None) -> DescriptionRequest:
     return DescriptionRequest(
         model="vision-describer",
         prompt="Describe.",
@@ -504,6 +506,7 @@ def _description_request(logging_disabled: bool = False) -> DescriptionRequest:
         logging_disabled=logging_disabled,
         trace_id="trace-1",
         session_id=None,
+        end_user_id=end_user_id,
     )
 
 
@@ -549,7 +552,9 @@ async def test_default_describer_sends_a_marked_child_request_and_reads_its_answ
 
     token: Final = chat_child_request.set(send)
     try:
-        result: Final = await describe_with_proxy_child_request(_description_request(logging_disabled=True))
+        result: Final = await describe_with_proxy_child_request(
+            _description_request(logging_disabled=True, end_user_id="customer-eu")
+        )
     finally:
         chat_child_request.reset(token)
 
@@ -572,12 +577,51 @@ async def test_default_describer_sends_a_marked_child_request_and_reads_its_answ
                     "max_tokens": 4096,
                     "timeout": 5.0,
                     "litellm_trace_id": "trace-1",
+                    "user": "customer-eu",
                 }
             ),
             True,
             None,
         )
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth", "end_user_id"),
+    [
+        (UserAPIKeyAuth(api_key="sk-test", end_user_id="customer-eu"), "customer-eu"),
+        (UserAPIKeyAuth(api_key="sk-test"), None),
+        (None, None),
+    ],
+)
+async def test_description_request_names_the_end_user_the_parent_auth_resolved(
+    auth: UserAPIKeyAuth | None, end_user_id: str | None
+):
+    describer: Final = _RecordingDescriber([Described("a cat")])
+
+    await _logger(describer).async_pre_call_deployment_hook(_identity_request(auth), CallTypes.acompletion)
+
+    assert describer.received[0].end_user_id == end_user_id
+
+
+@pytest.mark.asyncio
+async def test_the_child_request_names_its_end_user_where_the_proxy_auth_reads_it():
+    payloads: Final[list[Mapping[str, object]]] = []  # mutable-ok: records each child request
+
+    async def send(
+        payload: Mapping[str, object], *, logging_disabled: bool, scope: AbstractContextManager[None]
+    ) -> ChildResponse:
+        payloads.append(payload)
+        return ChildResponse(200, b'{"choices": [{"message": {"content": "a cat"}}]}')
+
+    token: Final = chat_child_request.set(send)
+    try:
+        await describe_with_proxy_child_request(_description_request(end_user_id="customer-eu"))
+    finally:
+        chat_child_request.reset(token)
+
+    assert get_end_user_id_from_request_body(payloads[0], {}) == "customer-eu"
 
 
 @pytest.mark.asyncio
