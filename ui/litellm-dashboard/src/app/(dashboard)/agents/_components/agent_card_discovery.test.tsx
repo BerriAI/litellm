@@ -189,6 +189,60 @@ describe("AgentCardDiscovery", () => {
     });
   });
 
+  it("sends the credentials only when the admin clicks Discover", async () => {
+    mockDiscover.mockRejectedValueOnce(new Error("HTTP 401")).mockResolvedValue({
+      url: "https://lg.example.com",
+      agent_card: sampleCard,
+    });
+    const plan = {
+      url: "https://lg.example.com",
+      discovery_mode: "langgraph_platform" as const,
+      params: { assistant_id: "asst_1" },
+      api_key: "sk-1",
+      static_headers: { "x-tenant": "t1" },
+    };
+    renderWithProviders(<AgentCardDiscovery accessToken="tok" onApply={vi.fn()} discoveryRequest={plan} />);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await screen.findByText(/HTTP 401/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Discover/ }));
+
+    await waitFor(() => expect(mockDiscover).toHaveBeenCalledTimes(2));
+    const anonymous = { discovery_mode: "langgraph_platform", params: { assistant_id: "asst_1" } };
+    expect(mockDiscover).toHaveBeenNthCalledWith(1, "tok", "https://lg.example.com", anonymous);
+    expect(mockDiscover).toHaveBeenNthCalledWith(2, "tok", "https://lg.example.com", {
+      ...anonymous,
+      api_key: "sk-1",
+      static_headers: { "x-tenant": "t1" },
+    });
+  });
+
+  it("keeps the card from a Discover click made before the as-you-type discovery fires", async () => {
+    mockDiscover.mockImplementation(async (_token: string, _url: string, request?: { api_key?: string }) => {
+      if (request?.api_key) return { url: "https://lg.example.com", agent_card: sampleCard };
+      throw new Error("HTTP 401");
+    });
+    const plan = (assistantId: string) => ({
+      url: "https://lg.example.com",
+      discovery_mode: "langgraph_platform" as const,
+      params: { assistant_id: assistantId },
+      api_key: "sk-1",
+    });
+    const { rerender } = renderWithProviders(
+      <AgentCardDiscovery accessToken="tok" onApply={vi.fn()} discoveryRequest={plan("asst_1")} />,
+    );
+    expect(await screen.findByText(/HTTP 401/)).toBeInTheDocument();
+    mockDiscover.mockClear();
+
+    rerender(<AgentCardDiscovery accessToken="tok" onApply={vi.fn()} discoveryRequest={plan("asst_2")} />);
+    fireEvent.click(screen.getByRole("button", { name: /Discover/ }));
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(await screen.findByText("Upstream card loaded")).toBeInTheDocument();
+    expect(screen.queryByText(/HTTP 401/)).not.toBeInTheDocument();
+    expect(mockDiscover).toHaveBeenCalledTimes(1);
+  });
+
   it("disables Re-discover until the parent provides a usable URL", async () => {
     renderWithProviders(
       <AgentCardDiscovery

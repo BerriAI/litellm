@@ -303,16 +303,9 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
   if (values.rpm_limit != null) agentData.rpm_limit = values.rpm_limit;
   if (values.session_tpm_limit != null) agentData.session_tpm_limit = values.session_tpm_limit;
   if (values.session_rpm_limit != null) agentData.session_rpm_limit = values.session_rpm_limit;
-  // static_headers: convert [{header, value}, ...] → {header: value, ...}
-  if (Array.isArray(values.static_headers) && values.static_headers.length > 0) {
-    const staticHeaders: Record<string, string> = {};
-    values.static_headers.forEach((entry: { header?: string; value?: string }) => {
-      const key = entry?.header?.trim();
-      if (key) staticHeaders[key] = entry?.value ?? "";
-    });
-    if (Object.keys(staticHeaders).length > 0) {
-      agentData.static_headers = staticHeaders;
-    }
+  const staticHeaders = staticHeadersFromForm(values.static_headers);
+  if (Object.keys(staticHeaders).length > 0) {
+    agentData.static_headers = staticHeaders;
   }
 
   // extra_headers: already an array of strings from Select tags
@@ -323,6 +316,18 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
   applyKillSwitchToPayload(agentData, values.kill_switch, existingAgent);
 
   return agentData;
+};
+
+/** Converts the form's [{header, value}, ...] rows to {header: value, ...}, skipping rows without a name. */
+export const staticHeadersFromForm = (rows: unknown): Record<string, string> => {
+  const staticHeaders: Record<string, string> = {};
+  if (Array.isArray(rows)) {
+    rows.forEach((entry: { header?: string; value?: string }) => {
+      const key = entry?.header?.trim();
+      if (key) staticHeaders[key] = entry?.value ?? "";
+    });
+  }
+  return staticHeaders;
 };
 
 export const applyKillSwitchToPayload = (
