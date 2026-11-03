@@ -33,6 +33,7 @@ from litellm.types.litellm_params import (
     wire_names,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
 from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 from litellm.types.router import (
     ConfigurableClientsideParamsCustomAuth,
@@ -221,6 +222,7 @@ OPTION_NAMES: Final = (
     "assistant_continue_message",
     "disable_add_transform_inline_image_block",
     "merge_reasoning_content_in_choices",
+    "thought_signature_in_tool_call_id",
     "enable_json_schema_validation",
     "complete_response",
     "stream_chunk_size",
@@ -231,6 +233,7 @@ OPTION_NAMES: Final = (
 )
 
 AGENTIC_LOOP_STATE_NAMES: Final = (
+    "_headroom_request_context",
     "_agentic_loop_depth",
     "_agentic_loop_fingerprints",
     "_agentic_loop_api_surface",
@@ -529,6 +532,7 @@ TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
     "Logging": Logging,
     "SecretFields": SecretFields,
     "CompactionState": CompactionState,
+    "HeadroomRequestContext": HeadroomRequestContext,
     "RouterWeights": RouterWeights,
     "AttemptedFallbackTargets": AttemptedFallbackTargets,
 }

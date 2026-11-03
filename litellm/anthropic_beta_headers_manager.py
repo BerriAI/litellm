@@ -30,7 +30,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from importlib.resources import files
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 import httpx
 from pydantic import TypeAdapter
@@ -46,6 +46,9 @@ _BETA_HEADERS_CONFIG_LOADER: Final = ThreadPoolExecutor(max_workers=1, thread_na
 BetaHeadersConfig: TypeAlias = Mapping[str, str | Mapping[str, str | None]]
 _BETA_HEADERS_CONFIG_ADAPTER: Final = TypeAdapter(BetaHeadersConfig)
 _DECODED_JSON: Final = TypeAdapter(object)
+
+BetaPlacement: TypeAlias = Literal["header", "body"]
+_HEADER_ONLY_COLUMN_SUFFIX: Final = "_header_only"
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -241,9 +244,42 @@ def get_provider_name(provider: str) -> str:
     return aliases.get(provider, provider)
 
 
+def _beta_column(name: str) -> Mapping[str, str | None]:
+    column: Final[Mapping[str, str | None]] = _load_beta_headers_config().get(name, {})
+    return column
+
+
+def _header_only_column(canonical_provider: str) -> Mapping[str, str | None]:
+    return _beta_column(f"{canonical_provider}{_HEADER_ONLY_COLUMN_SUFFIX}")
+
+
+def _provider_beta_mapping(provider: str, placement: BetaPlacement) -> Mapping[str, str | None]:
+    canonical_provider: Final = get_provider_name(provider)
+    column: Final = _beta_column(canonical_provider)
+    header_only: Final = _header_only_column(canonical_provider)
+    match placement:
+        case "header":
+            return {**column, **header_only}
+        case "body":
+            return {beta: name for beta, name in column.items() if beta not in header_only}
+
+
+def get_header_only_betas(provider: str) -> frozenset[str]:
+    header_only: Final = _header_only_column(get_provider_name(provider))
+    return frozenset(beta for beta, name in header_only.items() if name is not None)
+
+
+def has_beta_headers_config(provider: str) -> bool:
+    config: Final = _bundled_beta_headers_config()
+    aliases: Final = config.get("provider_aliases", {})
+    canonical_provider: Final = (aliases.get(provider) if isinstance(aliases, Mapping) else None) or provider
+    return canonical_provider in config
+
+
 def filter_and_transform_beta_headers(
     beta_headers: list[str],
     provider: str,
+    placement: BetaPlacement = "header",
 ) -> list[str]:
     """
     Filter and transform beta headers based on provider's mapping configuration.
@@ -256,6 +292,7 @@ def filter_and_transform_beta_headers(
     Args:
         beta_headers: List of Anthropic beta header values
         provider: Provider name (e.g., "anthropic", "bedrock", "vertex_ai")
+        placement: Whether the betas travel as the anthropic-beta header or the anthropic_beta body field
 
     Returns:
         List of filtered and transformed beta headers for the provider
@@ -263,11 +300,7 @@ def filter_and_transform_beta_headers(
     if not beta_headers:
         return []
 
-    config: Final = _load_beta_headers_config()
-    provider = get_provider_name(provider)
-
-    # Get the header mapping for this provider
-    provider_mapping: Final = config.get(provider, {})
+    provider_mapping: Final = _provider_beta_mapping(provider, placement)
 
     filtered_headers: Final[set[str]] = set()
 
@@ -397,7 +430,7 @@ def update_request_with_filtered_beta(
     headers: dict,
     request_data: dict,
     provider: str,
-) -> tuple[dict, dict]:
+) -> tuple[dict[str, str], dict[str, object]]:
     """
     Update both headers and request body beta fields based on provider support.
     Modifies both dicts in place and returns them.
@@ -419,6 +452,7 @@ def update_request_with_filtered_beta(
     filtered_body_betas: Final = filter_and_transform_beta_headers(
         beta_headers=existing_body_betas,
         provider=provider,
+        placement="body",
     )
 
     if filtered_body_betas:
