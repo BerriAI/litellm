@@ -4486,6 +4486,15 @@ def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(mar
     assert body["messages"] == [{"role": "user", "content": [expected_block]}]
 
 
+def test_transform_request_names_the_marker_ttl_rule_for_a_ttl_only_claude_takes():
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}]}
+    ]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="optional ttl of '30m' or '12h'"):
+        _anthropic_body(messages)
+
+
 def test_transform_request_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_cap():
     client_marked_part: Final = {"type": "text", "text": "part 0", "cache_control": {"type": "ephemeral"}}
     marked_parts: Final = [
