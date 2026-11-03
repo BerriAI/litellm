@@ -39,7 +39,7 @@ _API_KEY: Final = "scripted-provider-key"
 _DEEPSEEK_V4: Final = "azure_ai/DeepSeek-V4-Flash-0731"
 _DEEPSEEK_R1: Final = "azure_ai/DeepSeek-R1-0528"
 _QWEN3_5: Final = "databricks/databricks-qwen35-122b-a10b"
-_GROK: Final = "azure_ai/grok-4-1"
+_GROK_3: Final = "azure_ai/grok-3"
 _DEEPSEEK_V4_TOOL_PREAMBLE: Final = 222
 _QWEN3_5_TOOL_PREAMBLE: Final = 196
 _QWEN3_5_OPENED_SYSTEM_TURN: Final = 5
@@ -250,7 +250,7 @@ def test_messages_count_tokens_skips_web_search_and_counts_unmapped_tool_keys_fo
 
 def test_messages_count_tokens_keeps_openai_tool_framing_for_other_models(gateway: Gateway) -> None:
     with wire_server(_completion) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, "count", _GROK, wire.url)
+        model: Final = _deployment(scenario, "count", _GROK_3, wire.url)
         without_tools: Final = _count(gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, ()))
         plain: Final = _count(gateway, _MESSAGES_COUNT, _MESSAGES_COUNT.body(model, (_ANTHROPIC_TOOL,)))
         deferred: Final = _count(
@@ -428,7 +428,7 @@ def test_project_itpm_reserves_deepseek_v4_tools_the_way_its_chat_template_rende
 def test_project_itpm_keeps_openai_tool_framing_for_other_models(gateway: Gateway) -> None:
     chat: Final = _ENDPOINTS["chat-completions"]
     with wire_server(_completion) as wire, gateway.scenario() as scenario:
-        group: Final = _deployment(scenario, "grok-4-1", _GROK, wire.url)
+        group: Final = _deployment(scenario, "grok-3", _GROK_3, wire.url)
         response: Final = gateway.request(
             "POST",
             chat.path,
@@ -504,8 +504,8 @@ def _agent_body(group: str, marker: str, file_body: str, trigger: int) -> dict[s
 
 @pytest.mark.parametrize(
     ("model", "files_kept"),
-    ((_DEEPSEEK_V4, (False, False, True)), (_GROK, (True, True, True))),
-    ids=("deepseek-v4", "grok-4-1"),
+    ((_DEEPSEEK_V4, (False, False, True)), (_GROK_3, (True, True, True))),
+    ids=("deepseek-v4", "grok-3"),
 )
 def test_messages_context_management_trigger_counts_tools_the_way_the_models_chat_template_renders_them(
     gateway: Gateway, model: str, files_kept: tuple[bool, ...]

@@ -12,14 +12,14 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
-from litellm.llms.azure.ptu_capacity import PTUCapacity, normalized_tokens, ptu_hours
-from litellm.router import Router
-from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.router_utils.ptu_shares import (
+from litellm.litellm_core_utils.ptu_shares import (
     model_group_ptu_capacity,
     routed_deployments,
     team_servable_deployments,
 )
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
+from litellm.llms.azure.ptu_capacity import PTUCapacity, normalized_tokens, ptu_hours
+from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendData,
     MetricWithMetadata,
@@ -113,16 +113,17 @@ def capacity_by_requested_name(llm_router: Router, team_id: str | None) -> Calla
     its shared one first, so a team with no share on a name reads no PTU-hours for it; a page
     spanning teams keeps every deployment behind the name. Only a reservation covering the row's
     day sizes it, so tokens before a reservation starts or after it ends read no PTU-hours."""
-    listed_rows: Final = llm_router.get_model_list() or ()
-    aliases: Final = llm_router.model_group_alias
+    registry: Final = llm_router.registry()
+    listed_rows: Final = registry.deployments() or ()
+    aliases: Final = registry.aliases()
 
     def capacity_for(requested_model: str, day: date) -> PTUCapacity | None:
         model_group: Final = resolve_model_group_alias(aliases, requested_model) or requested_model
         routed: Final = routed_deployments(
             listed_rows,
-            llm_router.model_list,  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # Router.model_list is a bare list
+            registry.all(),
             model_group,
-            lambda name: llm_router.wildcard_route_deployments(name, team_id),
+            lambda name: registry.deployments(name, source="wildcard", team_id=team_id),
         )
         return model_group_ptu_capacity(routed if team_id is None else team_servable_deployments(routed, team_id), day)
 

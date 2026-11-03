@@ -12,11 +12,12 @@ use std::{
 };
 
 use litellm_core_utils::settings::Lookup;
+use litellm_secret_value::SecretValue;
 use litellm_secrets_types::{
     BaseSecretManager, HashicorpOperationContext, RotationError, SecretCache, SecretDeleter,
-    SecretRotator, SecretValue, SecretWriteContext, SecretWriter, async_rotate_secret,
-    validate_secret_name,
+    SecretRotator, SecretWriteContext, SecretWriter, async_rotate_secret, validate_secret_name,
 };
+
 use rustify::errors::ClientError as RustifyClientError;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -31,7 +32,7 @@ use vaultrs::{
 
 use crate::{Error, HashicorpVaultConfig, TlsCertAuth, cert_login::CertLoginRequest};
 
-pub use raw::RawOperationError;
+pub use raw::{HttpFailure, LoginFailure, RawOperationError};
 
 const CACHE_CAPACITY: u64 = 200;
 
@@ -178,23 +179,25 @@ fn map_api_error(error: ClientError, context: ErrorContext) -> Error {
             ErrorContext::Login => Error::LoginStatus { status: code },
             ErrorContext::Read | ErrorContext::Secret => Error::Status { status: code },
         },
-        ClientError::JsonParseError { source } => match context {
-            ErrorContext::Login => Error::MalformedLogin,
-            ErrorContext::Read => Error::MalformedPayload,
-            ErrorContext::Secret => Error::Client(ClientError::JsonParseError { source }),
+        error @ ClientError::JsonParseError { .. } => match context {
+            ErrorContext::Login => Error::MalformedLogin(error),
+            ErrorContext::Read => Error::MalformedPayload(error),
+            ErrorContext::Secret => Error::Client(error),
         },
-        ClientError::ResponseEmptyError | ClientError::ResponseDataEmptyError => {
-            malformed_response(context)
+        error @ (ClientError::ResponseEmptyError | ClientError::ResponseDataEmptyError) => {
+            malformed_response(context, error)
         }
         ClientError::RestClientError { source } => match source {
             RustifyClientError::ServerResponseError { code, .. } => match context {
                 ErrorContext::Login => Error::LoginStatus { status: code },
                 ErrorContext::Read | ErrorContext::Secret => Error::Status { status: code },
             },
-            RustifyClientError::ResponseParseError { .. } => malformed_response(context),
-            source => Error::Client(ClientError::RestClientError { source }),
+            source @ RustifyClientError::ResponseParseError { .. } => {
+                malformed_response(context, ClientError::RestClientError { source })
+            }
+            source => ClientError::RestClientError { source }.into(),
         },
-        error => Error::Client(error),
+        error => error.into(),
     }
 }
 
@@ -208,10 +211,10 @@ fn api_status(error: &ClientError) -> Option<u16> {
     }
 }
 
-fn malformed_response(context: ErrorContext) -> Error {
+fn malformed_response(context: ErrorContext, error: ClientError) -> Error {
     match context {
-        ErrorContext::Login => Error::MalformedLogin,
-        ErrorContext::Read => Error::MalformedPayload,
-        ErrorContext::Secret => Error::Client(ClientError::ResponseDataEmptyError),
+        ErrorContext::Login => Error::MalformedLogin(error),
+        ErrorContext::Read => Error::MalformedPayload(error),
+        ErrorContext::Secret => Error::Client(error),
     }
 }

@@ -38,6 +38,12 @@ from pydantic import ConfigDict, ValidationError
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.azure.common_utils import cached_azure_ad_token_refresh_provider
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.search.responses import (
+    ResponsesSearchAnnotation,
+    ResponsesSearchEnvelope,
+    ResponsesSearchError,
+    responses_search_citations,
+)
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -64,62 +70,10 @@ _UPSTREAM_ERROR_STATUS: Final = 502
 _RESPONSE_COST_HEADER: Final = "llm_provider-x-litellm-response-cost"
 
 
-class _Annotation(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    type: str = ""
-    url: str | None = None
-    title: str | None = None
-    start_index: int | None = None
-    end_index: int | None = None
-
-
-class _ContentPart(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    type: str = ""
-    text: str = ""
-    annotations: tuple[_Annotation, ...] = ()
-
-
-class _OutputItem(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    type: str = ""
-    content: tuple[_ContentPart, ...] = ()
-
-
-class _ErrorBody(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    message: str | None = None
-
-
-class _IncompleteDetails(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    reason: str | None = None
-
-
-class _ResponsesEnvelope(LiteLLMBaseModel):
-    """A Foundry Responses API body. `output` is required: a body without it is not a
-    Responses API response and must not be reported as a successful empty search.
-
-    A 200 body can still carry `status` `failed` or `incomplete`; those are surfaced as
-    errors rather than reported as a successful empty search."""
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    output: tuple[_OutputItem, ...]
-    status: str | None = None
-    error: _ErrorBody | None = None
-    incomplete_details: _IncompleteDetails | None = None
-
-
 class _ErrorEnvelope(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    error: _ErrorBody | None = None
+    error: ResponsesSearchError | None = None
 
 
 def _unwrap_error_detail(error_message: str) -> str:
@@ -138,13 +92,13 @@ def _unwrap_error_detail(error_message: str) -> str:
     if message is None:
         return error_message
     try:
-        nested: Final = _ErrorBody.model_validate_json(message)
+        nested: Final = ResponsesSearchError.model_validate_json(message)
     except ValidationError:
         return message
     return nested.message or message
 
 
-def _snippet(text: str, annotation: _Annotation) -> str:
+def _snippet(text: str, annotation: ResponsesSearchAnnotation) -> str:
     """
     The text a citation supports, not the citation marker itself.
 
@@ -160,7 +114,7 @@ def _snippet(text: str, annotation: _Annotation) -> str:
     return text[:_SNIPPET_FALLBACK_LENGTH]
 
 
-def _citation_results(envelope: _ResponsesEnvelope) -> tuple[SearchResult, ...]:
+def _citation_results(envelope: ResponsesSearchEnvelope) -> tuple[SearchResult, ...]:
     """One result per cited URL: first occurrence wins, order preserved as answered."""
     cited: Final = tuple(
         SearchResult(
@@ -170,12 +124,7 @@ def _citation_results(envelope: _ResponsesEnvelope) -> tuple[SearchResult, ...]:
             date=None,
             last_updated=None,
         )
-        for item in envelope.output
-        if item.type == "message"
-        for part in item.content
-        if part.type == "output_text"
-        for annotation in part.annotations
-        if annotation.type == "url_citation" and annotation.url
+        for part, annotation in responses_search_citations(envelope.output)
     )
     first_by_url: Final = MappingProxyType({result.url: result for result in reversed(cited)})
     return tuple(first_by_url[url] for url in dict.fromkeys(result.url for result in cited))
@@ -380,7 +329,7 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.transform_search_response signature
     ) -> SearchResponse:
         try:
-            parsed: Final = _ResponsesEnvelope.model_validate_json(raw_response.content)
+            parsed: Final = ResponsesSearchEnvelope.model_validate_json(raw_response.content)
         except ValidationError as e:
             raise self.get_error_class(
                 error_message=f"response does not match the Foundry Responses API schema: {e}",
