@@ -73201,7 +73201,11 @@
         "max_input_tokens": 16384,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://turion.ai/docs/guides/usage/#pricing"
+        "source": "https://turion.ai/docs/guides/usage/#pricing",
+        "supported_endpoints": [
+            "/v1/decisions",
+            "/v1/systemone"
+        ]
     },
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
