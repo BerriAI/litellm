@@ -956,7 +956,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self.merge_user_api_key_metadata_into_request(resolved_request_data, user_api_key_dict)
         try:
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
-            if self._streamed_tool_call_fingerprints(responses_so_far):
+            if self._stream_carries_tool_calls(responses_so_far):
                 stream_ended: Final = self._first_choice_has_finished(responses_so_far)
                 tool_arguments_complete: Final = self._streamed_tool_arguments_are_complete(responses_so_far)
                 assembled: Final = (
@@ -1089,12 +1089,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
         stream_ended: Final = self._first_choice_has_finished(responses_so_far)
-        tool_call_fingerprints: Final = self._streamed_tool_call_fingerprints(responses_so_far)
+        carries_tool_calls: Final = self._stream_carries_tool_calls(responses_so_far)
         return StreamingScanKey(
             texts=tuple(self._combine_streaming_texts(chunks).values()),
-            tool_calls=tool_call_fingerprints if stream_ended else (),
+            tool_calls=self._streamed_tool_call_fingerprints(responses_so_far) if stream_ended else (),
             stream_ended=stream_ended,
-            tool_calls_in_flight=bool(tool_call_fingerprints) and not stream_ended,
+            tool_calls_in_flight=carries_tool_calls and not stream_ended,
         )
 
     def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
@@ -1116,6 +1116,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             for chunk in responses_so_far
             for choice in _stream_chunk_choices(chunk)
             for tool_call in _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
+        )
+
+    @staticmethod
+    def _stream_carries_tool_calls(responses_so_far: Sequence[object]) -> bool:
+        """Whether any chunk so far carried a tool call, without fingerprinting them.
+
+        A round only needs to know that tool calls are present; fingerprinting every fragment
+        dumps and serializes each one, and repeating that as the stream grows is what made a
+        long tool argument cost far more CPU than the arguments themselves.
+        """
+        return any(
+            _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
+            for choice in chain.from_iterable(_stream_chunk_choices(chunk) for chunk in responses_so_far)
         )
 
     @staticmethod
