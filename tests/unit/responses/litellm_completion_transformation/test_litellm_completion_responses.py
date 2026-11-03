@@ -7457,3 +7457,37 @@ def test_a_follow_up_tool_output_for_a_call_the_stored_turn_holds_sends_that_cal
     )
 
     assert [message.get("role") for message in request["messages"]] == ["user", "assistant", "tool"]
+
+
+@pytest.mark.parametrize(
+    "ran_call_id, tool_call_ids",
+    [("mcp_docs", ["call_weather", "mcp_docs"]), (None, ["call_weather"])],
+)
+def test_a_ran_mcp_call_beside_a_handed_back_call_is_replayed_only_when_it_has_an_id(
+    ran_call_id: str | None, tool_call_ids: list[str]
+):
+    ran_call: Final = {
+        "type": "mcp_call",
+        "server_label": "gitmcp",
+        "name": "ask_question",
+        "arguments": "{}",
+        "output": "LiteLLM is an AI gateway",
+    }
+    chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="deepseek/deepseek-v4-flash",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"type": "message", "role": "user", "content": "Weather and docs?"},
+                {"type": "function_call", "call_id": "call_weather", "name": "get_weather", "arguments": "{}"},
+                ran_call if ran_call_id is None else {**ran_call, "id": ran_call_id},
+                {"type": "function_call_output", "call_id": "call_weather", "output": "Sunny."},
+            ],
+        ),
+        responses_api_request=ResponsesAPIOptionalRequestParams(),
+    )
+
+    messages: Final = [dict(message) for message in chat_request["messages"]]
+    assert [message["role"] for message in messages] == ["user", "assistant", *(["tool"] * len(tool_call_ids))]
+    assert [dict(call)["id"] for call in messages[1]["tool_calls"]] == tool_call_ids
+    assert sorted(message["tool_call_id"] for message in messages[2:]) == sorted(tool_call_ids)

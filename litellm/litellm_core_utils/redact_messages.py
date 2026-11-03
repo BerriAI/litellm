@@ -10,7 +10,7 @@
 import asyncio
 import copy
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
@@ -282,12 +282,19 @@ def _redact_field_when_present(item: object, field: str) -> None:
         setattr(item, field, REDACTED_BY_LITELLM)
 
 
-def _redact_responses_api_output(output_items):
+def _redact_field_when_held(item: object, field: str) -> None:
+    if hasattr(item, field):
+        setattr(item, field, REDACTED_BY_LITELLM)
+
+
+_MCP_CALL_CONTENT_FIELDS: Final = ("arguments", "output", "error")
+
+
+def _redact_responses_api_output(output_items: Iterable[object]) -> None:
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
         output_type = stream_item_field(output_item, "type")
-        if getattr(output_item, "text", None) is not None:
-            output_item.text = REDACTED_BY_LITELLM
+        _redact_field_when_present(output_item, "text")
 
         for content_part in stream_item_items(output_item, "content"):
             _redact_field_when_present(content_part, "text")
@@ -297,12 +304,15 @@ def _redact_responses_api_output(output_items):
             for summary_item in stream_item_items(output_item, "summary"):
                 _redact_field_when_present(summary_item, "text")
 
-        if output_type == "compaction" and hasattr(output_item, "encrypted_content"):
-            output_item.encrypted_content = REDACTED_BY_LITELLM
-        if output_type == "function_call" and hasattr(output_item, "arguments"):
-            output_item.arguments = REDACTED_BY_LITELLM
-        if output_type == "custom_tool_call" and hasattr(output_item, "input"):
-            output_item.input = REDACTED_BY_LITELLM
+        if output_type == "compaction":
+            _redact_field_when_held(output_item, "encrypted_content")
+        if output_type == "function_call":
+            _redact_field_when_held(output_item, "arguments")
+        if output_type == "custom_tool_call":
+            _redact_field_when_held(output_item, "input")
+        if output_type == "mcp_call":
+            for field in _MCP_CALL_CONTENT_FIELDS:
+                _redact_field_when_present(output_item, field)
 
 
 _RESPONSE_ITEMS: Final = TypeAdapter(tuple[object, ...])
@@ -355,6 +365,11 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
         **(
             {"input": redacted_str}
             if item_mapping.get("type") == "custom_tool_call" and "input" in item_mapping
+            else {}
+        ),
+        **(
+            {field: redacted_str for field in _MCP_CALL_CONTENT_FIELDS if item_mapping.get(field) is not None}
+            if item_mapping.get("type") == "mcp_call"
             else {}
         ),
     }
@@ -607,9 +622,14 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             if hasattr(_result, "reasoning") and _result.reasoning is not None:
                 _result.reasoning = None
             return _result.model_copy(
-                update={"instructions": REDACTED_BY_LITELLM}
-                if redact_streaming_responses and _result.instructions is not None
-                else {}
+                update={
+                    "output": _redact_responses_api_output_dict(_result.output, REDACTED_BY_LITELLM),
+                    **(
+                        {"instructions": REDACTED_BY_LITELLM}
+                        if redact_streaming_responses and _result.instructions is not None
+                        else {}
+                    ),
+                }
             )
         elif isinstance(_result, litellm.EmbeddingResponse):
             if hasattr(_result, "data") and _result.data is not None:

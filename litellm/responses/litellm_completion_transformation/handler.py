@@ -80,6 +80,7 @@ class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
         previous_response_client_ids: tuple[str, ...] = (),
+        stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id,
         /,
         *,
         model: str,
@@ -89,7 +90,6 @@ class LiteLLMCompletionTransformationHandler:
         _is_async: bool = False,
         stream: bool | None = None,
         extra_headers: Mapping[str, object] | None = None,
-        stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id,
         **kwargs,
     ) -> (
         ResponsesAPIResponse
@@ -107,6 +107,7 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_client_ids,
                 previous_response_id,
                 hoisted,
+                stored_turns_source,
                 model=model,
                 caller_input=input,
                 responses_api_request=responses_api_request,
@@ -114,7 +115,6 @@ class LiteLLMCompletionTransformationHandler:
                 stream=stream,
                 extra_headers=extra_headers,
                 request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
-                stored_turns_source=stored_turns_source,
             )
         bridged: Final = _bridged_request(hoisted, responses_api_request, ())
         bridged_input: Final = bridged.input
@@ -137,10 +137,11 @@ class LiteLLMCompletionTransformationHandler:
         if _is_async:
             return self.async_response_api_handler(
                 previous_response_client_ids,
+                None,
+                stored_turns_source,
                 litellm_completion_request=litellm_completion_request,
                 request_input=bridged_input,
                 responses_api_request=bridged_request,
-                stored_turns_source=stored_turns_source,
                 **kwargs,
             )
 
@@ -178,6 +179,7 @@ class LiteLLMCompletionTransformationHandler:
         previous_response_client_ids: tuple[str, ...],
         previous_response_id: str,
         hoisted: HoistedAdditionalTools,
+        stored_turns_source: StoredTurnsSource,
         /,
         *,
         model: str,
@@ -187,7 +189,6 @@ class LiteLLMCompletionTransformationHandler:
         stream: bool | None,
         extra_headers: Mapping[str, object] | None,
         request_kwargs: Mapping[str, object],
-        stored_turns_source: StoredTurnsSource,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         stored_turns: Final = await stored_turns_source(previous_response_id, previous_response_client_ids)
         bridged: Final = _bridged_request(
@@ -223,12 +224,12 @@ class LiteLLMCompletionTransformationHandler:
         self,
         previous_response_client_ids: tuple[str, ...] = (),
         stored_turns: StoredTurns | None = None,
+        stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id,
         /,
         *,
         litellm_completion_request: dict,
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
-        stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id,
         **kwargs,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         previous_response_id: Final[str | None] = responses_api_request.get("previous_response_id")

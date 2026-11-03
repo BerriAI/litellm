@@ -4,7 +4,7 @@ import json
 import logging
 import sys
 import warnings
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
@@ -27,6 +27,7 @@ from litellm.llms.xai.common_utils import xai_reported_cost_in_usd
 from litellm.proxy.mcp_server import mcp_server_manager
 from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
 from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
+from litellm.responses.dependencies import ResponsesDependencies, using_responses_dependencies
 from litellm.responses.litellm_completion_transformation.session_handler import StoredTurns
 from litellm.responses.mcp.direct_url_claims import DirectMCPServer
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
@@ -3591,16 +3592,16 @@ async def _gateway_hosted_mcp_request(
     stream: bool = False,
     caller: object = None,
 ) -> object:
-    return await litellm.aresponses(
-        model=model,
-        input="Ask DeepWiki what LiteLLM is",
-        tools=[dict(tool), *map(dict, beside)],
-        direct_client_factory=server.client_for,
-        drop_params=drop_params,
-        stream=stream,
-        litellm_metadata={"user_api_key_auth": caller},
-        **_ROUTE_KWARGS[model],
-    )
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        return await litellm.aresponses(
+            model=model,
+            input="Ask DeepWiki what LiteLLM is",
+            tools=[dict(tool), *map(dict, beside)],
+            drop_params=drop_params,
+            stream=stream,
+            litellm_metadata={"user_api_key_auth": caller},
+            **_ROUTE_KWARGS[model],
+        )
 
 
 def _sent_body(route: respx.Route, index: int) -> Mapping[str, object]:
@@ -4141,16 +4142,16 @@ async def test_a_route_that_runs_hosted_mcp_natively_still_gets_the_tool_with_th
     provider: Final = _serve_responses(respx.mock, monkeypatch, (_native_answer(model),), url)
     server: Final = _ScriptedMCPServer()
 
-    await litellm.aresponses(
-        model=model,
-        input="Ask DeepWiki what LiteLLM is",
-        tools=[dict(_DEEPWIKI_TOOL)],
-        api_key="sk-native",
-        api_base="https://gateway-mcp.example.com/v1"
-        if model.startswith("openai/")
-        else "https://gateway-mcp.example.com",
-        direct_client_factory=server.client_for,
-    )
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        await litellm.aresponses(
+            model=model,
+            input="Ask DeepWiki what LiteLLM is",
+            tools=[dict(_DEEPWIKI_TOOL)],
+            api_key="sk-native",
+            api_base="https://gateway-mcp.example.com/v1"
+            if model.startswith("openai/")
+            else "https://gateway-mcp.example.com",
+        )
 
     assert [entry.get(url_key) for entry in _sent_body(provider, 0)[field]] == [_DEEPWIKI_URL]
     assert server.opened == ()
@@ -4289,18 +4290,18 @@ async def test_a_round_calling_a_claimed_and_a_held_tool_runs_the_claimed_one_an
     recorder: Final = _RoundRecorder()
     tools: Final = [dict(_GITMCP_TOOL), dict(_deepwiki_reference())]
 
-    response, events = await _client_response(
-        await litellm.aresponses(
-            model=_DEEPSEEK_MODEL,
-            input="Ask both servers",
-            tools=tools,
-            direct_client_factory=server.client_for,
-            stream=stream,
-            litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
-            litellm_logging_obj=_rounds_logging_obj(recorder, f"mixed-round-{stream}"),
-            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        response, events = await _client_response(
+            await litellm.aresponses(
+                model=_DEEPSEEK_MODEL,
+                input="Ask both servers",
+                tools=tools,
+                stream=stream,
+                litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+                litellm_logging_obj=_rounds_logging_obj(recorder, f"mixed-round-{stream}"),
+                **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+            )
         )
-    )
 
     if stream:
         _assert_streamed_like_an_openai_accumulator_reads_it(events, response.output)
@@ -4323,15 +4324,15 @@ async def test_a_round_calling_a_claimed_and_a_held_tool_runs_the_claimed_one_an
         )
     )
     _proxy_database(monkeypatch, SimpleNamespace(db=spend_logs))
-    follow_up: Final = await litellm.aresponses(
-        model=_DEEPSEEK_MODEL,
-        input=[{"type": "function_call_output", "call_id": "call_wiki", "output": _HANDED_BACK_OUTPUT}],
-        previous_response_id=response.id,
-        tools=tools,
-        direct_client_factory=server.client_for,
-        litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
-        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
-    )
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        follow_up: Final = await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input=[{"type": "function_call_output", "call_id": "call_wiki", "output": _HANDED_BACK_OUTPUT}],
+            previous_response_id=response.id,
+            tools=tools,
+            litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
 
     assert isinstance(follow_up, ResponsesAPIResponse)
     replayed: Final = _sent_body(provider, 1)["messages"]
@@ -4476,15 +4477,15 @@ async def _first_turn_with_both_listings(
         respx_mock, monkeypatch, (_answer_round(_DEEPSEEK_MODEL), _answer_round(_DEEPSEEK_MODEL)), _DEEPSEEK_URL
     )
     recorder: Final = _RoundRecorder()
-    response: Final = await litellm.aresponses(
-        model=_DEEPSEEK_MODEL,
-        input="Which servers can you use?",
-        tools=[dict(_GITMCP_TOOL), dict(_deepwiki_reference("never"))],
-        direct_client_factory=server.client_for,
-        litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
-        litellm_logging_obj=_rounds_logging_obj(recorder, "listed-turn"),
-        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
-    )
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        response: Final = await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input="Which servers can you use?",
+            tools=[dict(_GITMCP_TOOL), dict(_deepwiki_reference("never"))],
+            litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+            litellm_logging_obj=_rounds_logging_obj(recorder, "listed-turn"),
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
     assert isinstance(response, ResponsesAPIResponse)
     await _settle(lambda: len(recorder.logged) > 0)
     return response, provider, recorder.logged[0]["response"]
@@ -4514,15 +4515,15 @@ async def _follow_up(
         )
     )
     _proxy_database(monkeypatch, SimpleNamespace(db=spend_logs))
-    follow_up: Final = await litellm.aresponses(
-        model=_DEEPSEEK_MODEL,
-        input=[question] if context == "stored_turn" else [*listings, question],
-        previous_response_id=first.id if context == "stored_turn" else None,
-        tools=[dict(_GITMCP_TOOL), dict(_deepwiki_reference("never"))],
-        direct_client_factory=server.client_for,
-        litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
-        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
-    )
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        follow_up: Final = await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input=[question] if context == "stored_turn" else [*listings, question],
+            previous_response_id=first.id if context == "stored_turn" else None,
+            tools=[dict(_GITMCP_TOOL), dict(_deepwiki_reference("never"))],
+            litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
     assert isinstance(follow_up, ResponsesAPIResponse)
     return follow_up
 
@@ -4591,16 +4592,17 @@ async def test_a_follow_up_reads_its_stored_turn_once_for_both_its_listings_and_
         StoredTurns(spend_logs=(stored_turn,), proxy_server_requests=(stored_turn["proxy_server_request"],))
     )
 
-    follow_up: Final = await litellm.aresponses(
-        model=_DEEPSEEK_MODEL,
-        input=[{"type": "message", "role": "user", "content": "Ask again"}],
-        previous_response_id=first.id,
-        tools=[dict(_GITMCP_TOOL), dict(_deepwiki_reference("never"))],
-        direct_client_factory=server.client_for,
-        stored_turns_source=reads,
-        litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
-        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
-    )
+    with using_responses_dependencies(
+        ResponsesDependencies(direct_client_factory=server.client_for, stored_turns_source=reads)
+    ):
+        follow_up: Final = await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input=[{"type": "message", "role": "user", "content": "Ask again"}],
+            previous_response_id=first.id,
+            tools=[dict(_GITMCP_TOOL), dict(_deepwiki_reference("never"))],
+            litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
 
     assert reads.asked == ((first.id, (first.id,)),)
     assert isinstance(follow_up, ResponsesAPIResponse)
@@ -4640,15 +4642,15 @@ async def _streamed_turn_running_a_tool(
         _DEEPSEEK_URL,
     )
     recorder: Final = _RoundRecorder()
-    stream: Final = await litellm.aresponses(
-        model=_DEEPSEEK_MODEL,
-        input="Ask DeepWiki what LiteLLM is",
-        tools=[dict(_GITMCP_TOOL)],
-        direct_client_factory=server.client_for,
-        stream=True,
-        litellm_logging_obj=_rounds_logging_obj(recorder, "streamed-tool-turn"),
-        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
-    )
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        stream: Final = await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input="Ask DeepWiki what LiteLLM is",
+            tools=[dict(_GITMCP_TOOL)],
+            stream=True,
+            litellm_logging_obj=_rounds_logging_obj(recorder, "streamed-tool-turn"),
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
     events: Final = tuple([event async for event in stream])
     assert _event_type(events[-1]) == "response.completed"
     assert [call.name for call in server.calls] == ["ask_question"]
@@ -4667,14 +4669,14 @@ async def _follow_up_from_stored_row(
         "response": row["response"],
     }
     _proxy_database(monkeypatch, SimpleNamespace(db=_SpendLogs((stored_turn,))))
-    follow_up: Final = await litellm.aresponses(
-        model=_DEEPSEEK_MODEL,
-        input="Who maintains it?",
-        previous_response_id=response_id,
-        tools=[dict(_GITMCP_TOOL)],
-        direct_client_factory=server.client_for,
-        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
-    )
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        follow_up: Final = await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input="Who maintains it?",
+            previous_response_id=response_id,
+            tools=[dict(_GITMCP_TOOL)],
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
     assert isinstance(follow_up, ResponsesAPIResponse)
     return follow_up
 
@@ -4754,3 +4756,189 @@ async def test_a_held_gateway_reference_is_still_listed_as_the_access_check_but_
     assert mcp_client.list_tools.await_count == 1
     assert _sent_tool_names(_sent_body(provider, 0)) == ("deepwiki-ask_question", "gitmcp-ask_question")
     assert (mcp_client.call_tool.await_count, server.calls) == (0, ())
+
+
+_GATEWAY_DEPENDENCY_NAMES: Final = (
+    "stored_turns_source",
+    "direct_client_factory",
+    "hosted_mcp_claims",
+    "direct_tools",
+    "stream_shaper",
+)
+
+
+def _rounds_for(turn: str, stream: bool) -> tuple[httpx.Response, ...]:
+    answer: Final = _streamed_answer_round() if stream else _answer_round(_DEEPSEEK_MODEL)
+    if turn != "hosted_tool":
+        return (answer,)
+    tool_call: Final = (
+        _streamed_tool_call_round("gitmcp-ask_question")
+        if stream
+        else _tool_call_round(_DEEPSEEK_MODEL, "gitmcp-ask_question")
+    )
+    return tool_call, answer
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("turn", ["first", "follow_up", "hosted_tool"])
+async def test_a_body_key_named_like_a_gateway_dependency_reaches_the_provider_like_any_other_key(
+    monkeypatch: pytest.MonkeyPatch, turn: str, stream: bool
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    provider: Final = _serve_responses(respx.mock, monkeypatch, _rounds_for(turn, stream), _DEEPSEEK_URL)
+    server: Final = _ScriptedMCPServer()
+    reads: Final = _StoredTurnReads(StoredTurns(spend_logs=(), proxy_server_requests=()))
+    body_keys: Final = {name: f"body-{name}" for name in _GATEWAY_DEPENDENCY_NAMES}
+
+    with using_responses_dependencies(
+        ResponsesDependencies(direct_client_factory=server.client_for, stored_turns_source=reads)
+    ):
+        response, _ = await _client_response(
+            await litellm.aresponses(
+                model=_DEEPSEEK_MODEL,
+                input="Ask DeepWiki what LiteLLM is",
+                previous_response_id="resp_unknown" if turn == "follow_up" else None,
+                tools=[dict(_GITMCP_TOOL)] if turn == "hosted_tool" else None,
+                stream=stream,
+                **body_keys,
+                **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+            )
+        )
+
+    sent: Final = tuple(_sent_body(provider, index) for index in range(provider.call_count))
+    assert [{name: body.get(name) for name in _GATEWAY_DEPENDENCY_NAMES} for body in sent] == [body_keys] * len(
+        _rounds_for(turn, stream)
+    )
+    assert [call.name for call in server.calls] == (["ask_question"] if turn == "hosted_tool" else [])
+    assert reads.asked == ((("resp_unknown", ("resp_unknown",)),) if turn == "follow_up" else ())
+    assert _output_types(response.output)[-1] == "message"
+
+
+
+async def _turn_running_a_hosted_tool(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, server: _ScriptedMCPServer, stream: bool
+) -> tuple[str, _RoundRecorder]:
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    rounds: Final = (
+        (_streamed_tool_call_round("gitmcp-ask_question"), _streamed_answer_round_from("chatcmpl-gateway-mcp-answer"))
+        if stream
+        else (_tool_call_round(_DEEPSEEK_MODEL, "gitmcp-ask_question"), _answer_round(_DEEPSEEK_MODEL))
+    )
+    _serve_responses(respx_mock, monkeypatch, (*rounds, _answer_round(_DEEPSEEK_MODEL)), _DEEPSEEK_URL)
+    recorder: Final = _RoundRecorder()
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        response, _ = await _client_response(
+            await litellm.aresponses(
+                model=_DEEPSEEK_MODEL,
+                input="Ask DeepWiki what LiteLLM is",
+                tools=[dict(_GITMCP_TOOL)],
+                stream=stream,
+                litellm_logging_obj=_rounds_logging_obj(recorder, f"hosted-tool-turn-{stream}"),
+                **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+            )
+        )
+    assert [call.name for call in server.calls] == ["ask_question"]
+    await _settle(lambda: len(recorder.logged) > 0)
+    assert len(recorder.logged) == 1
+    return response.id, recorder
+
+
+
+_TOOL_CONTENT: Final = (_ASK_OUTPUT, _ASK_ARGUMENTS["question"])
+
+
+def _tool_content_in(record: object) -> tuple[str, ...]:
+    text: Final = record if isinstance(record, str) else json.dumps(_item(record), default=str)
+    return tuple(content for content in _TOOL_CONTENT if content in text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_with_message_logging_off_a_turn_that_runs_a_hosted_tool_logs_and_stores_none_of_its_content(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_response_for_spend_logs_payload
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setitem(proxy_server.general_settings, "store_prompts_in_spend_logs", True)
+    server: Final = _ScriptedMCPServer()
+
+    _, recorder = await _turn_running_a_hosted_tool(respx_mock, monkeypatch, server, stream)
+
+    logged: Final = recorder.logged[0]
+    stored_row: Final = _get_response_for_spend_logs_payload(logged, {"litellm_params": {}})
+    assert _output_summary(json.loads(stored_row)["output"]) == (
+        ("mcp_list_tools", "gitmcp", None),
+        ("mcp_call", "gitmcp", "ask_question"),
+        ("message", None, None),
+    )
+    assert tuple(map(_tool_content_in, (logged, stored_row, recorder.results[0]))) == ((), (), ())
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_from_a_round_stored_with_message_logging_off_replays_every_call_and_checks_access(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from fastapi import HTTPException
+
+    from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    provider: Final = _serve_responses(
+        respx_mock, monkeypatch, (_round_calling_both_servers(False), _answer_round(_DEEPSEEK_MODEL)), _DEEPSEEK_URL
+    )
+    server: Final = _ScriptedMCPServer()
+    recorder: Final = _RoundRecorder()
+    tools: Final = [dict(_GITMCP_TOOL), dict(_deepwiki_reference())]
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        response: Final = await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input="Ask both servers",
+            tools=tools,
+            litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+            litellm_logging_obj=_rounds_logging_obj(recorder, "redacted-mixed-round"),
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
+    await _settle(lambda: len(recorder.logged) > 0)
+    stored_turn: Final = {
+        "request_id": response.id,
+        "session_id": "redacted-mixed-round-session",
+        "proxy_server_request": {"input": "Ask both servers"},
+        "response": recorder.logged[0]["response"],
+    }
+    _proxy_database(monkeypatch, SimpleNamespace(db=_SpendLogs((stored_turn,))))
+
+    def follow_up_from(caller: object) -> Coroutine[object, object, object]:
+        return litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input=[{"type": "function_call_output", "call_id": "call_wiki", "output": _HANDED_BACK_OUTPUT}],
+            previous_response_id=response.id,
+            tools=tools,
+            litellm_metadata={"user_api_key_auth": caller},
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
+
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        follow_up: Final = await follow_up_from(_key_holding("srv-deepwiki"))
+        with pytest.raises(HTTPException) as denied:
+            await follow_up_from(_key_holding("srv-other"))
+
+    assert isinstance(follow_up, ResponsesAPIResponse)
+    assert _output_types(follow_up.output) == ("message",)
+    replayed: Final = _sent_body(provider, 1)["messages"]
+    ran_call_id: Final = _item(response.output[3])["id"]
+    assert [(call["id"], call["function"]["arguments"]) for call in replayed[1]["tool_calls"]] == [
+        ("call_wiki", REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER),
+        (ran_call_id, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER),
+    ]
+    assert [(message["tool_call_id"], message["content"]) for message in replayed[2:]] == [
+        (ran_call_id, REDACTED_BY_LITELLM),
+        ("call_wiki", _HANDED_BACK_OUTPUT),
+    ]
+    assert mcp_client.list_tools.await_count == 2
+    assert (denied.value.status_code, provider.call_count) == (403, 2)

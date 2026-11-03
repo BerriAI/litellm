@@ -3,7 +3,7 @@ import contextvars
 import json
 from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast, get_type_hints
@@ -51,6 +51,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+from litellm.responses.dependencies import responses_dependencies, using_responses_dependencies
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     with_compaction_items_as_summaries,
 )
@@ -217,7 +218,6 @@ def mock_responses_api_response(
 
 
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
-_GATEWAY_OWNED_MCP_KWARGS: Final = frozenset({"hosted_mcp_claims", "direct_client_factory"})
 _TOOL_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _KNOWN_PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
 _STR_DICT: Final = TypeAdapter(dict[str, object])
@@ -282,7 +282,9 @@ def _listing_trace_id(request_kwargs: Mapping[str, object], *, bridged_first_tur
     return _request_trace_id(request_kwargs)
 
 
-async def aresponses_api_with_mcp(
+async def _aresponses_api_with_mcp(
+    hosted_mcp_claims: "HostedMCPClaims | None",
+    /,
     input: str | ResponseInputParam,
     model: str,
     include: list[ResponseIncludable] | None = None,
@@ -311,9 +313,6 @@ async def aresponses_api_with_mcp(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    hosted_mcp_claims: "HostedMCPClaims | None" = None,
-    direct_client_factory: "DirectClientFactory | None" = None,
-    stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id,
     **kwargs,
 ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     """
@@ -377,13 +376,15 @@ async def aresponses_api_with_mcp(
         request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
         raw_headers=discovery_raw_headers,
     )
-    direct_listing: Final = await _direct_listing(hosted_mcp_claims, direct_client_factory)
+    dependencies: Final = responses_dependencies()
+    direct_listing: Final = await _direct_listing(hosted_mcp_claims, dependencies.direct_client_factory)
     client_ids: Final = previous_response_client_ids(previous_response_id, request_kwargs)
     turns_source: Final = (
-        stored_turns_source
+        dependencies.stored_turns_source
         if hosted_mcp_claims is None
-        else await _stored_turns_read_once(stored_turns_source, previous_response_id, client_ids)
+        else await _stored_turns_read_once(dependencies.stored_turns_source, previous_response_id, client_ids)
     )
+    round_dependencies: Final = replace(dependencies, stored_turns_source=turns_source)
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(
         [*original_mcp_tools, *direct_listing.tools]
     )
@@ -428,7 +429,6 @@ async def aresponses_api_with_mcp(
         "custom_llm_provider": custom_llm_provider,
         **kwargs,
         "_skip_mcp_handler": True,
-        "stored_turns_source": turns_source,
     }
 
     # Handle MCP streaming if requested
@@ -452,6 +452,9 @@ async def aresponses_api_with_mcp(
         )
 
         mcp_streaming_response: Final = LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
+            direct_listing.by_name,
+            None if claimed_items is None else _stream_shaper(claimed_items),
+            round_dependencies,
             input=input,
             model=model,
             all_tools=all_tools,
@@ -461,8 +464,6 @@ async def aresponses_api_with_mcp(
             previous_response_id=previous_response_id,
             tool_server_map=tool_server_map,
             served_tools=original_mcp_tools,
-            direct_tools=direct_listing.by_name,
-            stream_shaper=None if claimed_items is None else _stream_shaper(claimed_items),
             **kwargs,
         )
         await mcp_streaming_response.start_initial_response()
@@ -486,7 +487,10 @@ async def aresponses_api_with_mcp(
     #########################################################
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.carry_failed_attempt_usage()
-    with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
+    with (
+        internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None),
+        using_responses_dependencies(round_dependencies),
+    ):
         response: Final = await aresponses(
             input=input,
             model=model,
@@ -536,7 +540,10 @@ async def aresponses_api_with_mcp(
         async def claimed_follow_up(
             follow_up_input: Sequence[object], with_tools: bool
         ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
-            with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
+            with (
+                internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None),
+                using_responses_dependencies(round_dependencies),
+            ):
                 return await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
                     follow_up_input=list(follow_up_input),
                     model=model,
@@ -624,8 +631,11 @@ async def aresponses_api_with_mcp(
                             tool_calls=tool_calls, tool_results=tool_results
                         )
 
-                    with internal_sub_call(
-                        logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
+                    with (
+                        internal_sub_call(
+                            logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
+                        ),
+                        using_responses_dependencies(round_dependencies),
                     ):
                         final_response = await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
                             follow_up_input=follow_up_input,
@@ -678,6 +688,9 @@ async def aresponses_api_with_mcp(
                     return final_response
 
     return response
+
+
+aresponses_api_with_mcp: Final = partial(_aresponses_api_with_mcp, None)
 
 
 def _registered_mcp_servers() -> tuple["MCPServer", ...]:
@@ -1605,8 +1618,6 @@ def _responses_try_dispatch_mcp_gateway(
     _is_async: bool,
     skip_mcp_handler: bool,
     hosted_mcp_claims: "HostedMCPClaims | None" = None,
-    direct_client_factory: "DirectClientFactory | None" = None,
-    stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id,
 ) -> (
     ResponsesAPIResponse
     | BaseResponsesAPIStreamingIterator
@@ -1617,7 +1628,8 @@ def _responses_try_dispatch_mcp_gateway(
     if skip_mcp_handler or (hosted_mcp_claims is None and not may_name_litellm_mcp_gateway(tools)):
         return None
     gateway_call: Final = partial(
-        aresponses_api_with_mcp,
+        _aresponses_api_with_mcp,
+        hosted_mcp_claims,
         input=input,
         model=model,
         include=include,
@@ -1643,10 +1655,7 @@ def _responses_try_dispatch_mcp_gateway(
         extra_body=extra_body,
         timeout=timeout,
         custom_llm_provider=custom_llm_provider,
-        hosted_mcp_claims=hosted_mcp_claims,
-        direct_client_factory=direct_client_factory,
-        stored_turns_source=stored_turns_source,
-        **{key: value for key, value in kwargs.items() if key not in _GATEWAY_OWNED_MCP_KWARGS},
+        **kwargs,
     )
     return gateway_call() if _is_async else run_async_function(gateway_call)
 
@@ -1774,8 +1783,6 @@ def responses(
     # LiteLLM specific params,
     allowed_openai_params: list[str] | None = None,
     custom_llm_provider: str | None = None,
-    direct_client_factory: "DirectClientFactory | None" = None,
-    stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id,
     **kwargs,
 ):
     """
@@ -1933,8 +1940,6 @@ def responses(
             else _hosted_mcp_claims(
                 tools, model, custom_llm_provider, use_chat_completions_api, deployment_model_info, litellm_params
             ),
-            direct_client_factory=direct_client_factory,
-            stored_turns_source=stored_turns_source,
         )
         if _mcp_dispatch is not None:
             return _mcp_dispatch
@@ -2033,6 +2038,7 @@ def responses(
             _raise_unrunnable_responses_hosted_mcp(tools, model, custom_llm_provider, litellm_params.drop_params)
             return litellm_completion_transformation_handler.response_api_handler(
                 previous_response_client_ids(previous_response_id, kwargs),
+                responses_dependencies().stored_turns_source,
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,
@@ -2043,7 +2049,6 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
-                stored_turns_source=stored_turns_source,
                 **bridge_kwargs,
             )
 

@@ -567,10 +567,14 @@ def _is_call_item(item: Mapping[str, object]) -> bool:
     return item.get("type") in ("function_call", "mcp_call")
 
 
+def _is_ran_call(item: Mapping[str, object]) -> bool:
+    return item.get("type") == "mcp_call" and bool(item.get("id"))
+
+
 def _ran_call_as_function_call(item: Mapping[str, object]) -> Mapping[str, object]:
     return {
         "type": "function_call",
-        "call_id": str(item.get("id") or ""),
+        "call_id": str(item["id"]),
         "name": str(item.get("name") or ""),
         "arguments": str(item.get("arguments") or "{}"),
     }
@@ -579,17 +583,18 @@ def _ran_call_as_function_call(item: Mapping[str, object]) -> Mapping[str, objec
 def _ran_call_output(item: Mapping[str, object]) -> Mapping[str, object]:
     return {
         "type": "function_call_output",
-        "call_id": str(item.get("id") or ""),
+        "call_id": str(item["id"]),
         "output": str(item.get("output") or item.get("error") or ""),
     }
 
 
 def _call_run_items(run: tuple[Mapping[str, object], ...]) -> tuple[Mapping[str, object], ...]:
-    if frozenset(item.get("type") for item in run) != frozenset(("function_call", "mcp_call")):
+    ran_calls: Final = tuple(item for item in run if _is_ran_call(item))
+    if not ran_calls or not any(item.get("type") == "function_call" for item in run):
         return run
     return (
-        *(_ran_call_as_function_call(item) if item.get("type") == "mcp_call" else item for item in run),
-        *(_ran_call_output(item) for item in run if item.get("type") == "mcp_call"),
+        *(_ran_call_as_function_call(item) if _is_ran_call(item) else item for item in run),
+        *(_ran_call_output(item) for item in ran_calls),
     )
 
 
@@ -598,7 +603,8 @@ def _with_ran_calls_beside_handed_back_calls(
 ) -> tuple[Mapping[str, object], ...]:
     """An mcp_call the gateway ran in the same turn as a function_call it handed back to the caller goes to the model
     as one of that turn's tool calls with its result, so the turn's tool calls and results still pair up once the
-    caller answers its function_call. Other mcp_call items stay out of the conversation, as before."""
+    caller answers its function_call. Other mcp_call items, and one without the id its result pairs on, stay out of the
+    conversation, as before."""
     return tuple(
         chain.from_iterable(
             _call_run_items(tuple(run)) if is_call else tuple(run)

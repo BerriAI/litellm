@@ -5,6 +5,11 @@ from typing import TYPE_CHECKING, Any, Final, cast
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.agentic_loop_settings import validated_max_agentic_loops
+from litellm.responses.dependencies import (
+    DEFAULT_RESPONSES_DEPENDENCIES,
+    ResponsesDependencies,
+    using_responses_dependencies,
+)
 from litellm.responses.litellm_completion_transformation.streaming_iterator import LiteLLMCompletionStreamingIterator
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.stream_round_billing import StreamedRoundBilling
@@ -291,11 +296,13 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         served_tools: Sequence[MCPTool] | None = None,
         direct_tools: "Mapping[str, DirectTool] | None" = None,
         stream_shaper: "OpenAIStreamShaper | None" = None,
+        dependencies: ResponsesDependencies = DEFAULT_RESPONSES_DEPENDENCIES,
     ):
         # MCP setup
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
         self.direct_tools: Final = MappingProxyType(dict(direct_tools or {}))
         self._stream_shaper = stream_shaper
+        self._dependencies: Final = dependencies
         self._shaped_events: tuple[ResponsesAPIStreamingResponse, ...] = ()
         self.user_api_key_auth = user_api_key_auth
         self.original_request_params = original_request_params or {}
@@ -844,7 +851,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             tools_count: Final = len(params_for_llm.get("tools", [])) if params_for_llm.get("tools") else 0
             verbose_logger.debug("Making LLM call with %s tools", tools_count)
-            response: Final = await aresponses(**params_for_llm)
+            with using_responses_dependencies(self._dependencies):
+                response: Final = await aresponses(**params_for_llm)
 
             # Set the base iterator
             if hasattr(response, "__aiter__") or hasattr(response, "__iter__"):
@@ -1107,7 +1115,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.max_tool_call_rounds,
                 )
 
-            follow_up_response: Final = await aresponses(**follow_up_params)
+            with using_responses_dependencies(self._dependencies):
+                follow_up_response: Final = await aresponses(**follow_up_params)
 
             # Route the follow-up through the same base_iterator machinery as
             # the initial call so its completion is checked for further tool
