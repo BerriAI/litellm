@@ -106,3 +106,17 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "https://gateway.example.com/voyage/v1/multimodalembeddings"
     )
+
+
+def test_get_complete_url_honors_voyage_api_base(monkeypatch):
+    monkeypatch.setenv("VOYAGE_API_BASE", "https://gateway.example.com/v1/")
+    config = VoyageMultimodalEmbeddingConfig()
+
+    assert (
+        config.get_complete_url(None, "vk-test", "voyage-3.5", {}, {})
+        == "https://gateway.example.com/v1/multimodalembeddings"
+    )
+    assert (
+        config.get_complete_url("https://explicit.example.com/v1", "vk-test", "voyage-3.5", {}, {})
+        == "https://explicit.example.com/v1/multimodalembeddings"
+    )
