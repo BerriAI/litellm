@@ -1608,8 +1608,12 @@ def _claim_identifies_user(jwt_handler: JWTHandler, claim_field: str, jwt_issuer
     return False
 
 
-async def _reusable_key_hash_for_user(prisma_client: PrismaClient, user_id: str, team_id: str | None) -> str | None:
-    key: Final = await VerificationTokenRepository(prisma_client).find_newest_reusable_llm_api_key(user_id, team_id)
+async def _reusable_key_hash_for_user(
+    prisma_client: PrismaClient, user_id: str, team_id: str | None, *, skip_allowed_routes_check: bool = False
+) -> str | None:
+    key: Final = await VerificationTokenRepository(prisma_client).find_newest_reusable_llm_api_key(
+        user_id, team_id, skip_allowed_routes_check=skip_allowed_routes_check
+    )
     return None if key is None else key.token
 
 
@@ -1651,7 +1655,12 @@ async def _auto_register_jwt_mapping(
     )
 
     existing_token_hash: Final = (
-        await _reusable_key_hash_for_user(prisma_client, user_id, team_id)
+        await _reusable_key_hash_for_user(
+            prisma_client,
+            user_id,
+            team_id,
+            skip_allowed_routes_check=jwt_handler.litellm_jwtauth.auto_register_skip_allowed_routes_check,
+        )
         if user_id is not None and _claim_identifies_user(jwt_handler, virtual_key_claim_field, jwt_issuer)
         else None
     )

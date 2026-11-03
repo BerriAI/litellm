@@ -31,7 +31,7 @@ def _hash(key: str) -> str:
     return sha256(key.encode()).hexdigest()
 
 
-def _config(directory: Path, claim_field: str) -> Path:
+def _config(directory: Path, claim_field: str, *, skip_allowed_routes_check: bool = False) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["general_settings"] = {
         **config["general_settings"],
@@ -42,6 +42,7 @@ def _config(directory: Path, claim_field: str) -> Path:
             "virtual_key_claim_field": claim_field,
             "unregistered_jwt_client_behavior": "auto_register",
             "auto_register_map_existing_key": True,
+            "auto_register_skip_allowed_routes_check": skip_allowed_routes_check,
         },
     }
     path: Final = directory / f"jwt_map_existing_key_{claim_field}.yaml"
@@ -138,6 +139,43 @@ def test_first_jwt_call_reuses_the_newest_durable_llm_key_and_skips_every_inelig
         }
         assert _user_key_hashes(user) == keys_before, "a key was minted although a reusable one existed"
         assert _billed_key(response) == _hash(durable)
+
+
+@pytest.mark.parametrize("skip_allowed_routes_check", [False, True])
+def test_route_filter_can_be_skipped_without_bypassing_other_key_checks(
+    gateway: Gateway, tmp_path: Path, skip_allowed_routes_check: bool
+) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        unrestricted: Final = scenario.key(user_id=user)
+        restricted: Final = scenario.key(user_id=user, allowed_routes=["/v1/chat/completions"])
+        scenario.key(user_id=user, duration="1h")
+        scenario.key(user_id=user, metadata={"auto_registered": True})
+        scenario.key(user_id=user, team_id=scenario.team())
+        blocked: Final = scenario.key(user_id=user)
+        gateway.post("/key/block", {"key": blocked})
+        keys_before: Final = _user_key_hashes(user)
+        token: Final = _token(private_key, user)
+
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {"JWT_PUBLIC_KEY_URL": jwks_url},
+            config=_config(tmp_path, "sub", skip_allowed_routes_check=skip_allowed_routes_check),
+        ) as candidate:
+            response: Final = _chat(candidate, model, token)
+            repeated: Final = _chat(candidate, model, token)
+            restricted_route: Final = candidate.request("GET", "/v1/models", key=token)
+
+        expected_key: Final = restricted if skip_allowed_routes_check else unrestricted
+        assert response.status_code == 200, response.text
+        assert repeated.status_code == 200, repeated.text
+        assert restricted_route.status_code == (403 if skip_allowed_routes_check else 200), restricted_route.text
+        assert _mapped_token("sub", user) == _hash(expected_key)
+        assert _user_key_hashes(user) == keys_before, "a new key was minted instead of linking an existing key"
+        assert _billed_key(response) == _hash(expected_key)
+        assert _billed_key(repeated) == _hash(expected_key)
 
 
 def test_user_matched_by_email_instead_of_sub_still_reuses_their_existing_key(gateway: Gateway, tmp_path: Path) -> None:

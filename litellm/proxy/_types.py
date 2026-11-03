@@ -5049,7 +5049,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "JWT-resolved user already owns instead of minting a new one. If the user owns several, the most recently created key in the "
             "JWT-resolved team (or with no team when the JWT resolves none) is chosen among keys that never "
             "expire, are not blocked, are not Admin UI session keys, were not minted by auto_register, and "
-            "have no allowed_routes or include llm_api_routes. Otherwise a new key is minted as usual."
+            "have no allowed_routes or include llm_api_routes unless auto_register_skip_allowed_routes_check is True. "
+            "Otherwise a new key is minted as usual."
+        ),
+    )
+    auto_register_skip_allowed_routes_check: bool = Field(
+        default=False,
+        description=(
+            "When auto_register_map_existing_key is True, skip the allowed_routes eligibility check when selecting "
+            "an existing virtual key. Other eligibility checks and request-time route permissions still apply."
         ),
     )
     routing_overrides: list[JWTRoutingOverride] | None = Field(

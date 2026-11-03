@@ -125,7 +125,7 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         return self._to_model_list(records)
 
     async def find_newest_reusable_llm_api_key(
-        self, user_id: str, team_id: str | None
+        self, user_id: str, team_id: str | None, *, skip_allowed_routes_check: bool = False
     ) -> LiteLLM_VerificationToken | None:
         records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(
             where={
@@ -140,13 +140,17 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
                             {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
                         ]
                     },
-                    {
+                ],
+                **(
+                    {}
+                    if skip_allowed_routes_check
+                    else {
                         "OR": [
                             {"allowed_routes": {"is_empty": True}},
                             {"allowed_routes": {"has": "llm_api_routes"}},
                         ]
-                    },
-                ],
+                    }
+                ),
             },
             order={"created_at": "desc"},
         )
