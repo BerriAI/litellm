@@ -1488,7 +1488,7 @@ def test_vertex_chat_json_schema_on_a_model_rejecting_forced_tools_maps_reasonin
     assert _reasoning_fields(structured_sent) == _reasoning_fields(plain_sent), (structured_sent.body, plain_sent.body)
 
 
-def test_bedrock_invoke_json_schema_sends_the_json_tool_unforced_when_the_model_rejects_forced_tools(
+def test_bedrock_invoke_json_schema_sends_native_structured_output_when_the_model_rejects_forced_tools(
     gateway: Gateway,
 ) -> None:
     marker, marker_hex = _marker("plain")
@@ -1499,7 +1499,8 @@ def test_bedrock_invoke_json_schema_sends_the_json_tool_unforced_when_the_model_
         assert _chat_content(response) == _payload(marker_hex), response.text
         sent: Final = _one_delivery(wire, marker_hex)
         assert sent.target == f"/model/{backend}/invoke", sent.target
-        assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
+        assert object_value(_folded_format(sent)["schema"])["properties"] == _SCHEMA["properties"], sent.body
+        assert "tools" not in sent.body, sent.body
         assert "tool_choice" not in sent.body, sent.body
 
 

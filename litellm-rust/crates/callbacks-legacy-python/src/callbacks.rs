@@ -5,6 +5,7 @@
 use litellm_host::interceptors::{RequestContext, WireRequest};
 use litellm_host_python::to_py;
 use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
+use serde_json::Value;
 
 use crate::logger::PythonLogger;
 use crate::python::{Logging, Wrapper};
@@ -15,9 +16,10 @@ pub trait LegacyCallbacks {
     fn update_from_kwargs(
         &self,
         py: Python<'_>,
-        kwargs: &Py<PyDict>,
+        kwargs: &Bound<'_, PyDict>,
         wire: &WireRequest,
         context: &RequestContext,
+        request_params: Option<&serde_json::Map<String, Value>>,
     ) -> PyResult<()>;
 
     /// `Logging.pre_call`.
@@ -30,6 +32,20 @@ pub trait LegacyCallbacks {
         headers: &Bound<'_, PyDict>,
         url: &str,
     ) -> PyResult<()>;
+
+    /// Records the provider's raw HTTP response on the logger, as Python's Messages handler
+    /// does with `httpx_response` and `response_headers`.
+    fn record_response(
+        &self,
+        py: Python<'_>,
+        status: u16,
+        headers: &[(String, String)],
+        body: &str,
+    ) -> PyResult<()>;
+
+    /// Records one provider HTTP exchange's window, as Python's timed `AsyncHTTPHandler.post`
+    /// does with `llm_api_duration_ms` and the metadata's `llm_api_timing_windows`.
+    fn record_api_window(&self, py: Python<'_>, start: f64, end: f64) -> PyResult<()>;
 
     /// `Logging.post_call`.
     fn post_call(
@@ -83,12 +99,13 @@ impl LegacyCallbacks for PythonLogger {
     fn update_from_kwargs(
         &self,
         py: Python<'_>,
-        kwargs: &Py<PyDict>,
+        kwargs: &Bound<'_, PyDict>,
         wire: &WireRequest,
         context: &RequestContext,
+        request_params: Option<&serde_json::Map<String, Value>>,
     ) -> PyResult<()> {
         let secret_fields: Vec<&str> = context.secret_fields.iter().map(String::as_str).collect();
-        let redacted_kwargs = redact(py, kwargs.bind(py), &secret_fields)?;
+        let redacted_kwargs = redact(py, kwargs, &secret_fields)?;
         let optional_params = redact(
             py,
             &to_py(py, &context.optional_params)?
@@ -97,22 +114,22 @@ impl LegacyCallbacks for PythonLogger {
             &secret_fields,
         )?;
         let params = PyDict::new(py);
-        params.set_item(
-            "litellm_call_id",
-            kwargs.bind(py).get_item("litellm_call_id")?,
-        )?;
+        params.set_item("litellm_call_id", kwargs.get_item("litellm_call_id")?)?;
         params.set_item("api_base", &wire.url)?;
         for name in ["logger_fn", "litellm_request_debug"] {
-            if let Some(value) = kwargs.bind(py).get_item(name)? {
+            if let Some(value) = kwargs.get_item(name)? {
                 params.set_item(name, value)?;
             }
         }
         for name in custom_pricing_fields(py)? {
-            if let Some(value) = kwargs.bind(py).get_item(&name)?
+            if let Some(value) = kwargs.get_item(&name)?
                 && !value.is_none()
             {
                 params.set_item(name, value)?;
             }
+        }
+        for (name, value) in request_params.into_iter().flatten() {
+            params.set_item(name, to_py(py, value)?)?;
         }
         Logging::Update.call(
             py,
@@ -142,6 +159,22 @@ impl LegacyCallbacks for PythonLogger {
         additional.set_item("headers", headers)?;
         additional.set_item("api_base", url)?;
         Logging::PreCall.call(py, (self.object(py), input, api_key, &additional))?;
+        Ok(())
+    }
+
+    fn record_response(
+        &self,
+        py: Python<'_>,
+        status: u16,
+        headers: &[(String, String)],
+        body: &str,
+    ) -> PyResult<()> {
+        Logging::RecordResponse.call(py, (self.object(py), status, headers.to_vec(), body))?;
+        Ok(())
+    }
+
+    fn record_api_window(&self, py: Python<'_>, start: f64, end: f64) -> PyResult<()> {
+        Logging::RecordApiWindow.call(py, (self.object(py), start, end))?;
         Ok(())
     }
 

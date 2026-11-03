@@ -8,7 +8,7 @@ _apply_process_defaults()
 import threading
 import os
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import (
     Any,
     Callable,
@@ -1562,7 +1562,9 @@ from .realtime_api.main import (
     _arealtime,
     acreate_realtime_client_secret,
     acreate_realtime_transcription_session,
+    acreate_realtime_translation_client_secret as acreate_realtime_translation_client_secret,
     arealtime_calls,
+    arealtime_translation_calls as arealtime_translation_calls,
 )
 from .responses.main import _aresponses_websocket
 
@@ -1754,6 +1756,9 @@ if TYPE_CHECKING:
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
     )
+    from .llms.parallel_ai.decisions.transformation import (
+        ParallelAIDecisionsConfig as ParallelAIDecisionsConfig,
+    )
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
     )
@@ -1808,6 +1813,9 @@ if TYPE_CHECKING:
     from .llms.vertex_ai.rerank.transformation import (
         VertexAIRerankConfig as VertexAIRerankConfig,
     )
+    from .llms.together_ai.chat.transformation import (
+        TogetherAIChatConfig as TogetherAIChatConfig,
+    )
     from .llms.fireworks_ai.rerank.transformation import (
         FireworksAIRerankConfig as FireworksAIRerankConfig,
     )
@@ -1853,9 +1861,6 @@ if TYPE_CHECKING:
         BedrockMantleAnthropicMessagesConfig as BedrockMantleAnthropicMessagesConfig,
     )
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
-    from .llms.together_ai.chat.transformation import (
-        TogetherAIChatConfig as TogetherAIChatConfig,
-    )
     from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig as VertexGeminiConfig,
@@ -2014,6 +2019,9 @@ if TYPE_CHECKING:
     from .llms.xai.responses.transformation import (
         XAIResponsesAPIConfig as XAIResponsesAPIConfig,
     )
+    from .llms.vertex_ai.interactions.transformation import (
+        VertexAIInteractionsConfig as VertexAIInteractionsConfig,
+    )
     from .llms.litellm_proxy.responses.transformation import (
         LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig,
     )
@@ -2040,9 +2048,6 @@ if TYPE_CHECKING:
     )
     from .llms.gemini.interactions.transformation import (
         GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig,
-    )
-    from .llms.vertex_ai.interactions.transformation import (
-        VertexAIInteractionsConfig as VertexAIInteractionsConfig,
     )
     from .llms.openai.chat.o_series_transformation import (
         OpenAIOSeriesConfig as OpenAIOSeriesConfig,
@@ -2374,6 +2379,7 @@ if TYPE_CHECKING:
     supports_web_search: Callable[..., bool]
     supports_tool_search: Callable[..., bool]
     supports_url_context: Callable[..., bool]
+    supports_continuation: Callable[..., bool]
     supports_response_schema: Callable[..., bool]
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]
