@@ -554,13 +554,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _reasoning_summary(thinking: Mapping[str, object], auto_summary_level: str) -> str | None:
-        if thinking.get("type") == "between_tools":
-            return "auto"
         requested: Final = requested_reasoning_summary(thinking)
         if requested:
             return requested
         if thinking.get("display") is not None:
             return None
+        if thinking.get("type") == "between_tools":
+            return "auto"
         return auto_summary_level if is_reasoning_auto_summary_enabled() else None
 
     @classmethod

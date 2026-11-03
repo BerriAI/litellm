@@ -164,6 +164,27 @@ def test_build_responses_kwargs_drops_reasoning_off_under_drop_params_unless_the
     assert responses_kwargs.get("reasoning") == ({"effort": "none"} if keeps_none else None)
 
 
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "gpt-5.1", "gpt-6-luna", "gpt-bridge-unmapped"])
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+def test_build_responses_kwargs_never_turns_on_reasoning_the_client_left_off(
+    model: str, thinking: dict[str, object] | None
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        output_config={"effort": "high"},
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+
+    map_row: Final = litellm.model_cost.get(model)
+    reasons_only_when_asked: Final = map_row is not None and map_row.get("default_reasoning_effort") == "none"
+    reasoning: Final = responses_kwargs.get("reasoning")
+    assert (reasoning is None) == (thinking is None and reasons_only_when_asked)
+    assert reasoning is None or cast(Mapping[str, object], reasoning)["effort"] != "none"
+
+
 @pytest.mark.parametrize("effort", ["max", "xhigh"])
 def test_build_responses_kwargs_forwards_an_output_effort_the_model_accepts(effort: Literal["max", "xhigh"]) -> None:
     responses_kwargs: Final = _build_responses_kwargs(

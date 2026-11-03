@@ -53,6 +53,7 @@ from ..utils import (
     local_model_name,
     model_reasoning_efforts,
     normalize_reasoning_effort_value,
+    reasoning_defaults_off,
 )
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
@@ -260,9 +261,6 @@ def _reasoning_off_for_target(
     custom_llm_provider: str | None,
     drop_params: bool,
 ) -> Mapping[str, object] | None:
-    """A model the map knows does not reason already honors reasoning turned off, and its Responses API would
-    reject ``reasoning`` outright. A reasoning model whose row does not confirm ``none`` may refuse it, so
-    drop_params drops it there instead of letting the provider answer 400."""
     if model_reasoning_efforts(model, custom_llm_provider) == ():
         return None
     if (
@@ -382,12 +380,18 @@ def _build_responses_kwargs(
     )
 
     provider_hint: Final = forwarded_kwargs.get("custom_llm_provider")
-    target_reasoning: Final = _reasoning_for_target(
-        responses_kwargs.pop("reasoning", None),
-        model=model,
-        custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
-        deployment_model_info=forwarded_kwargs.get("model_info"),
-        drop_params=drop_params,
+    provider: Final = provider_hint if isinstance(provider_hint, str) else None
+    bridged_reasoning: Final = responses_kwargs.pop("reasoning", None)
+    target_reasoning: Final = (
+        None
+        if not thinking and reasoning_defaults_off(model, provider)
+        else _reasoning_for_target(
+            bridged_reasoning,
+            model=model,
+            custom_llm_provider=provider,
+            deployment_model_info=forwarded_kwargs.get("model_info"),
+            drop_params=drop_params,
+        )
     )
     if target_reasoning is not None:
         responses_kwargs["reasoning"] = target_reasoning
