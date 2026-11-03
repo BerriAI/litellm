@@ -42,6 +42,7 @@ from fastapi import FastAPI, HTTPException, WebSocket
 
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
+from starlette.testclient import WebSocketTestSession
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -3661,6 +3662,91 @@ def test_live_session_pre_call_abort_releases_reservations(
     route_call.assert_not_awaited()
 
 
+def _receive_until_closed(websocket: WebSocketTestSession) -> None:
+    while True:
+        websocket.receive_text()
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected_upstream_url"),
+    (
+        pytest.param(
+            {"model": "openai/gateway-transcribe", "api_base": "https://gateway.example/v1"},
+            "wss://gateway.example/v1/realtime?model=gateway-transcribe&intent=transcription",
+            id="gateway",
+        ),
+        pytest.param(
+            {"model": "xai/grok-voice", "api_base": "https://api.x.ai/v1"},
+            "wss://api.x.ai/v1/realtime?model=grok-voice&intent=transcription",
+            id="xai",
+        ),
+        pytest.param(
+            {"model": "openai/gpt-live-transcribe", "api_base": "https://api.openai.com/v1"},
+            "wss://api.openai.com/v1/realtime?intent=transcription",
+            id="openai",
+        ),
+    ),
+)
+def test_realtime_transcription_websocket_keeps_the_model_upstream_except_on_openai_hosts(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_params: Mapping[str, str],
+    expected_upstream_url: str,
+) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[{"model_name": "team-transcriber", "litellm_params": {**litellm_params, "api_key": "fake"}}]
+        ),
+    )
+    connect: Final = MagicMock(side_effect=RuntimeError("upstream url captured"))
+    monkeypatch.setattr("websockets.connect", connect)
+
+    with (
+        client_no_auth.websocket_connect(
+            "/v1/realtime?model=team-transcriber&intent=transcription",
+            headers={"Authorization": "Bearer test-api-key"},
+        ) as websocket,
+        pytest.raises(WebSocketDisconnect),
+    ):
+        _receive_until_closed(websocket)
+
+    assert connect.call_args.args[0] == expected_upstream_url
+
+
+def test_openai_prefixed_translation_websocket_takes_the_openai_websocket_pass_through(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _OPENAI_WS_DISABLED_REFUSAL
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth_websocket, lambda: UserAPIKeyAuth())
+
+    with client_no_auth.websocket_connect(
+        "/openai/v1/realtime/translations?model=gpt-realtime-translate",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        refusal: Final = websocket.receive_json()
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+
+    assert refusal["error"]["message"] == _OPENAI_WS_DISABLED_REFUSAL.message
+    assert closed.value.code == 1008
+    route_call.assert_not_awaited()
+
+
 @pytest.mark.parametrize("path", ["/openai/v1/live/sessions", "/v1/live/sessions", "/live/sessions"])
 def test_live_session_invalid_start_is_rejected_without_routing(
     path: str,
@@ -4561,3 +4647,88 @@ async def test_text_completion_provider_rejection_captures_unknown_usage(
     assert envelope["usage"] is None
     assert envelope["usage_source"] == "unknown"
     assert envelope["pricing"]["reported_cost"] is None
+
+
+@pytest.mark.parametrize(
+    "polling,has_redis,native,expected",
+    [
+        (False, True, False, False),
+        ("all", False, False, False),
+        ("all", True, True, False),
+        ("all", True, False, True),
+        (["openai"], True, False, True),
+        (["anthropic"], True, False, False),
+    ],
+)
+def test_model_groups_advertise_cache_backed_background_chat(
+    monkeypatch: pytest.MonkeyPatch,
+    polling: bool | str | list[str],
+    has_redis: bool,
+    native: bool,
+    expected: bool,
+) -> None:
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy import proxy_server
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "research-chat",
+                "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "fake-test-key"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "polling_via_cache_enabled", polling)
+    monkeypatch.setattr(
+        proxy_server, "redis_usage_cache", RedisCache(host="localhost", port=6379) if has_redis else None
+    )
+    monkeypatch.setattr(proxy_server, "native_background_mode", ["research-chat"] if native else [])
+    groups: Final = proxy_server.get_model_group_info(router, ["research-chat"], None)
+    assert groups[0].supports_background_chat is expected
+
+
+@pytest.mark.parametrize("config_owned", [False, True])
+def test_background_response_settings_refresh_and_respect_config(
+    monkeypatch: pytest.MonkeyPatch,
+    config_owned: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "polling_via_cache_enabled", False)
+    monkeypatch.setattr(proxy_server, "native_background_mode", [])
+    monkeypatch.setattr(proxy_server, "polling_cache_ttl", 3600)
+    config: Final = proxy_server.ProxyConfig()
+    if config_owned:
+        config.litellm_settings.load_yaml(
+            {
+                "responses": {
+                    "background_mode": {
+                        "polling_via_cache": ["openai"],
+                        "native_background_mode": ["config-native"],
+                        "ttl": 900,
+                    }
+                },
+            }
+        )
+    config._apply_litellm_settings_db_values(
+        {
+            "responses": {
+                "background_mode": {
+                    "polling_via_cache": "all",
+                    "native_background_mode": ["db-native"],
+                    "ttl": 7200,
+                }
+            },
+        }
+    )
+    assert proxy_server.polling_via_cache_enabled == (["openai"] if config_owned else "all")
+    assert proxy_server.native_background_mode == (["config-native"] if config_owned else ["db-native"])
+    assert proxy_server.polling_cache_ttl == (900 if config_owned else 7200)
+    config._apply_litellm_settings_db_values(
+        {
+            "responses": {"background_mode": {"polling_via_cache": False}},
+        }
+    )
+    assert proxy_server.polling_via_cache_enabled == (["openai"] if config_owned else False)
+    assert proxy_server.native_background_mode == (["config-native"] if config_owned else [])
+    assert proxy_server.polling_cache_ttl == (900 if config_owned else 3600)

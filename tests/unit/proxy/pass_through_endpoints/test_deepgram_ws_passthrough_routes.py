@@ -287,6 +287,20 @@ async def test_deepgram_listen_refuses_sessions_it_cannot_price(query, missing_k
 
 
 @pytest.mark.asyncio
+async def test_deepgram_listen_refusal_for_a_long_unpriced_model_fits_a_close_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-provider-key")
+    websocket: Final = _FakeWebSocket("/deepgram/v1/listen", "model=" + "%C3%A9" * 100)
+
+    relay: Final = await _serve(websocket)
+
+    assert relay.calls == []
+    assert websocket.closed == (1008, "No streaming price for 'deepgram/streaming/" + "é" * 40)
+
+
+@pytest.mark.asyncio
 async def test_deepgram_listen_relays_once_the_operator_prices_the_model(monkeypatch):
     monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
     websocket = _FakeWebSocket("/deepgram/v1/listen", "model=nova-2")

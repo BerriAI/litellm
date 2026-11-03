@@ -3060,7 +3060,7 @@ def test_retry_success_charges_released_project_io_reservations(
     stash.itpm_reserved_scopes = frozenset({itpm_scope})
     stash.otpm_reserved_tokens = 60
     stash.otpm_reserved_scopes = frozenset({otpm_scope})
-    stash.reservation_released = True
+    stash.mark_reservation_released()
 
     operations = handler._build_io_token_reservation_ops(
         {},

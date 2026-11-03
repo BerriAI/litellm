@@ -70,7 +70,7 @@ class AWSKeyManagementService_V2:
             is_litellm_license_in_env = True
         if is_litellm_license_in_env is False:
             raise ValueError(
-                "AWSKeyManagementService V2 is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your envionment."
+                "AWSKeyManagementService V2 is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your environment."
             )
 
     def load_aws_kms(self, use_aws_kms: bool | None):
