@@ -130,6 +130,14 @@ def _context_caching_skip_reason(
     cache_model: str,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> str | None:
+    from litellm.utils import is_explicitly_disabled_factory
+
+    if is_explicitly_disabled_factory(deployment_model, custom_llm_provider, "supports_prompt_caching") or (
+        cache_model != deployment_model
+        and is_explicitly_disabled_factory(cache_model, custom_llm_provider, "supports_prompt_caching")
+    ):
+        return f"Vertex AI context caching: model {deployment_model} does not support explicit context caching."
+
     if not cached_messages_end_on_supported_turn(cached_messages):
         return (
             "Vertex AI context caching: cached message block ends on a model turn once "
@@ -537,6 +545,17 @@ class ContextCachingEndpoints(VertexBase):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
+            if "does not support explicit context caching" in err.response.text or (
+                err.response.status_code == 400
+                and "explicit" in err.response.text.lower()
+                and "caching" in err.response.text.lower()
+            ):
+                verbose_logger.warning(
+                    "Model %s does not support explicit context caching (%s). Falling back to non-cached request.",
+                    model,
+                    err.response.text,
+                )
+                return messages, optional_params, None
             error_code: Final = err.response.status_code
             raise VertexAIError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
@@ -689,6 +708,17 @@ class ContextCachingEndpoints(VertexBase):
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
+                if "does not support explicit context caching" in err.response.text or (
+                    err.response.status_code == 400
+                    and "explicit" in err.response.text.lower()
+                    and "caching" in err.response.text.lower()
+                ):
+                    verbose_logger.warning(
+                        "Model %s does not support explicit context caching (%s). Falling back to non-cached request.",
+                        model,
+                        err.response.text,
+                    )
+                    return None
                 error_code: Final = err.response.status_code
                 raise VertexAIError(status_code=error_code, message=err.response.text)
             except httpx.TimeoutException:
