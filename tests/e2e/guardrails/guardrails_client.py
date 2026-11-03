@@ -38,7 +38,7 @@ from models import (
 from proxy_client import ProxyClient
 from pydantic import BaseModel, Field
 
-GUARDRAIL_BACKEND: Final = "gemini/gemini-2.5-flash"
+GUARDRAIL_BACKEND: Final = "gemini/gemini-3.8-flash"
 
 GuardrailMode = Literal["pre_call", "post_call", "during_call", "logging_only"]
 PiiEntity = Literal["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON", "CREDIT_CARD", "US_SSN"]
