@@ -27,6 +27,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     AnthropicCacheControlHook,
     configured_injection_points,
+    routed_model_info,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
@@ -42,6 +43,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_tools_with_model_file_ids,
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    deployment_reasoning_effort_levels,
+    model_group_from_metadata,
+    resolve_deployment_reasoning_effort,
+)
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
@@ -63,11 +69,6 @@ from litellm.responses.mcp.round_billing import (
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.reasoning_effort_capability import (
-    deployment_reasoning_effort_levels,
-    model_group_from_metadata,
-    resolve_deployment_reasoning_effort,
-)
 from litellm.types.llms.openai import (
     PromptObject,
     Reasoning,
@@ -437,7 +438,7 @@ async def aresponses_api_with_mcp(
     #########################################################
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.carry_failed_attempt_usage()
-    with internal_sub_call():
+    with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
         response: Final = await aresponses(
             input=input,
             model=model,
@@ -514,7 +515,9 @@ async def aresponses_api_with_mcp(
                             tool_calls=tool_calls, tool_results=tool_results
                         )
 
-                    with internal_sub_call():
+                    with internal_sub_call(
+                        logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
+                    ):
                         final_response = await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
                             follow_up_input=follow_up_input,
                             model=model,
@@ -880,6 +883,7 @@ def _stamp_injection_points_for_the_hook(
         custom_llm_provider,
         kwargs.get("api_base") or kwargs.get("base_url"),
         kwargs.get("prompt_cache_options"),
+        routed_model_info(kwargs.get("model_info")),
     )
 
 

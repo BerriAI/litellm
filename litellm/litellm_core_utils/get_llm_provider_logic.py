@@ -146,6 +146,22 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
+def declared_provider(model: str | None, custom_llm_provider: str | None = None) -> str | None:
+    """The provider this pair names outright, or None when only get_llm_provider can tell.
+
+    get_llm_provider reads a named provider's API key and base on the way to returning it, and a hosted
+    secret manager answers each read with a network call, so a caller that needs only the name reads it here.
+    """
+    if custom_llm_provider:
+        return custom_llm_provider
+    prefix, slash, _ = (model or "").partition("/")
+    if not slash:
+        return None
+    if prefix in litellm.provider_list or JSONProviderRegistry.exists(prefix) or is_registered_custom_provider(prefix):
+        return prefix
+    return None
+
+
 def declared_authenticating_provider(model: str | None, custom_llm_provider: str | None = None) -> str | None:
     """The authenticating provider this pair already names, or None.
 
@@ -154,24 +170,8 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     and for a declared pair the resolver's answer is the declaration itself, so metadata callers
     adopt the declaration instead of resolving.
     """
-    declared: Final = custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
+    declared: Final = declared_provider(model, custom_llm_provider)
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
-
-
-def declared_provider(model: str, custom_llm_provider: str | None = None) -> str | None:
-    """The provider this pair names outright, or None when only get_llm_provider can tell.
-
-    get_llm_provider reads a named provider's API key and base on the way to returning it, and a hosted
-    secret manager answers each read with a network call, so a caller that needs only the name reads it here.
-    """
-    if custom_llm_provider:
-        return custom_llm_provider
-    prefix, slash, _ = model.partition("/")
-    if not slash:
-        return None
-    if prefix in litellm.provider_list or JSONProviderRegistry.exists(prefix) or is_registered_custom_provider(prefix):
-        return prefix
-    return None
 
 
 def resolve_model_and_provider_for_metadata(model: str, custom_llm_provider: str | None = None) -> tuple[str, str]:

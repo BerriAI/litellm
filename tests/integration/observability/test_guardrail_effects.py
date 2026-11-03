@@ -23,7 +23,7 @@ import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
-from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from openai import APIError, AsyncOpenAI, OpenAI
@@ -3263,7 +3263,10 @@ def test_client_disconnect_during_the_body_upload_runs_no_endpoint_and_writes_no
     with (
         wire_server(_openai_upstream) as upstream,
         owned_proxy_process(
-            gateway, tmp_path, {"OPENAI_BASE_URL": upstream.url + "/v1", "OPENAI_API_KEY": "synthetic-openai-key"}
+            gateway,
+            tmp_path,
+            {"OPENAI_BASE_URL": upstream.url + "/v1", "OPENAI_API_KEY": "synthetic-openai-key"},
+            state=OwnedState.PRIVATE,
         ) as owned,
         owned.gateway.scenario() as scenario,
     ):
