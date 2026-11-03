@@ -721,20 +721,37 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("setup_count", [1, 2])
-async def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(
+async def test_cost_tracking_publishes_captured_window_charges_once_after_repeated_setup(
     monkeypatch: pytest.MonkeyPatch, setup_count: int
 ) -> None:
-    from datetime import datetime
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
 
     import litellm
-    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows
+    from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
+    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import build_window_spend_transaction
     from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, decode_spend_event
     from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer
     from litellm.types.utils import ModelResponse, Usage
     from litellm.utils import Rules, function_setup
 
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    key_hash: Final = "a" * 64
     producer: Final = AsyncMock(spec=SpendEventProducer)
-    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(
+        return_value=SimpleNamespace(window_start=now, spend=0.0)
+    )
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(
+        dual_cache=DualCache(),
+        clock=lambda: now.timestamp(),
+        shared_windows=DatabaseSharedWindows(prisma_client_source=lambda: prisma),
+    )
+    monkeypatch.setattr(ps, "model_max_budget_limiter", limiter)
     monkeypatch.setattr(ps, "spend_event_producer", None)
     monkeypatch.setattr(ps, "build_spend_event_producer", lambda settings, fallback: producer)
     for name in (
@@ -747,15 +764,10 @@ async def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(
     ):
         monkeypatch.setattr(litellm, name, [])
 
+    litellm.logging_callback_manager.add_litellm_callback(limiter)
     for _ in range(setup_count):
         cost_tracking()
 
-    assert len(litellm.callbacks) == 2
-    assert sum(isinstance(cb, ShadowEvalLogger) for cb in litellm.callbacks) == 1
-    assert len(litellm._async_success_callback) == 2
-    assert litellm._async_success_callback[0] is ps.model_max_budget_limiter
-    assert isinstance(litellm._async_success_callback[1], ps.ProxyDBLogger)
-    now: Final = datetime(2026, 1, 1)
     logging_obj, _ = function_setup(
         "acompletion",
         Rules(),
@@ -764,7 +776,17 @@ async def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(
         messages=[{"role": "user", "content": "hello"}],
         litellm_call_id="single-accounting-event",
     )
-    logging_obj.update_environment_variables(litellm_params={"acompletion": True, "metadata": {}}, optional_params={})
+    logging_obj.update_environment_variables(
+        litellm_params={
+            "acompletion": True,
+            "metadata": {
+                "user_api_key": key_hash,
+                "user_api_key_model_max_budget": {"*": {"max_budget": 100, "budget_duration": "1d"}},
+            },
+        },
+        optional_params={},
+    )
+    logging_obj.model_call_details["response_cost"] = 0.25
     response: Final = ModelResponse(
         id="chatcmpl-single-accounting-event",
         model="gpt-4o-mini",
@@ -775,7 +797,16 @@ async def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(
     event: Final = decode_spend_event(producer.publish.call_args.args[0])
     assert not isinstance(event, SpendEventDecodeError)
     assert event.response_cost == logging_obj.model_call_details["response_cost"]
-    assert event.response_cost > 0
+    assert event.response_cost == 0.25
+    assert event.accounting_model_windows == (
+        build_window_spend_transaction(
+            entity_type="model_max_budget",
+            entity_id=f"virtual_key_spend:{key_hash}:*:1d",
+            window_duration="1d",
+            window_start=now,
+            spend=0.25,
+        ),
+    )
 
 
 def test_cost_tracking_no_op_when_prisma_missing(monkeypatch):
