@@ -39,6 +39,32 @@ describe("AdvancedDatePicker", () => {
     }
   };
 
+  it.each([
+    ["MTD", "Month to date"],
+    ["YTD", "Year to date"],
+  ])("keeps %s selected when calendar ranges coincide", (preset, label) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2027, 0, 1, 12));
+    try {
+      render(
+        <AdvancedDatePicker
+          value={{ from: new Date(2027, 0, 1), to: new Date(2027, 0, 1, 23, 59, 59, 999) }}
+          onValueChange={mockOnValueChange}
+          presetShortLabel={preset}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "1 Jan, 00:00 - 1 Jan, 23:59" }));
+      expect(screen.getByRole("button", { name: new RegExp(label) })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: /Today/ })).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(screen.getByRole("button", { name: /Today/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      fireEvent.click(screen.getByRole("button", { name: "1 Jan, 00:00 - 1 Jan, 23:59" }));
+      expect(screen.getByRole("button", { name: new RegExp(label) })).toHaveAttribute("aria-pressed", "true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("should render with default label", () => {
     render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
     expect(screen.getByText("Select Time Range")).toBeInTheDocument();

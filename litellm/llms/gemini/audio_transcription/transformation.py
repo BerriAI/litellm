@@ -3,6 +3,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -36,6 +37,7 @@ from litellm.types.utils import (
 
 INTERACTIONS_API_REVISION: Final = "2026-05-20"
 WORD_INFO_ANNOTATION_TYPE: Final = "word_info"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -132,7 +134,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         raw_response: Response,
     ) -> TranscriptionResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except ValueError:
             raise GeminiError(
                 status_code=raw_response.status_code,

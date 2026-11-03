@@ -22,6 +22,7 @@ TOKEN_PRICED_NAMES: Final = (
     "cohere-command-a",
     "grok-4-20-reasoning",
     "grok-4-20-non-reasoning",
+    "claude-mythos-5-1",
 )
 GROK_4_20_NAMES: Final = ("grok-4-20-reasoning", "grok-4-20-non-reasoning")
 CATALOG_NAMES: Final = TOKEN_PRICED_NAMES + ("whisper",)

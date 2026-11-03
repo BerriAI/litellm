@@ -69,21 +69,21 @@ def test_build_metadata_handles_none_and_does_not_mutate_input():
 
 def test_resolve_max_input_tokens_prefers_configured_over_deployment():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (8191, None)
+    router.registry.return_value.group.return_value = (8191, None)
     assert resolve_embedding_max_input_tokens(512, "sem-embed", router) == 512
-    router.get_configured_token_limits.assert_not_called()
+    router.registry.return_value.group.assert_not_called()
 
 
 def test_resolve_max_input_tokens_falls_back_to_deployment_limit():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (8191, 4096)
+    router.registry.return_value.group.return_value = (8191, 4096)
     assert resolve_embedding_max_input_tokens(None, "sem-embed", router) == 8191
-    router.get_configured_token_limits.assert_called_once_with("sem-embed")
+    router.registry.return_value.group.assert_called_once_with("sem-embed", field="token_limits")
 
 
 def test_resolve_max_input_tokens_is_none_without_router_or_deployment_limit():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.registry.return_value.group.return_value = (None, None)
     assert resolve_embedding_max_input_tokens(None, "sem-embed", router) is None
     assert resolve_embedding_max_input_tokens(None, "sem-embed", None) is None
 

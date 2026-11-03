@@ -2,11 +2,18 @@ import asyncio
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final, Protocol, TypeAlias
+from typing import Final, TypeAlias
 
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, BilledRoundsSpend, UncachedPrice
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.responses.mcp.parked_stream_dispatch import (
+    DISPATCH_RELEASE,
+    PARKED_DISPATCH,
+    SERVED_FROM_CACHE,
+    parked_success,
+    success_dispatcher,
+)
 from litellm.responses.mcp.round_billing import billed_for_every_round, merged_chat_usage, summed_cost_breakdown
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator, spawn_logging_task
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -15,25 +22,6 @@ from litellm.types.utils import CostBreakdown, ModelResponse, Usage
 
 Parked: TypeAlias = tuple[object, ...]
 RestoresHeaders: TypeAlias = Callable[[ResponsesAPIStreamingResponse], None]
-
-_PARKED_DISPATCH: Final = "_deferred_stream_complete_args"
-_DISPATCH_RELEASE: Final = "_on_deferred_stream_complete"
-_SERVED_FROM_CACHE: Final = UncachedPrice(cost=0.0, cost_breakdown=None)
-
-
-class _DispatchesSuccessHandlers(Protocol):
-    async def dispatch_success_handlers(
-        self,
-        result: object = None,
-        start_time: object = None,
-        end_time: object = None,
-        cache_hit: object = None,
-        prefer_async_handlers: bool = False,
-    ) -> None: ...
-
-
-def _success_dispatcher(logger: LiteLLMLoggingObj) -> _DispatchesSuccessHandlers:
-    return logger
 
 
 def _event_loop_running() -> bool:
@@ -198,8 +186,8 @@ class StreamedRoundBilling:
         self._billed: _BilledRounds | None = None
         self._banked: Parked | None = None
         self._banked_row: _RoundRow | None = None
-        if getattr(logging_obj, _DISPATCH_RELEASE, None) is None:
-            setattr(logging_obj, _DISPATCH_RELEASE, self._run_parked)
+        if getattr(logging_obj, DISPATCH_RELEASE, None) is None:
+            setattr(logging_obj, DISPATCH_RELEASE, self._run_parked)
 
     def complete_round(
         self,
@@ -286,7 +274,7 @@ class StreamedRoundBilling:
 
     def _price(self, response: ResponsesAPIResponse, round_parked: Parked | None) -> UncachedPrice:
         if served_from_cache(response):
-            return _SERVED_FROM_CACHE
+            return SERVED_FROM_CACHE
         match round_parked:
             case (ModelResponse() as assembled, bool()):
                 return self._logging_obj.uncached_price(assembled)
@@ -297,7 +285,7 @@ class StreamedRoundBilling:
         self._banked = parked
         self._banked_row = row
         if parked is not None:
-            setattr(self._logging_obj, _PARKED_DISPATCH, parked)
+            setattr(self._logging_obj, PARKED_DISPATCH, parked)
 
     def _bank_apart_from_later_rounds(self, billed: _BilledRounds) -> None:
         row: Final = self._banked_row
@@ -320,7 +308,7 @@ class StreamedRoundBilling:
     @staticmethod
     async def _log_success(success: _SuccessLog) -> None:
         success.carry_bridged_usage()
-        await _success_dispatcher(success.logger).dispatch_success_handlers(
+        await success_dispatcher(success.logger).dispatch_success_handlers(
             success.row.logged,
             start_time=success.logger.start_time,
             end_time=success.row.end_time,
@@ -329,10 +317,10 @@ class StreamedRoundBilling:
         )
 
     def _take_parked(self) -> Parked | None:
-        parked: Final[Parked | None] = getattr(self._logging_obj, _PARKED_DISPATCH, None)
+        parked: Final[Parked | None] = getattr(self._logging_obj, PARKED_DISPATCH, None)
         if not isinstance(parked, tuple):
             return None
-        setattr(self._logging_obj, _PARKED_DISPATCH, None)
+        setattr(self._logging_obj, PARKED_DISPATCH, None)
         return parked
 
     async def _run_parked(self, *parked: object) -> None:
@@ -341,29 +329,27 @@ class StreamedRoundBilling:
                 await dispatch
             case (dispatch,) if asyncio.iscoroutine(dispatch):
                 await dispatch
-            case (assembled, cache_hit):
-                await _success_dispatcher(self._logging_obj).dispatch_success_handlers(
-                    assembled, cache_hit=cache_hit, start_time=None, end_time=None, prefer_async_handlers=True
-                )
+            case _ if (success := parked_success(parked)) is not None:
+                await success.dispatch(self._logging_obj)
             case _:
                 return
 
     def _owns_release(self) -> bool:
-        release: Final[object] = getattr(self._logging_obj, _DISPATCH_RELEASE, None)
+        release: Final[object] = getattr(self._logging_obj, DISPATCH_RELEASE, None)
         return release == self._run_parked
 
     def _release(self, parked: Parked) -> None:
-        if getattr(self._logging_obj, _DISPATCH_RELEASE, None) is not None and not self._owns_release():
-            setattr(self._logging_obj, _PARKED_DISPATCH, parked)
+        if getattr(self._logging_obj, DISPATCH_RELEASE, None) is not None and not self._owns_release():
+            setattr(self._logging_obj, PARKED_DISPATCH, parked)
             return
-        setattr(self._logging_obj, _DISPATCH_RELEASE, None)
+        setattr(self._logging_obj, DISPATCH_RELEASE, None)
         spawn_logging_task(
             asyncio.get_running_loop(), self._run_parked(*parked), task_name="Responses MCP stream success logging"
         )
 
     def _disarm(self) -> None:
         if self._owns_release():
-            setattr(self._logging_obj, _DISPATCH_RELEASE, None)
+            setattr(self._logging_obj, DISPATCH_RELEASE, None)
 
     @staticmethod
     def _close(parked: Parked | None) -> None:
