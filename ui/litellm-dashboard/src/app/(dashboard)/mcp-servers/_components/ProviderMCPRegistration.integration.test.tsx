@@ -134,4 +134,18 @@ describe("provider registration UI", () => {
     expect(onDelete).toHaveBeenCalledOnce();
     expect(screen.getByText("2 allowed tools")).toBeInTheDocument();
   });
+
+  it("does not offer deletion for a config-backed provider card", () => {
+    const onDelete = vi.fn();
+    render(
+      <MCPServerCard
+        server={{ ...server, is_config: true }}
+        onClick={vi.fn()}
+        onRecheckHealth={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Server actions" })).not.toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
 });

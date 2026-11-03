@@ -60,6 +60,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   const { t } = useTranslation();
   const isProvider = server.execution_mode === "provider";
   const recheckHealth = isProvider ? undefined : onRecheckHealth;
+  const deleteServer = isProvider && server.is_config ? undefined : onDelete;
   const alias = server.alias || server.server_name || "";
   const name = server.server_name || alias || server.server_id;
   // Logo is sourced exclusively from the admin-set `mcp_info.logo_url`.
@@ -117,7 +118,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
     }
   };
 
-  const hasMenu = !!recheckHealth || !!onDelete;
+  const hasMenu = !!recheckHealth || !!deleteServer;
 
   // Card uses role="button" + nested <button> children (Set, BYOK Connect, the
   // recheck-health Badge), so a real <button> wrapper would produce invalid
@@ -186,13 +187,13 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                     {t("mcpServers.serverCard.actionsMenu.testConnection")}
                   </DropdownMenuItem>
                 )}
-                {recheckHealth && onDelete && <DropdownMenuSeparator />}
-                {onDelete && (
+                {recheckHealth && deleteServer && <DropdownMenuSeparator />}
+                {deleteServer && (
                   <DropdownMenuItem
                     variant="destructive"
                     onClick={(e) => {
                       stop(e);
-                      onDelete();
+                      deleteServer();
                     }}
                   >
                     <Trash2 />
