@@ -81884,6 +81884,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_vision": true,
+        "supports_video_input": true,
         "supports_reasoning": true,
         "supports_function_calling": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info"
@@ -81908,6 +81909,7 @@
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_vision": true,
+        "supports_video_input": true,
         "supports_reasoning": true,
         "supports_function_calling": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info"
