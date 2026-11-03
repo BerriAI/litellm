@@ -19,6 +19,7 @@ from redis.exceptions import DataError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+
 from litellm._service_logger import ServiceTypes
 from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
@@ -39,6 +40,24 @@ from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
+
+
+@pytest.mark.parametrize("queued,stored_path,expected", [(False, None, (0.25,)), (True, "legacy", (0.25,)), (False, "ledger", ())])
+@pytest.mark.asyncio
+async def test_legacy_failure_recovery_does_not_replay_queued_or_ledger_window_charges(queued, stored_path, expected):
+    writer = DBSpendUpdateWriter()
+    window = build_window_spend_transaction(
+        entity_type="model_max_budget", entity_id="key:model:1d", window_duration="1d",
+        window_start=datetime(2026, 11, 2, tzinfo=timezone.utc), spend=0.25,
+    )
+    if queued:
+        await writer.window_spend_update_queue.add_update(window)
+    await writer._restore_legacy_model_windows(
+        (window,), accounting_path="legacy", payload=None if stored_path is None else {"accounting_path": stored_path}, queued=queued,
+    )
+    charges = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+    assert tuple(charge["spend"] for charge in charges) == expected
+
 
 
 @pytest.mark.asyncio

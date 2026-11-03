@@ -18,14 +18,15 @@ from typing import (
     Final,
     Generic,
     Literal,
-    LiteralString,
     Protocol,
     cast,  # noqa: TID251  # validated partition identifiers cross the LiteralString SQL boundary
 )
 
 from pydantic import TypeAdapter
+from typing_extensions import LiteralString
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy.db.db_span import db_span
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
@@ -189,14 +190,15 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         if not any(row.get("accounting_path") == "ledger" for row in rows):
             return await self.table.create_many(data=rows, skip_duplicates=True)
         database: Final[_SpendLogInsertDatabase] = self.prisma_client.writer_db
-        counts: Final = tuple(
-            [
-                len(await database.query_raw(*spend_log_insert_statement(tuple(group))))
-                for _, group in groupby(
-                    sorted(rows, key=lambda row: tuple(sorted(row))), key=lambda row: tuple(sorted(row))
-                )
-            ]
-        )
+        async with db_span("insert_spend_logs", "LiteLLM_SpendLogs"):
+            counts: Final = tuple(
+                [
+                    len(await database.query_raw(*spend_log_insert_statement(tuple(group))))
+                    for _, group in groupby(
+                        sorted(rows, key=lambda row: tuple(sorted(row))), key=lambda row: tuple(sorted(row))
+                    )
+                ]
+            )
         return sum(counts)
 
     async def take_over_batch(self, row: Mapping[str, object]) -> BatchTakeover:
@@ -224,7 +226,8 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
                 if path == "ledger"
                 else ()
             )
-            changed: Final = await transaction.query_raw(*spend_log_takeover_statement(row))
+            async with db_span("update", "LiteLLM_SpendLogs"):
+                changed: Final = await transaction.query_raw(*spend_log_takeover_statement(row))
             if not changed:
                 return BatchTakeover(False, path)
             if path == "ledger" and (not receipts or receipts[0]["state"] == "applied"):
