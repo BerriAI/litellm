@@ -91,9 +91,7 @@ impl<H: Interceptors<Error>> CallHooks<Error> for OcrCallHooks<'_, H> {
     }
 
     fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
-        let raw = RawResponse {
-            body: String::from_utf8_lossy(body).into_owned(),
-        };
+        let raw = RawResponse::new(String::from_utf8_lossy(body).into_owned());
         if let Some(observers) = self.observers {
             observers.emit(litellm_host::lifecycle::CallEvent::Execution(
                 ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
