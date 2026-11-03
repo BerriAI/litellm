@@ -17,7 +17,7 @@ import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
@@ -1048,6 +1048,64 @@ async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sourc
         "type": "document",
         "source": {"type": "base64", "media_type": "application/pdf", "data": async_only_image_fetch.base64_png},
     } in captured["body"]["messages"][0]["content"]
+
+
+def test_bedrock_invoke_claude_sync_completion_downloads_a_pdf_link_once_and_sends_it_as_a_base64_document(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates import image_handling
+
+    pdf_url = f"https://docs.example/{uuid.uuid4()}/report.pdf"
+    pdf_bytes = b"%PDF-1.7\n" + b"0" * 64
+    fetched = []
+    captured = {}
+
+    def serve_pdf(client, url, **kwargs):
+        fetched.append(url)
+        return httpx.Response(
+            200, content=pdf_bytes, headers={"content-type": "application/pdf"}, request=httpx.Request("GET", url)
+        )
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "A lease"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(image_handling, "safe_get", serve_pdf)
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(handle))
+
+    response = litellm.completion(
+        model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this document?"},
+                    {"type": "image_url", "image_url": {"url": pdf_url}},
+                ],
+            }
+        ],
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "A lease"
+    assert fetched == [pdf_url]
+    assert captured["body"]["messages"][0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(pdf_bytes).decode()},
+    }
 
 
 @pytest.mark.parametrize(

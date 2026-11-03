@@ -721,6 +721,8 @@ class _Served:
     barrier: threading.Barrier | None = None
     declared_length: int | None = None
     hold_open_until: threading.Event | None = None
+    respond_after: threading.Event | None = None
+    drip_every: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -750,6 +752,8 @@ def probe_server(monkeypatch):
             seen.append((self.path, requested_range))
             if served.barrier is not None:
                 served.barrier.wait()
+            if served.respond_after is not None:
+                served.respond_after.wait(timeout=30)
             ranged = served.honors_range and requested_range == "bytes=0-1023"
             body = served.body[:1024] if ranged else served.body
             self.send_response(206 if ranged and served.status == 200 else served.status)
@@ -757,7 +761,13 @@ def probe_server(monkeypatch):
                 self.send_header("Content-Type", served.content_type)
             self.send_header("Content-Length", str(served.declared_length or len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if served.drip_every is None:
+                self.wfile.write(body)
+            else:
+                for byte in body:
+                    self.wfile.write(bytes([byte]))
+                    self.wfile.flush()
+                    time.sleep(served.drip_every)
             if served.hold_open_until is not None:
                 served.hold_open_until.wait(timeout=30)
 
@@ -772,8 +782,8 @@ def probe_server(monkeypatch):
     server.server_close()
 
 
-async def _serves_pdf(mode: str, url: str) -> bool:
-    return serves_pdf(url) if mode == "sync" else await async_serves_pdf(url)
+async def _serves_pdf(mode: str, url: str, **kwargs) -> bool:
+    return serves_pdf(url, **kwargs) if mode == "sync" else await async_serves_pdf(url, **kwargs)
 
 
 async def _format_pdf_links(mode, messages):
@@ -860,6 +870,44 @@ async def test_serves_pdf_stops_reading_after_the_leading_kilobyte_when_the_host
         assert await _serves_pdf(mode, url) is True
     finally:
         rest_of_body_sent.set()
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_serves_pdf_gives_up_within_its_timeout_when_the_host_sends_one_byte_at_a_time(probe_server, mode):
+    url = probe_server.serve("/report.pdf", _Served(body=b"0" * 1024, honors_range=False, drip_every=0.02))
+    started = time.monotonic()
+
+    assert await _serves_pdf(mode, url, timeout=0.5) is False
+    assert time.monotonic() - started < 3
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_serves_pdf_reuses_a_link_verdict_instead_of_probing_the_link_again(probe_server, mode):
+    pdf_link = probe_server.serve("/a/report.pdf", _Served())
+    png_link = probe_server.serve("/a/page.pdf", _Served(content_type="image/png", body=PNG_BODY))
+
+    verdicts = [await _serves_pdf(mode, url) for url in (pdf_link, png_link, pdf_link, png_link)]
+
+    assert verdicts == [True, False, True, False]
+    assert [path for path, _ in probe_server.seen] == ["/a/report.pdf", "/a/page.pdf"]
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_serves_pdf_remembers_a_timed_out_probe_so_the_next_turn_does_not_wait_again(probe_server, mode):
+    host_answers = threading.Event()
+    url = probe_server.serve("/report.pdf", _Served(respond_after=host_answers))
+
+    try:
+        first = await _serves_pdf(mode, url, timeout=0.3)
+        started = time.monotonic()
+        second = await _serves_pdf(mode, url, timeout=0.3)
+        second_took = time.monotonic() - started
+    finally:
+        host_answers.set()
+
+    assert (first, second) == (False, False)
+    assert second_took < 0.1
+    assert probe_server.seen == [("/report.pdf", "bytes=0-1023")]
 
 
 @pytest.mark.parametrize("mode", ("sync", "async"))

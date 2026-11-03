@@ -5,11 +5,11 @@ Helper functions to handle images passed in messages
 import asyncio
 import base64
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
-from itertools import chain
+from itertools import accumulate, chain, takewhile, tee
 from types import MappingProxyType
 from typing import Final, TypeVar
 from urllib.parse import urlparse
@@ -31,6 +31,7 @@ _Fetched = TypeVar("_Fetched")
 _FETCH_ATTEMPTS: Final = 3
 
 in_memory_cache: Final = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
+pdf_probe_verdicts: Final = InMemoryCache()
 
 
 def _header_value(response: Response, name: str) -> str | None:
@@ -220,6 +221,9 @@ _PDF_SIGNATURE_WINDOW: Final = 1024
 _PDF_PROBE_HEADERS: Final = MappingProxyType({"Range": f"bytes=0-{_PDF_SIGNATURE_WINDOW - 1}"})
 _PDF_PROBE_STATUSES: Final = frozenset({200, 206})
 _PDF_PROBE_FAILURES: Final = (httpx.HTTPError, httpx.InvalidURL, ValueError)
+_ASYNC_PDF_PROBE_FAILURES: Final = (*_PDF_PROBE_FAILURES, asyncio.TimeoutError)
+_PDF_PROBE_VERDICT_TTL: Final = 600
+_PDF_PROBE_FAILURE_TTL: Final = 60
 _DECODED_BODY_HEADERS: Final = frozenset({"content-encoding", "content-length", "transfer-encoding"})
 
 
@@ -252,6 +256,15 @@ def _serves_pdf(response: Response) -> bool:
     return _PDF_SIGNATURE in response.content[:_PDF_SIGNATURE_WINDOW]
 
 
+def _signature_window_chunks(chunks: Iterable[bytes], deadline: float) -> Iterator[bytes]:
+    reading, counting = tee(chunks)
+    read_so_far: Final = chain((0,), accumulate(map(len, counting)))
+    still_reading: Final = takewhile(
+        lambda total: total < _PDF_SIGNATURE_WINDOW and time.monotonic() < deadline, read_so_far
+    )
+    return (chunk for _, chunk in zip(still_reading, reading))
+
+
 def _with_body_prefix(response: Response, prefix: bytes) -> Response:
     return Response(
         response.status_code,
@@ -264,6 +277,7 @@ def _with_body_prefix(response: Response, prefix: bytes) -> Response:
 @dataclass(frozen=True, slots=True)
 class _BodyPrefixReader:
     client: httpx.Client
+    deadline: float
 
     def get(
         self,
@@ -280,7 +294,8 @@ class _BodyPrefixReader:
             follow_redirects=follow_redirects,
             timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
         ) as response:
-            return _with_body_prefix(response, next(response.iter_bytes(_PDF_SIGNATURE_WINDOW), b""))
+            prefix: Final = b"".join(_signature_window_chunks(response.iter_bytes(), self.deadline))
+            return _with_body_prefix(response, prefix[:_PDF_SIGNATURE_WINDOW])
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,37 +321,59 @@ class _AsyncBodyPrefixReader:
             return _with_body_prefix(response, await anext(response.aiter_bytes(max_response_bytes), b""))
 
 
-def serves_pdf(url: str) -> bool:
+def _cached_pdf_verdict(url: str) -> bool | None:
+    cached: Final = pdf_probe_verdicts.get_cache(url)
+    return cached if isinstance(cached, bool) else None
+
+
+def _remember_pdf_verdict(url: str, verdict: bool, ttl: int) -> bool:
+    pdf_probe_verdicts.set_cache(url, verdict, ttl=ttl)
+    return verdict
+
+
+def _failed_pdf_probe(url: str, error: Exception) -> bool:
+    verbose_logger.debug("PDF probe of %s failed, sending it as an image link: %s", url, error)
+    return _remember_pdf_verdict(url, False, _PDF_PROBE_FAILURE_TTL)
+
+
+def serves_pdf(url: str, timeout: float = NON_LLM_CONNECTION_TIMEOUT) -> bool:
     if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
         return False
+    cached: Final = _cached_pdf_verdict(url)
+    if cached is not None:
+        return cached
     try:
         response: Final = safe_get(
-            _BodyPrefixReader(litellm.module_level_client.client),
+            _BodyPrefixReader(litellm.module_level_client.client, deadline=time.monotonic() + timeout),
             url,
             headers=dict(_PDF_PROBE_HEADERS),
-            timeout=NON_LLM_CONNECTION_TIMEOUT,
+            timeout=timeout,
         )
     except _PDF_PROBE_FAILURES as e:
-        verbose_logger.debug("PDF probe of %s failed, sending it as an image link: %s", url, e)
-        return False
-    return _serves_pdf(response)
+        return _failed_pdf_probe(url, e)
+    return _remember_pdf_verdict(url, _serves_pdf(response), _PDF_PROBE_VERDICT_TTL)
 
 
-async def async_serves_pdf(url: str) -> bool:
+async def async_serves_pdf(url: str, timeout: float = NON_LLM_CONNECTION_TIMEOUT) -> bool:
     if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
         return False
+    cached: Final = _cached_pdf_verdict(url)
+    if cached is not None:
+        return cached
     try:
-        response: Final = await async_safe_get(
-            _AsyncBodyPrefixReader(litellm.module_level_aclient.client),
-            url,
-            headers=dict(_PDF_PROBE_HEADERS),
-            timeout=NON_LLM_CONNECTION_TIMEOUT,
-            max_response_bytes=_PDF_SIGNATURE_WINDOW,
+        response: Final = await asyncio.wait_for(
+            async_safe_get(
+                _AsyncBodyPrefixReader(litellm.module_level_aclient.client),
+                url,
+                headers=dict(_PDF_PROBE_HEADERS),
+                timeout=timeout,
+                max_response_bytes=_PDF_SIGNATURE_WINDOW,
+            ),
+            timeout,
         )
-    except _PDF_PROBE_FAILURES as e:
-        verbose_logger.debug("PDF probe of %s failed, sending it as an image link: %s", url, e)
-        return False
-    return _serves_pdf(response)
+    except _ASYNC_PDF_PROBE_FAILURES as e:
+        return _failed_pdf_probe(url, e)
+    return _remember_pdf_verdict(url, _serves_pdf(response), _PDF_PROBE_VERDICT_TTL)
 
 
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:
