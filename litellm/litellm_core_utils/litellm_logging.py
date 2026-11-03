@@ -1732,7 +1732,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 _litellm_params: Final = require_attributes(
                     self._model_call_details_view.get("litellm_params", dict[str, object]()), _ParamsLookup, "get"
                 )
-                _metadata: Final = _litellm_params.get("metadata", dict[str, object]()) or dict[str, object]()
+                # Write into the request's own metadata so callbacks see raw_request: a missing
+                # one is created on litellm_params, and an empty one is kept rather than replaced.
+                _request_metadata = _litellm_params.get("metadata", None)
+                if _request_metadata is None and has_attributes(_litellm_params, _MetadataSlot, "__setitem__"):
+                    _request_metadata = dict[str, object]()
+                    _litellm_params["metadata"] = _request_metadata
+                _metadata: Final = _request_metadata if _request_metadata is not None else dict[str, object]()
                 try:
                     self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
                         raw_request_api_base=self._get_masked_api_base(str(additional_args.get("api_base") or "")),

@@ -8867,6 +8867,26 @@ def test_pre_call_redacts_and_masks_raw_request(logging_obj):
     assert "key=*****" in raw_api_base
 
 
+@pytest.mark.parametrize("litellm_params", [{}, {"metadata": None}, {"metadata": {}}])
+def test_pre_call_keeps_raw_request_when_request_has_no_metadata(logging_obj, litellm_params):
+    """Callbacks read raw_request from litellm_params metadata, which SDK calls often leave unset."""
+    logging_obj.model_call_details["litellm_params"] = litellm_params
+    logging_obj.log_raw_request_response = True
+
+    logging_obj.pre_call(
+        input="hi",
+        api_key="",
+        additional_args={
+            "api_base": "https://api.openai.com/v1/chat/completions",
+            "headers": {},
+            "complete_input_dict": {"model": "gpt-4o-mini"},
+        },
+    )
+
+    raw_request = logging_obj.model_call_details["litellm_params"]["metadata"]["raw_request"]
+    assert "https://api.openai.com/v1/chat/completions" in raw_request
+
+
 _PRIVATE_RAW_REQUEST_ARGS: Final = {
     "api_base": "https://api.openai.com/v1/chat/completions",
     "headers": {},
