@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
+    deployment_model_info,
     deployment_prompt_cache_breakpoint_support,
     targets_openai_api,
 )
@@ -767,6 +768,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             custom_llm_provider=_provider_name(self.custom_llm_provider),
             api_base=host.api_base or host.base_url,
             prompt_cache_options=prompt_cache_options,
+            model_info=deployment_model_info(litellm_params),
         )
 
     @staticmethod

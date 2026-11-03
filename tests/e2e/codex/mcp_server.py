@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Final
 
 from mcp.server.mcpserver import MCPServer
 
-server = MCPServer("vault")
+server: Final = MCPServer("vault")
 
 
 @server.tool(name=os.environ.get("TOOL_NAME"))

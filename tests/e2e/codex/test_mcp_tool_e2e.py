@@ -29,6 +29,7 @@ class TestCodexMcpTool:
             model=setup.model,
             cwd=workspace,
         )
+        assert first.exit_code == 0, first
         assert first.thread_id is not None, first
         assert any(first_marker in call.output for call in first.mcp_calls), first
         assert first_marker in first.answer, first
@@ -41,5 +42,6 @@ class TestCodexMcpTool:
             model=setup.model,
             cwd=workspace,
         )
+        assert second.exit_code == 0, second
         assert any(second_marker in call.output for call in second.mcp_calls), second
         assert second_marker in second.answer, second
