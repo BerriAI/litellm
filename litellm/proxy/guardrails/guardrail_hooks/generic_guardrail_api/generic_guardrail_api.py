@@ -378,12 +378,13 @@ class GenericGuardrailAPI(CustomGuardrail):
         # Fields in metadata are already prefixed with 'user_api_key_'
         for field_name in GenericGuardrailAPIMetadata.__annotations__:
             value = metadata_dict.get(field_name)
-            if value is not None:
+            if isinstance(value, str):
                 result_metadata[field_name] = value
 
         # handle user_api_key_token = user_api_key_hash
-        if metadata_dict.get("user_api_key_token") is not None:
-            result_metadata["user_api_key_hash"] = metadata_dict.get("user_api_key_token")
+        token: Final = metadata_dict.get("user_api_key_token")
+        if isinstance(token, str):
+            result_metadata["user_api_key_hash"] = token
 
         verbose_proxy_logger.debug(
             "Generic Guardrail API: Extracted user metadata: %s",
@@ -391,6 +392,14 @@ class GenericGuardrailAPI(CustomGuardrail):
         )
 
         return result_metadata
+
+    def _dynamic_request_body_params(self, request_body: object) -> Mapping[str, object]:
+        """The ``extra_body`` a request's ``body`` asks this guardrail to send. A custom endpoint's client can send a
+        ``body`` field of any shape, which asks for nothing unless it names this guardrail's params in the usual form."""
+        try:
+            return as_str_mapping(self.get_guardrail_dynamic_request_body_params(request_body)) or {}  # pyright: ignore[reportArgumentType, reportUnknownArgumentType]  # a client's JSON, validated by the call
+        except (TypeError, ValidationError):
+            return {}
 
     def _fail_open_passthrough(
         self,
@@ -561,16 +570,16 @@ class GenericGuardrailAPI(CustomGuardrail):
         tools: Final = inputs.get("tools")
         structured_messages: Final = inputs.get("structured_messages")
         tool_calls: Final = inputs.get("tool_calls")
-        model: Final = inputs.get("model")
+        model: Final[object] = inputs.get("model")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
             request_data = {}
 
-        request_body: Final = request_data.get("body") or {}
+        request_body: Final[object] = request_data.get("body")
 
         # Merge additional provider specific params from config and dynamic params
-        dynamic_params: Final[Mapping[str, object]] = self.get_guardrail_dynamic_request_body_params(request_body) or {}
+        dynamic_params: Final = self._dynamic_request_body_params(request_body)
         additional_params: Final = {**self.additional_provider_specific_params, **dynamic_params}
 
         # Extract user API key metadata
@@ -597,7 +606,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 tool_calls=tool_calls,
                 additional_provider_specific_params=additional_params,
                 input_type=input_type,
-                model=model,
+                model=model if isinstance(model, str) else None,
             )
 
             headers: Final = self._build_request_headers()

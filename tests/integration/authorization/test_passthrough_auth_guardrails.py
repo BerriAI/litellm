@@ -47,6 +47,8 @@ ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
 GEMINI_ROUTE: Final = "/gemini/v1beta/models/gemini-2.5-flash:generateContent"
 CUSTOM_ROUTE: Final = "/passthrough-auth-custom"
 CUSTOM_GUARDED_ROUTE: Final = "/passthrough-auth-custom-guarded"
+CUSTOM_PRE_CALL_ROUTE: Final = "/passthrough-auth-custom-pre-call"
+GLOBAL_UNIFIED_POST_CALL: Final = "passthrough-global-unified-post-call"
 UNPRICED_MODEL: Final = "passthrough-auth-unpriced-model"
 MONITOR_POST_CALL: Final = "passthrough-auth-monitor-post-call"
 MONITORED_PROMPT: Final = "reply-with-the-monitored-id"
@@ -175,6 +177,7 @@ class AuthGuardrailRig:
     post_call_vendor: Wire
     key_post_call_vendor: Wire
     generic_post_call_vendor: Wire
+    global_unified_vendor: Wire
     model_post_call_vendor: Wire
     upstreams: Mapping[str, Wire]
 
@@ -187,6 +190,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
         post_call_vendor: Final = stack.enter_context(wire_server(_lakera_clean))
         key_post_call_vendor: Final = stack.enter_context(wire_server(_lakera_flagged))
         generic_post_call_vendor: Final = stack.enter_context(wire_server(_verdict))
+        global_unified_vendor: Final = stack.enter_context(wire_server(_verdict))
         blocking_post_call_vendor: Final = stack.enter_context(wire_server(_block_every_reply))
         monitor_post_call_vendor: Final = stack.enter_context(wire_server(_lakera_pii_only))
         model_post_call_vendor: Final = stack.enter_context(wire_server(_verdict))
@@ -223,6 +227,12 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                                 "auth": True,
                                 "cost_per_request": 0.25,
                                 "guardrails": {BLOCKING_POST_CALL: None},
+                            },
+                            {
+                                "path": CUSTOM_PRE_CALL_ROUTE,
+                                "target": f"{upstreams[OPENAI_ROUTE].url}/v1/chat/completions",
+                                "auth": True,
+                                "guardrails": {GUARDRAIL: None},
                             },
                         ],
                     },
@@ -318,6 +328,16 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                             },
                         },
                         {
+                            "guardrail_name": GLOBAL_UNIFIED_POST_CALL,
+                            "litellm_params": {
+                                "guardrail": "generic_guardrail_api",
+                                "mode": "post_call",
+                                "default_on": True,
+                                "api_base": global_unified_vendor.url,
+                                "api_key": "synthetic-guardrail-key",
+                            },
+                        },
+                        {
                             "guardrail_name": GENERIC_POST_CALL,
                             "litellm_params": {
                                 "guardrail": "generic_guardrail_api",
@@ -367,6 +387,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
             post_call_vendor,
             key_post_call_vendor,
             generic_post_call_vendor,
+            global_unified_vendor,
             model_post_call_vendor,
             upstreams,
         )
@@ -864,6 +885,78 @@ def test_custom_endpoint_writes_no_charge_for_a_response_its_post_call_guardrail
         assert response.status_code == 400, response.text
         assert len(rig.upstreams[OPENAI_ROUTE].drain()) == 1
         assert [float(str(row["spend"])) for row in _row_fields(gateway, key)] == [0], response.text
+
+
+def test_a_custom_endpoint_with_only_a_pre_call_guardrail_never_calls_a_global_unified_guardrail(
+    rig: AuthGuardrailRig,
+) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        custom_key: Final = scenario.key(metadata={"allowed_passthrough_routes": [CUSTOM_PRE_CALL_ROUTE]})
+        built_in_key: Final = scenario.key(metadata={"guardrails": [GENERIC_POST_CALL]})
+        _drain(rig)
+        rig.global_unified_vendor.drain()
+
+        custom_response: Final = gateway.request(
+            "POST", CUSTOM_PRE_CALL_ROUTE, _route_body(OPENAI_ROUTE, "Hello"), key=custom_key
+        )
+
+        assert custom_response.status_code == 200, custom_response.text
+        assert len(rig.vendor.drain()) == 1
+        assert rig.global_unified_vendor.drain() == ()
+
+        built_in_response: Final = _send(gateway, OPENAI_ROUTE, _route_body(OPENAI_ROUTE, "Hello"), built_in_key)
+
+        assert built_in_response.status_code == 200, built_in_response.text
+        assert len(rig.global_unified_vendor.drain()) == 1
+
+
+@pytest.mark.parametrize(
+    "field", ["Hello there", 7, ["a", "b"], {"guardrails": 7}], ids=["text", "int", "list", "dict"]
+)
+def test_a_custom_endpoints_own_body_field_still_gets_its_reply_scanned(
+    rig: AuthGuardrailRig, field: JsonValue
+) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"allowed_passthrough_routes": [CUSTOM_GUARDED_ROUTE]})
+
+        response: Final = gateway.request(
+            "POST", CUSTOM_GUARDED_ROUTE, {**_route_body(OPENAI_ROUTE, "Hello"), "body": field}, key=key
+        )
+
+        assert response.status_code == 400, response.text
+        assert "synthetic block" in response.text
+
+
+@pytest.mark.parametrize(
+    ("guardrail", "fields"),
+    [
+        (GUARDRAIL, {"proxy_server_request": 5}),
+        (GUARDRAIL, {"metadata": {"user_api_key_alias": 5}}),
+        (TAG_SCOPED_POST_CALL, {"metadata": {"tags": [1, {"a": 1}]}}),
+        (
+            None,
+            {
+                "metadata": {"_pipeline_managed_guardrails": []},
+                "litellm_metadata": {"_guardrail_pipelines": [["p", "q"]]},
+            },
+        ),
+    ],
+    ids=["proxy-server-request", "key-alias", "tags", "pipeline-slots"],
+)
+def test_a_malformed_proxy_field_in_a_body_still_gets_the_provider_reply(
+    rig: AuthGuardrailRig, guardrail: str | None, fields: Mapping[str, JsonValue]
+) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [guardrail]} if guardrail else {})
+        _drain(rig)
+
+        response: Final = _send(gateway, OPENAI_ROUTE, {**_route_body(OPENAI_ROUTE, "Hello"), **fields}, key)
+
+        assert response.status_code == 200, response.text
+        assert len(rig.upstreams[OPENAI_ROUTE].drain()) == 1
 
 
 def test_a_monitored_lakera_flag_keeps_the_provider_id_on_the_row(rig: AuthGuardrailRig) -> None:

@@ -2703,3 +2703,52 @@ def test_extract_user_api_key_metadata_reads_past_a_litellm_metadata_that_is_not
     )
 
     assert metadata["user_api_key_hash"] == "hash"
+
+
+def test_extract_user_api_key_metadata_leaves_out_a_value_that_isnt_a_string() -> None:
+    guardrail: Final = GenericGuardrailAPI(api_base="http://vendor.invalid", guardrail_name="generic")
+
+    metadata: Final = guardrail._extract_user_api_key_metadata(
+        {"metadata": {"user_api_key_alias": 5, "user_api_key_token": 7, "user_api_key_team_id": "team"}}
+    )
+
+    assert metadata == {"user_api_key_team_id": "team"}
+
+
+async def _vendor_payload(request_data: dict[str, object], inputs: dict[str, object]) -> dict[str, object]:
+    guardrail: Final = GenericGuardrailAPI(api_base="http://vendor.invalid", guardrail_name="generic")
+    vendor_reply: Final = MagicMock(json=MagicMock(return_value={"action": "NONE"}))
+
+    with patch.object(guardrail.async_handler, "post", return_value=vendor_reply) as post:
+        await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="response")
+
+    return post.call_args.kwargs["json"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    (
+        "Hello there",
+        7,
+        True,
+        ["a", "b"],
+        {"guardrails": 7},
+        {"metadata": {"guardrails": 7}},
+        {"guardrails": [{"generic": 7}]},
+    ),
+)
+async def test_a_body_field_a_custom_endpoints_client_sent_asks_the_vendor_for_nothing(body: object) -> None:
+    payload: Final = await _vendor_payload({"body": body}, {"texts": ["reply"]})
+
+    assert payload["texts"] == ["reply"]
+    assert not payload.get("additional_provider_specific_params")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ({"id": 1}, ["gpt"], 7))
+async def test_a_reply_model_that_isnt_a_string_is_left_out_of_the_vendor_request(model: object) -> None:
+    payload: Final = await _vendor_payload({}, {"texts": ["reply"], "model": model})
+
+    assert payload["texts"] == ["reply"]
+    assert payload.get("model") is None

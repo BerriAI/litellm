@@ -59,6 +59,9 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     SafeRouteAdder,
     _anthropic_user_id_to_forward,
     _inherit_auth_guardrails,
+    _post_call_hook_data,
+    _post_call_selection_metadata,
+    _starts_post_call_pass,
     WebsocketFrameModelAllowed,
     WebsocketFrameModelGate,
     WebsocketFrameModelRefused,
@@ -13416,10 +13419,82 @@ class TestInheritAuthGuardrails:
             await _inherit_auth_guardrails(body, UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata), None, True)
 
         assert "guardrails" not in body
-        assert (body["metadata"].get("guardrails") or []) == [
+        assert (body.get("metadata", {}).get("guardrails") or []) == [
             *key_metadata.get("guardrails", ()),
             *(body_metadata or {}).get("guardrails", ()),
         ]
+
+    @pytest.mark.asyncio
+    async def test_a_body_with_nothing_to_merge_gets_no_metadata(self):
+        body: Final[dict[str, object]] = self._chat_body()
+
+        assert await _inherit_auth_guardrails(body, UserAPIKeyAuth(api_key="sk-test"), None, True) is None
+
+        assert body == self._chat_body()
+
+    @pytest.mark.asyncio
+    async def test_a_body_with_nothing_to_merge_keeps_the_metadata_it_sent(self):
+        body: Final[dict[str, object]] = self._chat_body(metadata={})
+
+        await _inherit_auth_guardrails(body, UserAPIKeyAuth(api_key="sk-test"), None, True)
+
+        assert body["metadata"] == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", [5, "text", ["list"], None])
+    async def test_a_proxy_server_request_that_isnt_an_object_never_reaches_the_guardrails(self, value):
+        body: Final[dict[str, object]] = self._chat_body(proxy_server_request=value)
+
+        await _inherit_auth_guardrails(body, UserAPIKeyAuth(api_key="sk-test"), None, True)
+
+        assert "proxy_server_request" not in body
+
+    @pytest.mark.parametrize("slot", [[["p", "q"]], [7], 7, "text", [{"mode": "post_call"}]])
+    def test_a_pipeline_slot_a_body_sent_does_not_start_the_post_call_pass(self, slot):
+        kwargs: Final = {
+            "litellm_params": {
+                "metadata": {"_guardrail_pipelines": slot, "_pipeline_managed_guardrails": [], "tags": ["t"]}
+            }
+        }
+
+        selection: Final = _post_call_selection_metadata(kwargs, inherited=True)
+
+        assert selection == {"_pipeline_managed_guardrails": [], "tags": ["t"]}
+        assert _starts_post_call_pass(None, selection) is False
+
+    def test_a_pipeline_the_policy_engine_resolved_starts_the_post_call_pass(self):
+        pipeline: Final = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="guard")])
+        kwargs: Final = {"litellm_params": {"metadata": {"_guardrail_pipelines": [("p", pipeline)]}}}
+
+        selection: Final = _post_call_selection_metadata(kwargs, inherited=True)
+
+        assert selection == {"_guardrail_pipelines": [("p", pipeline)]}
+        assert _starts_post_call_pass(None, selection) is True
+
+    @pytest.mark.parametrize(
+        ("event_hook", "inherited", "gets_the_logging_object"),
+        [
+            (GuardrailEventHooks.pre_call, False, False),
+            (GuardrailEventHooks.post_call, False, True),
+            (GuardrailEventHooks.pre_call, True, True),
+        ],
+        ids=["custom-pre-call", "custom-post-call", "built-in-route"],
+    )
+    def test_a_custom_endpoint_gets_the_logging_object_only_for_a_post_call_guardrail(
+        self, event_hook, inherited, gets_the_logging_object
+    ):
+        logging_obj: Final = MagicMock()
+
+        with patch.object(
+            litellm.logging_callback_manager,
+            "get_custom_loggers_for_type",
+            return_value=[self._guardrail("guard", event_hook)],
+        ):
+            data: Final = _post_call_hook_data(
+                self._chat_body(), ["guard"], logging_obj, UserAPIKeyAuth(api_key="sk-test"), {}, inherited
+            )
+
+        assert data.get("litellm_logging_obj") is (logging_obj if gets_the_logging_object else None)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("value", [None, False, 7, "config", ["config"]])

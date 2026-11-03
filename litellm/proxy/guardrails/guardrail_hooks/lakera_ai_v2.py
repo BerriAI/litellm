@@ -1,9 +1,9 @@
 import copy
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
-from itertools import chain, product
+from itertools import chain
 from string import Formatter
 from types import MappingProxyType
 from typing import Final, Literal
@@ -261,14 +261,20 @@ def _gemini_text(content: object) -> str:
     return "\n".join(text for text in texts if isinstance(text, str) and text)
 
 
+def _gemini_tool_part_values(part: object) -> Iterator[object]:
+    fields: Final = as_str_mapping(part) or {}
+    return (
+        (as_str_mapping(fields[name]) or {}).get(_GEMINI_TOOL_PART_FIELDS[name])
+        for name in fields
+        if name in _GEMINI_TOOL_PART_FIELDS
+    )
+
+
 def _gemini_tool_text(content: object) -> str:
     """What one Gemini ``Content`` carries in its function call, function response and code execution parts, with
     structured values as JSON."""
     parts: Final = _gemini_items((as_str_mapping(content) or {}).get("parts"))
-    values: Final = (
-        (as_str_mapping((as_str_mapping(part) or {}).get(part_name)) or {}).get(field)
-        for part, (part_name, field) in product(parts, _GEMINI_TOOL_PART_FIELDS.items())
-    )
+    values: Final = chain.from_iterable(map(_gemini_tool_part_values, parts))
     return "\n".join(
         value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
         for value in values

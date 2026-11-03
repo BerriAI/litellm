@@ -3,6 +3,11 @@ from typing import List, Optional, Union
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 
 
+def _names_a_mode_tag(tag: object, mode: Mode) -> bool:
+    """Whether a request tag, which a client's body can make anything, is one of ``mode``'s tags"""
+    return isinstance(tag, str) and tag in mode.tags
+
+
 class EnterpriseCustomGuardrailHelper:
     @staticmethod
     def _should_run_if_mode_by_tag(
@@ -55,7 +60,7 @@ class EnterpriseCustomGuardrailHelper:
         matched_mode = None
         if request_tags:
             for tag in request_tags:
-                if tag in event_hook.tags:
+                if _names_a_mode_tag(tag, event_hook):
                     matched_mode = event_hook.tags[tag]
                     break
 
