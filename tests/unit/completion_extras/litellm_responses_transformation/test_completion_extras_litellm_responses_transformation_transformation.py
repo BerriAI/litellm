@@ -3064,6 +3064,38 @@ def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
             {"type": "custom", "name": "ApplyPatch"},
         ),
         ({"type": "custom"}, {"type": "custom"}),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [
+                        {"type": "function", "function": {"name": "get_time"}},
+                        {"type": "custom", "custom": {"name": "apply_patch"}},
+                        {"type": "mcp", "server_label": "docs"},
+                        {"type": "function", "name": "already_flat"},
+                    ],
+                },
+            },
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [
+                    {"type": "function", "name": "get_time"},
+                    {"type": "custom", "name": "apply_patch"},
+                    {"type": "mcp", "server_label": "docs"},
+                    {"type": "function", "name": "already_flat"},
+                ],
+            },
+        ),
+        (
+            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}},
+            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}},
+        ),
+        (
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+        ),
     ],
 )
 def test_normalize_tool_choice_for_responses_api(tool_choice, expected):
@@ -4105,6 +4137,16 @@ def test_output_item_done_with_stream_map_keeps_empty_delta():
         ({"type": "required"}, "required"),
         ("auto", "auto"),
         ({"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "name": "get_weather"}),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+                },
+            },
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+        ),
     ],
 )
 async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
@@ -4177,6 +4219,7 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
     post_kwargs = mock_post.call_args.kwargs
     request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
     assert request_body["tool_choice"] == expected_wire_tool_choice
+    assert [tool["name"] for tool in request_body["tools"]] == ["get_weather"]
 
 
 def _make_incomplete_responses_api_response(
@@ -5436,6 +5479,38 @@ def test_transform_request_strips_the_breakpoint_when_the_served_providers_row_o
 
     assert _bridged_input_for_served_provider("gpt-6-luna", "bedrock_mantle")[0]["content"] == [
         {"type": "input_text", "text": "Stable prefix"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("sibling_flag", "model_info", "keeps_the_breakpoint"),
+    [
+        (True, {"id": "flagless"}, False),
+        (True, {"id": "opted-out", "supports_prompt_cache_breakpoint": False}, False),
+        (False, {"id": "opted-in", "supports_prompt_cache_breakpoint": True}, True),
+    ],
+    ids=["flagless", "opted-out", "opted-in"],
+)
+def test_transform_request_reads_the_routed_deployments_own_flag_not_a_siblings_on_the_shared_key(
+    monkeypatch: pytest.MonkeyPatch,
+    sibling_flag: bool,
+    model_info: Mapping[str, object],
+    keeps_the_breakpoint: bool,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock_mantle/qa-mantle-shared",
+        {**_MANTLE_GPT_ROW, "supports_prompt_cache_breakpoint": sibling_flag},
+    )
+
+    system_content: Final = _bridged_input_for_served_provider(
+        "qa-mantle-shared", "bedrock_mantle", model_info=model_info
+    )[0]["content"]
+
+    assert system_content == [
+        {**_MARKED_SYSTEM_PART, "type": "input_text"}
+        if keeps_the_breakpoint
+        else {"type": "input_text", "text": "Stable prefix"}
     ]
 
 

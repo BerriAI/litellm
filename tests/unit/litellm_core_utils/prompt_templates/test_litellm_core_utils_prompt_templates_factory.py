@@ -1298,6 +1298,71 @@ def test_anthropic_messages_pt_uses_pdf_format_for_generic_mime_data_uri(llm_pro
     }
 
 
+@pytest.mark.parametrize(
+    ("image_url", "expected_type"),
+    (
+        ({"url": "https://example.com/download?id=7", "format": "application/pdf"}, "document"),
+        ({"url": "https://example.com/download?id=7", "format": "Application/PDF; charset=binary"}, "document"),
+        ({"url": "https://example.com/files/report.pdf", "format": "image/png"}, "image"),
+        ({"url": "https://example.com/pdf/photo.png"}, "image"),
+        ({"url": "https://example.com/pdf/photo.png", "format": 5}, "image"),
+        ({"url": "https://example.com/pdf/photo.png", "format": ["application/pdf"]}, "image"),
+    ),
+)
+def test_anthropic_messages_pt_picks_block_type_for_https_image_url(
+    image_url: dict[str, object], expected_type: str
+) -> None:
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "image_url", "image_url": image_url},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": expected_type,
+        "source": {"type": "url", "url": image_url["url"]},
+    }
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    (
+        {"url": "data:Application/PDF;base64,JVBERi0xLjQK"},
+        {"url": "data:application/x-pdf;base64,JVBERi0xLjQK"},
+        {"url": "data:application/octet-stream;base64,JVBERi0xLjQK", "format": "application/pdf; charset=binary"},
+    ),
+)
+def test_anthropic_messages_pt_normalizes_a_pdf_media_type_with_case_or_parameters(
+    image_url: dict[str, str],
+) -> None:
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "image_url", "image_url": image_url},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+    }
+
+
 def test_anthropic_messages_pt_keeps_png_image_url_as_image() -> None:
     image_data = "iVBORw0KGgo="
     result: Final = anthropic_messages_pt(
