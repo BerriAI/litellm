@@ -1181,3 +1181,46 @@ async def test_retained_batch_storage_threshold_alerts_without_deleting_receipts
         )
     finally:
         await client.db.disconnect()
+
+
+@pytest.mark.parametrize("backlog", ["retries", "expired"])
+@pytest.mark.parametrize("batch_size", [1, 1100])
+@pytest.mark.asyncio
+async def test_worker_drains_recovered_and_expired_work_at_its_configured_capacity(
+    parity_database, monkeypatch, backlog, batch_size
+):
+    from litellm.accounting.worker import flush_accounting_deliveries
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", str(batch_size))
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": True})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    writer = DBSpendUpdateWriter()
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    await client.db.connect()
+    try:
+        assert await _retrieve_batch(writer, 0.25)
+        with psycopg.connect(parity_database, autocommit=True) as connection:
+            if backlog == "retries":
+                connection.execute(
+                    'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch, attempts) '
+                    "SELECT 'retry-' || i, accounting_payload, false, 1 "
+                    'FROM "LiteLLM_SpendLogDelivery" CROSS JOIN generate_series(1, 3) i'
+                )
+            else:
+                connection.execute(
+                    'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch, state, applied_at) '
+                    "SELECT 'expired-' || i, '{}', false, 'applied', CURRENT_TIMESTAMP - INTERVAL '2 days' "
+                    'FROM generate_series(1, 1100) i'
+                )
+        await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (
+                0.25 * (1 + min(batch_size, 3)) if backlog == "retries" else 0.25,
+            )
+            assert connection.execute(
+                'SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE state=\'pending\' OR request_id LIKE \'expired-%\''
+             ).fetchone() == ((3 - min(batch_size, 3)) if backlog == "retries" else max(0, 1100 - batch_size * 2),)
+    finally:
+        await client.db.disconnect()

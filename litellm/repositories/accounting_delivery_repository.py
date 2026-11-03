@@ -122,15 +122,22 @@ class AccountingDeliveryRepository:
         *,
         batch_size: int = 100,
         max_attempts: int = 5,
+        retry_only: bool | None = None,
     ) -> DeliveryBatchResult:
         if batch_size < 1 or max_attempts < 1:
             raise ValueError("Delivery batch size and maximum attempts must be positive")
         claimed: tuple[_Delivery, ...] = ()  # rebind-ok: preserve claims for retry accounting after rollback
         try:
             async with self._database.tx(timeout=_TIMEOUT) as transaction:
-                retries: Final = _DELIVERIES.validate_python(await transaction.query_raw(_CLAIM, 1, True))
-                claimed = retries or _DELIVERIES.validate_python(  # rebind-ok: retain claimed identities after rollback
-                    await transaction.query_raw(_CLAIM, batch_size, False)
+                retries: Final = (
+                    _DELIVERIES.validate_python(await transaction.query_raw(_CLAIM, 1, True))
+                    if retry_only is not False
+                    else ()
+                )
+                claimed = retries or (  # rebind-ok: retain claimed identities after rollback
+                    _DELIVERIES.validate_python(await transaction.query_raw(_CLAIM, batch_size, False))
+                    if retry_only is not True
+                    else ()
                 )
                 if not claimed:
                     return DeliveryBatchResult()

@@ -54,21 +54,30 @@ async def flush_accounting_deliveries(
         )
         repository: Final = AccountingDeliveryRepository(database)
         started: Final = time.monotonic()
-        result: Final = await repository.apply_pending(
-            apply, batch_size=int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "10000"))
-        )
-        if result.applied:
-            await writer.invalidate_accounting_entities(applied, proxy_logging_obj)
-        if result.parked:
-            verbose_proxy_logger.error(
-                "Accounting delivery parked %d requests after isolated failures", len(result.parked)
-            )
-            await _alert(
-                proxy_logging_obj,
-                message=f"Accounting delivery parked {len(result.parked)} requests. Included spend totals require repair.",
-            )
+        batch_size: Final = int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "10000"))
+
+        async def run_batch(*, retry_only: bool) -> bool:
+            result: Final = await repository.apply_pending(apply, batch_size=batch_size, retry_only=retry_only)
+            if result.applied:
+                await writer.invalidate_accounting_entities(applied, proxy_logging_obj)
+            if result.parked:
+                verbose_proxy_logger.error(
+                    "Accounting delivery parked %d requests after isolated failures", len(result.parked)
+                )
+                await _alert(
+                    proxy_logging_obj,
+                    message=f"Accounting delivery parked {len(result.parked)} requests. Included spend totals require repair.",
+                )
+            return bool(result.applied or result.failed)
+
+        await run_batch(retry_only=False)
+        retry_deadline: Final = time.monotonic() + 5
+        for _ in range(batch_size):
+            if time.monotonic() >= retry_deadline or not await run_batch(retry_only=True):
+                break
         await repository.cleanup_applied(
-            retention_days=int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_RETENTION_DAYS", "1"))
+            retention_days=int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_RETENTION_DAYS", "1")),
+            batch_size=batch_size * 2,
         )
         metrics: Final = await repository.metrics()
         record_deliveries(metrics, time.monotonic() - started)
