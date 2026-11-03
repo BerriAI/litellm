@@ -24,6 +24,7 @@ _PAYLOAD_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _ENDPOINT_PATHS: Final = TypeAdapter(tuple[str, ...])
 
 BATCH_ENDPOINT: Final = "/v1/batch"
+BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 _AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
 
 _batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)

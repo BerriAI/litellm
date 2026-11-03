@@ -4793,9 +4793,25 @@ async def _update_database_for_video_poll(
     response_cost: float,
     status: str = "completed",
     polled_video_id: str = "video_abc",
+    guardrail_cost: float = 0.0,
+    call_type: str = "avideo_status",
 ) -> bool:
+    from litellm.types.utils import LiteLLMBatch
     from litellm.types.videos.main import VideoObject
 
+    polled_job = (
+        VideoObject(id="video_abc", object="video", status=status)
+        if call_type == "avideo_status"
+        else LiteLLMBatch(
+            id="batch_abc",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="f",
+            object="batch",
+            status=status,
+        )
+    )
     with (
         patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
             "litellm.proxy.proxy_server.prisma_client", prisma
@@ -4812,13 +4828,27 @@ async def _update_database_for_video_poll(
             org_id=None,
             kwargs={
                 "model": "sora-2",
-                "call_type": "avideo_status",
+                "call_type": call_type,
                 "litellm_call_id": litellm_call_id,
                 "response_cost": response_cost,
                 "polled_video_status": status,
                 "litellm_params": {"metadata": {"user_api_key": "test-key"}, "video_id": polled_video_id},
+                **(
+                    {
+                        "standard_logging_object": {
+                            "response_cost": response_cost,
+                            "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": guardrail_cost}],
+                            "metadata": {},
+                            "hidden_params": {},
+                            "request_tags": [],
+                            "model_map_information": None,
+                        }
+                    }
+                    if guardrail_cost
+                    else {}
+                ),
             },
-            completion_response=VideoObject(id="video_abc", object="video", status=status),
+            completion_response=polled_job,
             start_time=datetime.now(timezone.utc),
             end_time=datetime.now(timezone.utc),
             response_cost=response_cost,
@@ -4841,6 +4871,36 @@ async def test_update_database_charges_the_completed_polls_cost_and_not_a_runnin
 
     assert (running, completed, repolled) == (True, True, False)
     assert prisma.db.litellm_spendlogs.rows["video_abc_video_cost"]["spend"] == 0.42
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "charge_row_id"),
+    [("avideo_status", "video_abc_video_cost"), ("aretrieve_batch", "batch_abc_batch_cost")],
+)
+async def test_a_poll_paying_only_its_guardrail_cannot_take_the_jobs_charge_whatever_call_id_the_client_sent(
+    call_type, charge_row_id
+):
+    """A client picks its own x-litellm-call-id, so a guardrail-only poll naming the job's charge row, once or
+    twice, must still be charged each time and leave the finished job's charge to the poll that sees it done."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(
+            db_writer, prisma, call_id, cost, status=status, guardrail_cost=0.01, call_type=call_type
+        )
+        for call_id, cost, status in (
+            (charge_row_id, 0.01, "in_progress"),
+            (charge_row_id, 0.01, "in_progress"),
+            ("poll-3", 0.43, "completed"),
+        )
+    ]
+    await _flush_queued_spend_logs(prisma)
+
+    assert charged == [True, True, True]
+    assert prisma.db.litellm_spendlogs.rows[charge_row_id]["spend"] == 0.43
 
 
 @pytest.mark.asyncio

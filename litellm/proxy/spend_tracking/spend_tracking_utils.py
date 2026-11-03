@@ -38,7 +38,11 @@ from litellm.constants import (
 )
 from litellm.integrations.otel.model.metadata import caller_session_id
 from litellm.integrations.otel.model.trace_controls import TraceControls
-from litellm.litellm_core_utils.batch_utils import charged_video_id, pays_only_its_guardrail
+from litellm.litellm_core_utils.batch_utils import (
+    BATCH_COST_REQUEST_ID_SUFFIX,
+    charged_video_id,
+    pays_only_its_guardrail,
+)
 from litellm.litellm_core_utils.classifier_logging import (
     CLASSIFIER_AUDIT_FIELDS,
     classifier_audit_fields,
@@ -345,7 +349,7 @@ def _get_spend_logs_metadata(
     return clean_metadata
 
 
-BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
+JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX: Final = "_guardrail_cost"
 
 
 def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> str:
@@ -379,7 +383,7 @@ def get_spend_logs_id(
         return f"{charged_video}{VIDEO_COST_REQUEST_ID_SUFFIX}"
     call_id: Final = kwargs.get("litellm_call_id")
     if pays_only_its_guardrail(call_type, kwargs, response_cost) and isinstance(call_id, str) and call_id:
-        return call_id
+        return f"{call_id}{JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX}"
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
 

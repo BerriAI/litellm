@@ -5115,7 +5115,7 @@ def test_a_job_poll_that_pays_only_its_guardrail_gets_a_row_of_its_own(
     }
 
     assert get_spend_logs_id(call_type, {"id": job_id, "status": "completed"}, kwargs) == (
-        charged_id if pays_the_job else "poll-call-id"
+        charged_id if pays_the_job else "poll-call-id_guardrail_cost"
     )
 
 

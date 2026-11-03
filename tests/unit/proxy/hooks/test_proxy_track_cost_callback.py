@@ -43,6 +43,7 @@ from litellm.proxy.utils import (
 )
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.videos.main import VideoObject
 
 
 @pytest.mark.asyncio
@@ -3377,18 +3378,8 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
     assert event.response_cost == 0.0125
 
 
-@pytest.mark.asyncio
-async def test_async_log_success_event_keeps_batch_retrieves_in_process():
-    producer = SpendEventProducer(
-        address=UnixAddress(path="/nonexistent/spend.sock"),
-        on_unavailable="drop",
-        buffer_size=10,
-        connect_timeout=1.0,
-        fallback=_no_fallback,
-    )
-    logger = ProxyDBLogger(producer)
-    kwargs = {**_offload_kwargs(), "call_type": CallTypes.aretrieve_batch.value}
-    completed_batch = LiteLLMBatch(
+def _completed_batch() -> LiteLLMBatch:
+    return LiteLLMBatch(
         id="batch_abc",
         completion_window="24h",
         created_at=1,
@@ -3398,6 +3389,29 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
         object="batch",
         status="completed",
     )
+
+
+def _completed_video() -> VideoObject:
+    return VideoObject(id="video_abc", object="video", status="completed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "polled_job"),
+    [(CallTypes.aretrieve_batch.value, _completed_batch), ("avideo_status", _completed_video)],
+)
+async def test_async_log_success_event_keeps_job_polls_in_process(call_type, polled_job):
+    """The spend event leaves out the polled video's status and id, which decide whether the poll charges the job."""
+    producer = SpendEventProducer(
+        address=UnixAddress(path="/nonexistent/spend.sock"),
+        on_unavailable="drop",
+        buffer_size=10,
+        connect_timeout=1.0,
+        fallback=_no_fallback,
+    )
+    logger = ProxyDBLogger(producer)
+    kwargs = {**_offload_kwargs(), "call_type": call_type}
+    completed_job = polled_job()
 
     with (
         patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
@@ -3412,7 +3426,7 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
-        await logger.async_log_success_event(kwargs, completed_batch, datetime.now(), datetime.now())
+        await logger.async_log_success_event(kwargs, completed_job, datetime.now(), datetime.now())
 
     mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
     assert producer.stats().queued == 0

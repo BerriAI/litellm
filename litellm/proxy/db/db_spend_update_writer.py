@@ -34,6 +34,7 @@ from litellm.constants import (
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
+from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
 from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -164,15 +165,17 @@ def _is_settle_once_cost_row(payload: SpendLogsPayload) -> bool:
 
     A batch's cost is known only when a retrieve sees it finished (LIT-7048). A video's cost is
     charged at create by the built-in providers, but a custom provider may report it on the
-    status poll that sees the video completed. Only such a poll's row carries the video cost
-    suffix, so a poll that reports no cost keeps its own id and charges nothing.
+    status poll that sees the video completed. Only a row carrying the job's cost suffix settles
+    the job, so a poll that pays only its guardrails, under an id that client call ids cannot
+    turn into the job's, is charged like any other request.
     """
     if payload.get("status") != "success":
         return False
     call_type: Final = payload.get("call_type")
+    request_id: Final = payload["request_id"]
     if call_type == CallTypes.aretrieve_batch.value:
-        return True
-    return call_type in VIDEO_STATUS_CALL_TYPES and payload["request_id"].endswith(VIDEO_COST_REQUEST_ID_SUFFIX)
+        return request_id.endswith(BATCH_COST_REQUEST_ID_SUFFIX)
+    return call_type in VIDEO_STATUS_CALL_TYPES and request_id.endswith(VIDEO_COST_REQUEST_ID_SUFFIX)
 
 
 _COST_CLAIM_FIELDS: Final = frozenset({"request_id", "call_type", "spend", "startTime", "endTime", "status"})
