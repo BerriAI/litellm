@@ -3329,15 +3329,15 @@ class TestMultiPodBatchCostClaim:
         from datetime import datetime
 
         import httpx
-        import litellm
         import respx
 
+        import litellm
         from litellm.caching.caching import DualCache
         from litellm.integrations.custom_logger import CustomLogger
-        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.utils import PrismaClient
+        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
         from litellm.types.utils import SpecialEnums
 
@@ -3346,6 +3346,7 @@ class TestMultiPodBatchCostClaim:
                 self.failure_phase = failure_phase
                 self.writer: Final = DBSpendUpdateWriter()
                 self.failed_tracking_alert = AsyncMock()
+                self.service_logging_obj = None
                 self.slack_alerting_instance = MagicMock()
                 self.slack_alerting_instance.customer_spend_alert = AsyncMock(
                     side_effect=ConnectionError("Alert destination unavailable after charge")
@@ -3382,7 +3383,7 @@ class TestMultiPodBatchCostClaim:
         spend_prisma: Final = PrismaClient(
             database_url="postgresql://unused:unused@localhost:5432/unused", proxy_logging_obj=dependency
         )
-        create_spend_rows: Final = AsyncMock(return_value=1)
+        insert_spend_rows: Final = AsyncMock(return_value=[{"request_id": "batch-charge"}])
         input_rate: Final = 0.000002
         litellm.register_model(
             {
@@ -3435,9 +3436,9 @@ class TestMultiPodBatchCostClaim:
             patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency),
             patch("litellm.proxy.proxy_server.prisma_client", spend_prisma),
             patch.object(
-                spend_prisma.writer_db._original_prisma,
-                "litellm_spendlogs",
-                MagicMock(create_many=create_spend_rows),
+                type(spend_prisma.writer_db._original_prisma),
+                "query_raw",
+                insert_spend_rows,
             ),
         ):
             respx.get(f"https://api.openai.com/v1/files/{_CLAIM_OUTPUT_FILE_ID}/content").mock(
@@ -3449,7 +3450,7 @@ class TestMultiPodBatchCostClaim:
             if failure_phase == "before_write":
                 assert row.status == original_status
                 assert json.loads(row.file_object) == original_file_object
-            assert create_spend_rows.await_count == (0 if failure_phase == "before_write" else 1)
+            assert insert_spend_rows.await_count == (0 if failure_phase == "before_write" else 1)
             dependency.failure_phase = "recovered"
             await worker.check_batch_cost()
             await worker.check_batch_cost()
@@ -3457,8 +3458,8 @@ class TestMultiPodBatchCostClaim:
         assert row.batch_processed is True
         assert await budget_cache.async_get_cache("provider_spend:openai:1d") == pytest.approx(100 * input_rate)
         assert await budget_cache.async_get_cache("deployment_spend:model-123:1d") == pytest.approx(100 * input_rate)
-        create_spend_rows.assert_awaited_once()
-        assert create_spend_rows.call_args.kwargs["data"][0]["spend"] == pytest.approx(100 * input_rate)
+        insert_spend_rows.assert_awaited_once()
+        assert json.loads(insert_spend_rows.call_args.args[1])[0]["spend"] == pytest.approx(100 * input_rate)
         if producer is not None:
             assert all(
                 json.loads(call.args[0])["call_type"] != "aretrieve_batch" for call in producer.publish.call_args_list

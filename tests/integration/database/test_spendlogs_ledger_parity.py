@@ -937,16 +937,63 @@ async def _retrieve_batch(writer: DBSpendUpdateWriter, cost: float) -> bool:
 
 
 @pytest.mark.parametrize("disable_logs", [False, True])
+@pytest.mark.parametrize(("call_type", "status"), [("acompletion", "success"), ("aretrieve_batch", "failure")])
+@pytest.mark.parametrize("concurrent", [False, True])
+@pytest.mark.asyncio
+async def test_batch_request_id_collision_preserves_one_durable_charge(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch, disable_logs: bool, call_type: str, status: str, concurrent: bool
+):
+    import asyncio
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    writer = DBSpendUpdateWriter()
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", disable_logs)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    await client.db.connect()
+    try:
+        await client.writer_db.execute_raw(
+            'INSERT INTO "LiteLLM_SpendLogs" '
+            '(request_id, call_type, status, api_key, spend, "startTime", "endTime") '
+            "VALUES ('batch_batch_cost', $1, $2, 'other-key', 0.5, $3::timestamp, $3::timestamp)",
+            call_type, status, _NOW,
+        )
+        if concurrent:
+            charged = await asyncio.gather(_retrieve_batch(writer, 0.25), _retrieve_batch(writer, 0.25))
+            assert sorted(charged) == [False, True]
+        else:
+            assert await _retrieve_batch(writer, 0.25)
+        await writer.db_update_spend_transaction_handler(client, 0, proxy_server.proxy_logging_obj)
+        totals = await client.writer_db.query_raw('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=$1', 'user')
+        assert totals[0]["spend"] == 0.25
+        assert await _retrieve_batch(writer, 0.25) is False
+        await writer.db_update_spend_transaction_handler(client, 0, proxy_server.proxy_logging_obj)
+        totals = await client.writer_db.query_raw('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=$1', 'user')
+        assert totals[0]["spend"] == 0.25
+        rows = await client.writer_db.query_raw(
+            'SELECT call_type, status, api_key, spend FROM "LiteLLM_SpendLogs" WHERE request_id=$1', 'batch_batch_cost'
+        )
+        assert rows == [{"call_type": call_type, "status": status, "api_key": "other-key", "spend": 0.5}]
+        deliveries = await client.writer_db.query_raw('SELECT state::text FROM "LiteLLM_AccountingDelivery"')
+        assert deliveries == [{"state": "applied"}]
+    finally:
+        await client.db.disconnect()
+
+
+
+@pytest.mark.parametrize("disable_logs", [False, True])
+@pytest.mark.parametrize("restrict_metadata", [False, True])
 @pytest.mark.asyncio
 async def test_legacy_batch_without_accounting_metadata_keeps_its_prior_daily_count(
-    parity_database: str, monkeypatch: pytest.MonkeyPatch, disable_logs: bool
+    parity_database: str, monkeypatch: pytest.MonkeyPatch, disable_logs: bool, restrict_metadata: bool
 ):
     monkeypatch.setenv("DATABASE_URL", parity_database)
     client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
     client.spend_log_transactions = []
     writer = DBSpendUpdateWriter()
     monkeypatch.setattr(proxy_server, "prisma_client", client)
-    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {"spend_logs_metadata_fields": {"include": ["status"]}} if restrict_metadata else {})
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
     await client.db.connect()
     try:

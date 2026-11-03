@@ -109,6 +109,10 @@ async def record(db: Prisma) -> AsyncIterator[Callable[..., BaselineAccountingRe
     await db.execute_raw('DELETE FROM "LiteLLM_AutoRouterSession" WHERE api_key=$1', key)
     await db.execute_raw('DELETE FROM "LiteLLM_AutoRouterBaselineObservation" WHERE scope=$1', scope)
     await db.execute_raw('DELETE FROM "LiteLLM_AutoRouterBaselineComparison" WHERE scope=$1', scope)
+    await db.execute_raw(
+        'DELETE FROM "LiteLLM_AccountingDelivery" WHERE request_id IN '
+        '(SELECT request_id FROM "LiteLLM_SpendLogs" WHERE api_key=$1)', key,
+    )
     await db.execute_raw('DELETE FROM "LiteLLM_SpendLogs" WHERE api_key=$1', key)
 
 
@@ -309,9 +313,11 @@ async def test_native_observation_enters_spend_pipeline_once_with_shared_daily_a
 ) -> None:
     import os
 
+    from litellm.accounting.worker import flush_accounting_deliveries
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.repositories.table_repositories import SpendLogsRepository
 
     event: Final = record("routed", identical=False)
     payload: Final = _native_observation_payload(event)
@@ -320,7 +326,7 @@ async def test_native_observation_enters_spend_pipeline_once_with_shared_daily_a
     writer: Final = DBSpendUpdateWriter()
     try:
         await client.db.connect()
-        await _log(db, event)
+        assert await SpendLogsRepository(client).insert_with_deliveries(({**payload, "accounting_path": "ledger"},)) == 1
         await writer._enqueue_autorouter_turn_transaction(payload, client)
         assert len(client.baseline_accounting_transactions) == 1
         queued: Final = client.baseline_accounting_transactions[0]
@@ -328,10 +334,12 @@ async def test_native_observation_enters_spend_pipeline_once_with_shared_daily_a
         assert [(target.entity, target.entity_id) for target in queued.daily.targets] == [
             ("user", None), ("team", ""), ("org", "org"), ("tag", "tag"),
         ]
-        await writer.add_spend_log_transaction_to_daily_tag_transaction(payload, client)
-        actual_tags: Final = await writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        assert len(actual_tags) == 1
-        assert next(iter(actual_tags.values()))["spend"] == 0.17
+        await flush_accounting_deliveries(writer, client, client.proxy_logging_obj)
+        actual_tags: Final = await db.query_raw(
+            'SELECT spend, api_requests FROM "LiteLLM_DailyTagSpend" WHERE api_key=$1 AND tag=$2',
+            event.api_key, "tag",
+        )
+        assert actual_tags == [{"spend": 0.17, "api_requests": 1}]
         durable: Final = BaselineAccountingStore.for_client(client)
         anchor: Final = record("anchor", 9999.0)
         await _log(db, anchor)
@@ -349,7 +357,8 @@ async def test_native_observation_enters_spend_pipeline_once_with_shared_daily_a
         assert session["saved_spend"] < 0
         assert len(tag_rows) == 1
         assert tag_rows[0]["autorouter_savings_spend"] == pytest.approx(session["saved_spend"])
-        assert tag_rows[0]["spend"] == tag_rows[0]["api_requests"] == 0
+        assert tag_rows[0]["spend"] == 0.17
+        assert tag_rows[0]["api_requests"] == 1
     finally:
         await client.db.disconnect()
 

@@ -639,13 +639,18 @@ class DBSpendUpdateWriter:
             )
             await self._insert_spend_log_to_db(payload=prisma_client.jsonify_object(row), prisma_client=prisma_client)
             return True
-        if existing is None or existing.call_type != CallTypes.aretrieve_batch.value or existing.status != "success":
-            verbose_proxy_logger.warning(
-                "Spend row %s belongs to a %s request, so this batch's cost is charged without a row of its own",
-                request_id,
-                getattr(existing, "call_type", None),
-            )
+        if existing is None:
+            await self._insert_spend_log_to_db(payload=prisma_client.jsonify_object(row), prisma_client=prisma_client)
             return True
+        if existing.call_type != CallTypes.aretrieve_batch.value or existing.status != "success":
+            from uuid import NAMESPACE_URL, uuid5
+
+            return await self._claim_batch_cost_spend_log(
+                payload={**payload, "request_id": str(uuid5(NAMESPACE_URL, "litellm:batch-cost:" + request_id))},
+                prisma_client=prisma_client,
+                disable_spend_logs=disable_spend_logs,
+                prepare_ledger=prepare_ledger,
+            )
         if existing.spend > 0:
             verbose_proxy_logger.debug("Cost tracking skipped: spend row %s already charged this batch", request_id)
             return False
@@ -655,12 +660,7 @@ class DBSpendUpdateWriter:
         )
         if payload["accounting_path"] == "ledger" and not was_ledger and prepare_ledger is not None:
             await prepare_ledger()
-        takeover_row: Final = spend_log_row_with_retained_metadata(
-            _batch_cost_row_to_write(payload, disable_spend_logs), configured_spend_logs_metadata_fields()
-        )
-        return await self._take_over_uncharged_batch_cost_row(
-            payload=payload, prisma_client=prisma_client, row=takeover_row
-        )
+        return await self._take_over_uncharged_batch_cost_row(payload=payload, prisma_client=prisma_client, row=row)
 
     async def _take_over_uncharged_batch_cost_row(
         self, payload: SpendLogsPayload, prisma_client: "PrismaClient", row: Mapping[str, object]
