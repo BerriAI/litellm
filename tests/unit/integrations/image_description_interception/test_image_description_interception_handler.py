@@ -383,6 +383,42 @@ async def test_an_oversized_remote_image_becomes_a_placeholder_without_being_rea
     assert (len(served_chunks), describer.requests) == (3, [])
 
 
+
+@pytest.mark.asyncio
+async def test_slow_remote_images_share_one_fetch_deadline_and_inline_images_still_get_described(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def drip() -> AsyncIterator[bytes]:
+        while True:
+            await asyncio.sleep(0.05)
+            yield b"\0"
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=drip())
+
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.MockTransport(serve)))
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    describer: Final = _RecordingDescriber([Described("a cat")])
+    logger: Final = ImageDescriptionInterceptionLogger(image_model="vision-describer", describer=describer, timeout=0.3)
+    remote: Final = [_image_turn("hi", f"https://img.example/{uuid.uuid4()}.png") for _ in range(3)]
+    started: Final = asyncio.get_running_loop().time()
+
+    result: Final = await asyncio.wait_for(
+        logger.async_pre_call_deployment_hook(_request([*remote, _image_turn("and this")]), CallTypes.acompletion), 5
+    )
+
+    assert asyncio.get_running_loop().time() - started < 1.0
+    assert result == _request(
+        [
+            *(
+                _turn_with_text("hi", f"[Image #{number} could not be described: image fetch timed out after 0.3s]")
+                for number in (1, 2, 3)
+            ),
+            _described_turn("and this", 4, "a cat"),
+        ]
+    )
+    assert describer.requests == [("vision-describer", IMAGE_URI)]
+
 def _child_payload_text(payload: Mapping[str, object]) -> str:
     return json.dumps(payload, sort_keys=True)
 

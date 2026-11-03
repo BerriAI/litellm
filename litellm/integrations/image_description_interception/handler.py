@@ -12,6 +12,7 @@ import asyncio
 import base64
 import hashlib
 import math
+import time
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -312,9 +313,18 @@ def _with_text_parts(
     }
 
 
-async def _load_image(url: str) -> _LoadedImage | DescriptionFailed:
+async def _load_image(url: str, deadline: float, timeout: float) -> _LoadedImage | DescriptionFailed:
+    """Remote fetches of one request share `deadline`, so a slow server cannot hold the request past `timeout`"""
+    remaining: Final = deadline - time.monotonic()
+    timed_out: Final = DescriptionFailed(f"image fetch timed out after {timeout:g}s")
+    if not url.startswith("data:") and remaining <= 0:
+        return timed_out
     try:
-        data_uri: Final = await async_convert_url_to_base64(url, bounded_read=True)
+        data_uri: Final = await asyncio.wait_for(
+            async_convert_url_to_base64(url, bounded_read=True), None if url.startswith("data:") else remaining
+        )
+    except asyncio.TimeoutError:
+        return timed_out
     except Exception as e:  # noqa: BLE001  # an unreachable or oversized image degrades to a placeholder
         return DescriptionFailed(f"image fetch failed ({type(e).__name__})")
     _, separator, encoded = data_uri.partition(";base64,")
@@ -409,8 +419,11 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
             session_id=_nonempty_str(kwargs.get("litellm_session_id")),
         )
         scope: Final = _tenant_scope(kwargs)
+        fetch_deadline: Final = time.monotonic() + self.timeout
         loaded: Final = [
-            await _load_image(part.url) if part.url is not None else DescriptionFailed("the image part has no url")
+            await _load_image(part.url, fetch_deadline, self.timeout)
+            if part.url is not None
+            else DescriptionFailed("the image part has no url")
             for part in image_parts
         ]
         keys: Final = [self._cache_key(scope, image) if isinstance(image, _LoadedImage) else None for image in loaded]
