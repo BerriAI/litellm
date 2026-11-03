@@ -124,7 +124,7 @@ async def test_authenticate_user_admin_login_with_ui_credentials():
                 "litellm.proxy.auth.login_utils.user_update",
                 new_callable=AsyncMock,
                 return_value=None,
-            ) as mock_user_update:
+            ):
                 with patch(
                     "litellm.proxy.auth.login_utils.get_secret_bool",
                     return_value=False,
@@ -182,7 +182,7 @@ async def test_authenticate_user_admin_login_with_master_key_as_password(monkeyp
                 "litellm.proxy.auth.login_utils.user_update",
                 new_callable=AsyncMock,
                 return_value=None,
-            ) as mock_user_update:
+            ):
                 with patch(
                     "litellm.proxy.auth.login_utils.get_secret_bool",
                     return_value=False,
@@ -430,7 +430,7 @@ async def test_authenticate_user_admin_login_with_non_ascii_characters():
                 "litellm.proxy.auth.login_utils.user_update",
                 new_callable=AsyncMock,
                 return_value=None,
-            ) as mock_user_update:
+            ):
                 with patch(
                     "litellm.proxy.auth.login_utils.get_secret_bool",
                     return_value=False,
@@ -465,7 +465,7 @@ def test_authenticate_user_non_ascii_direct_comparison():
     assert result is True
 
     # And correctly returns False for different passwords
-    result = secrets.compare_digest(password.encode("utf-8"), "different£pass".encode("utf-8"))
+    result = secrets.compare_digest(password.encode("utf-8"), "different£pass".encode())
     assert result is False
 
 
@@ -1018,18 +1018,12 @@ def test_declared_proxy_ranges_distinguishes_none_from_empty_from_configured():
 @pytest.mark.asyncio
 async def test_with_trusted_proxy_ranges_the_source_is_the_forwarded_client(monkeypatch):
     """The header is walked right to left past the trusted hops, so a forged left-most entry cannot pick the bucket."""
-    from litellm.proxy.auth.login_throttle import LoginThrottle
-
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     settings = {"trusted_proxy_ranges": ["10.0.0.0/8"], "max_failed_login_attempts_per_source": 2}
 
     def _from(peer: str, forwarded: str):
-        request = MagicMock()
-        request.headers = {"x-forwarded-for": forwarded}
-        request.client = MagicMock()
-        request.client.host = peer
-        return LoginThrottle.from_request(request, general_settings=settings, redis_cache=None)
+        return _throttle_behind_trusted_proxy(forwarded, settings, peer=peer)
 
     via_proxy = _from("10.0.0.1", "1.1.1.1, 203.0.113.9, 10.0.0.2")
     assert via_proxy.client_ip == "203.0.113.9"
@@ -1041,8 +1035,6 @@ async def test_with_trusted_proxy_ranges_the_source_is_the_forwarded_client(monk
 
 def test_source_overrides_pick_the_most_specific_matching_range():
     """An exact address beats a /16 beats a /8; an address in none of them keeps the default."""
-    from litellm.proxy.auth.login_throttle import LoginThrottle
-
     settings = {
         "trusted_proxy_ranges": ["10.0.0.0/8"],
         "max_failed_login_attempts_per_source": 7,
@@ -1056,11 +1048,7 @@ def test_source_overrides_pick_the_most_specific_matching_range():
     }
 
     def _limit(client: str) -> int | None:
-        request = MagicMock()
-        request.headers = {"x-forwarded-for": client}
-        request.client = MagicMock()
-        request.client.host = "10.0.0.1"
-        return LoginThrottle.from_request(request, general_settings=settings, redis_cache=None).source_limit
+        return _throttle_behind_trusted_proxy(client, settings).source_limit
 
     assert _limit("203.0.113.9") == 300
     assert _limit("203.0.113.10") == 200
@@ -1588,14 +1576,31 @@ def test_the_per_username_allowance_is_half_the_address_allowance_rounded_down_a
     assert user_limit_for(source_limit) == expected_user_limit
 
 
-def _throttle_behind_trusted_proxy(client_ip: str, settings: Mapping[str, object]) -> "LoginThrottle":
-    from litellm.proxy.auth.login_throttle import LoginThrottle
+def _throttle_behind_trusted_proxy(
+    client_ip: str, settings: Mapping[str, object], *, peer: str = "10.0.0.1"
+) -> "LoginThrottle":
+    from queue import SimpleQueue
 
-    request = MagicMock()
-    request.headers = {"x-forwarded-for": client_ip}
-    request.client = MagicMock()
-    request.client.host = "10.0.0.1"
-    return LoginThrottle.from_request(request, general_settings=settings, redis_cache=None)
+    from fastapi import Request
+    from starlette.applications import Starlette
+    from starlette.responses import Response
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from litellm.proxy.auth.login_throttle import LoginThrottle
+    from litellm.proxy.middleware.proxy_headers_middleware import TrustedProxyMiddleware
+
+    throttles: Final[SimpleQueue[LoginThrottle]] = SimpleQueue()
+
+    async def endpoint(request: Request) -> Response:
+        throttles.put(LoginThrottle.from_request(request, general_settings=settings, redis_cache=None))
+        return Response()
+
+    app: Final = Starlette(routes=[Route("/", endpoint)])
+    app.add_middleware(TrustedProxyMiddleware, settings=lambda: settings)
+    with TestClient(app, client=(peer, 5555)) as client:
+        client.get("/", headers={"x-forwarded-for": client_ip})
+    return throttles.get_nowait()
 
 
 def test_a_per_address_override_also_raises_that_address_per_username_allowance():

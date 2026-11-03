@@ -5,7 +5,7 @@
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-from typing import Dict, Final, List, Mapping, Optional
+from typing import Final, List, Mapping, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,17 +20,10 @@ from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     get_api_key_from_custom_header,
 )
-from fastapi import WebSocket, HTTPException, status
+from fastapi import Request, WebSocket, HTTPException, status
 
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from tests._master_key import MASTER_KEY
-
-
-class Request:
-    def __init__(self, client_ip: Optional[str] = None, headers: Optional[dict] = None):
-        self.client = MagicMock()
-        self.client.host = client_ip
-        self.headers: Dict[str, str] = {}
 
 
 @pytest.mark.parametrize(
@@ -51,9 +44,11 @@ class Request:
 def test_check_valid_ip(allowed_ips: Optional[List[str]], client_ip: Optional[str], expected_result: bool):
     from litellm.proxy.auth.auth_utils import _check_valid_ip
 
-    request = Request(client_ip)
+    request: Final = Request(
+        {"type": "http", "client": (client_ip, 1234) if client_ip else None, "headers": []}
+    )
 
-    assert _check_valid_ip(allowed_ips, request)[0] == expected_result  # type: ignore
+    assert _check_valid_ip(allowed_ips, request)[0] == expected_result
 
 
 # test x-forwarder for is used when user has opted in
@@ -79,9 +74,15 @@ def test_check_valid_ip_sent_with_x_forwarded_for(
 ):
     from litellm.proxy.auth.auth_utils import _check_valid_ip
 
-    request = Request(client_ip, headers={"X-Forwarded-For": client_ip})
+    request: Final = Request(
+        {
+            "type": "http",
+            "client": ("192.0.2.1", 1234),
+            "headers": [(b"x-forwarded-for", client_ip.encode())] if client_ip else [],
+        }
+    )
 
-    assert _check_valid_ip(allowed_ips, request, use_x_forwarded_for=True)[0] == expected_result  # type: ignore
+    assert _check_valid_ip(allowed_ips, request, use_x_forwarded_for=True)[0] == expected_result
 
 
 @pytest.mark.asyncio

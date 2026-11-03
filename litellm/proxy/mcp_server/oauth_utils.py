@@ -235,7 +235,9 @@ def get_request_base_url(request: Request) -> str:
     if configured:
         return configured
 
-    base_url: Final = str(request.base_url).rstrip("/")
+    from litellm.proxy.auth.network import get_direct_request
+
+    base_url: Final = str(get_direct_request(request).base_url).rstrip("/")
     parsed: Final = urlparse(base_url)
 
     if not IPAddressUtils.is_request_from_trusted_proxy(request):

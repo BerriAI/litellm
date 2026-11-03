@@ -122,7 +122,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
-from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
+from litellm.proxy.auth.network import resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.resolvers import CredentialRef, Principal
@@ -137,7 +137,6 @@ from litellm.proxy.auth.resolvers.grants import (
 from litellm.proxy.auth.resolvers.store import IdentityStore
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.team_grants import team_grants
-from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -4099,11 +4098,7 @@ def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) ->
     credential_ref and a stable subject fallback are always set off the token so
     the Principal can never be anonymous, even for a keyless service-account key
     with no user or alias."""
-    cidrs: Final = get_trusted_proxy_cidrs()
-    network: Final = resolve_network_context(
-        request,
-        TrustedProxyConfig(use_forwarded_for=bool(cidrs), trusted_proxy_cidrs=cidrs),
-    )
+    network: Final = resolve_network_context(request)
     auth_method: Final = AuthMethod.BEARER_JWT if valid_token.jwt_claims else AuthMethod.API_KEY
     return IdentityStore.principal_from_key(
         valid_token,

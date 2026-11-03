@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import ipaddress
-from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from fastapi import Request
-from pydantic import Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -19,9 +18,35 @@ class NetworkContext(LiteLLMBaseModel):
     via_trusted_proxy: bool = False
 
 
-class TrustedProxyConfig(LiteLLMBaseModel):
-    use_forwarded_for: bool = False
-    trusted_proxy_cidrs: Sequence[str] = Field(default_factory=tuple)
+PROXY_HEADER_CONTEXT: Final = "litellm.proxy_header_context"
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyHeaderContext:
+    direct_client: tuple[str, int] | None
+    direct_scheme: str
+    configured: bool
+    via_trusted_proxy: bool
+
+
+def proxy_header_context(request: Request) -> ProxyHeaderContext | None:
+    context: Final[object] = request.get(PROXY_HEADER_CONTEXT)
+    return context if isinstance(context, ProxyHeaderContext) else None
+
+
+def get_direct_client_ip(request: Request) -> str | None:
+    context: Final = proxy_header_context(request)
+    if context is not None:
+        return context.direct_client[0] if context.direct_client else None
+    return request.client.host if request.client else None
+
+
+def get_direct_request(request: Request) -> Request:
+    context: Final = proxy_header_context(request)
+    if context is None:
+        return request
+    scope: Final = {key: value for key, value in request.scope.items() if key != PROXY_HEADER_CONTEXT}
+    return Request({**scope, "client": context.direct_client, "scheme": context.direct_scheme})
 
 
 def normalize_cidr_ranges(configured_ranges: object, *, setting_name: str = "trusted_proxy_cidrs") -> list[str]:
@@ -68,35 +93,10 @@ def ip_in_networks(client_ip: str | None, networks: list[TrustedProxyNetwork]) -
     return any(candidate in network for candidate in candidates for network in networks)
 
 
-def _is_valid_ip(value: str) -> bool:
-    try:
-        ipaddress.ip_address(value)
-        return True
-    except ValueError:
-        return False
-
-
-def resolve_client_ip(request: Request, config: TrustedProxyConfig) -> tuple[str | None, bool]:
-    """Resolve the real client IP, trusting X-Forwarded-For only when the direct
-    peer is itself a configured trusted proxy. Walks the header right-to-left and
-    returns the first hop that is not a trusted proxy, so a forged left-most entry
-    cannot spoof the client."""
-    peer: Final = request.client.host if request.client else None
-    networks: Final = parse_trusted_proxy_ranges(config.trusted_proxy_cidrs)
-    if not config.use_forwarded_for or not ip_in_networks(peer, networks):
-        return peer, False
-    forwarded: Final = request.headers.get("x-forwarded-for", "")
-    hops: Final = [h.strip() for h in forwarded.split(",") if h.strip()]
-    for hop in reversed(hops):
-        if _is_valid_ip(hop) and not ip_in_networks(hop, networks):
-            return hop, True
-    return peer, True
-
-
-def resolve_network_context(request: Request, config: TrustedProxyConfig) -> NetworkContext:
-    ip, via_proxy = resolve_client_ip(request, config)
+def resolve_network_context(request: Request) -> NetworkContext:
+    context: Final = proxy_header_context(request)
     return NetworkContext(
-        client_ip=ip,
+        client_ip=request.client.host if request.client else None,
         host=request.headers.get("host"),
-        via_trusted_proxy=via_proxy,
+        via_trusted_proxy=context.via_trusted_proxy if context else False,
     )
