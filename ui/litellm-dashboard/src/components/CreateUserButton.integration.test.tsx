@@ -5,8 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CreateUserButton } from "./CreateUserButton";
 
 const createUser = vi.fn<(body: Record<string, unknown>) => Response>();
+const unexpectedRequest = vi.fn((path: string) =>
+  Response.json({ error: `Unexpected request ${path}` }, { status: 500 }),
+);
 
 beforeEach(() => {
+  unexpectedRequest.mockClear();
   createUser.mockReset();
   createUser.mockImplementation((body) => Response.json({ user_id: body.user_id ?? "generated-id" }));
   vi.stubGlobal(
@@ -17,12 +21,15 @@ beforeEach(() => {
       if (path === "/models") return Response.json({ data: [] });
       if (path === "/sso/get/ui_settings") return Response.json({ SSO_ENABLED: true });
       if (path === "/v2/team/list") return Response.json({ teams: [], total: 0, total_pages: 0 });
-      throw new Error(`Unexpected request ${path}`);
+      return unexpectedRequest(path);
     }),
   );
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  expect(unexpectedRequest).not.toHaveBeenCalled();
+});
 
 const renderForm = (isEmbedded: boolean, onUserCreated = vi.fn()) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
