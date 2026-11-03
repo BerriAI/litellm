@@ -173,6 +173,24 @@ describe("RealtimePlayground", () => {
     expect(update.session.type).toBe("realtime");
   });
 
+  it("starts recording on the configuration the session was created with", async () => {
+    const user = userEvent.setup();
+    render(<RealtimePlayground {...props} />);
+
+    await connect(user);
+    await act(async () => {
+      latestSocket().emit({ type: "session.created" });
+    });
+    await user.click(screen.getByTitle("Start recording"));
+
+    const updates = latestSocket()
+      .sent.map((raw) => JSON.parse(raw))
+      .filter((payload) => payload.type === "session.update");
+    expect(updates).toHaveLength(2);
+    expect(updates[1]).toEqual(updates[0]);
+    expect(updates[0].session.turn_detection).toEqual({ type: "server_vad" });
+  });
+
   it("sends what was typed and then asks for a response", async () => {
     const user = userEvent.setup();
     render(<RealtimePlayground {...props} />);

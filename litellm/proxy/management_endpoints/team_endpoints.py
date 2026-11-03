@@ -109,6 +109,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     can_org_access_model,
     delete_cache_key_objects,
     delete_cache_team_object,
+    evict_budget_windows_absent_marker,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_org_object,
     get_team_membership,
@@ -226,6 +227,7 @@ from litellm.proxy.management_helpers.utils import (
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in
+from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -611,6 +613,9 @@ async def refresh_cached_team(
     await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
         await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
+    await evict_budget_windows_absent_marker(
+        entity_type=Litellm_EntityType.TEAM, entity_id=team_row.team_id, user_api_key_cache=user_api_key_cache
+    )
 
 
 _refresh_cached_team: Final = refresh_cached_team
@@ -7329,11 +7334,12 @@ async def resolve_team_daily_activity_scope(
             if not user_api_keys:
                 user_api_keys = []
 
+    selected_key: Final = api_key_from_bucket(api_key) if api_key else None
     final_api_key_filter: str | list[str] | None
     if user_api_keys is None:
-        final_api_key_filter = api_key
-    elif api_key:
-        final_api_key_filter = api_key if api_key in user_api_keys else []
+        final_api_key_filter = [selected_key] if selected_key is not None else None
+    elif selected_key is not None:
+        final_api_key_filter = [selected_key] if selected_key in user_api_keys else []
     else:
         final_api_key_filter = user_api_keys
 

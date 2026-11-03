@@ -6,19 +6,24 @@ and allows requests with only registered servers. Covers both /chat/completions
 and /responses API paths (same pre_call_hook logic, different call_type).
 """
 
-from typing import Literal
-from unittest.mock import MagicMock, patch
+from typing import Final, Literal
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.mcp_security import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.mcp_security.mcp_security_guardrail import (
     MCPSecurityGuardrail,
 )
+from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
+from litellm.types.mcp import MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
 
 @pytest.fixture
@@ -60,93 +65,67 @@ class TestExtractMCPServerNames:
         assert names == set()
 
 
+def _manager_with_saved_server() -> MCPServerManager:
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="3f6b2c1e-saved-zapier",
+        name="zapier",
+        server_name="zapier",
+        alias="zap",
+        transport=MCPTransport.http,
+        url="https://upstream.example/mcp",
+    )
+    manager.registry[server.server_id] = server
+    return manager
+
+
 class TestMCPSecurityGuardrailPreCall:
     @pytest.mark.asyncio
-    @patch(
-        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
-    )
-    async def test_blocks_unregistered_server_chat_completions(
-        self, mock_manager, guardrail
-    ):
-        """Simulates /chat/completions with an unregistered MCP server."""
-        mock_manager.get_registry.return_value = {"zapier": MagicMock()}
-
+    @pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+    async def test_blocks_unregistered_server(self, guardrail, call_type):
         data = {
             "tools": [
                 {"type": "mcp", "server_url": "litellm_proxy/mcp/zapier"},
                 {"type": "mcp", "server_url": "litellm_proxy/mcp/evil_server"},
             ],
             "model": "gpt-4",
-            "messages": [{"role": "user", "content": "hi"}],
             "guardrails": ["test-mcp-security"],
         }
 
-        with pytest.raises(HTTPException) as exc_info:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", _manager_with_saved_server()),
+            pytest.raises(HTTPException) as exc_info,
+        ):
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=MagicMock(),
                 data=data,
-                call_type="acompletion",
+                call_type=call_type,
             )
         assert exc_info.value.status_code == 400
-        assert "evil_server" in str(exc_info.value.detail)
+        assert exc_info.value.detail["unregistered_servers"] == ["evil_server"]
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
-    )
-    async def test_blocks_unregistered_server_responses_api(
-        self, mock_manager, guardrail
-    ):
-        """Simulates /responses with an unregistered MCP server."""
-        mock_manager.get_registry.return_value = {"github": MagicMock()}
-
+    @pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+    @pytest.mark.parametrize("reference", ["zapier", "zap", "3f6b2c1e-saved-zapier"])
+    async def test_allows_saved_server_by_any_name_the_gateway_routes(self, guardrail, call_type, reference):
         data = {
-            "tools": [
-                {"type": "mcp", "server_url": "litellm_proxy/mcp/unknown_server"},
-            ],
-            "model": "gpt-4o",
-            "input": "What can you do?",
-            "guardrails": ["test-mcp-security"],
-        }
-
-        with pytest.raises(HTTPException) as exc_info:
-            await guardrail.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(),
-                cache=MagicMock(),
-                data=data,
-                call_type="aresponses",
-            )
-        assert exc_info.value.status_code == 400
-        assert "unknown_server" in str(exc_info.value.detail)
-
-    @pytest.mark.asyncio
-    @patch(
-        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager"
-    )
-    async def test_allows_registered_servers(self, mock_manager, guardrail):
-        """All MCP servers are registered - request passes through."""
-        mock_manager.get_registry.return_value = {
-            "zapier": MagicMock(),
-            "github": MagicMock(),
-        }
-
-        data = {
-            "tools": [
-                {"type": "mcp", "server_url": "litellm_proxy/mcp/zapier"},
-                {"type": "mcp", "server_url": "litellm_proxy/mcp/github"},
-            ],
+            "tools": [{"type": "mcp", "server_url": f"litellm_proxy/mcp/{reference}"}],
             "model": "gpt-4",
-            "messages": [{"role": "user", "content": "hi"}],
             "guardrails": ["test-mcp-security"],
         }
 
-        result = await guardrail.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(),
-            cache=MagicMock(),
-            data=data,
-            call_type="acompletion",
-        )
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", _manager_with_saved_server()),
+        ):
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(),
+                data=data,
+                call_type=call_type,
+            )
         assert result == data
 
     @pytest.mark.asyncio
@@ -222,11 +201,13 @@ async def test_guardrail_observes_saved_server_creation_and_deletion_on_another_
     prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=([row], []))
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_mcptoolsettable.find_first = AsyncMock(return_value=None)
     data = {"tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/peer-server"}],
         "guardrails": ["test-mcp-security"]}
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
         patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager),
     ):
         result = await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
@@ -235,3 +216,34 @@ async def test_guardrail_observes_saved_server_creation_and_deletion_on_another_
             await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
     assert exc.value.status_code == 400
     assert exc.value.detail["unregistered_servers"] == ["peer-server"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+async def test_allows_saved_toolset_by_name_and_blocks_unknown_name(guardrail, call_type):
+    saved_toolset: Final = MCPToolset(toolset_id="7c1d-research", toolset_name="research")
+
+    async def find_toolset(*, where: dict[str, str]) -> MCPToolset | None:
+        return saved_toolset if where["toolset_name"] == saved_toolset.toolset_name else None
+
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_mcptoolsettable.find_first = AsyncMock(side_effect=find_toolset)
+    data: Final = {
+        "tools": [
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/research"},
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/evil_server"},
+        ],
+        "guardrails": ["test-mcp-security"],
+    }
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
+    assert exc.value.detail["unregistered_servers"] == ["evil_server"]
