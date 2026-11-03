@@ -124,6 +124,8 @@ ignored_function_names = [
     "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
     "_merged_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
+    "_malformed_request_params_the_deployment_sets",  # Run by _update_kwargs_with_deployment, tested through the drop_params deployment test in test_thought_signature_in_tool_call_id.py
+    "_drop_malformed_request_params_the_deployment_sets",  # Run by _update_kwargs_with_deployment, tested through the drop_params deployment test in test_thought_signature_in_tool_call_id.py
     "_drops_malformed_request_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
     "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
@@ -136,6 +138,7 @@ ignored_function_names = [
     "_resolve_pre_call_check_input_tokens",  # Tested through the token-count failure pre-call check tests in test_router.py
     "_params_neither_dropped_nor_allowed",  # Tested through the allowed-or-dropped param pre-call check tests in test_router.py
     "_deployment_rejects_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_cache_flags_left_to_the_catalog",  # Tested through the wildcard prompt cache flag tests in test_anthropic_cache_control_hook.py
     "_deployment_lacks_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_pre_call_check_requested_chat_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_deployment_supports_param",  # Tested through the deployment-capability pre-call check tests in test_router.py

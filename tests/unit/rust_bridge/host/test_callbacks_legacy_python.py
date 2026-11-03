@@ -5,6 +5,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
@@ -244,3 +245,56 @@ def test_the_rust_contract_matches_the_shim_signatures() -> None:
     contract: Final = TypeAdapter(dict[str, list[str]]).validate_json(CONTRACT_PATH.read_text())
 
     assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}
+
+
+def _messages_logger() -> Logging:
+    return Logging(
+        model="claude-sonnet-4-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="messages",
+        function_id="messages",
+    )
+
+
+def test_native_provider_response_is_recorded_for_logging_replay() -> None:
+    logger: Final = _messages_logger()
+
+    legacy.record_response(logger, 200, (("request-id", "req_native"),), '{"id": "msg_native"}')
+
+    recorded: Final[object] = logger.model_call_details["httpx_response"]
+    assert isinstance(recorded, httpx.Response)
+    assert recorded.status_code == 200
+    assert recorded.content == b'{"id": "msg_native"}'
+    assert logger.model_call_details["response_headers"]["request-id"] == "req_native"
+
+
+def test_native_provider_exchange_window_is_recorded_like_the_timed_post() -> None:
+    logger: Final = _messages_logger()
+    logger.model_call_details["litellm_params"] = {"litellm_metadata": {"user_api_key": "hashed"}}
+
+    legacy.record_api_window(logger, 1_700_000_000.0, 1_700_000_000.25)
+
+    assert logger.model_call_details["llm_api_duration_ms"] == 250.0
+    metadata: Final = logger.model_call_details["litellm_params"]["litellm_metadata"]
+    assert metadata["llm_api_timing_windows"] == ((1_700_000_000.0, 1_700_000_000.25),)
+
+
+def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
+    logger: Final = _messages_logger()
+    head: Final[dict[str, object]] = {"additional_headers": {"request-id": "req_native"}}
+    started: Final = datetime.datetime.now()
+
+    legacy.stamp_stream_head(
+        head,
+        logger,
+        {"model": "anthropic/claude-sonnet-4-5", "litellm_call_id": "messages"},
+        started,
+        started + datetime.timedelta(milliseconds=5),
+    )
+
+    assert head["additional_headers"] == {"request-id": "req_native", "llm_provider-request-id": "req_native"}
+    assert head["litellm_call_id"] == "messages"
+    assert "_response_ms" in head

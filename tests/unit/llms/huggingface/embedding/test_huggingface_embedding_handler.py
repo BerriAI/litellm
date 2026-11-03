@@ -1,12 +1,12 @@
 import json
 from typing import Final
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-
-import litellm
+import httpx
 import pytest
 import respx
 
+import litellm
 
 MOCK_EMBEDDING_RESPONSE = [[0.1, 0.2, 0.3, 0.4, 0.5]]
 
@@ -52,12 +52,10 @@ def mock_embedding_async_http_handler():
 class TestHuggingFaceEmbedding:
     @pytest.fixture(autouse=True)
     def setup(self, mock_embedding_http_handler, mock_embedding_async_http_handler, mock_hf_config_fetch):
-        self.mock_get_task_patcher = patch(
-            "litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model"
-        )
+        self.mock_get_task_patcher = patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
         self.mock_get_task = self.mock_get_task_patcher.start()
 
-        def mock_get_task_side_effect(model, task_type, api_base):
+        def mock_get_task_side_effect(model, task_type, api_base, timeout=None):
             if task_type is not None:
                 return task_type
             return "sentence-similarity"
@@ -180,7 +178,9 @@ async def test_hf_embedding_sentence_sim_sends_one_similarity_request(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf-test-token")
     with respx.mock(assert_all_called=False) as hf:
-        hf.get(url__regex=r"https://huggingface\.co/api/models/.*").respond(json={"pipeline_tag": "sentence-similarity"})
+        hf.get(url__regex=r"https://huggingface\.co/api/models/.*").respond(
+            json={"pipeline_tag": "sentence-similarity"}
+        )
         hf.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(json={"max_position_embeddings": 512})
         inference: Final = hf.post(
             "https://router.huggingface.co/hf-inference/pipeline/sentence-similarity/sentence-transformers/TaylorAI/bge-micro-v2"
@@ -197,3 +197,33 @@ async def test_hf_embedding_sentence_sim_sends_one_similarity_request(
     }
     assert inference.calls.last.request.headers["Authorization"] == "Bearer hf-test-token"
     assert response.data == [{"object": "embedding", "index": 0, "embedding": 0.7708950042724609}]
+
+
+HF_MODEL_LOOKUP_URL: Final = "https://huggingface.co/api/models/BAAI/bge-m3"
+HF_EMBED_URL: Final = "https://router.huggingface.co/hf-inference/pipeline/feature-extraction/BAAI/bge-m3"
+
+
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_huggingface_embedding_sends_the_caller_timeout(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(json={"max_position_embeddings": 512})
+    lookup: Final = respx_mock.get(HF_MODEL_LOOKUP_URL).mock(
+        return_value=httpx.Response(200, json={"pipeline_tag": "feature-extraction"})
+    )
+    route: Final = respx_mock.post(HF_EMBED_URL).mock(return_value=httpx.Response(200, json=MOCK_EMBEDDING_RESPONSE))
+    request: Final = {
+        "model": "huggingface/BAAI/bge-m3",
+        "input": ["hello"],
+        "api_key": "hf_test",
+        "timeout": 45,
+    }
+
+    response: Final = litellm.embedding(**request) if sync_mode else await litellm.aembedding(**request)
+
+    assert all(call.request.extensions["timeout"]["read"] == 45 for call in lookup.calls)
+    assert lookup.called
+    assert route.calls.last.request.extensions["timeout"]["read"] == 45
+    assert response.data[0]["embedding"] == MOCK_EMBEDDING_RESPONSE[0]

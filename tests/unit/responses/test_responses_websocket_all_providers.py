@@ -1607,6 +1607,39 @@ def _admission_refusing_the_next_turn():
     return AsyncMock(side_effect=[RateLimitError(message="crossed budget", llm_provider="", model=""), {}])
 
 
+class _TokenLimits:
+    """A proxy hook whose per-turn token check answers each later turn with the next outcome."""
+
+    def __init__(self, *outcomes: Exception | None) -> None:
+        self._outcomes: Final = iter(outcomes)
+        self.checked: Final[list[tuple[object, str | None]]] = []
+
+    async def enforce_token_limits_for_frame(self, user_api_key_dict: object, requested_model: str | None) -> None:
+        self.checked.append((user_api_key_dict, requested_model))
+        outcome: Final = next(self._outcomes)
+        if outcome is not None:
+            raise outcome
+
+
+def _out_of_tokens() -> Exception:
+    from litellm.exceptions import RateLimitError
+
+    return RateLimitError(message="key is out of tokens", llm_provider="", model="")
+
+
+def _counters_unverifiable() -> Exception:
+    from litellm.exceptions import ServiceUnavailableError
+
+    return ServiceUnavailableError(message="counters could not be verified", llm_provider="litellm_proxy", model="")
+
+
+_TURN_REFUSALS: Final = pytest.mark.parametrize(
+    "refusal, refusal_frame",
+    [(_out_of_tokens(), (429, "rate_limit_exceeded")), (_counters_unverifiable(), (503, "server_error"))],
+    ids=["out-of-tokens", "counters-unverifiable"],
+)
+
+
 class _ClientSocket:
     """A client socket that, like Starlette's, stops receiving once the server closes it."""
 
@@ -2203,6 +2236,123 @@ class TestWebSocketTurnAdmission:
         ]
         assert [(refusal["status"], refusal["error"]["type"]) for refusal in refusals] == [(429, "rate_limit_exceeded")]
 
+
+    @pytest.mark.asyncio
+    @_TURN_REFUSALS
+    async def test_managed_socket_checks_token_limits_before_every_later_turn_and_marks_each_turn(
+        self, monkeypatch: pytest.MonkeyPatch, refusal: Exception, refusal_frame: tuple[int, str]
+    ) -> None:
+        import litellm
+        from litellm.constants import RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY
+        from litellm.litellm_core_utils.core_helpers import as_str_mapping
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        answered: Final[list[tuple[str, object]]] = []
+
+        async def fake_aresponses(*args: object, **kwargs: object):
+            turn_metadata: Final = as_str_mapping(kwargs.get("litellm_metadata"))
+            answered.append(
+                (
+                    json.dumps(kwargs.get("input")),
+                    None if turn_metadata is None else turn_metadata.get(RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY),
+                )
+            )
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        token_limits: Final = _TokenLimits(refusal, None)
+        monkeypatch.setattr(litellm, "callbacks", [token_limits])
+        deployment_admission: Final = AsyncMock(return_value={})
+        user_api_key_dict: Final = UserAPIKeyAuth(api_key="hashed-key", tpm_limit=1000)
+        first, second, third = _turn_frames()
+        websocket: Final = _ClientSocket(second, third)
+
+        await BaseLLMHTTPHandler().async_responses_websocket(
+            model="anthropic/claude-sonnet-4-5",
+            websocket=websocket,
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="socket-open",
+                function_id="test-func",
+            ),
+            responses_api_provider_config=None,
+            user_api_key_dict=user_api_key_dict,
+            litellm_metadata={"model_group": "claude-ws"},
+            first_message=first,
+            turn_admission=deployment_admission,
+        )
+
+        assert [("two" in turn_input, "three" in turn_input) for turn_input, _ in answered] == [
+            (False, False),
+            (False, True),
+        ]
+        assert [socket_call_id for _, socket_call_id in answered] == ["socket-open", "socket-open"]
+        assert token_limits.checked == [(user_api_key_dict, "claude-ws"), (user_api_key_dict, "claude-ws")]
+        assert deployment_admission.await_count == 1
+        assert [(status, error["type"]) for status, error in _errors(websocket)] == [refusal_frame]
+
+    @pytest.mark.asyncio
+    @_TURN_REFUSALS
+    @pytest.mark.parametrize(
+        "keyed, forwarded, refused",
+        [(True, ["one", "three"], True), (False, ["one", "two", "three"], False)],
+        ids=["keyed", "keyless"],
+    )
+    async def test_native_socket_checks_token_limits_before_every_later_turn_of_a_keyed_socket(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        keyed: bool,
+        forwarded: list[str],
+        refused: bool,
+        refusal: Exception,
+        refusal_frame: tuple[int, str],
+    ) -> None:
+        from unittest.mock import patch
+
+        import litellm
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        token_limits: Final = _TokenLimits(refusal, None)
+        monkeypatch.setattr(litellm, "callbacks", [token_limits])
+        provider: Final = _ProviderResponsesSocket()
+        config: Final = MagicMock(spec=OpenAIResponsesAPIConfig)
+        config.supports_native_websocket.return_value = True
+        config.model_in_websocket_url.return_value = True
+        config.get_websocket_url.return_value = "wss://api.openai.com/v1/responses"
+        config.validate_environment.return_value = {}
+        logging_obj: Final = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
+        user_api_key_dict: Final = UserAPIKeyAuth(api_key="hashed-key", tpm_limit=1000) if keyed else None
+        first, second, third = _turn_frames()
+        websocket: Final = _ClientSocket(second, third)
+
+        with patch("websockets.connect", provider.connect):
+            await BaseLLMHTTPHandler().async_responses_websocket(
+                model="gpt-5.4",
+                websocket=websocket,
+                logging_obj=logging_obj,
+                responses_api_provider_config=config,
+                api_key="sk-test",
+                user_api_key_dict=user_api_key_dict,
+                first_message=first,
+            )
+
+        assert [frame["input"] for frame in provider.sent] == forwarded
+        assert token_limits.checked == ([(user_api_key_dict, "gpt-5.4")] * 2 if keyed else [])
+        assert [(status, error["type"]) for status, error in _errors(websocket)] == ([refusal_frame] if refused else [])
 
     @pytest.mark.asyncio
     async def test_native_relay_runs_the_guardrail_before_the_deployment_counts_a_turn(self):

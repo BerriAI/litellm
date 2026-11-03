@@ -57,6 +57,8 @@ pub struct LegacyLogging {
     asynchronous: bool,
     internal: bool,
     cache_key: Option<String>,
+    /// When the provider request went out, until its window is recorded (Messages only).
+    api_started: Option<f64>,
 }
 
 fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
@@ -87,6 +89,60 @@ impl LegacyLogging {
             asynchronous,
             internal: false,
             cache_key: None,
+            api_started: None,
+        }
+    }
+
+    /// The kwargs `Logging.update_from_kwargs` sees. Python's Messages handler takes `metadata` as
+    /// its own argument, so the logger never sees the caller's raw metadata, only the validated
+    /// request metadata merged in through `litellm_params`. Python updates the logger once, before
+    /// the call; the refresh once the result is ready leaves out `litellm_metadata` too, so the
+    /// logged metadata is not rebuilt from what the call wrote into it since.
+    fn logging_kwargs<'py>(&self, py: Python<'py>, refresh: bool) -> PyResult<Bound<'py, PyDict>> {
+        let kwargs = self.call.kwargs().bind(py).copy()?;
+        if self.operation != LoggingOperation::Messages {
+            return Ok(kwargs);
+        }
+        let consumed: &[&str] = if refresh {
+            &["metadata", "litellm_metadata"]
+        } else {
+            &["metadata"]
+        };
+        for name in consumed {
+            if kwargs.contains(name)? {
+                kwargs.del_item(name)?;
+            }
+        }
+        Ok(kwargs)
+    }
+
+    /// Python's Messages handler hands the logger its request params, validated `metadata`
+    /// included, as `litellm_params`, beside the `aanthropic_messages` call flag.
+    fn logged_request_params(
+        &self,
+        context: &RequestContext,
+    ) -> Option<serde_json::Map<String, Value>> {
+        if self.operation != LoggingOperation::Messages {
+            return None;
+        }
+        let mut params = context
+            .optional_params
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        params.insert(
+            "aanthropic_messages".to_owned(),
+            Value::Bool(self.asynchronous),
+        );
+        Some(params)
+    }
+
+    /// Python times the provider exchange inside the async `AsyncHTTPHandler.post`; its sync
+    /// client is untimed.
+    fn close_api_window(&mut self, py: Python<'_>, end: f64) -> PyResult<()> {
+        match self.api_started.take() {
+            Some(start) => self.logger()?.record_api_window(py, start, end),
+            None => Ok(()),
         }
     }
 
@@ -108,6 +164,16 @@ impl LegacyLogging {
             LoggingOperation::Responses => "Responses",
             LoggingOperation::Messages => "Messages",
             LoggingOperation::Ocr => "OCR document processing",
+        }
+    }
+
+    /// The key `pre_call` logs. Python's Messages handler logs an empty string, never the key.
+    fn logged_api_key<'a>(&self, context: &'a RequestContext) -> Option<&'a str> {
+        match self.operation {
+            LoggingOperation::Messages => Some(""),
+            LoggingOperation::Completion | LoggingOperation::Responses | LoggingOperation::Ocr => {
+                context.api_key.as_ref().map(|api_key| api_key.expose())
+            }
         }
     }
 
@@ -377,7 +443,13 @@ impl LegacyLogging {
         context: &RequestContext,
     ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
         let logger = self.logger()?;
-        logger.update_from_kwargs(py, self.call.kwargs(), &wire, context)?;
+        logger.update_from_kwargs(
+            py,
+            &self.logging_kwargs(py, false)?,
+            &wire,
+            context,
+            self.logged_request_params(context).as_ref(),
+        )?;
         let body = to_py(py, &wire.body)?
             .into_bound(py)
             .cast_into::<PyDict>()?;
@@ -400,11 +472,14 @@ impl LegacyLogging {
         self.logger()?.pre_call(
             py,
             self.input_description(),
-            context.api_key.as_ref().map(|api_key| api_key.expose()),
+            self.logged_api_key(context),
             &body,
             &headers,
             &wire.url,
         )?;
+        if self.operation == LoggingOperation::Messages && self.asynchronous {
+            self.api_started = Some(epoch_seconds());
+        }
         let headers = headers
             .iter()
             .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
@@ -455,7 +530,7 @@ impl LegacyLogging {
             py,
             (
                 &logger,
-                self.call.kwargs(),
+                self.logging_kwargs(py, true)?,
                 &facts.provider.model,
                 logger.getattr("optional_params")?,
                 params,
@@ -483,6 +558,16 @@ impl LegacyLogging {
         py: Python<'_>,
         raw: &RawResponse,
     ) -> PyResult<HookStep<Self, ()>> {
+        if self.operation == LoggingOperation::Messages {
+            // Python's Messages handler never calls `post_call` at receipt: it stores the raw
+            // response, and logging replays it through `AnthropicConfig.transform_response`.
+            self.close_api_window(py, epoch_seconds())?;
+            if let Some(head) = &raw.head {
+                self.logger()?
+                    .record_response(py, head.status, &head.headers, &raw.body)?;
+            }
+            return Ok(HookStep::Ready(()));
+        }
         let api_key = self
             .request
             .as_ref()
@@ -522,6 +607,9 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, ()>> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.error = Some(error.clone_ref(py).into_value(py));
+        if self.logger.is_some() {
+            self.close_api_window(py, timing.end_time)?;
+        }
         if self.stream.is_some() {
             return self.stream_failure(py);
         }
@@ -542,6 +630,20 @@ impl LegacyLogging {
         if let Some(key) = &self.cache_key {
             head.bind(py).set_item("cache_key", key)?;
             head.bind(py).set_item("cache_hit", true)?;
+        }
+        self.close_api_window(py, epoch_seconds())?;
+        if self.operation == LoggingOperation::Messages {
+            // Python's `@client` stamps the call metadata onto the stream it hands back.
+            Streaming::StampHead.call(
+                py,
+                (
+                    head.bind(py),
+                    self.logger()?.object(py),
+                    self.call.kwargs(),
+                    &self.start,
+                    datetime(py, epoch_seconds())?,
+                ),
+            )?;
         }
         Streaming::Opened.call(py, (self.logger()?.object(py), head.bind(py)))?;
         self.stream = Some(DeliveredStream {
@@ -1117,9 +1219,7 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
         let step = logging
             .before_provider_request(py, Box::new(wire), context)
             .unwrap();
-        let raw = RawResponse {
-            body: "raw response".into(),
-        };
+        let raw = RawResponse::new("raw response".into());
         assert!(matches!(
             logging
                 .on_event(
@@ -1869,9 +1969,10 @@ assert logger.calls[1][1] is response
                 py,
                 &locals,
                 c"
-assert logger.names() == ['stream_opened', 'stream_success'], logger.calls
+assert logger.names() == ['stamp_stream_head', 'stream_opened', 'stream_success'], logger.calls
 assert logger.calls[0][1] is head
-chunks = logger.calls[1][1]
+assert logger.calls[1][1] is head
+chunks = logger.calls[2][1]
 assert len(chunks) == 2
 assert chunks[0] is first
 assert chunks[1] is last

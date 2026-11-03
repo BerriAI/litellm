@@ -30,6 +30,7 @@ import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
@@ -137,6 +138,7 @@ from litellm.proxy.route_llm_request import (
     route_request,
 )
 from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost, prepare_response_cost
+from litellm.proxy.spend_tracking.usage_capture import capture_proxy_response
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
@@ -169,7 +171,9 @@ ProxyRouteType: TypeAlias = Literal[
     "_arealtime",
     "_aresponses_websocket",
     "acreate_realtime_client_secret",
+    "acreate_realtime_translation_client_secret",
     "arealtime_calls",
+    "arealtime_translation_calls",
     "aget_responses",
     "adelete_responses",
     "acancel_responses",
@@ -779,7 +783,7 @@ def resolve_counted_tool_fields(
     return resolved
 
 
-def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:
+def proxy_exception_from_http_exception(exc: StarletteHTTPException, headers: dict[str, str]) -> ProxyException:
     raw_detail: Final = attribute_of(exc, "detail", str(exc))
     message, structured_fields = serialize_http_exception_detail(raw_detail)
     existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
@@ -1883,6 +1887,13 @@ def _response_cost_header_value(hidden_params: Mapping[str, object]) -> float | 
 def cost_headers(
     response_cost: float | str | None, litellm_logging_obj: LiteLLMLoggingObj | None
 ) -> Mapping[str, str | None]:
+    if (
+        response_cost == 0
+        and litellm_logging_obj is not None
+        and litellm_logging_obj.prepared_cost is not None
+        and not litellm_logging_obj.prepared_cost.price_known
+    ):
+        return {}
     cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
         litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
     )
@@ -3365,6 +3376,9 @@ class ProxyBaseLLMRequestProcessing:
                         _REQUEST_FIELDS.validate_python(request_metadata_bucket), logging_obj
                     )
                 ),
+            )
+            await capture_proxy_response(
+                logging_obj, response, background=_REQUEST_FIELDS.validate_python(self.data).get("background") is True
             )
         except (Exception, asyncio.CancelledError) as exc:
             _exception_raised = True
