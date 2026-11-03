@@ -13,6 +13,7 @@ import litellm
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
+from prisma.errors import DataError
 from pydantic import ValidationError
 
 from litellm._uuid import uuid
@@ -17411,6 +17412,87 @@ async def test_get_team_spend_by_user_rejects_bad_input(mock_db_client, team_ids
     assert exc_info.value.status_code == 400
     assert expected_error in str(exc_info.value.detail)
     mock_db_client.db.query_raw.assert_not_called()
+
+
+class _RecordingTransaction:
+    def __init__(self, query_raw: AsyncMock) -> None:
+        self.statements: list[str] = []
+        self.query_raw = query_raw
+
+    async def execute_raw(self, sql: str) -> int:
+        self.statements.append(sql)
+        return 0
+
+    async def __aenter__(self) -> "_RecordingTransaction":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        pass
+
+
+def _statement_timeout_error() -> DataError:
+    message = "canceling statement due to statement timeout"
+    return DataError(
+        data={
+            "user_facing_error": {
+                "is_panic": False,
+                "message": f"Error querying the database: {message}",
+                "meta": {"code": "57014", "message": message},
+            }
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_team_spend_by_user_timeout_runs_query_under_statement_timeout(mock_db_client):
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
+
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
+    mock_db_client.db.query_raw = AsyncMock(return_value=[])
+    transaction = _RecordingTransaction(
+        AsyncMock(return_value=[_team_spend_by_user_db_row("team-alpha", "alice", 0.5, 3)])
+    )
+    mock_db_client.db.tx = MagicMock(return_value=transaction)
+
+    response = await get_team_spend_by_user(
+        user_api_key_dict=admin,
+        team_ids="team-alpha",
+        start_date="2026-09-01",
+        end_date="2026-09-04",
+        timeout_seconds=60,
+    )
+
+    assert transaction.statements == ["SET LOCAL statement_timeout = 60000"]
+    _sql, *params = transaction.query_raw.call_args.args
+    assert params == ["2026-09-01", "2026-09-04", "team-alpha"]
+    mock_db_client.db.query_raw.assert_not_called()
+    assert [(r.user_id, r.spend) for r in response.results] == [("alice", 0.5)]
+
+
+@pytest.mark.asyncio
+async def test_get_team_spend_by_user_statement_timeout_returns_503(mock_db_client):
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
+
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
+    mock_db_client.db.tx = MagicMock(
+        return_value=_RecordingTransaction(AsyncMock(side_effect=_statement_timeout_error()))
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_team_spend_by_user(
+            user_api_key_dict=admin,
+            team_ids="team-alpha",
+            start_date="2026-09-01",
+            end_date="2026-09-04",
+            timeout_seconds=60,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "longer than 60s" in str(exc_info.value.detail)
 
 
 class _TeamRowWithOrganization(LiteLLM_TeamTable):
