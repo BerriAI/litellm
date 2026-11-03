@@ -303,6 +303,9 @@ gateway:
   # Number of uvicorn worker processes per gateway pod. Sets NUM_WORKERS,
   # consumed by the gateway image entrypoint. Default is 1.
   numWorkers: 1
+  rustGateway:
+    # null inherits the image default; true or false sets LITELLM_RUST_GATEWAY
+    enabled:
   extraEnv: [] # Add extra environment variables to the gateway
   envConfigMaps: [] # Add extra environment variables to the gateway from config maps
   envSecrets: [] # Add extra environment variables to the gateway from secrets

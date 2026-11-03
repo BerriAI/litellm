@@ -60,6 +60,17 @@ spec:
             - name: LITELLM_CORS_ORIGINS
               value: {{ include "litellm.ui.publicOrigin" . | quote }}
             {{- end }}
+            {{- $rustGateway := .Values.gateway.rustGateway | default dict }}
+            {{- $rustGatewayOverridden := false }}
+            {{- range .Values.gateway.extraEnv }}
+            {{- if eq .name "LITELLM_RUST_GATEWAY" }}
+            {{- $rustGatewayOverridden = true }}
+            {{- end }}
+            {{- end }}
+            {{- if and (not (kindIs "invalid" $rustGateway.enabled)) (not $rustGatewayOverridden) }}
+            - name: LITELLM_RUST_GATEWAY
+              value: {{ $rustGateway.enabled | toString | quote }}
+            {{- end }}
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
             {{- if .Values.gateway.config.create }}
             - name: CONFIG_FILE_PATH
