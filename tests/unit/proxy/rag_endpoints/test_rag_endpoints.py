@@ -499,7 +499,12 @@ def test_rag_ingest_uses_the_forwarded_provider_key_over_team_provider_credentia
 
 
 @pytest.mark.parametrize("ingest_request", [_ingest_form, _ingest_json])
-def test_rag_ingest_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_header(client_team_a, ingest_request):
+def test_rag_ingest_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_header(
+    client_team_a, ingest_request, monkeypatch
+):
+    monkeypatch.setattr(
+        "litellm.proxy.rag_endpoints.endpoints.fetch_file_url", _fetcher_answering(200, b"test content")[0]
+    )
     aingest_patch, registry_patch = _patched_ingest_boundary(
         None,
         {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
@@ -525,7 +530,12 @@ def test_rag_ingest_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_hea
 
 
 @pytest.mark.parametrize("unread_request_field", ["not json", json.dumps({"drop_params": False})])
-def test_rag_ingest_json_body_ignores_a_request_field_it_does_not_read(client_team_a, unread_request_field):
+def test_rag_ingest_json_body_ignores_a_request_field_it_does_not_read(
+    client_team_a, unread_request_field, monkeypatch
+):
+    monkeypatch.setattr(
+        "litellm.proxy.rag_endpoints.endpoints.fetch_file_url", _fetcher_answering(200, b"test content")[0]
+    )
     aingest_patch, registry_patch = _patched_ingest_boundary(
         None,
         {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
