@@ -448,7 +448,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
 @pytest.mark.parametrize(
     ("feature", "model", "kwargs", "settings"),
     (
-        (Feature.MOCK_RESPONSE, "anthropic/claude-sonnet-4-5", {"mock_response": "hi"}, {}),
         (
             Feature.PROXY_MCP_TOOLS,
             "anthropic/claude-sonnet-4-5",
@@ -466,25 +465,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
             "anthropic/claude-sonnet-4-5",
             {"anthropic_federation_rule_id": "rule-1", "anthropic_organization_id": "org-1"},
             {},
-        ),
-        (Feature.CACHE_CONTROL_INJECTION, "anthropic/claude-sonnet-4-5", {"enable_prompt_caching": True}, {}),
-        (
-            Feature.THINKING_SIGNATURE_RETRY,
-            "anthropic/claude-sonnet-4-5",
-            {"messages": [{"role": "assistant", "content": [{"type": "redacted_thinking", "data": "x"}]}]},
-            {},
-        ),
-        (
-            Feature.TOOL_CUSTOM_FIELD,
-            "anthropic/claude-sonnet-4-5",
-            {"tools": [{"name": "a", "input_schema": {"type": "object"}, "custom": {"eager_input_streaming": True}}]},
-            {},
-        ),
-        (
-            Feature.STREAM_COST_INJECTION,
-            "anthropic/claude-sonnet-4-5",
-            {"stream": True},
-            {"include_cost_in_streaming_usage": True},
         ),
     ),
 )

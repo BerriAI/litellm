@@ -18,7 +18,7 @@ use litellm_llms_types::{
     recognized::Recognized,
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
@@ -276,6 +276,112 @@ pub fn has_advisor_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
         .into_iter()
         .flatten()
         .any(|tool| matches!(tool, Recognized::Known(MessagesTool::Advisor { .. })))
+}
+
+/// What a Claude-compatible host does with a tool's non-spec `custom` object (Python's
+/// `tools_for_upstream`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomToolField {
+    /// The tools are sent as the caller wrote them (Bedrock Invoke and Mantle).
+    Forward,
+    /// `custom` is hoisted and, under `drop_params`, dropped (Python's
+    /// `tools_without_custom_field`).
+    Rewrite {
+        hoist_defer_loading: bool,
+        drop_custom: bool,
+    },
+}
+
+impl CustomToolField {
+    /// The base config's policy for `provider`, as Python's `AnthropicMessagesConfig` applies it.
+    pub fn rewrite(provider: &str, model: &str, drop_params: bool) -> Self {
+        Self::Rewrite {
+            hoist_defer_loading: is_claude_model_target(provider, model),
+            drop_custom: drop_params,
+        }
+    }
+}
+
+/// Python's `is_claude_model_target`: a Claude model on a host whose tools take Claude's own
+/// `defer_loading` field.
+pub fn is_claude_model_target(provider: &str, model: &str) -> bool {
+    let model = model.to_lowercase();
+    model.contains("claude")
+        && matches!(provider, "anthropic" | "azure_ai" | "vertex_ai" | "bedrock")
+}
+
+fn hoistable_defer_loading(tool: &Map<String, Value>, custom: &Value) -> Option<bool> {
+    let custom = custom.as_object()?;
+    if tool.contains_key("defer_loading") {
+        return None;
+    }
+    custom.get("defer_loading").and_then(Value::as_bool)
+}
+
+/// Python's `_tool_without_custom_field` for one tool.
+fn tool_without_custom_field(tool: Value, hoist_defer_loading: bool, drop_custom: bool) -> Value {
+    let Value::Object(tool) = tool else {
+        return tool;
+    };
+    let Some(custom) = tool.get("custom").cloned() else {
+        return Value::Object(tool);
+    };
+    let without_custom = || {
+        tool.iter()
+            .filter(|(key, _)| *key != "custom")
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Map<String, Value>>()
+    };
+    let defer_loading = hoist_defer_loading
+        .then(|| hoistable_defer_loading(&tool, &custom))
+        .flatten();
+    let Some(defer_loading) = defer_loading else {
+        return Value::Object(if drop_custom { without_custom() } else { tool });
+    };
+    let unhoisted: Map<String, Value> = custom
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| *key != "defer_loading")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let mut rewritten = without_custom();
+    rewritten.insert("defer_loading".into(), Value::Bool(defer_loading));
+    if !unhoisted.is_empty() && !drop_custom {
+        rewritten.insert("custom".into(), Value::Object(unhoisted));
+    }
+    Value::Object(rewritten)
+}
+
+/// Python's `tools_for_upstream`: each tool's `custom` object handled as `policy` says.
+pub fn tools_for_upstream(
+    tools: Vec<Recognized<MessagesTool>>,
+    policy: CustomToolField,
+) -> Result<Vec<Recognized<MessagesTool>>, serde_json::Error> {
+    let CustomToolField::Rewrite {
+        hoist_defer_loading,
+        drop_custom,
+    } = policy
+    else {
+        return Ok(tools);
+    };
+    tools
+        .into_iter()
+        .map(|tool| {
+            let value = serde_json::to_value(&tool)?;
+            if !value
+                .as_object()
+                .is_some_and(|tool| tool.contains_key("custom"))
+            {
+                return Ok(tool);
+            }
+            serde_json::from_value(tool_without_custom_field(
+                value,
+                hoist_defer_loading,
+                drop_custom,
+            ))
+        })
+        .collect()
 }
 
 pub fn requires_native_compaction_beta(compaction: Option<&Value>, messages: &[Message]) -> bool {
@@ -674,6 +780,65 @@ mod tests {
 
     fn tools(value: Option<Value>) -> Option<Vec<Recognized<MessagesTool>>> {
         value.map(|tools| serde_json::from_value(tools).unwrap())
+    }
+
+    #[rstest]
+    #[case::forward_keeps_custom(
+        CustomToolField::Forward,
+        json!({"name": "f", "custom": {"defer_loading": true}}),
+        json!({"name": "f", "custom": {"defer_loading": true}}),
+    )]
+    #[case::hoists_defer_loading(
+        CustomToolField::Rewrite { hoist_defer_loading: true, drop_custom: false },
+        json!({"name": "f", "custom": {"defer_loading": true}}),
+        json!({"name": "f", "defer_loading": true}),
+    )]
+    #[case::hoists_and_keeps_the_rest(
+        CustomToolField::Rewrite { hoist_defer_loading: true, drop_custom: false },
+        json!({"name": "f", "custom": {"defer_loading": false, "x": 1}}),
+        json!({"name": "f", "defer_loading": false, "custom": {"x": 1}}),
+    )]
+    #[case::hoists_and_drops_the_rest(
+        CustomToolField::Rewrite { hoist_defer_loading: true, drop_custom: true },
+        json!({"name": "f", "custom": {"defer_loading": true, "x": 1}}),
+        json!({"name": "f", "defer_loading": true}),
+    )]
+    #[case::top_level_defer_loading_wins(
+        CustomToolField::Rewrite { hoist_defer_loading: true, drop_custom: false },
+        json!({"name": "f", "defer_loading": false, "custom": {"defer_loading": true}}),
+        json!({"name": "f", "defer_loading": false, "custom": {"defer_loading": true}}),
+    )]
+    #[case::non_bool_defer_loading_is_not_hoisted(
+        CustomToolField::Rewrite { hoist_defer_loading: true, drop_custom: false },
+        json!({"name": "f", "custom": {"defer_loading": "yes"}}),
+        json!({"name": "f", "custom": {"defer_loading": "yes"}}),
+    )]
+    #[case::not_hoisted_off_claude(
+        CustomToolField::Rewrite { hoist_defer_loading: false, drop_custom: false },
+        json!({"name": "f", "custom": {"defer_loading": true}}),
+        json!({"name": "f", "custom": {"defer_loading": true}}),
+    )]
+    #[case::dropped_under_drop_params(
+        CustomToolField::Rewrite { hoist_defer_loading: false, drop_custom: true },
+        json!({"name": "f", "custom": "anything"}),
+        json!({"name": "f"}),
+    )]
+    fn custom_tool_fields_follow_the_host_policy(
+        #[case] policy: CustomToolField,
+        #[case] tool: Value,
+        #[case] expected: Value,
+    ) {
+        let rewritten = tools_for_upstream(tools(Some(json!([tool]))).unwrap(), policy).unwrap();
+        assert_eq!(serde_json::to_value(rewritten).unwrap(), json!([expected]));
+    }
+
+    #[rstest]
+    #[case::anthropic_claude("anthropic", "claude-sonnet-4-5", true)]
+    #[case::bedrock_claude("bedrock", "us.anthropic.Claude-opus", true)]
+    #[case::anthropic_other_model("anthropic", "other-model", false)]
+    #[case::deepseek_claude_name("deepseek", "claude-sonnet-4-5", false)]
+    fn claude_model_targets(#[case] provider: &str, #[case] model: &str, #[case] expected: bool) {
+        assert_eq!(is_claude_model_target(provider, model), expected);
     }
 
     fn headers(pairs: &[(&str, &str)]) -> Headers {

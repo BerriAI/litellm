@@ -16,10 +16,10 @@ use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        ANTHROPIC_BASE_URL_ENV, CustomToolField, OauthHandling, complete_anthropic_url,
+        get_auth_header, has_advisor_tool, has_anthropic_credential, is_tool_search_used,
+        merge_beta_headers, optionally_handle_anthropic_oauth, requires_native_compaction_beta,
+        strip_advisor_blocks, strip_encrypted_reasoning_blocks, tools_for_upstream,
     },
     base_llm::{
         auth::AuthScheme,
@@ -56,7 +56,9 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(request, &context.keeping_display_updates())
+        let custom_tools =
+            CustomToolField::rewrite("anthropic", &request.model, context.drop_params);
+        transform_messages_request(request, &context.keeping_display_updates(), custom_tools)
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -121,6 +123,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
 pub(crate) fn transform_messages_request(
     request: MessagesRequest,
     context: &MessagesTransformContext,
+    custom_tools: CustomToolField,
 ) -> Result<MessagesRequest, Error> {
     if request.params.max_tokens.is_none() {
         return Err(Error::MissingField("max_tokens"));
@@ -137,10 +140,17 @@ pub(crate) fn transform_messages_request(
     } else {
         strip_advisor_blocks(request.messages)
     };
+    let tools = request
+        .params
+        .tools
+        .map(|tools| tools_for_upstream(tools, custom_tools))
+        .transpose()
+        .map_err(|err| Error::InvalidRequest(crate::ErrorDetail::invalid("Messages tools", err)))?;
     Ok(MessagesRequest {
         messages: strip_encrypted_reasoning_blocks(messages),
         params: MessagesOptionalParams {
             context_management,
+            tools,
             extra: without_null_safeguards(request.params.extra),
             ..request.params
         },

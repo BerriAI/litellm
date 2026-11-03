@@ -4,7 +4,7 @@ use litellm_llms_types::formats::messages::{
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
-use super::context::MessagesTransformContext;
+use super::{context::MessagesTransformContext, http_error_retry};
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
@@ -90,6 +90,16 @@ pub trait BaseMessagesConfig: Sync {
     /// Python's configs `pop("model")` when the model is addressed by the URL.
     fn wire_body(&self, body: Value) -> Value {
         body
+    }
+
+    /// The body to send again after the upstream rejected `body` with `status` and
+    /// `error_text`, or `None` when the rejection stands: Python's
+    /// `should_retry_anthropic_messages_on_http_error` with
+    /// `transform_anthropic_messages_request_on_http_error`, which every Messages config
+    /// inherits.
+    fn body_after_http_error(&self, status: u16, error_text: &str, body: &Value) -> Option<Value> {
+        http_error_retry::retries_without_thinking(status, error_text, body)
+            .then(|| http_error_retry::without_thinking(body.clone()))
     }
 }
 

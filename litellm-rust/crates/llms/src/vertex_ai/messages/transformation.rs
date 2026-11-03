@@ -12,6 +12,7 @@ use litellm_llms_types::{
 use litellm_router_types::LitellmParams;
 use serde_json::{Value, json};
 
+use crate::anthropic::common_utils::CustomToolField;
 use crate::{
     Error,
     anthropic::{
@@ -77,7 +78,12 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let request = transform_messages_request(request, &context.keeping_display_updates())?;
+        let request_model = request.model.clone();
+        let request = transform_messages_request(
+            request,
+            &context.keeping_display_updates(),
+            CustomToolField::rewrite("vertex_ai", &request_model, context.drop_params),
+        )?;
         let request = strip_cache_control_scope(normalize_system_role_messages(
             request,
             context

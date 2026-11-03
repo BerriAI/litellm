@@ -44,6 +44,9 @@ struct ProviderCall {
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
     stream: bool,
+    /// Relay the stream in whole SSE frames, as Python's pass-through chunk processor does
+    /// while it injects cost into streamed usage.
+    whole_frames: bool,
 }
 
 impl ProviderCall {
@@ -98,6 +101,35 @@ pub(super) async fn execute(
     Ok(cache.finish(output, &source).await)
 }
 
+/// The errors Python's `mock_response` raises for the `mock_response` text that names them.
+const MOCKED_ERRORS: [&str; 3] = [
+    "litellm.InternalServerError",
+    "litellm.ContextWindowExceededError",
+    "litellm.RateLimitError",
+];
+
+/// Python's Messages `mock_response`: the canned message carrying `mock` as its text, or the
+/// error it names, answered before any provider work or logging update.
+pub(super) fn mock_response(mock: &str) -> Result<MessagesResponse, Error> {
+    if MOCKED_ERRORS.contains(&mock) {
+        return Err(Error::Mocked(mock.to_string()));
+    }
+    let response = serde_json::from_value(serde_json::json!({
+        "content": [{"text": mock, "type": "text"}],
+        "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+        "model": "claude-sonnet-4-20250514",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {"input_tokens": 2095, "output_tokens": 503},
+    }))
+    .map_err(|err| {
+        Error::invalid_response(litellm_llms::ErrorDetail::invalid("mock response", err))
+    })?;
+    Ok(response)
+}
+
 async fn provider_call(
     auth: &AuthServices,
     provider: MessagesProvider,
@@ -123,6 +155,9 @@ async fn provider_call(
     };
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
+    // Python takes `stream` from the caller, not from the body that `additional_drop_params`
+    // may have trimmed, for the URL, the response handling and logging.
+    let caller_stream = body.params.stream == Some(true);
 
     let sanitized = config.shape_request(
         MessagesRequest { model, ..body },
@@ -166,7 +201,7 @@ async fn provider_call(
         api_base.as_deref(),
         &body.model,
         &connection_params,
-        body.params.stream == Some(true),
+        caller_stream,
         &env_lookup,
     )?;
 
@@ -194,7 +229,8 @@ async fn provider_call(
         )
         .await?;
     let stream = match wire.body.get("stream") {
-        None | Some(Value::Null) => false,
+        None => caller_stream,
+        Some(Value::Null) => false,
         Some(Value::Bool(stream)) => *stream,
         Some(value) => {
             return Err(Error::invalid_request(
@@ -213,6 +249,7 @@ async fn provider_call(
         signer: authenticated.signer,
         timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         stream,
+        whole_frames: shaping.settings.include_cost_in_streaming_usage,
     })
 }
 
@@ -303,32 +340,55 @@ async fn call_provider(
         signer,
         timeout,
         stream,
+        whole_frames,
     } = request;
     let provider_name = provider.as_str();
-    log_request_body(provider_name, stream, &wire.body);
-    let timeout = timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS));
-    let response = send(
-        http,
-        Authenticated {
-            headers: wire.headers,
-            signer,
-        },
-        &wire.url,
-        &wire.body,
-        timeout,
-        stream,
-    )
-    .await?;
-    if !response.status().is_success() {
-        return Err(provider_error(response, timeout).await);
-    }
     let config = provider.config();
+    let timeout = timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS));
+    let mut body = wire.body;
+    let mut attempts = 1;
+    let response = loop {
+        log_request_body(provider_name, stream, &body);
+        let response = send(
+            http,
+            Authenticated {
+                headers: wire.headers.clone(),
+                signer: signer.clone(),
+            },
+            &wire.url,
+            &body,
+            timeout,
+            stream,
+        )
+        .await?;
+        if response.status().is_success() {
+            break response;
+        }
+        let rejection = provider_rejection(response, timeout).await?;
+        // Python's `_async_post_anthropic_messages_with_http_error_retry`: a recoverable
+        // rejection is sent once more with the body the config rewrites, under the same headers.
+        let retried = (attempts < litellm_llms::base_llm::messages::http_error_retry::MAX_ATTEMPTS)
+            .then(|| config.body_after_http_error(rejection.status, &rejection.text, &body))
+            .flatten();
+        match retried {
+            Some(rewritten) => {
+                tracing::debug!(
+                    attempt = attempts + 1,
+                    "anthropic messages: retrying after a recoverable HTTP error"
+                );
+                body = rewritten;
+                attempts += 1;
+            }
+            None => return Err(rejection.into_error()),
+        }
+    };
     if stream {
         return Ok(streaming_response(
             response,
             config.stream_decoder(),
             provider_name,
             timeout,
+            whole_frames,
         ));
     }
     let head = ResponseHead {
@@ -392,18 +452,36 @@ fn timed_chunks(
     })
 }
 
+/// An upstream rejection whose body was read.
+struct Rejection {
+    status: u16,
+    text: String,
+    headers: Vec<(String, String)>,
+}
+
+impl Rejection {
+    fn into_error(self) -> Error {
+        log_error_body(self.status, &self.text);
+        litellm_http::Error::upstream_with_headers(self.status, self.text, self.headers).into()
+    }
+}
+
 /// The provider's error, its body read under `timeout`: a stream has no overall deadline once
 /// its head arrives, so an error body that stalls would otherwise hold the call forever.
-async fn provider_error(response: reqwest::Response, timeout: Duration) -> Error {
+async fn provider_rejection(
+    response: reqwest::Response,
+    timeout: Duration,
+) -> Result<Rejection, Error> {
     let status = response.status().as_u16();
     let headers = litellm_http::request::header_pairs(response.headers());
     match tokio::time::timeout(timeout, response.text()).await {
-        Ok(Ok(text)) => {
-            log_error_body(status, &text);
-            litellm_http::Error::upstream_with_headers(status, text, headers).into()
-        }
-        Ok(Err(error)) => litellm_http::Error::from(error).into(),
-        Err(elapsed) => litellm_http::Error::read_timeout(elapsed).into(),
+        Ok(Ok(text)) => Ok(Rejection {
+            status,
+            text,
+            headers,
+        }),
+        Ok(Err(error)) => Err(litellm_http::Error::from(error).into()),
+        Err(elapsed) => Err(litellm_http::Error::read_timeout(elapsed).into()),
     }
 }
 
@@ -429,6 +507,7 @@ fn streaming_response(
     decoder: Option<StreamDecoder>,
     provider: &'static str,
     timeout: Duration,
+    whole_frames: bool,
 ) -> MessagesCallResponse {
     let headers = response
         .headers()
@@ -438,6 +517,9 @@ fn streaming_response(
     let chunks = timed_chunks(response, timeout)
         .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk));
     let chunks = match decoder {
+        // A decoded stream is re-encoded one whole event per chunk, and Python's decoded
+        // hosts relay it without the pass-through cost injection.
+        None if whole_frames => in_whole_frames(chunks.map_err(Error::from).boxed()),
         None => chunks.map_err(Error::from).boxed(),
         Some(decode) => decoded_chunks(
             chunks.map_err(std::io::Error::other).boxed(),
@@ -449,6 +531,68 @@ fn streaming_response(
         head: super::route::MessagesStreamHead { headers },
         chunks,
     }
+}
+
+const SSE_FRAME_DELIMITERS: [&[u8]; 3] = [b"\r\n\r\n", b"\n\n", b"\r\r"];
+
+/// Python's `split_complete_sse_frames`: the buffered bytes up to the last frame boundary, and
+/// the unterminated tail. `pending[..scanned]` holds no whole delimiter, so only the bytes a new
+/// delimiter could end in are searched.
+fn split_complete_sse_frames_after(pending: &[u8], scanned: usize) -> (&[u8], &[u8]) {
+    let longest = SSE_FRAME_DELIMITERS
+        .iter()
+        .map(|delimiter| delimiter.len())
+        .max()
+        .unwrap_or(0);
+    let from = scanned.saturating_sub(longest - 1);
+    let boundary_end = SSE_FRAME_DELIMITERS
+        .iter()
+        .filter_map(|delimiter| {
+            pending[from..]
+                .windows(delimiter.len())
+                .rposition(|window| window == *delimiter)
+                .map(|start| from + start + delimiter.len())
+        })
+        .max()
+        .unwrap_or(0);
+    pending.split_at(boundary_end)
+}
+
+/// The stream regrouped into whole SSE frames, as Python's pass-through chunk processor yields
+/// it while cost injection is on: a read that completes no frame yields nothing, and an
+/// unterminated tail is yielded once the upstream ends.
+fn in_whole_frames(
+    chunks: BoxStream<'static, Result<Bytes, Error>>,
+) -> BoxStream<'static, Result<Bytes, Error>> {
+    futures_util::stream::try_unfold(
+        (chunks, Vec::new(), false),
+        |(mut chunks, mut pending, ended)| async move {
+            if ended {
+                return Ok(None);
+            }
+            loop {
+                match chunks.try_next().await? {
+                    Some(chunk) => {
+                        let scanned = pending.len();
+                        pending.extend_from_slice(&chunk);
+                        let (complete, tail) = split_complete_sse_frames_after(&pending, scanned);
+                        if complete.is_empty() {
+                            continue;
+                        }
+                        let frames = Bytes::copy_from_slice(complete);
+                        pending = tail.to_vec();
+                        return Ok(Some((frames, (chunks, pending, false))));
+                    }
+                    None if pending.is_empty() => return Ok(None),
+                    None => {
+                        let tail = Bytes::from(std::mem::take(&mut pending));
+                        return Ok(Some((tail, (chunks, pending, true))));
+                    }
+                }
+            }
+        },
+    )
+    .boxed()
 }
 
 fn decoded_chunks(
@@ -535,6 +679,7 @@ mod tests {
 
     async fn wire_body(fields: Value, shaping: MessagesShaping) -> Result<Value, Error> {
         provider_call_for(MessagesCall {
+            mock_response: None,
             body: body(fields),
             api_key: Some("sk-test".into()),
             api_base: Some("https://anthropic.test".into()),
@@ -584,7 +729,7 @@ mod tests {
                 .map(|(_, value)| value.to_string())
         };
         let call = provider_call_with_secrets(
-            MessagesCall {
+            MessagesCall { mock_response: None,
                 body: body(
                     json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
                 ),
@@ -620,6 +765,7 @@ mod tests {
         drop_params: bool,
     ) -> MessagesCall {
         MessagesCall {
+            mock_response: None,
             body: body(
                 json!({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
             ),
@@ -698,6 +844,7 @@ mod tests {
         shaping: MessagesShaping,
     ) {
         let result = provider_call_for(MessagesCall {
+            mock_response: None,
             body: body(
                 json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}]}),
             ),
@@ -735,7 +882,7 @@ mod tests {
         #[case] request_timeout: Option<f64>,
         #[case] expected: Option<Duration>,
     ) {
-        let call = provider_call_for(MessagesCall {
+        let call = provider_call_for(MessagesCall { mock_response: None,
             body: body(json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16})),
             api_key: Some("sk-test".into()),
             api_base: Some("https://anthropic.test".into()),
@@ -848,7 +995,7 @@ mod tests {
             {"custom_llm_provider": "anthropic", "extra_headers": {"x-scoped": "anthropic", "x-priority": "scoped"}}
         ]))
         .unwrap();
-        let call = provider_call_for(MessagesCall {
+        let call = provider_call_for(MessagesCall { mock_response: None,
             body: body(
                 json!({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
             ),
@@ -996,7 +1143,7 @@ mod tests {
         #[case] path: &str,
         #[case] service: &str,
     ) {
-        let call = provider_call_with_secrets(MessagesCall {
+        let call = provider_call_with_secrets(MessagesCall { mock_response: None,
             body: body(json!({"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]})),
             api_key: None,
             api_base: Some(base.into()),
@@ -1063,6 +1210,7 @@ mod tests {
             Some(streaming::event_stream),
             "test",
             Duration::from_secs(5),
+            false,
         ) else {
             panic!("a streaming response returns chunks");
         };
@@ -1073,5 +1221,72 @@ mod tests {
             None => assert!(chunk.unwrap_err().is_response()),
         }
         assert!(chunks.next().await.is_none());
+    }
+
+    #[rstest]
+    #[case::delimiter_straddles_reads(
+        b"data: 1\r\n",
+        b"\r\ndata: 2",
+        b"data: 1\r\n\r\n",
+        b"data: 2"
+    )]
+    #[case::boundary_in_new_bytes(b"data: 1", b"\n\ndata: 2\n\nx", b"data: 1\n\ndata: 2\n\n", b"x")]
+    #[case::no_boundary_yet(b"data: 1\r", b"\ndata", b"", b"data: 1\r\ndata")]
+    fn incremental_split_matches_a_full_rescan(
+        #[case] earlier: &[u8],
+        #[case] read: &[u8],
+        #[case] complete: &[u8],
+        #[case] tail: &[u8],
+    ) {
+        let pending = [earlier, read].concat();
+        assert_eq!(
+            split_complete_sse_frames_after(&pending, earlier.len()),
+            (complete, tail)
+        );
+        assert_eq!(
+            split_complete_sse_frames_after(&pending, 0),
+            (complete, tail)
+        );
+    }
+
+    #[rstest]
+    #[case::no_boundary(b"event: a\ndata: 1", b"", b"event: a\ndata: 1")]
+    #[case::one_frame(b"data: 1\n\n", b"data: 1\n\n", b"")]
+    #[case::frame_and_tail(b"data: 1\n\ndata: 2", b"data: 1\n\n", b"data: 2")]
+    #[case::crlf(b"data: 1\r\n\r\ndata: 2\n\nx", b"data: 1\r\n\r\ndata: 2\n\n", b"x")]
+    #[case::cr_only(b"data: 1\r\rdata", b"data: 1\r\r", b"data")]
+    fn sse_frames_split_at_the_last_boundary(
+        #[case] pending: &[u8],
+        #[case] complete: &[u8],
+        #[case] tail: &[u8],
+    ) {
+        assert_eq!(
+            split_complete_sse_frames_after(pending, 0),
+            (complete, tail)
+        );
+    }
+
+    #[rstest]
+    #[case::regrouped(
+        &["event: a\nda", "ta: 1\n\nevent: b\n", "data: 2\n\n"],
+        &["event: a\ndata: 1\n\n", "event: b\ndata: 2\n\n"],
+    )]
+    #[case::tail_after_the_end(&["data: 1\n\nda", "ta"], &["data: 1\n\n", "data"])]
+    #[case::nothing(&[], &[])]
+    #[tokio::test]
+    async fn whole_frames_regroup_the_reads(#[case] reads: &[&str], #[case] expected: &[&str]) {
+        let reads: Vec<Result<Bytes, Error>> = reads
+            .iter()
+            .map(|read| Ok(Bytes::copy_from_slice(read.as_bytes())))
+            .collect();
+        let frames: Vec<Bytes> = in_whole_frames(futures_util::stream::iter(reads).boxed())
+            .try_collect()
+            .await
+            .unwrap();
+        let expected: Vec<Bytes> = expected
+            .iter()
+            .map(|frame| Bytes::copy_from_slice(frame.as_bytes()))
+            .collect();
+        assert_eq!(frames, expected);
     }
 }

@@ -494,6 +494,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
     let shaped = |drop_params: bool| {
         with_fields(
             MessagesCall {
+                mock_response: None,
                 api_key: Some("sk".into()),
                 api_base: Some(upstream.uri()),
                 shaping: MessagesShaping {

@@ -8,6 +8,7 @@ use litellm_llms_types::{
 };
 use litellm_router_types::LitellmParams;
 
+use crate::anthropic::common_utils::CustomToolField;
 use crate::{
     Error,
     anthropic::{
@@ -96,7 +97,12 @@ impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let request = transform_messages_request(request, context)?;
+        let request_model = request.model.clone();
+        let request = transform_messages_request(
+            request,
+            context,
+            CustomToolField::rewrite("tencent", &request_model, context.drop_params),
+        )?;
         Ok(MessagesRequest {
             params: MessagesOptionalParams {
                 system: request

@@ -34,6 +34,8 @@ const MESSAGES_MISSING_CREDENTIAL: &str = "messages_missing_credential";
 /// Python refuses the request only once its logger knows the resolved model and provider (the
 /// provider config's request transform), so the failure logs them.
 const MESSAGES_LATE_REJECTION: &str = "messages_late_rejection";
+/// The `mock_response` text whose error the Messages host raises in place of this one.
+const MESSAGES_MOCK_ERROR: &str = "messages_mock_error";
 
 pub(crate) fn upstream_error(
     py: Python<'_>,
@@ -136,6 +138,9 @@ pub(crate) fn route_failure(
             }
             if error.is_missing_credential() {
                 value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;
+            }
+            if let Some(mock) = error.mocked() {
+                value.setattr(MESSAGES_MOCK_ERROR, mock)?;
             }
             native
         }
