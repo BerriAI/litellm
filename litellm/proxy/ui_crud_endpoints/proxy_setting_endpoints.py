@@ -1170,7 +1170,7 @@ async def update_internal_user_settings(
     )
 
 
-async def _validate_default_access_groups_exist(access_group_ids: list[str]) -> None:
+async def _validate_default_access_groups_exist(access_group_ids: Sequence[str]) -> None:
     """Reject default access groups that cannot be attached.
 
     Teams are created from these settings long after they are saved, and /team/new does
