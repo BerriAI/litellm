@@ -35,7 +35,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `llm_translation/` - LLM endpoint and provider-translation behavior: passthrough, custom pricing, OCR, and the non-chat inference endpoints (`/v1/responses`, `/v1/messages`, `/embeddings`, `/v1/rerank`, `/v1/audio/speech`, `/v1/images/generations`), each against a deployment the test creates via `/model/new` and deletes on teardown
 - `access_control/` - the gateway's authorization and error-shape contract: per-key model allow-lists, route-group permissions (`allowed_routes`), and unknown-model validation
 - `embeddings/` - the `/embeddings` endpoint across providers
-- `batches/` - the `/batches` endpoint (placeholder until the first test lands)
+- `batches/` - the `/batches` endpoint. GovCloud batch coverage is explicitly skipped until its infrastructure is provisioned. Other missing credentials and provider errors remain failures
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
 - `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `ratelimit/` (rpm/tpm blocks, window reset, pacing headers on live traffic), `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window), and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials (API surface, not Playwright)
