@@ -55,7 +55,7 @@ from spend_e2e_client import (
 
 pytestmark = pytest.mark.e2e
 
-CHAT_MODEL: Final = "gemini-2.5-flash"
+CHAT_MODEL: Final = "gemini-3.8-flash"
 MESSAGES_MODEL: Final = "claude-haiku-4-5"
 RESPONSES_MODEL: Final = "openai-responses-codex"
 EMBED_MODEL: Final = "openai-text-embedding-3-small"
