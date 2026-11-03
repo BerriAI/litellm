@@ -2,11 +2,13 @@
 
 use std::sync::Arc;
 
+use litellm_secret_value::SecretValue;
 use litellm_secrets::{
     AccessMode, Error, FailurePolicy, KeyManagementSettings, OidcResolver, Secret, SecretManager,
-    SecretManagerState, SecretResolver, SecretValue, aws::AwsSecretsManagerV2,
+    SecretManagerState, SecretResolver, aws::AwsSecretsManagerV2,
     secret_manager_would_be_consulted,
 };
+
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 fn state(server: &MockServer, settings: KeyManagementSettings) -> SecretManagerState {

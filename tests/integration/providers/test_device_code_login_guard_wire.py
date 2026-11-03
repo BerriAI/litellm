@@ -746,10 +746,7 @@ def test_a_recent_device_code_request_does_not_hold_the_worker_for_the_rest_of_t
     assert scene.rig.peers.auth_connections() == ()
 
 
-_NOT_LIVE: Final = re.compile(r"saved to the database, but the model id\(s\) \['([0-9a-f-]+)'\] are not live")
-
-
-def test_model_created_without_a_token_is_saved_not_live_and_serves_once_the_token_is_mounted(scene: _Scene) -> None:
+def test_model_created_without_a_token_refuses_requests_and_serves_once_the_token_is_mounted(scene: _Scene) -> None:
     gateway: Final = scene.rig.owned.gateway
     name: Final = f"device-login-db-{uuid.uuid4().hex}"
     identity: Final = str(uuid.uuid4())
@@ -763,14 +760,18 @@ def test_model_created_without_a_token_is_saved_not_live_and_serves_once_the_tok
         },
     )
     try:
-        assert created.status_code == 500, created.text
-        not_live: Final = _NOT_LIVE.search(created.text)
-        assert not_live is not None and not_live.group(1) == identity, created.text
+        assert created.status_code == 200, created.text
+        assert created.json()["model_info"]["id"] == identity, created.text
         assert scene.rig.peers.auth_connections() == ()
-        scene.store_valid_token("chatgpt")
         call: Final = _Call(
             scene.rig.base_url(), scene.key, name, "responses", False, "httpx", uuid.uuid4().hex, SimpleQueue()
         )
+        refused: Final = _serve(call)
+        assert refused.status == 400, refused.text
+        assert dl.CHATGPT_REFUSAL in _error_message(refused.text), refused.text
+        assert scene.rig.peers.auth_connections() == ()
+        assert scene.rig.peers.api.drain() == ()
+        scene.store_valid_token("chatgpt")
         served: Final = eventually(lambda: _serve(call), lambda answer: answer.status == 200, seconds=90)
         assert set(rv.MARKER.findall(served.text)) == {call.marker}, served.text
         assert scene.rig.peers.auth_connections() == ()
