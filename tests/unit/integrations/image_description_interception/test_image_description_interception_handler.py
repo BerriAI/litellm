@@ -393,14 +393,18 @@ async def test_slow_remote_images_share_one_fetch_deadline_and_inline_images_sti
             await asyncio.sleep(0.05)
             yield b"\0"
 
+    contacted: Final[list[str]] = []  # mutable-ok: records each URL the slow server was asked for
+
     def serve(request: httpx.Request) -> httpx.Response:
+        contacted.append(str(request.url))
         return httpx.Response(200, headers={"content-type": "image/png"}, content=drip())
 
     monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.MockTransport(serve)))
     monkeypatch.setattr(litellm, "user_url_validation", False)
     describer: Final = _RecordingDescriber([Described("a cat")])
     logger: Final = ImageDescriptionInterceptionLogger(image_model="vision-describer", describer=describer, timeout=0.3)
-    remote: Final = [_image_turn("hi", f"https://img.example/{uuid.uuid4()}.png") for _ in range(3)]
+    remote_urls: Final = [f"https://img.example/{uuid.uuid4()}.png" for _ in range(3)]
+    remote: Final = [_image_turn("hi", url) for url in remote_urls]
     started: Final = asyncio.get_running_loop().time()
 
     result: Final = await asyncio.wait_for(
@@ -417,6 +421,8 @@ async def test_slow_remote_images_share_one_fetch_deadline_and_inline_images_sti
             _described_turn("and this", 4, "a cat"),
         ]
     )
+    # The first download spends the whole shared budget, so the later remote images are never fetched
+    assert contacted == [remote_urls[0]]
     assert describer.requests == [("vision-describer", IMAGE_URI)]
 
 def _child_payload_text(payload: Mapping[str, object]) -> str:
