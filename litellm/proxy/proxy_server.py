@@ -380,7 +380,6 @@ from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
     TRANSCRIPTION_STREAM_DONE_FRAME,
     GuardedTranscriptionReplay,
     guarded_transcription_events,
-    transcription_stream_requested,
 )
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
@@ -13889,12 +13888,12 @@ async def audio_transcriptions(
         callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
-            response=response,
+            response=response.response if isinstance(response, GuardedTranscriptionReplay) else response,
             request_headers=dict(request.headers),
         )
         response_headers: Final = {**custom_headers, **(callback_headers or {})}
 
-        if transcription_stream_requested(form_data.get("stream")) and hasattr(response, "__aiter__"):
+        if hasattr(response, "__aiter__"):
 
             async def transcription_event_stream(
                 stream: AsyncIterator[TranscriptionStreamEvent],

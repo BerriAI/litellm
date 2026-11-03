@@ -649,6 +649,67 @@ def test_streamed_transcription_applies_a_deployment_guardrail_only_in_its_strea
     assert _sse_events(response.text)[-1]["text"] == expected_text
 
 
+async def _form_without_stream_field(request: object) -> FormData:
+    return FormData(
+        [("file", UploadFile(filename="sample.wav", file=io.BytesIO(b"audio"))), ("model", "gpt-transcribe")]
+    )
+
+
+@pytest.mark.usefixtures("patched_transcription")
+@pytest.mark.parametrize("deployment_guardrails", (["transcript-redactor"], None))
+def test_a_deployment_that_streams_transcription_answers_sse_to_a_client_that_sent_no_stream_field(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_guardrails: list[str] | None,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_TranscriptRedactor()])
+    monkeypatch.setattr(proxy_server, "get_form_data", _form_without_stream_field)
+    respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(side_effect=_streams_when_asked)
+    deployment_params: Final = {
+        "model": "openai/gpt-transcribe",
+        "api_key": "sk-test",
+        "api_base": "https://transcribe-upstream.example/v1",
+        "stream": True,
+    }
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-transcribe",
+                    "litellm_params": (
+                        {**deployment_params, "guardrails": deployment_guardrails}
+                        if deployment_guardrails
+                        else deployment_params
+                    ),
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "route_request", route_request)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", b"audio", "audio/wav")},
+            data={"model": "gpt-transcribe"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert _sse_events(response.text)[-1]["text"] == ("[REDACTED]" if deployment_guardrails else "my pin is 1234")
+    header_hook_response: Final = proxy_server.proxy_logging_obj.post_call_response_headers_hook.await_args.kwargs[
+        "response"
+    ]
+    if deployment_guardrails:
+        assert isinstance(header_hook_response, TranscriptionResponse)
+        assert header_hook_response.text == "[REDACTED]"
+
+
 @pytest.mark.usefixtures("patched_transcription_stream")
 def test_cached_guarded_transcription_still_streams_to_a_stream_client(
     client: TestClient,
