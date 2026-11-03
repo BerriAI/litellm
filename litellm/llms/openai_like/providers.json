@@ -302,5 +302,16 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "mixroute": {
+    "base_url": "https://api.mixroute.ai/v1",
+    "api_key_env": "MIXROUTE_API_KEY",
+    "api_base_env": "MIXROUTE_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/embeddings"],
+    "model_supported_endpoints": {
+      "claude-opus-5-5": ["/v1/messages"],
+      "claude-sonnet-5-5": ["/v1/messages"],
+      "gpt-6.1-sol": ["/v1/responses"]
+    }
   }
 }

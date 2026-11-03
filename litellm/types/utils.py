@@ -4743,6 +4743,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
+    MIXROUTE = "mixroute"
     CORALBRICKS = "coralbricks"
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
