@@ -319,9 +319,16 @@ async def test_a_rate_limited_file_upload_is_resent_up_to_the_callers_max_retrie
     explicit_max_retries: Final = {} if max_retries is None else {"max_retries": max_retries}
 
     with pytest.raises(openai.RateLimitError):
-        await _create_file(sync_mode, _upload(custom_llm_provider, api_base, **explicit_max_retries))
+        await _create_file(
+            sync_mode,
+            _upload(custom_llm_provider, api_base, extra_headers={"x-request-tag": "kept"}, **explicit_max_retries),
+        )
 
     assert upload_route.call_count == expected_posts
+    assert [call.request.headers["x-stainless-retry-count"] for call in upload_route.calls] == [
+        str(retries_taken) for retries_taken in range(expected_posts)
+    ]
+    assert {call.request.headers["x-request-tag"] for call in upload_route.calls} == {"kept"}
 
 
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])

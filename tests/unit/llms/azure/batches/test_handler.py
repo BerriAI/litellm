@@ -47,6 +47,7 @@ CREATE_DATA = {
     "endpoint": "/v1/chat/completions",
     "input_file_id": "file-abc",
 }
+FIRST_TRY_HEADERS = {"x-stainless-retry-count": "0"}
 RETRIEVE_DATA = {"batch_id": "batch-123"}
 CANCEL_DATA = {"batch_id": "batch-123"}
 
@@ -127,7 +128,7 @@ def test_create_sync_forwards_auth_to_client_seam(handler):
     assert kw["litellm_params"] == {}
 
     # PAYLOAD: request data forwarded verbatim to the SDK as kwargs.
-    client.batches.create.assert_called_once_with(**CREATE_DATA)
+    client.batches.create.assert_called_once_with(**CREATE_DATA, extra_headers=FIRST_TRY_HEADERS)
     # sibling SDK seams untouched.
     client.batches.retrieve.assert_not_called()
     client.batches.cancel.assert_not_called()
@@ -196,7 +197,7 @@ async def test_create_async_returns_coroutine_and_awaits_async_client(handler):
         result = await coro
 
     assert get_client.call_args.kwargs["_is_async"] is True
-    client.batches.create.assert_awaited_once_with(**CREATE_DATA)
+    client.batches.create.assert_awaited_once_with(**CREATE_DATA, extra_headers=FIRST_TRY_HEADERS)
     assert isinstance(result, LiteLLMBatch)
     assert result.id == "batch-123"
 
@@ -224,7 +225,7 @@ async def test_acreate_batch_parses_response(handler):
         create_batch_data=CREATE_DATA, azure_client=client
     )
 
-    client.batches.create.assert_awaited_once_with(**CREATE_DATA)
+    client.batches.create.assert_awaited_once_with(**CREATE_DATA, extra_headers=FIRST_TRY_HEADERS)
     assert isinstance(result, LiteLLMBatch)
     assert result.status == "validating"
 

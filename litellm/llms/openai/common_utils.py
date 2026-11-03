@@ -40,6 +40,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
     http2_enabled,
 )
+from litellm.types.llms.openai import CreateBatchRequest, CreateFileRequest
 
 
 def _get_client_init_params(cls: type) -> tuple[str, ...]:
@@ -54,6 +55,8 @@ _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(Azur
 _OPENAI_API_HOST: Final[str] = "api.openai.com"
 
 _CreatedT = TypeVar("_CreatedT")
+_CreateRequestT = TypeVar("_CreateRequestT", CreateFileRequest, CreateBatchRequest)
+_RETRY_COUNT_HEADER: Final = "x-stainless-retry-count"
 _CAUSES_THAT_CANNOT_HAVE_CREATED_ANYTHING: Final = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -106,10 +109,18 @@ def _answer_says_it_may_exist(response: httpx.Response) -> bool:
     return response.status_code == _GATEWAY_TIMEOUT
 
 
+def _error_it_wraps(error: BaseException) -> BaseException | None:
+    if error.__cause__ is not None:
+        return error.__cause__
+    if isinstance(error, litellm.Timeout) and isinstance(error.__context__, httpx.TimeoutException):
+        return error.__context__
+    return None
+
+
 def _cause_chain(error: BaseException | None, links_left: int = _LONGEST_CAUSE_CHAIN) -> tuple[BaseException, ...]:
     if error is None or links_left == 0:
         return ()
-    return (error, *_cause_chain(error.__cause__, links_left - 1))
+    return (error, *_cause_chain(_error_it_wraps(error), links_left - 1))
 
 
 def create_may_already_exist(error: BaseException) -> bool:
@@ -138,30 +149,40 @@ def _seconds_before_resend(error: openai.APIError, max_retries: int, retries_lef
     )
 
 
-def send_create_without_duplicates(client: OpenAI, create: Callable[[OpenAI], _CreatedT]) -> _CreatedT:
+def _numbered(request: _CreateRequestT, retries_taken: int) -> _CreateRequestT:
+    numbered: Final = request.copy()
+    numbered["extra_headers"] = {_RETRY_COUNT_HEADER: str(retries_taken), **(request.get("extra_headers") or {})}
+    return numbered
+
+
+def send_create_without_duplicates(
+    client: OpenAI, request: _CreateRequestT, create: Callable[[OpenAI, _CreateRequestT], _CreatedT]
+) -> _CreatedT:
     single_try_client: Final = client.with_options(max_retries=0)
-    for retries_left in range(client.max_retries, 0, -1):
+    for retries_taken in range(client.max_retries):
         try:
-            return create(single_try_client)
+            return create(single_try_client, _numbered(request, retries_taken))
         except openai.APIError as error:
             if not _resend_cannot_duplicate(error):
                 raise
-            time.sleep(_seconds_before_resend(error, client.max_retries, retries_left))
-    return create(single_try_client)
+            time.sleep(_seconds_before_resend(error, client.max_retries, client.max_retries - retries_taken))
+    return create(single_try_client, _numbered(request, client.max_retries))
 
 
 async def asend_create_without_duplicates(
-    client: AsyncOpenAI, create: Callable[[AsyncOpenAI], Awaitable[_CreatedT]]
+    client: AsyncOpenAI,
+    request: _CreateRequestT,
+    create: Callable[[AsyncOpenAI, _CreateRequestT], Awaitable[_CreatedT]],
 ) -> _CreatedT:
     single_try_client: Final = client.with_options(max_retries=0)
-    for retries_left in range(client.max_retries, 0, -1):
+    for retries_taken in range(client.max_retries):
         try:
-            return await create(single_try_client)
+            return await create(single_try_client, _numbered(request, retries_taken))
         except openai.APIError as error:
             if not _resend_cannot_duplicate(error):
                 raise
-            await asyncio.sleep(_seconds_before_resend(error, client.max_retries, retries_left))
-    return await create(single_try_client)
+            await asyncio.sleep(_seconds_before_resend(error, client.max_retries, client.max_retries - retries_taken))
+    return await create(single_try_client, _numbered(request, client.max_retries))
 
 
 class _ModelDumpable(Protocol):

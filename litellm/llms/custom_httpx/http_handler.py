@@ -630,7 +630,7 @@ def _raise_timeout(error: httpx.TimeoutException, started_at: float) -> NoReturn
         message=f"{label} timed out. Timeout passed={seconds}, time taken={time_taken} seconds",
         model="default-model-name",
         llm_provider="litellm-httpx-handler",
-    ) from error
+    )
 
 
 class HTTPResponseLimitError(ValueError):

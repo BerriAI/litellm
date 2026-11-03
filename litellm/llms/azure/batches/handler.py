@@ -38,7 +38,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         azure_client: AsyncAzureOpenAI | AsyncOpenAI,
     ) -> LiteLLMBatch:
         response: Final = await asend_create_without_duplicates(
-            azure_client, lambda client: client.batches.create(**create_batch_data)
+            azure_client, create_batch_data, lambda client, request: client.batches.create(**request)
         )
         return LiteLLMBatch.model_validate(response.model_dump())
 
@@ -74,7 +74,9 @@ class AzureBatchesAPI(BaseAzureLLM):
                 )
             return self.acreate_batch(create_batch_data=create_batch_data, azure_client=azure_client)
         response: Final = send_create_without_duplicates(
-            cast(AzureOpenAI | OpenAI, azure_client), lambda client: client.batches.create(**create_batch_data)
+            cast(AzureOpenAI | OpenAI, azure_client),
+            create_batch_data,
+            lambda client, request: client.batches.create(**request),
         )
         return LiteLLMBatch.model_validate(response.model_dump())
 

@@ -1859,7 +1859,7 @@ class OpenAIFilesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> OpenAIFileObject:
         response: Final = await asend_create_without_duplicates(
-            openai_client, lambda client: client.files.create(**create_file_data)
+            openai_client, create_file_data, lambda client, request: client.files.create(**request)
         )
         return OpenAIFileObject.model_validate(response.model_dump())
 
@@ -1897,7 +1897,7 @@ class OpenAIFilesAPI(BaseLLM):
                 )
             return self.acreate_file(create_file_data=create_file_data, openai_client=openai_client)
         response: Final = send_create_without_duplicates(
-            cast(OpenAI, openai_client), lambda client: client.files.create(**create_file_data)
+            cast(OpenAI, openai_client), create_file_data, lambda client, request: client.files.create(**request)
         )
         return OpenAIFileObject.model_validate(response.model_dump())
 
@@ -2234,7 +2234,7 @@ class OpenAIBatchesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
         response: Final = await asend_create_without_duplicates(
-            openai_client, lambda client: client.batches.create(**create_batch_data)
+            openai_client, create_batch_data, lambda client, request: client.batches.create(**request)
         )
         return LiteLLMBatch.model_validate(response.model_dump())
 
@@ -2272,7 +2272,7 @@ class OpenAIBatchesAPI(BaseLLM):
                 )
             return self.acreate_batch(create_batch_data=create_batch_data, openai_client=openai_client)
         response: Final = send_create_without_duplicates(
-            cast(OpenAI, openai_client), lambda client: client.batches.create(**create_batch_data)
+            cast(OpenAI, openai_client), create_batch_data, lambda client, request: client.batches.create(**request)
         )
 
         return LiteLLMBatch.model_validate(response.model_dump())

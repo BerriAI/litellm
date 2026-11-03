@@ -47,9 +47,10 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         openai_client: AsyncAzureOpenAI | AsyncOpenAI,
     ) -> OpenAIFileObject:
         verbose_logger.debug("create_file_data=%s", create_file_data)
-        prepared_create_file_data: Final = self._prepare_create_file_data(create_file_data)
         response: Final = await asend_create_without_duplicates(
-            openai_client, lambda client: client.files.create(**prepared_create_file_data)
+            openai_client,
+            create_file_data,
+            lambda client, request: client.files.create(**self._prepare_create_file_data(request)),
         )
         verbose_logger.debug("create_file_response=%s", response)
         return OpenAIFileObject.model_validate(response.model_dump())
@@ -85,9 +86,10 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
             return self.acreate_file(create_file_data=create_file_data, openai_client=openai_client)
-        prepared_create_file_data: Final = self._prepare_create_file_data(create_file_data)
         response: Final = send_create_without_duplicates(
-            cast(AzureOpenAI | OpenAI, openai_client), lambda client: client.files.create(**prepared_create_file_data)
+            cast(AzureOpenAI | OpenAI, openai_client),
+            create_file_data,
+            lambda client, request: client.files.create(**self._prepare_create_file_data(request)),
         )
         return OpenAIFileObject.model_validate(response.model_dump())
 

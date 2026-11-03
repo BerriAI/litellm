@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, TypeAdapter
@@ -1781,6 +1782,34 @@ async def test_async_streaming_read_timeout_after_first_chunk_surfaces_timeout(
     assert excinfo.value.is_pre_first_chunk is False
     assert isinstance(excinfo.value.original_exception, litellm.Timeout)
     assert excinfo.value.original_exception.status_code == 408
+
+
+def _stall_before_the_answer(request: httpx.Request) -> NoReturn:
+    raise httpx.ReadTimeout("no answer in time", request=request)
+
+
+async def _read_a_gemini_stream(api_base: str) -> None:
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        api_base=api_base,
+        api_key="test-key",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+    )
+    async for _ in response:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_a_direct_gemini_stream_that_times_out_before_its_first_chunk_raises_timeout(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = "https://gemini-stream-open-stall.test"
+    respx_mock.post(url__startswith=api_base).mock(side_effect=_stall_before_the_answer)
+
+    with pytest.raises(litellm.Timeout):
+        await _read_a_gemini_stream(api_base)
 
 
 _AZURE_DEPLOYMENT_API_BASE: Final = "https://mid-stream-debug.openai.azure.com"

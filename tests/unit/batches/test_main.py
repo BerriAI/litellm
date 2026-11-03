@@ -1328,6 +1328,13 @@ async def test_a_rate_limited_batch_create_is_resent_up_to_the_callers_max_retri
     explicit_max_retries: Final = {} if max_retries is None else {"max_retries": max_retries}
 
     with pytest.raises(openai.RateLimitError):
-        await _create_batch(sync_mode, _batch(custom_llm_provider, api_base, **explicit_max_retries))
+        await _create_batch(
+            sync_mode,
+            _batch(custom_llm_provider, api_base, extra_headers={"x-request-tag": "kept"}, **explicit_max_retries),
+        )
 
     assert create_route.call_count == expected_posts
+    assert [call.request.headers["x-stainless-retry-count"] for call in create_route.calls] == [
+        str(retries_taken) for retries_taken in range(expected_posts)
+    ]
+    assert {call.request.headers["x-request-tag"] for call in create_route.calls} == {"kept"}
