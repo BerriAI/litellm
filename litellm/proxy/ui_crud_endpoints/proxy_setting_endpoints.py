@@ -1172,12 +1172,6 @@ async def update_internal_user_settings(
 
 
 async def _validate_default_access_groups_exist(access_group_ids: Sequence[str]) -> None:
-    """Reject default access groups that cannot be attached.
-
-    Teams are created from these settings long after they are saved, and /team/new does
-    not check that an access group exists, so an unknown id would silently attach nothing
-    to every future team instead of failing here, where the admin can still fix it.
-    """
     if not access_group_ids:
         return
 
