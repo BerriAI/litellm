@@ -8,6 +8,7 @@ from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
+import openai
 import pytest
 from fastapi import HTTPException
 from openai.types.chat import ChatCompletionChunk
@@ -596,6 +597,15 @@ def _guardrail_backend_failure() -> Exception:
     return MaskedHTTPStatusError(rejected)
 
 
+def _backend_sdk_rejected_proxy_key() -> Exception:
+    request: Final = httpx.Request("POST", "https://api.openai.com/v1/moderations")
+    return openai.AuthenticationError(
+        "Incorrect API key provided",
+        response=httpx.Response(401, request=request),
+        body={"code": "invalid_api_key", "type": "invalid_request_error"},
+    )
+
+
 class TestIsClientCausedFailure:
     @pytest.mark.parametrize(
         "exception",
@@ -648,6 +658,7 @@ class TestIsClientCausedFailure:
             pytest.param(_provider_error(500), id="provider_500"),
             pytest.param(HTTPException(status_code=500), id="proxy_500"),
             pytest.param(_guardrail_backend_failure(), id="guardrail_backend_rejected_proxy_key"),
+            pytest.param(_backend_sdk_rejected_proxy_key(), id="backend_sdk_rejected_proxy_key_with_an_error_code"),
             pytest.param(
                 GuardrailRaisedException(guardrail_name="mod-broken", message="backend unreachable"),
                 id="guardrail_without_verdict",

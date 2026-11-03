@@ -290,7 +290,8 @@ def is_client_caused_failure(exception: BaseException | None) -> bool:
         return False
     if is_expected_client_error(exception):
         return True
-    return _is_provider_originated(exception) and _http_status(exception) in _CLIENT_REQUEST_STATUSES
+    provider_status: Final[object] = getattr(exception, "status_code", None)
+    return _is_provider_originated(exception) and provider_status in _CLIENT_REQUEST_STATUSES
 
 
 _MAX_EXCEPTION_CHAIN_LINKS: Final = 8
@@ -312,12 +313,12 @@ def _raised_from(exception: BaseException) -> BaseException | None:
 
 
 def _http_status(exception: BaseException) -> int | None:
-    status_code: Final[object] = getattr(exception, "status_code", None)
-    status: Final[object] = status_code if status_code is not None else getattr(exception, "code", None)
-    if status is None or isinstance(status, bool):
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    if status_code is None or isinstance(status_code, bool):
         return None
     try:
-        return int(str(status))
+        return int(str(status_code))
     except ValueError:
         return None
 
