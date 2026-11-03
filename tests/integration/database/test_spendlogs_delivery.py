@@ -560,3 +560,41 @@ async def test_batch_takeover_preserves_another_request_receipt(delivery_databas
     assert not (await repository.take_over_batch(_with_payload(replacement))).charged
     assert delivery_database.execute('SELECT accounting_payload FROM "LiteLLM_SpendLogDelivery"').fetchone() == before
     assert delivery_database.execute('SELECT spend FROM "LiteLLM_SpendLogs"').fetchone() == (0.0,)
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+@pytest.mark.asyncio
+async def test_batch_takeover_respects_current_request_log_retention(
+    delivery_database, delivery_client, monkeypatch, disabled
+):
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+
+    initial = {
+        **_row("retained-batch"), "call_type": "aretrieve_batch", "status": "success", "spend": 0.0,
+        "metadata": '{"status":"success","original":"retained"}',
+    }
+    _insert(delivery_database, (initial,))
+    replacement = {
+        **initial, "spend": 0.5, "metadata": '{"status":"success","private":"new request detail"}',
+        "accounting_payload": {
+            "request_id": "retained-batch", "call_type": "aretrieve_batch", "status": "success", "spend": 0.5,
+            "metadata": {"accounting_savings": {"compression": 0.2}},
+        },
+    }
+    monkeypatch.setattr(proxy_server, "general_settings", {
+        "spend_logs_metadata_fields": {"include": ["status"]},
+    })
+    client = SimpleNamespace(db=delivery_client, writer_db=delivery_client)
+    assert await DBSpendUpdateWriter()._claim_batch_cost_spend_log(
+        payload=replacement, prisma_client=client, disable_spend_logs=disabled,
+    )
+    expected_metadata = {"status": "success", "original": "retained"} if disabled else {"status": "success"}
+    assert delivery_database.execute('SELECT spend, metadata FROM "LiteLLM_SpendLogs"').fetchone() == (
+        0.5, expected_metadata,
+    )
+    assert delivery_database.execute(
+        'SELECT accounting_payload FROM "LiteLLM_SpendLogDelivery"'
+    ).fetchone() == (replacement["accounting_payload"],)

@@ -169,17 +169,18 @@ _BATCH_COST_CLAIM_FIELDS: Final = frozenset(
 
 
 def _batch_cost_row_to_write(payload: SpendLogsPayload, disable_spend_logs: bool) -> Mapping[str, object]:
-    """Reduce a batch's cost row to what tells the retrieves apart when logging is off.
-
-    A proxy run with spend logs disabled still needs one row per batch to charge it once,
-    so the row is written either way, but it carries no request of its own: no metadata,
-    no requester IP, no key, model, or token counts (LIT-7048).
-    """
+    """Build batch accounting with only the permitted request-log fields."""
     if disable_spend_logs is False:
         return payload
     if "accounting_path" in payload and payload["accounting_path"] == "ledger":
-        disabled: Final[SpendLogsPayload] = {**payload, "accounting_log_disabled": True}
-        return disabled
+        return {
+            **{
+                field: value
+                for field, value in payload.items()
+                if field in _BATCH_COST_CLAIM_FIELDS or field == "accounting_payload"
+            },
+            "accounting_log_disabled": True,
+        }
     return MappingProxyType({field: value for field, value in payload.items() if field in _BATCH_COST_CLAIM_FIELDS})
 
 
@@ -892,7 +893,11 @@ class DBSpendUpdateWriter:
                 if prepare_ledger is not None:
                     await prepare_ledger()
                 return await self._take_over_uncharged_batch_cost_row(
-                    payload, prisma_client, _batch_cost_row_to_write(payload, disable_spend_logs)
+                    payload,
+                    prisma_client,
+                    spend_log_row_with_retained_metadata(
+                        _batch_cost_row_to_write(payload, disable_spend_logs), configured_spend_logs_metadata_fields()
+                    ),
                 )
             if "accounting_path" not in payload or payload["accounting_path"] != "ledger":
                 legacy_claim: Final = spend_log_row_with_retained_metadata(
