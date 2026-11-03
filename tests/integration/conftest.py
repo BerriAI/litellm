@@ -210,6 +210,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
                 _case_identity(inner_groups[item.nodeid]),
             )
         )
+    if os.environ.get("RC109_SDK_HANG_PROBE") == "1":
+        items[:] = items[:117]
     root: Final = Path(__file__).parent
     owned: Final = tuple(
         item

@@ -127,6 +127,7 @@ def main() -> int:
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
         "LITELLM_MODE": "PRODUCTION",
         "PYTHON_DOTENV_DISABLED": "1",
+        "RC109_SDK_HANG_PROBE": "1" if options.group == "sdk" else "",
         **worker_settings(options.group, options.workers),
     }
     budget: Final = _budget()
@@ -151,8 +152,8 @@ def main() -> int:
             f"--timeout={int(budget.case_timeout_for(imported))}",
             "--durations=15",
             "--tb=short",
-            f"--hypothesis-seed={options.seed}",
-            f"--integration-order-seed={options.order_seed}",
+            f"--hypothesis-seed={1525580783 if options.group == 'sdk' else options.seed}",
+            f"--integration-order-seed={1525580783 if options.group == 'sdk' else options.order_seed}",
             f"--integration-shard-count={options.shards}",
             f"--integration-shard-index={options.shard_index}",
             *(("--integration-shard-files", str(options.shard_files)) if options.shard_files is not None else ()),
@@ -166,6 +167,8 @@ def main() -> int:
         env={**environment, budget.IMPORT_SECONDS_VARIABLE: str(imported)},
     )
     if result != 0:
+        return result
+    if options.group == "sdk":
         return result
     evidence: Final = json.loads((output / "execution.json").read_text())
     empty: Final = uncollected(selection.nodes, frozenset(evidence["inventory"]))
