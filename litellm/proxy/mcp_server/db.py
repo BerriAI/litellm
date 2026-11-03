@@ -1286,6 +1286,27 @@ def _validate_mcp_protocol_write(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_TOOL_METADATA_FIELDS: Final = ("tool_name_to_description", "tool_name_to_display_name")
+
+
+def _tool_metadata_for_new_allowlist(
+    current: Mapping[str, object], patch: Mapping[str, object]
+) -> Mapping[str, object]:
+    allowed: Final = patch.get("allowed_tools")
+    if not isinstance(allowed, Sequence) or isinstance(allowed, str):
+        return {}
+    kept: Final = frozenset(TypeAdapter(tuple[str, ...]).validate_python(allowed))
+    return {
+        field: {
+            tool: value
+            for tool, value in TypeAdapter(dict[str, object]).validate_python(stored).items()
+            if tool in kept
+        }
+        for field in _TOOL_METADATA_FIELDS
+        if field not in patch and isinstance(stored := current.get(field), Mapping)
+    }
+
+
 def _validate_provider_registration_update(
     stored: "prisma_db_models.LiteLLM_MCPServerTable",
     data: UpdateMCPServerRequest,
@@ -1294,7 +1315,8 @@ def _validate_provider_registration_update(
     try:
         patch: Final = data.provider_registration_patch(fields_set)
         registration: Final = LiteLLM_MCPServerTable.model_validate(stored.model_dump())
-        merged: Final = {**registration.model_dump(include=set(NewMCPServerRequest.model_fields)), **patch}
+        current: Final = registration.model_dump(include=set(NewMCPServerRequest.model_fields))
+        merged: Final = {**current, **_tool_metadata_for_new_allowlist(current, patch), **patch}
         return NewMCPServerRequest.model_validate(merged)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

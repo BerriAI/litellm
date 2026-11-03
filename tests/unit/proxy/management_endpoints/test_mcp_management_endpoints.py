@@ -218,6 +218,34 @@ async def test_mcp_publication_list_and_detail_derive_current_status(
     assert record.mcp_info == original_metadata
 
 
+def _provider_row(server_id: str, **fields: object) -> LiteLLM_MCPServerTable:
+    return LiteLLM_MCPServerTable(
+        server_id=server_id, execution_mode="provider", transport=None,
+        url=f"https://{server_id}.example/mcp", allowed_tools=["search"], **fields,
+    )
+
+
+@pytest.mark.parametrize(
+    "identifier,expected",
+    (
+        ("native-id", "native-id"),
+        ("docs", "native-id"),
+        ("docs_alias", "native-id"),
+        ("gateway-id", None),
+        ("unknown", None),
+    ),
+)
+def test_provider_detail_lookup_prefers_exact_ids_over_other_rows_aliases(identifier: str, expected: str | None) -> None:
+    rows: Final = (
+        _provider_row("shadow-id", alias="native-id"),
+        _provider_row("gateway-shadow", alias="gateway-id"),
+        _provider_row("native-id", server_name="docs", alias="docs_alias"),
+        LiteLLM_MCPServerTable(server_id="gateway-id", transport=MCPTransport.http, url="https://gw.example/mcp"),
+    )
+    match: Final = mgmt_endpoints._provider_registration_for_identifier(rows, identifier)
+    assert (match.server_id if match is not None else None) == expected
+
+
 @pytest.mark.parametrize("approval_status", ("pending_review", "rejected", "draft", "active"))
 @pytest.mark.parametrize("strict", (False, True))
 def test_mcp_publication_projection_excludes_unregistered_lifecycle_records(

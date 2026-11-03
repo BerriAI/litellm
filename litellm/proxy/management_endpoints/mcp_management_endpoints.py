@@ -1210,6 +1210,23 @@ if MCP_AVAILABLE:
     def _mcp_server_display_order(server: LiteLLM_MCPServerTable) -> tuple[str, str]:
         return ((server.server_name or server.alias or server.server_id).lower(), server.server_id)
 
+    def _provider_registration_for_identifier(
+        servers: Sequence[LiteLLM_MCPServerTable], identifier: str
+    ) -> LiteLLM_MCPServerTable | None:
+        """An exact server_id wins over every name or alias, so another row's alias cannot shadow it."""
+        exact: Final = next((server for server in servers if server.server_id == identifier), None)
+        if exact is not None:
+            return exact if exact.execution_mode == MCPExecutionMode.provider else None
+        return next(
+            (
+                server
+                for server in servers
+                if server.execution_mode == MCPExecutionMode.provider
+                and identifier in (server.server_name, server.alias)
+            ),
+            None,
+        )
+
     def _get_user_mcp_management_mode() -> UserMCPManagementMode:
         from litellm.proxy.proxy_server import (
             general_settings as proxy_general_settings,
@@ -1979,25 +1996,16 @@ if MCP_AVAILABLE:
         is_admin_view: Final = user_api_key_has_admin_view(user_api_key_dict)
         is_restricted_virtual_key: Final = _is_restricted_virtual_key_request(user_api_key_dict)
         snapshot: Final = global_mcp_server_manager.catalog.current()
-        config_match: Final = (
-            next(
-                (
-                    server
-                    for server in snapshot.management_servers.values()
-                    if server.is_config
-                    and server.execution_mode == MCPExecutionMode.provider
-                    and server_id in (server.server_id, server.server_name, server.alias)
-                ),
-                None,
-            )
+        provider_match: Final = (
+            _provider_registration_for_identifier(tuple(snapshot.management_servers.values()), server_id)
             if snapshot is not None
             else None
         )
         resolved: Final = (
-            ResolvedMCPServer(table=config_match, runtime=None, source="registry")
-            if config_match is not None
+            ResolvedMCPServer(table=provider_match, runtime=None, source="registry")
+            if provider_match is not None and provider_match.is_config
             else await resolve_mcp_server(
-                server_id,
+                provider_match.server_id if provider_match is not None else server_id,
                 manager=global_mcp_server_manager,
                 db_lookup=lambda sid: get_mcp_server(
                     get_prisma_client_or_throw("Database not connected. Connect a database to your proxy"),

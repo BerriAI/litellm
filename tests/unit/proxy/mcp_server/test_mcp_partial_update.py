@@ -1405,6 +1405,32 @@ def test_provider_partial_update_preserves_tools_and_empty_list_stays_enforced()
     assert cleared.mcp_info["tool_allowlist_enforced"] is True
 
 
+@pytest.mark.parametrize(
+    "allowed_tools,descriptions,display_names",
+    [
+        ([], {}, {}),
+        (["fetch"], {"fetch": "Fetch a page"}, {"fetch": "Fetch"}),
+    ],
+)
+def test_provider_allowlist_change_drops_metadata_for_removed_tools(
+    allowed_tools: list[str], descriptions: dict[str, str], display_names: dict[str, str]
+) -> None:
+    from litellm.proxy.mcp_server.db import _validate_provider_registration_update
+
+    stored = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="provider", execution_mode="provider", url="https://docs.example/mcp", transport=None,
+        allowed_tools=["search", "fetch"], mcp_info={"tool_allowlist_enforced": True},
+        tool_name_to_description={"search": "Search docs", "fetch": "Fetch a page"},
+        tool_name_to_display_name={"search": "Search", "fetch": "Fetch"},
+    )
+    updated = _validate_provider_registration_update(
+        stored, UpdateMCPServerRequest(server_id="provider", allowed_tools=allowed_tools)
+    )
+    assert (updated.allowed_tools, updated.tool_name_to_description, updated.tool_name_to_display_name) == (
+        allowed_tools, descriptions, display_names,
+    )
+
+
 @pytest.mark.parametrize("field", ["description", "instructions", "source_url", "tool_name_to_description"])
 def test_provider_update_clears_explicit_null_metadata_without_writing_omitted_fields(field: str) -> None:
     from litellm.proxy.mcp_server.db import _prepare_provider_registration_update
