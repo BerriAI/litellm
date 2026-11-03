@@ -5,7 +5,7 @@
 replicaCount: 1
 
 rustGateway:
-  # null inherits the image default; true or false sets LITELLM_RUST_GATEWAY
+  # null inherits the image default; true or false sets LITELLM_RUST
   enabled:
 liteadmin:
   enabled: false

@@ -311,8 +311,8 @@ and the same spend transaction buffer.
 - name: LITELLM_LOG
   value: {{ .Values.logLevel | quote }}
 {{- end }}
-{{- if and (not (kindIs "invalid" .Values.rustGateway.enabled)) (not (hasKey (default dict .Values.envVars) "LITELLM_RUST_GATEWAY")) }}
-- name: LITELLM_RUST_GATEWAY
+{{- if and (not (kindIs "invalid" .Values.rustGateway.enabled)) (not (hasKey (default dict .Values.envVars) "LITELLM_RUST")) }}
+- name: LITELLM_RUST
   value: {{ .Values.rustGateway.enabled | toString | quote }}
 {{- end }}
 {{- if .Values.envVars }}

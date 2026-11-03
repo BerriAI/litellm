@@ -11,7 +11,7 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_RUST_GATEWAY
+            name: LITELLM_RUST
           any: true
   - it: turns forwarding off explicitly
     template: gateway/deployment.yaml
@@ -21,7 +21,7 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_RUST_GATEWAY
+            name: LITELLM_RUST
             value: "false"
   - it: enables forwarding without changing command or probes
     template: gateway/deployment.yaml
@@ -31,7 +31,7 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_RUST_GATEWAY
+            name: LITELLM_RUST
             value: "true"
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.httpGet.port
@@ -41,16 +41,16 @@ tests:
     set:
       gateway.rustGateway.enabled: true
       gateway.extraEnv:
-        - name: LITELLM_RUST_GATEWAY
+        - name: LITELLM_RUST
           value: "false"
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_RUST_GATEWAY
+            name: LITELLM_RUST
             value: "false"
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_RUST_GATEWAY
+            name: LITELLM_RUST
             value: "true"
