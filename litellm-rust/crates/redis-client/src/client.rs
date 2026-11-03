@@ -4,17 +4,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_util::stream::BoxStream;
 use litellm_circuit_breaker::{Admission, Breaker, Failure, State};
 use redis::{Cmd, FromRedisValue, RedisError, ToRedisArgs, ToSingleRedisArg, Value};
 
 use crate::{
     Amount, CallEvent, ConnectError, Error, Expiry, FailureKind, Namespace, Operation, Outcome,
     Pipeline, RedisBatch, RedisConfig, RedisEvents, Script, commands, connection::Connection,
+    pubsub::Subscriber,
 };
 
 #[derive(Clone)]
 pub struct RedisClient {
     pub(crate) connection: Connection,
+    subscriber: Subscriber,
     namespace: Namespace,
     breaker: Option<Breaker>,
     events: Option<Arc<dyn RedisEvents>>,
@@ -31,8 +34,15 @@ pub enum Ttl {
 
 impl RedisClient {
     pub fn new(config: RedisConfig) -> Result<Self, ConnectError> {
+        let connection = Connection::new(&config.target, &config.credentials, config.timeouts)?;
         Ok(Self {
-            connection: Connection::new(&config.target, &config.credentials, config.timeouts)?,
+            subscriber: Subscriber::new(
+                &config.target,
+                &config.credentials,
+                config.timeouts,
+                &connection,
+            )?,
+            connection,
             namespace: config.namespace,
             breaker: config.breaker,
             events: config.events,
@@ -192,6 +202,18 @@ impl RedisClient {
                 .await
         })
         .await
+    }
+
+    /// The channel is sent as given, without the namespace, like redis-py's `publish`.
+    pub async fn publish(&self, channel: &str, payload: &[u8]) -> Result<(), Error> {
+        self.query("PUBLISH", &commands::publish(channel, payload))
+            .await
+    }
+
+    /// Messages published on `channel`, on a connection of its own. After the connection is lost
+    /// it reconnects and resubscribes, and messages published meanwhile are not delivered.
+    pub fn subscribe(&self, channel: &str) -> BoxStream<'static, Vec<u8>> {
+        self.subscriber.clone().messages(channel.to_owned())
     }
 
     pub fn pipeline(&self) -> Pipeline {

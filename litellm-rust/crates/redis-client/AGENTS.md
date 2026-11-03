@@ -39,6 +39,14 @@
 - Pipeline ops take one key each. A multi-key op would span slots inside one group. An op can send more than one command for that key (`INCRBYFLOAT` then `EXPIRE`), and settles from the first reply, failing if any of its replies failed
 - Command builders live in `commands.rs` and are shared by `RedisClient` and `Pipeline`, so a command is written once
 
+## Pub/sub
+- Classic `PUBLISH` / `SUBSCRIBE`, never sharded, since redis-py publishes and subscribes through one plain client and cluster broadcasts classic messages to every node. Payloads are raw bytes, and the codec belongs to the store that owns the channel
+- Channel names never get the namespace. Python builds `{namespace}:{channel}` itself, so the store does too
+- `publish` is a command like any other, guarded by the breaker and reported to events
+- `subscribe` returns a `Stream` that opens its own RESP2 `PubSub` connection when first polled, like redis-py's `PubSub`, to the endpoint, the first reachable cluster node, or the master Sentinel names at that moment. It never touches the breaker or events, like Python's subscriber, which reads off its own connection
+- After a lost connection or a failed subscribe it waits and resubscribes, 5s doubling to 60s and reset by a successful subscribe, like `AuthCacheInvalidationSubscriber._run`. Messages published while it is down are lost. The connection has no idle ping, so a socket that dies silently is only noticed by TCP
+- redis-rs's `PubSub` takes no credentials provider, so a provider is asked for its current credentials once when the subscription connects, which is when redis-py's pubsub connection asks it. The connect is bounded by the connect timeout
+
 ## Batches
 - `RedisBatch` is litellm's `RedisBatch` (`litellm/caching/redis_batch.py`). It keeps each declared op as data and, on a standalone or Sentinel Redis, sends them later as one `Pipeline`, so it inherits every pipeline rule above. On a cluster it never pipelines and runs each op on its own, concurrently, the way `_settle_alone` calls the `RedisCache` method behind it. An increment there keeps a TTL the key already has, as `async_increment` does, where the pipelined one refreshes it like `_Increment`
 - `mget` is one `MGET` of the keys in order with repeats read once, like `_MGet`. Use it instead of one `get` per key whenever Python reads several keys in one call It knows nothing about requests. The host that owns a request (Axum handler, pyo3 adapter) builds one and passes it down as a value, never through a task-local
