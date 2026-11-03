@@ -17,7 +17,7 @@ _CHAT_LAYOUT: Final[dict[str, object]] = {
         "mode": "auto",
         "tools": [
             {"type": "function", "function": {"name": "get_time"}},
-            {"type": "custom", "custom": {"name": "apply_patch"}},
+            {"type": "custom", "custom": {"name": "apply_patch", "x-vendor": 1}, "x-trace": "a"},
             {"type": "mcp", "server_label": "docs", "server_url": "https://docs.example"},
             {"type": "function", "name": "already_flat"},
         ],
@@ -37,7 +37,7 @@ def test_responses_layout_lifts_mode_and_tools_and_flattens_names_in_order():
         "mode": "auto",
         "tools": [
             {"type": "function", "name": "get_time"},
-            {"type": "custom", "name": "apply_patch"},
+            {"type": "custom", "name": "apply_patch", "x-vendor": 1, "x-trace": "a"},
             {"type": "mcp", "server_label": "docs", "server_url": "https://docs.example"},
             {"type": "function", "name": "already_flat"},
         ],
@@ -54,9 +54,17 @@ def test_responses_layout_leaves_the_caller_dict_untouched():
 
 @pytest.mark.parametrize(
     "tool",
-    [{"type": "function"}, {"type": "function", "function": {}}, {"type": "custom", "custom": {"name": ""}}],
+    [
+        {"type": "function"},
+        {"type": "function", "name": ""},
+        {"type": "function", "function": {}},
+        {"type": "function", "function": "get_time"},
+        {"type": "custom", "custom": {"name": ""}},
+        {"type": "function", "name": "get_time", "function": {"name": "get_weather"}},
+        {"type": "function", "function": {"name": "get_time", "type": "custom"}},
+    ],
 )
-def test_responses_layout_refuses_to_rewrite_an_entry_without_a_name(tool: dict[str, object]):
+def test_responses_layout_refuses_to_rewrite_a_malformed_or_conflicting_entry(tool: dict[str, object]):
     tool_choice: Final[dict[str, object]] = {
         "type": "allowed_tools",
         "allowed_tools": {"mode": "required", "tools": [tool]},

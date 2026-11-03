@@ -30,13 +30,7 @@ class ChatAllowedToolsToolChoice(BaseModel):
 _CHAT_ALLOWED_TOOLS_TOOL_CHOICE: Final = TypeAdapter(ChatAllowedToolsToolChoice)
 
 
-class _NamedTool(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    name: str = Field(min_length=1)
-
-
-_NAMED_TOOL: Final = TypeAdapter(_NamedTool)
+_SELECTOR: Final = TypeAdapter(dict[str, object])
 
 
 class _ToolChoiceType(BaseModel):
@@ -83,22 +77,30 @@ def parse_chat_allowed_tools_tool_choice(tool_choice: object) -> ChatAllowedTool
         return None
 
 
+def _has_name(selector: Mapping[str, object]) -> bool:
+    name: Final = selector.get("name")
+    return isinstance(name, str) and name != ""
+
+
 def _responses_allowed_tool(tool: Mapping[str, object]) -> Mapping[str, object] | None:
     tool_type: Final = tool.get("type")
     if tool_type not in ("function", "custom"):
         return tool
-    if isinstance(tool.get("name"), str):
-        return tool
+    if tool_type not in tool:
+        return tool if _has_name(tool) else None
     try:
-        nested: Final = _NAMED_TOOL.validate_python(tool.get(tool_type))
+        nested: Final = _SELECTOR.validate_python(tool[tool_type])
     except ValidationError:
         return None
-    return {"type": tool_type, "name": nested.name}
+    outer: Final = {key: value for key, value in tool.items() if key != tool_type}
+    if not _has_name(nested) or outer.keys() & nested.keys():
+        return None
+    return {**outer, **nested}
 
 
 def responses_allowed_tools_tool_choice(choice: ChatAllowedToolsToolChoice) -> ToolChoiceAllowedParam | None:
-    """The flat Responses API layout of a chat ``allowed_tools`` choice, or ``None`` when an entry is not one the
-    chat layout defines, so the caller sends the original rather than a rewrite that could mean something looser."""
+    """The flat Responses API layout of a chat ``allowed_tools`` choice, or ``None`` when an entry is malformed or
+    carries conflicting keys, so the caller sends the original rather than a rewrite that could mean something looser."""
     flattened: Final = tuple(_responses_allowed_tool(tool) for tool in choice.allowed_tools.tools)
     if any(tool is None for tool in flattened):
         return None
