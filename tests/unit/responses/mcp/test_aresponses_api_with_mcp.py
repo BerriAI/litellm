@@ -2668,6 +2668,65 @@ async def test_stream_auto_execute_bills_the_paid_first_round_on_its_success_row
     assert _request_failure_row(logging_obj, recorder.logged[0]).get("response_cost", 0.0) == 0.0
 
 
+class _CutAfterStreamedText(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        opened: Final = {**json.loads(json.dumps(_ROUND_TWO_BODY, default=dict)), "status": "in_progress"}
+        yield _sse(
+            (
+                {"type": "response.created", "response": opened, "sequence_number": 0},
+                {
+                    "type": "response.output_text.delta",
+                    "item_id": "msg_round_two",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "PING " * 40,
+                    "sequence_number": 1,
+                },
+            )
+        )
+        raise httpx.ReadError("connection reset mid-stream")
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_bills_a_follow_up_cut_after_streamed_text_with_no_second_fixed_margin(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_streamed(_ROUND_ONE_BODY), httpx.Response(200, stream=_CutAfterStreamedText(), headers=SSE_HEADERS)),
+    )
+    recorder: Final = _RoundRecorder()
+    logging_obj: Final = _rounds_logging_obj(recorder, "mcp-stream-follow-up-cut-after-text")
+
+    with pytest.raises(httpx.ReadError):
+        await _stream_auto_execute(logging_obj)
+    ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+    await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
+
+    _assert_one_row_bills(recorder.logged, _ROUND_ONE_BODY)
+    assert len(recorder.failed) == 1
+    failed: Final = recorder.failed[0]
+    assert failed["completion_tokens"] > 0
+    priced_with_its_own_margin: Final = litellm.completion_cost(
+        completion_response=ModelResponse(
+            model="gpt-5.6",
+            usage=Usage(
+                prompt_tokens=failed["prompt_tokens"],
+                completion_tokens=failed["completion_tokens"],
+                total_tokens=failed["prompt_tokens"] + failed["completion_tokens"],
+            ),
+        ),
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+    )
+    assert failed["response_cost"] == pytest.approx(priced_with_its_own_margin - _FIXED_MARGIN)
+    _assert_breakdown_agrees_with_the_billed_cost(failed)
+
+
 @pytest.mark.asyncio
 async def test_stream_auto_execute_blocked_by_a_post_call_guardrail_keeps_both_rounds_on_the_success_row(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

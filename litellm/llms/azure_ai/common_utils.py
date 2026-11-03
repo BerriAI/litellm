@@ -140,6 +140,15 @@ def get_azure_ai_auth_headers(
 AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
 
 
+FOUNDRY_CLASSIC_AGENT_ID_PREFIX: Final = "asst_"
+
+
+def is_foundry_project_agent(model: str | None) -> bool:
+    if model is None or AzureFoundryModelInfo.get_azure_ai_route(model) != "agents":
+        return False
+    return not model.split("agents/", 1)[1].startswith(FOUNDRY_CLASSIC_AGENT_ID_PREFIX)
+
+
 def azure_ai_supports_native_responses(model: str | None, api_base: str | None) -> bool:
     resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
     if resolved_base is not None and not is_azure_openai_v1_host(resolved_base):

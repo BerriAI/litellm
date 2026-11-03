@@ -36,7 +36,7 @@ _LOCK_TIMEOUT_SQLSTATE: Final = "55P03"
 _LOCK_TIMEOUT_PHRASE: Final = "canceling statement due to lock timeout"
 
 
-def _exception_chain(e: BaseException) -> Iterator[BaseException]:
+def exception_chain(e: BaseException) -> Iterator[BaseException]:
     current = e  # rebind-ok: advances one link per iteration of the bounded walk
     for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
         yield current
@@ -49,7 +49,7 @@ def _exception_chain(e: BaseException) -> Iterator[BaseException]:
 def _database_service_unavailable_errors(e: BaseException) -> tuple[Exception, ...]:
     return tuple(
         link
-        for link in _exception_chain(e)
+        for link in exception_chain(e)
         if isinstance(link, Exception) and PrismaDBExceptionHandler.is_database_service_unavailable_error(link)
     )
 
@@ -70,6 +70,22 @@ def _exception_types(*candidates: object) -> tuple[type[BaseException], ...]:
     False. Dropping the non-types lets the call fall through to the other checks.
     """
     return tuple(c for c in candidates if isinstance(c, type) and issubclass(c, BaseException))
+
+
+def _prisma_error_code(e: Exception) -> str | None:
+    import prisma.engine.errors
+
+    if isinstance(e, _exception_types(prisma.errors.DataError)):
+        code: Final[object] = getattr(e, "code", None)
+        return code if isinstance(code, str) else None
+    if not isinstance(e, _exception_types(prisma.engine.errors.EngineRequestError)):
+        return None
+    try:
+        body: Final = _DATABASE_ERROR_META.validate_json(str(e).partition(": ")[2])
+    except ValidationError:
+        return None
+    engine_code: Final = body.get("error_code")
+    return engine_code if isinstance(engine_code, str) else None
 
 
 class PrismaDBExceptionHandler:
@@ -206,6 +222,8 @@ class PrismaDBExceptionHandler:
             return True
         if PrismaDBExceptionHandler.is_database_capacity_error(e):
             return False
+        if _prisma_error_code(e) == "P1017":
+            return True
         if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             error_message: Final = str(e).lower()
             connection_keywords: Final = (
@@ -435,7 +453,7 @@ class PrismaDBExceptionHandler:
         return ProxyException(
             message=PrismaDBExceptionHandler.database_unavailable_message(e),
             type=ProxyErrorTypes.no_db_connection,
-            param="None",
+            param=None,
             code=HTTPStatus.SERVICE_UNAVAILABLE.value,
         )
 

@@ -11,6 +11,7 @@ mod handler;
 use std::sync::Arc;
 
 use litellm_auth::AuthServices;
+use litellm_core_utils::decline::Decline;
 use litellm_core_utils::get_llm_provider_logic::{
     CustomLlmProvider, LlmProviders, get_custom_llm_provider,
 };
@@ -23,6 +24,8 @@ use litellm_llms::{
 };
 use litellm_secrets::source::SecretSource;
 use types::{ResponsesCall, ResponsesOutput, ResponsesProvider};
+
+const NOT_NATIVE: Decline = Decline::new("native HTTP responses provider");
 
 fn responses_provider(provider: LlmProviders) -> Option<&'static dyn BaseResponsesApiConfig> {
     match provider {
@@ -111,9 +114,8 @@ impl ResponsesRoute {
             }
             let provider = provider_name
                 .parse::<LlmProviders>()
-                .map_err(|_| Error::Unsupported("native HTTP responses provider"))?;
-            let config = responses_provider(provider)
-                .ok_or(Error::Unsupported("native HTTP responses provider"))?;
+                .map_err(|_| Error::Declined(NOT_NATIVE))?;
+            let config = responses_provider(provider).ok_or(Error::Declined(NOT_NATIVE))?;
             let wire_model = match provider {
                 LlmProviders::Openai if resolved_model.contains('/') => {
                     return Err(Error::InvalidProvider(call.model));
@@ -123,7 +125,7 @@ impl ResponsesRoute {
                     format!("openrouter/{resolved_model}")
                 }
                 LlmProviders::Openrouter => resolved_model.into(),
-                _ => return Err(Error::Unsupported("native HTTP responses provider")),
+                _ => return Err(Error::Declined(NOT_NATIVE)),
             };
             let provider = ResponsesProvider {
                 identity: ProviderIdentity {
