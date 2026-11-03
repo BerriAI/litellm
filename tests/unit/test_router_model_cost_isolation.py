@@ -37,6 +37,9 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY
 from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.router import router_arguments
+from litellm.router_config import build_router_config
+from litellm.router_python_host import Endpoint, PythonHost
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
@@ -2482,8 +2485,14 @@ _CACHE_POINT_DEPLOYMENT_MODEL: Final = f"bedrock/{_CACHE_POINT_MODEL}"
 _CACHE_POINT_FLAG: Final = "supports_prompt_cache_breakpoint"
 
 
-def _cache_point_deployment(model_id: str, model: str = _CACHE_POINT_DEPLOYMENT_MODEL, **model_info: object) -> dict:
-    return {"model_name": model_id, "litellm_params": {"model": model}, "model_info": {"id": model_id, **model_info}}
+def _cache_point_deployment(
+    model_id: str, model: str = _CACHE_POINT_DEPLOYMENT_MODEL, **model_info: object
+) -> DeploymentTypedDict:
+    return DeploymentTypedDict(
+        model_name=model_id,
+        litellm_params=LiteLLMParamsTypedDict(model=model),
+        model_info={"id": model_id, **model_info},
+    )
 
 
 def _shared_cache_point_row() -> str:
@@ -2534,6 +2543,31 @@ def test_deleting_a_flagged_deployment_keeps_the_flag_a_remaining_deployment_set
     assert litellm.model_cost[row].get(_CACHE_POINT_FLAG) is flag
     assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is flag
     assert litellm.model_cost[row].get("max_output_tokens") == _catalog_field(row, "max_output_tokens")
+
+
+def test_deleting_a_flagged_deployment_keeps_the_flag_a_deployment_object_in_model_list_sets() -> None:
+    flag: Final = not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    router: Final = Router(model_list=[_cache_point_deployment("doomed", **{_CACHE_POINT_FLAG: flag})])
+    router.model_list.append(Deployment(**_cache_point_deployment("kept", **{_CACHE_POINT_FLAG: flag})))
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is flag
+
+
+def test_deleting_a_flagged_deployment_rebuilds_the_shared_row_past_a_malformed_model_list_entry() -> None:
+    catalog_answer: Final = bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment("plain"),
+            _cache_point_deployment("flagged", **{_CACHE_POINT_FLAG: not catalog_answer}),
+        ]
+    )
+    router.model_list.append({"litellm_params": {}})
+
+    assert router.delete_deployment(id="flagged") is not None
+
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is catalog_answer
 
 
 def test_editing_the_flag_off_a_deployment_gives_the_shared_row_back_to_the_catalog() -> None:
@@ -2635,23 +2669,139 @@ def test_deleting_a_flagged_deployment_keeps_what_a_deployment_whose_id_names_th
     assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is catalog_answer
 
 
-def test_a_failed_cost_row_rebuild_still_deletes_the_deployment(monkeypatch) -> None:
+def test_deleting_a_deployment_keeps_a_limit_registered_on_a_row_the_rebuild_leaves_alone() -> None:
+    shared_row: Final = "azure/gpt-4o"
+    responses_model: Final = "azure/responses/gpt-4o"
+    deployment_limit: Final = _unseen_max_output_tokens(shared_row)
+    saved_limit: Final = deployment_limit + 1
     router: Final = Router(
         model_list=[
-            _cache_point_deployment("plain"),
+            _cache_point_deployment("responses", model=responses_model, max_output_tokens=deployment_limit),
+            _cache_point_deployment("doomed", model=shared_row),
+        ]
+    )
+    litellm.register_model({responses_model: {"max_output_tokens": saved_limit}})
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert litellm.model_cost[responses_model].get("max_output_tokens") == saved_limit
+    assert litellm.model_cost[shared_row].get("max_output_tokens") == deployment_limit
+
+
+def test_deleting_a_flagged_deployment_keeps_the_cache_price_a_custom_priced_sibling_inherits() -> None:
+    row: Final = _shared_cache_point_row()
+    catalog_cache_read: Final = _catalog_field(row, "cache_read_input_token_cost")
+    saved_cache_read: Final = (catalog_cache_read if isinstance(catalog_cache_read, float) else 0.0) + 1e-6
+    litellm.register_model({_CACHE_POINT_DEPLOYMENT_MODEL: {"cache_read_input_token_cost": saved_cache_read}})
+    router: Final = Router(
+        model_list=[
+            DeploymentTypedDict(
+                model_name="priced",
+                litellm_params=LiteLLMParamsTypedDict(
+                    model=_CACHE_POINT_DEPLOYMENT_MODEL, input_cost_per_token=5e-7, output_cost_per_token=1e-6
+                ),
+                model_info={"id": "priced"},
+            ),
             _cache_point_deployment(
                 "flagged", **{_CACHE_POINT_FLAG: not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)}
             ),
         ]
     )
-
-    def _refuse_cost_map_write(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("cost map write refused")
-
-    monkeypatch.setattr(litellm, "register_model", _refuse_cost_map_write)
+    assert litellm.model_cost["priced"].get("cache_read_input_token_cost") == saved_cache_read
 
     assert router.delete_deployment(id="flagged") is not None
+
+    assert litellm.model_cost["priced"].get("cache_read_input_token_cost") == saved_cache_read
+
+
+def test_deleting_a_deployment_keeps_the_pricing_an_sdk_user_wrote_into_the_cost_map() -> None:
+    backend_model: Final = "hosted_vllm/withdraw-test-sdk-priced-model"
+    sdk_price: Final = 1e-6
+    removed_limit: Final = 987_655
+    litellm.model_cost[backend_model] = {
+        "input_cost_per_token": sdk_price,
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+    }
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment("kept", model=backend_model),
+            _cache_point_deployment("doomed", model=backend_model, max_input_tokens=removed_limit),
+        ]
+    )
+    assert litellm.model_cost[backend_model].get("max_input_tokens") == removed_limit
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert litellm.model_cost[backend_model].get("input_cost_per_token") == sdk_price
+    assert litellm.model_cost[backend_model].get("max_input_tokens") is None
+
+
+class _CostMapWriteRecordingHost(PythonHost):
+    __slots__ = ("cost_map_writes",)
+
+    def __init__(self) -> None:
+        self.cost_map_writes: Final = Mock(wraps=litellm.register_model)
+
+    def invoke(self, op: str) -> Endpoint:
+        return self.cost_map_writes if op == "register_model" else super().invoke(op)
+
+
+def test_deleting_one_of_many_identical_deployments_rewrites_the_shared_row_once() -> None:
+    row: Final = _shared_cache_point_row()
+    flag: Final = not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    host: Final = _CostMapWriteRecordingHost()
+    router: Final = Router.from_config(
+        build_router_config(
+            router_arguments(
+                model_list=[
+                    *(_cache_point_deployment(f"sibling-{n}", **{_CACHE_POINT_FLAG: flag}) for n in range(50)),
+                    _cache_point_deployment("doomed", max_output_tokens=_unseen_max_output_tokens(row)),
+                ]
+            )
+        ),
+        host=host,
+    )
+    host.cost_map_writes.reset_mock()
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert host.cost_map_writes.call_count == 1
+    assert litellm.model_cost[row].get(_CACHE_POINT_FLAG) is flag
+    assert litellm.model_cost[row].get("max_output_tokens") == _catalog_field(row, "max_output_tokens")
+
+
+def _refuse_cost_map_write(*_args: object, **_kwargs: object) -> None:
+    raise RuntimeError("cost map write refused")
+
+
+class _CostMapRefusingHost(PythonHost):
+    __slots__ = ()
+
+    def invoke(self, op: str) -> Endpoint:
+        return _refuse_cost_map_write if op == "register_model" else super().invoke(op)
+
+
+def test_a_failed_cost_row_rebuild_still_deletes_the_deployment(caplog: pytest.LogCaptureFixture) -> None:
+    router: Final = Router.from_config(
+        build_router_config(
+            router_arguments(
+                model_list=[
+                    _cache_point_deployment("plain"),
+                    _cache_point_deployment(
+                        "flagged", **{_CACHE_POINT_FLAG: not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)}
+                    ),
+                ]
+            )
+        ),
+        host=_CostMapRefusingHost(),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+        assert router.delete_deployment(id="flagged") is not None
+
     assert router.get_deployment(model_id="flagged") is None
+    assert any("could not rebuild the shared cost-map rows" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.parametrize(
@@ -3153,9 +3303,10 @@ def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered() -> None:
         _invalidate_model_cost_lowercase_map()
 
 
-def test_replay_model_cost_registrations_survives_a_malformed_deployment():
+@pytest.mark.parametrize("malformed_entry", [{"litellm_params": {}}, None], ids=["dict", "not-a-dict"])
+def test_replay_model_cost_registrations_survives_a_malformed_deployment(malformed_entry: object):
     """
-    The rebuild reads whatever dicts are sitting in model_list, so one entry that
+    The rebuild reads whatever is sitting in model_list, so one entry that
     cannot be rebuilt into a Deployment must not stop the rest being restored.
     """
     saved_model_cost = litellm.model_cost
@@ -3169,7 +3320,7 @@ def test_replay_model_cost_registrations_survives_a_malformed_deployment():
                 }
             ],
         )
-        router.model_list.insert(0, {"litellm_params": {}})
+        router.model_list.insert(0, malformed_entry)
 
         litellm.model_cost = {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
         _invalidate_model_cost_lowercase_map()

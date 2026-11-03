@@ -561,14 +561,19 @@ def get_model_cost_map_loaded_at() -> "datetime | None":
 
 
 class AliasedCostEntry(dict[str, object]):
-    __slots__ = ("names", "registered_fields")
+    __slots__ = ("created_by_registration", "names", "registered_fields")
 
     def __init__(
-        self, entry: Mapping[str, object], names: tuple[str, ...], registered_fields: frozenset[str] = frozenset()
+        self,
+        entry: Mapping[str, object],
+        names: tuple[str, ...],
+        registered_fields: frozenset[str] = frozenset(),
+        created_by_registration: bool = False,
     ) -> None:
         super().__init__(entry)
         self.names: tuple[str, ...] = names
         self.registered_fields: frozenset[str] = registered_fields
+        self.created_by_registration: bool = created_by_registration
 
 
 def _alias_groups(alias_owners: Mapping[str, str]) -> Mapping[str, tuple[str, ...]]:

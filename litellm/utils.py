@@ -3799,8 +3799,14 @@ def _replace_cost_map_entry(
     registered_fields: Final = previous_fields | frozenset(
         name for name, value in registration.items() if value is not None
     )
+    created_by_registration: Final = (
+        current.created_by_registration if isinstance(current, AliasedCostEntry) else current is None
+    )
     cost_map.update(
-        dict.fromkeys((key, *_names_sharing_entry(cost_map, key)), AliasedCostEntry(merged, names, registered_fields))
+        dict.fromkeys(
+            (key, *_names_sharing_entry(cost_map, key)),
+            AliasedCostEntry(merged, names, registered_fields, created_by_registration),
+        )
     )
 
 
@@ -4089,24 +4095,32 @@ def model_cost_rows_off_catalog(rows: Iterable[str]) -> frozenset[str]:
 
 def restore_model_cost_rows_to_catalog(rows: Iterable[str]) -> None:
     """Put each of ``rows`` back to its loaded catalog entry with no registered fields, keeping every alias on the
-    one shared entry, and drop a row the catalog lacks, so registrations replayed onto them start where a fresh boot
-    does."""
+    one shared entry. A row the catalog lacks keeps only the fields written into it outside ``register_model``, such
+    as an SDK user's own ``litellm.model_cost`` entry, and goes once none is left or a registration created it, so
+    registrations replayed onto them start where a fresh boot does."""
     cost_map: Final = _builtin_cost_map()
     catalog: Final = GetModelCostMap.loaded_model_cost_map()
-    for row in rows:
-        if row in catalog:
-            cost_map.update(_catalog_entry_on_row_and_aliases(cost_map, row, catalog[row]))
+    for row, restored in ((row, catalog.get(row) or _unregistered_fields(cost_map.get(row))) for row in rows):
+        if restored:
+            cost_map.update(_entry_on_row_and_aliases(cost_map, row, restored))
         else:
             cost_map.pop(row, None)
     _invalidate_model_cost_lowercase_map()
 
 
-def _catalog_entry_on_row_and_aliases(
-    cost_map: Mapping[str, Mapping[str, object]], row: str, catalog_entry: Mapping[str, object]
+def _unregistered_fields(entry: Mapping[str, object] | None) -> Mapping[str, object]:
+    if isinstance(entry, AliasedCostEntry) and entry.created_by_registration:
+        return {}
+    registered: Final[frozenset[str]] = entry.registered_fields if isinstance(entry, AliasedCostEntry) else frozenset()
+    return {name: value for name, value in (entry or {}).items() if name not in registered and value is not None}
+
+
+def _entry_on_row_and_aliases(
+    cost_map: Mapping[str, Mapping[str, object]], row: str, entry: Mapping[str, object]
 ) -> Mapping[str, AliasedCostEntry]:
     current: Final = cost_map.get(row)
     names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
-    restored: Final = AliasedCostEntry(catalog_entry, names)
+    restored: Final = AliasedCostEntry(entry, names)
     return MappingProxyType(dict.fromkeys((row, *_names_sharing_entry(cost_map, row)), restored))
 
 
