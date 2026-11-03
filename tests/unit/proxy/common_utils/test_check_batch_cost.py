@@ -3335,6 +3335,7 @@ class TestMultiPodBatchCostClaim:
         from litellm.caching.caching import DualCache
         from litellm.integrations.custom_logger import CustomLogger
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+        from litellm.proxy.db.prisma_client import PrismaWrapper
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.utils import PrismaClient
         from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -3384,6 +3385,7 @@ class TestMultiPodBatchCostClaim:
             database_url="postgresql://unused:unused@localhost:5432/unused", proxy_logging_obj=dependency
         )
         insert_spend_rows: Final = AsyncMock(return_value=[{"request_id": "batch-charge"}])
+        spend_prisma.db = PrismaWrapper(original_prisma=MagicMock(query_raw=insert_spend_rows))
         input_rate: Final = 0.000002
         litellm.register_model(
             {
@@ -3435,11 +3437,6 @@ class TestMultiPodBatchCostClaim:
             respx.mock,
             patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency),
             patch("litellm.proxy.proxy_server.prisma_client", spend_prisma),
-            patch.object(
-                type(spend_prisma.writer_db._original_prisma),
-                "query_raw",
-                insert_spend_rows,
-            ),
         ):
             respx.get(f"https://api.openai.com/v1/files/{_CLAIM_OUTPUT_FILE_ID}/content").mock(
                 return_value=httpx.Response(200, content=content)
