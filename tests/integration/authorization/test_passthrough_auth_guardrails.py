@@ -791,6 +791,71 @@ def test_response_a_post_call_guardrail_blocks_still_charges_the_provider_call(
         assert int(str(rows[0]["total_tokens"])) > 0, rows
 
 
+def _spend_logs_metadata_of_the_failure_row(gateway: Gateway, key: str) -> JsonValue:
+    rows: Final = eventually(
+        lambda: gateway.rows('SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE api_key = %s', (key_hash(key),)),
+        bool,
+    )
+    assert [row["status"] for row in rows] == ["failure"], rows
+    return _JSON.validate_python(rows[0]["metadata"]).get("spend_logs_metadata")
+
+
+@pytest.mark.parametrize("route", [OPENAI_ROUTE, ANTHROPIC_ROUTE, GEMINI_ROUTE])
+def test_a_blocked_response_keeps_the_spend_logs_metadata_on_its_row(rig: AuthGuardrailRig, route: str) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team(metadata={"spend_logs_metadata": {"team_field": "team"}})
+        key: Final = scenario.key(
+            team_id=team,
+            metadata={"guardrails": [BLOCKING_POST_CALL], "spend_logs_metadata": {"key_field": "key"}},
+        )
+        _drain(rig)
+        body: Final = {
+            **_route_body(route, "What is the capital of France?"),
+            "metadata": {"spend_logs_metadata": {"body_field": "body"}},
+        }
+
+        response: Final = _send(gateway, route, body, key)
+
+        assert response.status_code == 400, response.text
+        assert _spend_logs_metadata_of_the_failure_row(gateway, key) == {
+            "body_field": "body",
+            "key_field": "key",
+            "team_field": "team",
+        }
+
+
+def test_a_response_a_pipeline_replaces_keeps_the_spend_logs_metadata_on_its_row(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"spend_logs_metadata": {"key_field": "key"}})
+        _drain(rig)
+
+        response: Final = _send(gateway, OPENAI_ROUTE, _tagged_body(OPENAI_ROUTE, PIPELINE_MODIFIES), key)
+
+        assert response.status_code == 200, response.text
+        assert b"content_filter" in response.content, response.text
+        assert _spend_logs_metadata_of_the_failure_row(gateway, key) == {"key_field": "key"}
+
+
+def test_a_custom_endpoints_blocked_response_row_gets_no_spend_logs_metadata(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(
+            team_id=scenario.team(),
+            metadata={
+                "allowed_passthrough_routes": [CUSTOM_GUARDED_ROUTE],
+                "spend_logs_metadata": {"key_field": "key"},
+            },
+        )
+        _drain(rig)
+
+        response: Final = gateway.request("POST", CUSTOM_GUARDED_ROUTE, _route_body(OPENAI_ROUTE, "Hello"), key=key)
+
+        assert response.status_code == 400, response.text
+        assert _spend_logs_metadata_of_the_failure_row(gateway, key) is None
+
+
 def _row_fields(gateway: Gateway, key: str) -> tuple[Mapping[str, object], ...]:
     return tuple(
         eventually(
