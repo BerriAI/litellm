@@ -5489,6 +5489,56 @@ async def test_the_deployments_named_tokenizer_beats_the_tokenizer_the_cost_map_
 
 
 @pytest.mark.asyncio
+async def test_a_named_tokenizer_count_adds_the_framing_the_deployment_sets_for_requests_with_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_info: Final = {"token_count_tokenizer": "openai", "token_count_framing": 5, "token_count_tool_framing": 40}
+
+    _, utils_reply, sent = await _bedrock_counts(
+        monkeypatch, _NOVA_PRO, model_info, {"messages": _MIXED_SCRIPT_TURNS, "tools": [_KIMI_WEATHER]}
+    )
+
+    assert sent == ()
+    assert isinstance(utils_reply, TokenCountResponse), utils_reply
+    assert utils_reply.total_tokens == 40 + litellm.token_counter(
+        model=_NOVA_PRO, messages=_MIXED_SCRIPT_TURNS, tools=[_KIMI_WEATHER]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_named_kimi_k3_tokenizer_counts_text_with_kimi_k3_and_answers_400_for_a_body_it_cannot_render(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    encoding: Final = _available_kimi_k3(monkeypatch, tmp_path)
+    image_turn: Final[dict[str, JsonValue]] = {
+        "role": "user",
+        "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0K"}}],
+    }
+
+    counted, _, counted_sent = await _bedrock_counts(
+        monkeypatch, _NOVA_PRO, {"token_count_tokenizer": "kimi_k3"}, {"messages": _MIXED_SCRIPT_TURNS}
+    )
+    rejected, _, rejected_sent = await _bedrock_counts(
+        monkeypatch, _NOVA_PRO, {"token_count_tokenizer": "kimi_k3"}, {"messages": [image_turn]}
+    )
+
+    assert counted == {
+        "input_tokens": kimi_k3_tokens(encoding, _NOVA_PRO, _MIXED_SCRIPT_TURNS, None),
+        "litellm_count_source": "local_estimate",
+        "litellm_count_tokenizer": "kimi_k3",
+    }
+    status, message = _rejection(rejected)
+    assert (
+        status,
+        "kimi_k3 tokenizer set in token_count_tokenizer, which could not count this request" in message,
+    ) == (
+        400,
+        True,
+    ), message
+    assert counted_sent == rejected_sent == ()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model_info", "reason"),
     [
