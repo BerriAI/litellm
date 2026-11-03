@@ -155,6 +155,7 @@ async def _assert_legacy_database_parity(
     toggle_after_capture: bool = False,
     fallback_narrowing: bool = False,
     failing_table: str | None = None,
+    organization_id: str | None = "org",
 ):
     monkeypatch.setitem(
         litellm.model_cost,
@@ -249,7 +250,7 @@ async def _assert_legacy_database_parity(
                         "user_api_key_model_max_budget": {"ledger-test": {"max_budget": 100, "budget_duration": "1d"}},
                         "user_api_key_user_id": "user",
                         "user_api_key_team_id": "team",
-                        "user_api_key_org_id": "org",
+                        "user_api_key_org_id": organization_id,
                         "user_api_key_project_id": "project",
                         "user_api_key_end_user_id": "end-user",
                         "tags": ["tag"],
@@ -277,7 +278,7 @@ async def _assert_legacy_database_parity(
                 user_id="user",
                 end_user_id="end-user",
                 team_id="team",
-                org_id="org",
+                org_id=organization_id,
                 project_id="project",
                 kwargs=request_kwargs,
                 completion_response=ModelResponse(
@@ -403,6 +404,16 @@ async def test_stored_ledger_matches_real_legacy_database_updates(
     parity_database: str, monkeypatch: pytest.MonkeyPatch, status: str, origin: str | None, cost: float, retention: str
 ):
     await _assert_legacy_database_parity(parity_database, monkeypatch, status, origin, cost, retention)
+
+
+@pytest.mark.parametrize("retention", ["full", "stripped", "lean"])
+@pytest.mark.asyncio
+async def test_missing_organization_matches_legacy_daily_rollups(parity_database, monkeypatch, retention):
+    await _assert_legacy_database_parity(
+        parity_database, monkeypatch, "success", None, 0.25, retention, organization_id=None
+    )
+    with psycopg.connect(parity_database) as connection:
+        assert connection.execute('SELECT count(*) FROM "LiteLLM_DailyOrganizationSpend"').fetchone() == (0,)
 
 
 @pytest.mark.parametrize("reset_kind", ["scheduled", "key", "team_member", "global", "window_rollover"])
