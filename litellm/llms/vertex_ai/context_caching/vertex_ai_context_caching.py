@@ -507,9 +507,9 @@ class ContextCachingEndpoints(VertexBase):
         except _CachedContentsNotServedError:
             verbose_logger.debug("Gemini context caching: %s answers 404. Skipping context caching.", url)
             return messages, optional_params, None
-        for tool_param in _TOOL_PARAMS:
-            optional_params.pop(tool_param, None)
         if google_cache_name:
+            for tool_param in _TOOL_PARAMS:
+                optional_params.pop(tool_param, None)
             return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
@@ -571,6 +571,8 @@ class ContextCachingEndpoints(VertexBase):
             raw_response_cached.get("name"),
             raw_response_cached.get("expireTime"),
         )
+        for tool_param in _TOOL_PARAMS:
+            optional_params.pop(tool_param, None)
         return (
             non_cached_messages,
             optional_params,
@@ -738,6 +740,10 @@ class ContextCachingEndpoints(VertexBase):
         except _CachedContentsNotServedError:
             verbose_logger.debug("Gemini context caching: %s answers 404. Skipping context caching.", url)
             return messages, optional_params, None
+
+        if cache_name is None:
+            return messages, optional_params, None
+
         for tool_param in _TOOL_PARAMS:
             optional_params.pop(tool_param, None)
         return non_cached_messages, optional_params, cache_name
