@@ -1,46 +1,63 @@
 import asyncio
 import urllib.parse
-from collections.abc import AsyncGenerator, Coroutine
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
-from litellm.proxy.db.native_database import keep_writer_token_fresh, native_endpoint, writer_token_rotation
+from litellm.proxy.db.native_database import (
+    TokenRotation,
+    keep_token_fresh,
+    native_endpoint,
+    reader_token_rotation,
+    writer_token_rotation,
+)
 from litellm.rust_bridge._native import NativeDatabase
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
+def _token_refresh(
+    install: Callable[[str], None], rotation: TokenRotation | None, url: str
+) -> "asyncio.Task[None] | None":
+    if rotation is None:
+        return None
+    current: Final = urllib.parse.unquote(urllib.parse.urlsplit(url).password or "")
+    return asyncio.create_task(keep_token_fresh(install, rotation, current))
+
+
 @dataclass(frozen=True, slots=True)
 class Database:
     prisma: "PrismaClient"
     native: NativeDatabase
-    token_refresh: "asyncio.Task[None] | None"
+    token_refreshes: "tuple[asyncio.Task[None], ...]"
 
     @classmethod
-    async def open(cls, prisma: "PrismaClient", writer_url: str) -> "Database":
+    async def open(cls, prisma: "PrismaClient", writer_url: str, reader_url: str | None) -> "Database":
         try:
-            native: Final = await NativeDatabase.connect(native_endpoint(writer_url))
+            native: Final = await NativeDatabase.connect(
+                native_endpoint(writer_url), None if reader_url is None else native_endpoint(reader_url)
+            )
         except BaseException:
             await prisma.aclose()
             raise
-        rotation: Final = writer_token_rotation(writer_url)
-        token_refresh: Final = (
+        refreshes: Final = (
+            _token_refresh(native.set_writer_password, writer_token_rotation(writer_url), writer_url),
             None
-            if rotation is None
-            else asyncio.create_task(
-                keep_writer_token_fresh(
-                    native, rotation, urllib.parse.unquote(urllib.parse.urlsplit(writer_url).password or "")
-                )
-            )
+            if reader_url is None
+            else _token_refresh(native.set_reader_password, reader_token_rotation(reader_url), reader_url),
         )
-        return cls(prisma=prisma, native=native, token_refresh=token_refresh)
+        return cls(
+            prisma=prisma,
+            native=native,
+            token_refreshes=tuple(task for task in refreshes if task is not None),
+        )
 
     async def aclose(self) -> None:
-        if self.token_refresh is not None:
-            self.token_refresh.cancel()
-            await asyncio.gather(self.token_refresh, return_exceptions=True)
+        for task in self.token_refreshes:
+            task.cancel()
+        await asyncio.gather(*self.token_refreshes, return_exceptions=True)
         try:
             await self.prisma.aclose()
         finally:

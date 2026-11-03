@@ -11,6 +11,7 @@ mod end_user;
 mod endpoint;
 mod error;
 mod failure;
+mod pools;
 mod spend;
 #[cfg(test)]
 mod test_support;
@@ -20,6 +21,7 @@ pub use end_user::{EndUser, RateLimits, find_end_user};
 pub use endpoint::{Endpoint, PoolLimits, SslMode};
 pub use error::Error;
 pub use failure::DbFailure;
+pub use pools::Pools;
 pub use spend::{
     DailySpend, DailyTable, EntitySpend, SpendLog, SpendLogRow, TeamMemberSpend,
     add_end_user_spend, add_key_spend, add_team_member_spend, add_team_spend, add_user_spend,

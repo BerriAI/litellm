@@ -62,7 +62,6 @@ serde_json.workspace = true
 strum.workspace = true
 veil.workspace = true
 thiserror.workspace = true
-sqlx.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]
