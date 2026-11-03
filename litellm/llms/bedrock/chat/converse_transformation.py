@@ -264,7 +264,7 @@ class AmazonConverseConfig(BaseConfig):
             return messages
 
         # Find all consecutive user messages at the end
-        consecutive_user_message_indices: Final[list[int]] = []
+        consecutive_user_message_indices: Final = []
         for i in range(len(messages) - 1, -1, -1):
             if messages[i].get("role") == "user":
                 consecutive_user_message_indices.append(i)
@@ -294,7 +294,7 @@ class AmazonConverseConfig(BaseConfig):
                         new_item = {
                             "type": "guarded_text",
                             "text": item["text"],
-                            **_cache_mark_kept(item, keeps_cache_marks),
+                            **_cache_mark_kept(_JSON_OBJECT.validate_python(item), keeps_cache_marks),
                         }
                         new_content.append(new_item)
                     else:
@@ -304,7 +304,11 @@ class AmazonConverseConfig(BaseConfig):
             elif isinstance(content, str):
                 # If content is a string, convert it to guarded_text
                 messages_copy[user_message_index]["content"] = [
-                    {"type": "guarded_text", "text": content, **_cache_mark_kept(user_message, keeps_cache_marks)}
+                    {
+                        "type": "guarded_text",
+                        "text": content,
+                        **_cache_mark_kept(_JSON_OBJECT.validate_python(user_message), keeps_cache_marks),
+                    }
                 ]
 
         return messages_copy
