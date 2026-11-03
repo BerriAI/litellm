@@ -2587,6 +2587,26 @@ class TestBedrockPassthroughBody:
             {"role": "tool", "content": '{"card": "on file"}'},
         ]
 
+    def test_reads_converse_and_anthropic_search_results(self):
+        converse_result: Final = {"source": "s", "title": "t", "content": [{"text": "first"}, {"text": "second"}]}
+        tool_result: Final = {"toolUseId": "t1", "content": [{"searchResult": converse_result}]}
+        anthropic_result: Final = {
+            "type": "search_result",
+            "source": "s",
+            "title": "t",
+            "content": [{"type": "text", "text": "third"}],
+        }
+        body: Final = {
+            "messages": [
+                {"role": "user", "content": [{"toolResult": tool_result}]},
+                {"role": "user", "content": [anthropic_result]},
+            ],
+        }
+        assert _build_lakera_inspection_messages(_bedrock_data(body), call_type="allm_passthrough_route") == [
+            {"role": "tool", "content": "first\nsecond"},
+            {"role": "user", "content": "third"},
+        ]
+
     def test_a_nested_body_for_another_provider_is_not_read(self):
         data: Final = {**_bedrock_data(_invoke_body()), "custom_llm_provider": "vertex_ai"}
         assert _build_lakera_inspection_messages(data, call_type="allm_passthrough_route") == []

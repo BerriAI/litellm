@@ -237,13 +237,26 @@ def _bedrock_items(value: object) -> Sequence[object]:
     return _BEDROCK_ITEMS.validate_python(value) if isinstance(value, list) else ()
 
 
+def _bedrock_search_result_text(fields: Mapping[str, object]) -> str:
+    """The joined text of a Converse ``searchResult`` block or an Anthropic ``search_result`` block, else nothing."""
+    search_result: Final = (
+        fields if fields.get("type") == "search_result" else as_str_mapping(fields.get("searchResult"))
+    )
+    entries: Final = _bedrock_items((search_result or {}).get("content"))
+    texts: Final = ((as_str_mapping(entry) or {}).get("text") for entry in entries)
+    return "\n".join(text for text in texts if isinstance(text, str) and text)
+
+
 def _bedrock_text_block(block: object) -> object:
-    """A Converse ``guardContent`` text block or ``json`` tool-result block as a plain ``{"text": ...}`` block, so its
-    text is inspected like any other; every other block is returned as given."""
+    """A Converse ``guardContent`` text block, ``json`` tool-result block or search result as a plain ``{"text": ...}``
+    block, so its text is inspected like any other; every other block is returned as given."""
     fields: Final = as_str_mapping(block) or {}
     guard_text: Final = as_str_mapping((as_str_mapping(fields.get("guardContent")) or {}).get("text")) or {}
     if isinstance(guard_text.get("text"), str):
         return {"text": guard_text["text"]}
+    search_text: Final = _bedrock_search_result_text(fields)
+    if search_text:
+        return {"text": search_text}
     return {"text": json.dumps(fields["json"])} if "json" in fields else block
 
 
