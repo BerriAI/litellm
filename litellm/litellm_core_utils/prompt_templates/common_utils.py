@@ -8,7 +8,7 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, groupby, islice
@@ -17,7 +17,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -29,6 +29,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAudioObject,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
+    ChatCompletionPromptCacheBreakpoint,
     ChatCompletionReasoningItem,
     ChatCompletionReasoningSummaryTextBlock,
     ChatCompletionRedactedThinkingBlock,
@@ -88,17 +89,22 @@ def handle_any_messages_to_chat_completion_str_messages_conversion(
         return [{"input": str(messages)}]
 
 
+def _message_with_str_content(message: AllMessageValues) -> AllMessageValues:
+    texts: Final = convert_content_list_to_str(message=message)
+    if not texts:
+        return message
+    return cast(  # cast-ok: the same message with its content flattened to one string
+        AllMessageValues, {**message, "content": texts}
+    )
+
+
 def handle_messages_with_content_list_to_str_conversion(
     messages: list[AllMessageValues],
 ) -> list[AllMessageValues]:
     """
-    Handles messages with content list conversion
+    Returns new messages with each content list flattened to a string, leaving the caller's messages untouched
     """
-    for message in messages:
-        texts = convert_content_list_to_str(message=message)
-        if texts:
-            message["content"] = texts
-    return messages
+    return [_message_with_str_content(message) for message in messages]
 
 
 def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[str] = ["user"]) -> AllMessageValues:
@@ -233,7 +239,7 @@ def is_non_content_values_set(message: AllMessageValues) -> bool:
     return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
 
 
-_IMAGE_CONTENT_PART_TYPES: Final = frozenset({"image_url", "input_image", "image"})
+_IMAGE_CONTENT_PART_TYPES: Final = ("image_url", "input_image", "image", "computer_screenshot")
 _IMAGE_SCAN_MAX_DEPTH: Final = 4
 
 
@@ -458,6 +464,109 @@ def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> 
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class InlineDocument:
+    filename: str
+    file_data: str
+
+
+def _document_media_type(source: object) -> str:
+    match source:
+        case {"media_type": str() as media_type} if media_type:
+            return media_type
+        case _:
+            return "application/pdf"
+
+
+def anthropic_inline_document(document: Mapping[str, object]) -> InlineDocument | None:
+    source: Final = document.get("source")
+    match source:
+        case {"type": "base64", "data": str() as data} if data:
+            title: Final = document.get("title")
+            return InlineDocument(
+                filename=title if isinstance(title, str) and title else "document.pdf",
+                file_data=f"data:{_document_media_type(source)};base64,{data}",
+            )
+        case _:
+            return None
+
+
+def is_pdf_file_part(part: object) -> bool:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data.startswith("data:"):
+            return file_data.startswith("data:application/pdf")
+        case {"type": "file", "file": {"format": str() as file_format}}:
+            return file_format == "application/pdf"
+        case {"type": "file", "file": {"filename": str() as filename}}:
+            return filename.lower().endswith(".pdf")
+        case _:
+            return False
+
+
+_CONTENT_PARTS: Final = TypeAdapter(tuple[object, ...])
+
+
+def content_parts(message: Mapping[str, object]) -> Sequence[object]:
+    content: Final = message.get("content")
+    return _CONTENT_PARTS.validate_python(content) if isinstance(content, list) else ()
+
+
+def _has_pdf_file_part(message: Mapping[str, object]) -> bool:
+    return any(is_pdf_file_part(part) for part in content_parts(message))
+
+
+def messages_have_pdf_file_part(messages: Sequence[Mapping[str, object]]) -> bool:
+    return any(_has_pdf_file_part(message) for message in messages)
+
+
+def _message_without_pdf_file_parts(message: AllMessageValues) -> AllMessageValues:
+    if not _has_pdf_file_part(message):
+        return message
+    kept: Final = [part for part in content_parts(message) if not is_pdf_file_part(part)]
+    return cast(AllMessageValues, {**message, "content": kept})  # cast-ok: same message with fewer content parts
+
+
+def _is_pdf_only_user_turn(message: AllMessageValues) -> bool:
+    parts: Final = content_parts(message)
+    return message["role"] == "user" and bool(parts) and all(is_pdf_file_part(part) for part in parts)
+
+
+def messages_without_pdf_file_parts(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    return tuple(
+        _message_without_pdf_file_parts(message) for message in messages if not _is_pdf_only_user_turn(message)
+    )
+
+
+_CONTENT_PART: Final = TypeAdapter(Mapping[str, object])
+
+
+def _file_part_as_image_url(part: object) -> object:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
+            fields: Final = _CONTENT_PART.validate_python(part)
+            return {key: value for key, value in fields.items() if key != "file"} | {
+                "type": "image_url",
+                "image_url": {"url": file_data},
+            }
+        case _:
+            return part
+
+
+def message_with_file_parts_as_image_urls(message: Mapping[str, object]) -> Mapping[str, object]:
+    parts: Final = content_parts(message)
+    if not parts:
+        return message
+    return {**message, "content": [_file_part_as_image_url(part) for part in parts]}
+
+
+def _typed_message_with_file_parts_as_image_urls(message: AllMessageValues) -> AllMessageValues:
+    return cast(AllMessageValues, message_with_file_parts_as_image_urls(message))  # cast-ok: same message, image parts
+
+
+def messages_with_file_parts_as_image_urls(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    return tuple(_typed_message_with_file_parts_as_image_urls(message) for message in messages)
+
+
 def _image_part_url(part: Mapping[str, object]) -> str | None:
     """The image URL carried by one content part, whichever of the three dialects wrote it."""
     part_type: Final = part.get("type")
@@ -483,15 +592,24 @@ def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObjec
     return {"type": "image_url", "image_url": {"url": url}} if url else None
 
 
-def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> bool:
-    """Whether any message carries an image content part, across the dialects that reach
-    pre-routing hooks untranslated: chat-completions ``image_url``, Responses ``input_image``,
-    and Anthropic Messages ``image``, including images nested inside ``tool_result`` blocks."""
-    return any(
-        isinstance(content, list) and _content_parts_contain_image(content)
-        for message in messages
-        for content in (message.get("content"),)
-    )
+def _message_contains_image_content(message: object) -> bool:
+    match message:
+        case {"content": list()}:
+            return _content_parts_contain_image(content_parts(_CONTENT_PART.validate_python(message)))
+        case {"type": "function_call_output" | "custom_tool_call_output" | "tool_result", "output": list()}:
+            output: Final = _CONTENT_PART.validate_python(message)["output"]
+            return _content_parts_contain_image(_CONTENT_PARTS.validate_python(output))
+        case {"type": "computer_call_output", "output": dict()}:
+            return _content_parts_contain_image((_CONTENT_PART.validate_python(message)["output"],))
+        case _:
+            return False
+
+
+def request_contains_image_content(messages: object) -> bool:
+    """Inspect native message content without translating or validating the request."""
+    if not isinstance(messages, (list, tuple)):
+        return False
+    return any(_message_contains_image_content(message) for message in _CONTENT_PARTS.validate_python(messages))
 
 
 def audio_or_image_in_message_content(message: AllMessageValues) -> bool:
@@ -1954,12 +2072,14 @@ def infer_content_type_from_url_and_content(
     """
     from litellm.litellm_core_utils.token_counter import get_image_type
 
+    media_type: Final = current_content_type.split(";", 1)[0].strip().lower() if current_content_type else None
+
     # If we have a valid content type that's not generic, use it
-    if current_content_type and current_content_type not in [
+    if media_type and media_type not in [
         "binary/octet-stream",
         "application/octet-stream",
     ]:
-        return current_content_type
+        return media_type
 
     # Extension to MIME type mapping
     # Supports images, documents, and other common file types
@@ -2107,6 +2227,65 @@ def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
+_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
+_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(ChatCompletionPromptCacheBreakpoint)
+_AcceptedBreakpointT: Final = TypeVar("_AcceptedBreakpointT", bound=Mapping[str, object])
+
+
+def _accepted_prompt_cache_breakpoint(
+    accepted: TypeAdapter[_AcceptedBreakpointT], marker: object
+) -> _AcceptedBreakpointT | None:
+    try:
+        return accepted.validate_python(marker)
+    except ValidationError:
+        return None
+
+
+def prompt_cache_breakpoint_within(
+    accepted: TypeAdapter[_AcceptedBreakpointT], marker: object
+) -> _AcceptedBreakpointT | None:
+    """The client's marker cut down to the ``accepted`` shape: an unsupported ttl is dropped and the mode kept,
+    and a marker whose mode the target cannot read is dropped whole."""
+    whole: Final = _accepted_prompt_cache_breakpoint(accepted, marker)
+    if whole is not None:
+        return whole
+    fields: Final = _breakpoint_fields_or_none(marker)
+    without_ttl: Final = (
+        None
+        if fields is None
+        else _accepted_prompt_cache_breakpoint(accepted, {key: item for key, item in fields.items() if key != "ttl"})
+    )
+    verbose_logger.debug(
+        "Dropping malformed prompt_cache_breakpoint %r under drop_params"
+        if without_ttl is None
+        else "Dropping the unsupported ttl of prompt_cache_breakpoint %r under drop_params",
+        marker,
+    )
+    return without_ttl
+
+
+def prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
+    if marker is None or not drop_params:
+        return marker
+    return prompt_cache_breakpoint_within(_PROMPT_CACHE_BREAKPOINT, marker)
+
+
+def prompt_cache_breakpoint_with_readable_mode(marker: object, drop_params: bool) -> object:
+    """The client's marker as written, or None under drop_params when no target could read its mode, so the
+    target's own config decides which ttl and keys it keeps."""
+    return None if prompt_cache_breakpoint_for_wire(marker, drop_params) is None else marker
+
+
+def whole_prompt_cache_breakpoint_or_none(marker: object) -> PromptCacheBreakpoint | None:
+    return _accepted_prompt_cache_breakpoint(_PROMPT_CACHE_BREAKPOINT, marker)
+
+
+def chat_completion_prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
+    if marker is None or not drop_params:
+        return marker
+    return prompt_cache_breakpoint_within(_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT, marker)
+
+
 def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
     """Anthropic's ``cache_control`` mark rewritten as OpenAI's ``prompt_cache_breakpoint`` on the same block."""
     if block.get("cache_control") is None:
@@ -2120,6 +2299,13 @@ def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
 _BREAKPOINT_BLOCK_LIST_KEYS: Final = frozenset({"content", "tool_calls"})
 _BREAKPOINT_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _BREAKPOINT_BLOCKS: Final = TypeAdapter(list[object])
+
+
+def _breakpoint_fields_or_none(value: object) -> Mapping[str, object] | None:
+    try:
+        return _BREAKPOINT_FIELDS.validate_python(value)
+    except ValidationError:
+        return None
 
 
 def _without_prompt_cache_breakpoint(value: object) -> object:
@@ -2142,6 +2328,27 @@ def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
         key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
     }
     return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
+
+
+def _part_with_chat_completion_prompt_cache_breakpoint(part: object) -> object:
+    if not isinstance(part, Mapping):
+        return part
+    fields: Final = _BREAKPOINT_FIELDS.validate_python(part)
+    marker: Final = fields.get("prompt_cache_breakpoint")
+    if marker is None:
+        return fields
+    unmarked: Final = {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
+    return with_prompt_cache_breakpoint(unmarked, chat_completion_prompt_cache_breakpoint_for_wire(marker, True))
+
+
+def chat_completion_prompt_cache_breakpoints_for_wire(message: _MarkedT, drop_params: bool) -> _MarkedT:
+    content: Final = message.get("content")
+    if not drop_params or not isinstance(content, list):
+        return message
+    parts: Final = [
+        _part_with_chat_completion_prompt_cache_breakpoint(part) for part in _BREAKPOINT_BLOCKS.validate_python(content)
+    ]
+    return cast(_MarkedT, {**message, "content": parts})  # cast-ok: same message shape with its parts' markers trimmed
 
 
 LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(
@@ -3137,3 +3344,15 @@ def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues
     if string_entries and len(string_entries) == len(entries):
         return tuple(ChatCompletionUserMessage(role="user", content=entry) for entry in string_entries)
     raise ValueError(f"`prompt` must be a non-empty string or a non-empty list of strings. Got: {prompt_type_name}.")
+
+
+def is_present_non_string(value: object) -> bool:
+    return value is not None and not isinstance(value, str)
+
+
+def invalid_type_message(field_path: str, value: object) -> str:
+    return f"Invalid type for '{field_path}': expected a string, got {type(value).__name__}"
+
+
+def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
+    return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)

@@ -393,9 +393,9 @@ async def test_deployment_tpm_counts_embedding_image_as_media_only_on_image_mode
 
     if not admitted:
         with pytest.raises((litellm.RateLimitError, RouterRateLimitError)):
-            await router.async_get_available_deployment(model="embedder", input=[uri], request_kwargs={})
+            await router.select("embedder", {}, input=[uri])
         return
-    deployment: Final = await router.async_get_available_deployment(model="embedder", input=[uri], request_kwargs={})
+    deployment: Final = await router.select("embedder", {}, input=[uri])
     assert deployment["model_info"]["id"] in ("embedder-0", "embedder-1")
 
 

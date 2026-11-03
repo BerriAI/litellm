@@ -97,9 +97,10 @@ def test_shared_gateway_route_is_disabled_without_reaching_provider(gateway: Gat
             headers=_cli_bearer_headers(gateway.key),
         )
         assert response.status_code == 404, response.text
-        assert _JSON_OBJECT.validate_json(response.content) == {"detail": "Claude Code gateway is not enabled"}, (
-            response.text
-        )
+        assert _JSON_OBJECT.validate_json(response.content) == {
+            "type": "error",
+            "error": {"type": "not_found_error", "message": "Claude Code gateway is not enabled"},
+        }, response.text
         assert wire.drain() == ()
 
 
@@ -268,15 +269,15 @@ def test_enabled_gateway_count_tokens_alias_matches_native_count_tokens_route(en
         )
         assert restricted_response.status_code == 403, restricted_response.text
         assert _JSON_OBJECT.validate_json(restricted_response.content) == {
+            "type": "error",
             "error": {
+                "type": "permission_error",
                 "message": (
                     f"The requested model '{restricted_model}' is not available for this API key, or the model name "
                     "is invalid. Check the models available to you and try again."
                 ),
-                "type": "key_model_access_denied",
-                "param": "model",
-                "code": "403",
-            }
+                "litellm_error_type": "key_model_access_denied",
+            },
         }, restricted_response.text
         assert wire.drain() == ()
 
@@ -285,15 +286,15 @@ def test_enabled_gateway_count_tokens_alias_matches_native_count_tokens_route(en
 def test_enabled_gateway_refuses_model_outside_virtual_key(enabled_gateway: Gateway) -> None:
     result: Final = _restricted_model_responses(enabled_gateway)
     expected_body: Final = {
+        "type": "error",
         "error": {
+            "type": "permission_error",
             "message": (
                 f"The requested model '{result[4]}' is not available for this API key, or the model name is invalid. "
                 "Check the models available to you and try again."
             ),
-            "type": "key_model_access_denied",
-            "param": "model",
-            "code": "403",
-        }
+            "litellm_error_type": "key_model_access_denied",
+        },
     }
     assert result[0] == result[2] == 403, (result[1], result[3])
     assert _JSON_OBJECT.validate_json(result[1]) == expected_body, result[1]

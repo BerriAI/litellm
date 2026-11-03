@@ -82,9 +82,9 @@ class _ShadowRecorder(CustomLogger):
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        metadata: Final = _OBJECT.validate_python(_OBJECT.validate_python(kwargs["litellm_params"])["metadata"] or {})
-        if metadata.get("is_silent_experiment") is True:
-            self.shadow_groups.put(str(metadata.get("model_group")))
+        payload: Final = _OBJECT.validate_python(kwargs["standard_logging_object"])
+        if _OBJECT.validate_python(payload["metadata"]).get("is_silent_experiment") is True:
+            self.shadow_groups.put(str(payload["model_group"]))
 
     def drained(self) -> tuple[str, ...]:
         return tuple(self.shadow_groups.get_nowait() for _ in range(self.shadow_groups.qsize()))

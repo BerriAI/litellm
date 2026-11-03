@@ -30,6 +30,7 @@ from PIL import Image
 
 from litellm import get_model_info, token_counter
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, estimate_image_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -47,7 +48,6 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
-from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.llms.openai import (
     InputTokensDetails,
     ResponseAPIUsage,
@@ -3061,7 +3061,7 @@ def test_retry_success_charges_released_project_io_reservations(
     stash.itpm_reserved_scopes = frozenset({itpm_scope})
     stash.otpm_reserved_tokens = 60
     stash.otpm_reserved_scopes = frozenset({otpm_scope})
-    stash.reservation_released = True
+    stash.mark_reservation_released()
 
     operations = handler._build_io_token_reservation_ops(
         {},

@@ -10,8 +10,8 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
-from litellm.router_utils.deployment_pricing import deployment_backend_models
 from litellm.types.utils import LiteLLMPydanticObjectBase
 from litellm.utils import print_verbose
 
