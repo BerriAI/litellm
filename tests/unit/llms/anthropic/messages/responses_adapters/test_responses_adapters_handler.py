@@ -133,7 +133,7 @@ def test_build_responses_kwargs_auto_summary_asks_each_target_for_a_level_it_acc
     assert cast(Mapping[str, object], responses_kwargs["reasoning"])["summary"] == summary
 
 
-@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6.1-sol", "gpt-4.1", "gpt-bridge-unmapped"])
+@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6.1-sol", "o3", "gpt-4.1", "gpt-bridge-unmapped"])
 def test_build_responses_kwargs_turns_reasoning_off_unless_the_map_knows_the_model_never_reasons(model: str) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
@@ -146,6 +146,22 @@ def test_build_responses_kwargs_turns_reasoning_off_unless_the_map_knows_the_mod
     map_row: Final = litellm.model_cost.get(model)
     never_reasons: Final = map_row is not None and not map_row.get("supports_reasoning")
     assert responses_kwargs.get("reasoning") == (None if never_reasons else {"effort": "none"})
+
+
+@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6.1-sol", "o3", "gpt-4.1", "gpt-bridge-unmapped"])
+def test_build_responses_kwargs_drops_reasoning_off_under_drop_params_unless_the_map_confirms_none(model: str) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        thinking={"type": "disabled"},
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": True},
+    )
+
+    map_row: Final = litellm.model_cost.get(model)
+    confirms_none: Final = map_row is not None and map_row.get("supports_none_reasoning_effort") is True
+    keeps_none: Final = map_row is None or (bool(map_row.get("supports_reasoning")) and confirms_none)
+    assert responses_kwargs.get("reasoning") == ({"effort": "none"} if keeps_none else None)
 
 
 @pytest.mark.parametrize("effort", ["max", "xhigh"])

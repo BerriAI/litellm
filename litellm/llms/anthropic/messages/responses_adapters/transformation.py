@@ -6,8 +6,8 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
-from itertools import groupby
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from itertools import chain, groupby
 from typing import Any, Final, cast
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -554,6 +554,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _reasoning_summary(thinking: Mapping[str, object], auto_summary_level: str) -> str | None:
+        if thinking.get("type") == "between_tools":
+            return "auto"
         requested: Final = requested_reasoning_summary(thinking)
         if requested:
             return requested
@@ -594,14 +596,19 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         summary: Final = cls._reasoning_summary(thinking_params, auto_summary_level)
         return {"effort": effort} if summary is None else {"effort": effort, "summary": summary}
 
+    @staticmethod
+    def _final_user_turn(messages: Sequence[object]) -> Iterator[Mapping[str, object]]:
+        for message in map(as_str_mapping, reversed(messages)):
+            if message is None or message.get("role") != "user":
+                return
+            yield message
+
     @classmethod
     def _is_between_tool_calls(cls, messages: Sequence[object]) -> bool:
-        last_message: Final = as_str_mapping(messages[-1]) if messages else None
-        return (
-            last_message is not None
-            and last_message.get("role") == "user"
-            and any(block.get("type") == "tool_result" for block in cls._content_blocks(last_message.get("content")))
+        blocks: Final = chain.from_iterable(
+            cls._content_blocks(message.get("content")) for message in cls._final_user_turn(messages)
         )
+        return any(block.get("type") == "tool_result" for block in blocks)
 
     @classmethod
     def system_blocks_to_instructions(cls, system: object) -> str:

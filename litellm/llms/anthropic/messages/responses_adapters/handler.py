@@ -39,7 +39,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CountContextManagement
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, supports_none_reasoning_effort, supports_reasoning
 
 from ..adapters.handler import context_management_explicitly_dropped, request_safeguards_evaluator
 from ..context_management import AnthropicContextManagementError, PolyfillResult, apply_context_management
@@ -253,21 +253,48 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
+def _reasoning_off_for_target(
+    reasoning: Mapping[str, object],
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    drop_params: bool,
+) -> Mapping[str, object] | None:
+    """A model the map knows does not reason already honors reasoning turned off, and its Responses API would
+    reject ``reasoning`` outright. A reasoning model whose row does not confirm ``none`` may refuse it, so
+    drop_params drops it there instead of letting the provider answer 400."""
+    if model_reasoning_efforts(model, custom_llm_provider) == ():
+        return None
+    if (
+        not drop_params
+        or not supports_reasoning(model, custom_llm_provider)
+        or supports_none_reasoning_effort(model, custom_llm_provider)
+    ):
+        return reasoning
+    verbose_logger.warning(
+        "Dropping reasoning.effort=none for %s, its model cost map entry does not set "
+        "supports_none_reasoning_effort, because drop_params is set",
+        model,
+    )
+    return None
+
+
 def _reasoning_for_target(
     reasoning: object,
     *,
     model: str,
     custom_llm_provider: str | None,
     deployment_model_info: object,
+    drop_params: bool,
 ) -> object:
-    """A model the map knows does not reason already honors reasoning turned off, and its Responses API would
-    reject ``reasoning`` outright."""
     reasoning_params: Final = as_str_mapping(reasoning)
     effort: Final = reasoning_params.get("effort") if reasoning_params is not None else None
     if reasoning_params is None or not isinstance(effort, str):
         return reasoning
-    if effort == REASONING_EFFORT_OFF and model_reasoning_efforts(model, custom_llm_provider) == ():
-        return None
+    if effort == REASONING_EFFORT_OFF:
+        return _reasoning_off_for_target(
+            reasoning_params, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+        )
     normalized: Final = normalize_reasoning_effort_value(
         effort,
         model=model,
@@ -344,13 +371,14 @@ def _build_responses_kwargs(
         request_data["output_format"] = output_format
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
+    drop_params: Final = drops_unsupported_params(forwarded_kwargs.get("drop_params"))
     responses_kwargs: Final = _ADAPTER.translate_request(
         anthropic_request,
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
-        drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
+        drop_params=drop_params,
     )
 
     provider_hint: Final = forwarded_kwargs.get("custom_llm_provider")
@@ -359,6 +387,7 @@ def _build_responses_kwargs(
         model=model,
         custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
         deployment_model_info=forwarded_kwargs.get("model_info"),
+        drop_params=drop_params,
     )
     if target_reasoning is not None:
         responses_kwargs["reasoning"] = target_reasoning

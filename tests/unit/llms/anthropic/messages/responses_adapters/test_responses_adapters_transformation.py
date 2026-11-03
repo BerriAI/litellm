@@ -1097,6 +1097,11 @@ _NEW_QUESTION_AFTER_TOOL_CALLS: Final = (
     {"role": "assistant", "content": "It is sunny."},
     {"role": "user", "content": [{"type": "text", "text": "And tomorrow?"}]},
 )
+_TOOL_RESULT_SPLIT_FROM_TEXT: Final = (
+    *_TOOL_CALL_TURNS[:2],
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Sunny"}]},
+    {"role": "user", "content": "Keep it short."},
+)
 _LOW_BUDGET: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}
 
 
@@ -1118,10 +1123,23 @@ _LOW_BUDGET: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFO
             {"type": "between_tools"},
             {"effort": "high"},
             _TOOL_CALL_TURNS,
-            {"effort": "high"},
+            {"effort": "high", "summary": "auto"},
             id="between-tool-result",
         ),
-        pytest.param({"type": "between_tools"}, None, _TOOL_CALL_TURNS, {"effort": "medium"}, id="between-default"),
+        pytest.param(
+            {"type": "between_tools"},
+            {"effort": "high"},
+            _TOOL_RESULT_SPLIT_FROM_TEXT,
+            {"effort": "high", "summary": "auto"},
+            id="between-tool-result-split-from-text",
+        ),
+        pytest.param(
+            {"type": "between_tools"},
+            None,
+            _TOOL_CALL_TURNS,
+            {"effort": "medium", "summary": "auto"},
+            id="between-default",
+        ),
         pytest.param(None, {"effort": "low"}, _FRESH_TURN, {"effort": "low"}, id="output-effort-alone"),
         pytest.param({"type": "future"}, {"effort": "low"}, _FRESH_TURN, {"effort": "low"}, id="unknown-type-effort"),
         pytest.param({"type": "adaptive"}, {"effort": "xhigh"}, _FRESH_TURN, {"effort": "xhigh"}, id="adaptive-effort"),
