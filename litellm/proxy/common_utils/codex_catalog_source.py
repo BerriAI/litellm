@@ -56,6 +56,7 @@ class _AsyncGetClient(Protocol):
         *,
         headers: dict[str, str] | None = None,  # mutable-ok: httpx's own get signature
         timeout: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> Awaitable[httpx.Response]: ...
 
 
@@ -145,6 +146,14 @@ class CodexCatalogSource:
         pending: Final = self._pending.get(tag)
         if pending is not None:
             return await asyncio.shield(pending)
+        if len(self._pending) >= self._cached_versions:
+            verbose_proxy_logger.warning(
+                "Codex catalog %s not fetched, %d fetches already in flight, serving the %s one",
+                tag,
+                len(self._pending),
+                vendored_codex_stock().source,
+            )
+            return vendored_codex_stock()
         task: Final = asyncio.ensure_future(self._resolve(tag, client_version, openai_api_key))
         self._pending[tag] = task
         task.add_done_callback(lambda _: self._pending.pop(tag, None))
@@ -231,7 +240,9 @@ class CodexCatalogSource:
     ) -> bytes | _FetchFailed:
         client: Final = self._client if self._client is not None else _default_client()
         try:
-            response: Final = await client.get(url, headers=headers, timeout=self._timeout)
+            response: Final = await client.get(
+                url, headers=headers, timeout=self._timeout, max_response_bytes=CODEX_CATALOG_MAX_BYTES
+            )
         except httpx.HTTPError as error:
             return _FetchFailed(reason=f"{type(error).__name__} fetching {url}")
         if response.status_code != 200:

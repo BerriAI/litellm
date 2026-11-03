@@ -9,6 +9,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.codex_catalog_source import (
     CODEX_CATALOG_BASE_URL,
+    CODEX_CATALOG_MAX_BYTES,
     CODEX_CATALOG_OPENAI_URL,
     CodexCatalogSource,
     codex_release_tag,
@@ -46,12 +47,19 @@ class _RawTree:
         self.replies = replies
         self.calls: list[str] = []
         self.headers: list[dict[str, str] | None] = []
+        self.byte_limits: list[int | None] = []
 
     async def get(
-        self, url: str, *, headers: dict[str, str] | None = None, timeout: float | None = None
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> httpx.Response:
         self.calls.append(url)
         self.headers.append(headers)
+        self.byte_limits.append(max_response_bytes)
         status, body = self.replies.get(url, (404, b"404: Not Found"))
         return httpx.Response(status, content=body)
 
@@ -158,7 +166,12 @@ def test_a_release_whose_pair_does_not_parse_serves_the_vendored_pair(replies: M
 def test_a_transport_error_serves_the_vendored_pair() -> None:
     class _Down:
         async def get(
-            self, url: str, *, headers: dict[str, str] | None = None, timeout: float | None = None
+            self,
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            timeout: float | None = None,
+            max_response_bytes: int | None = None,
         ) -> httpx.Response:
             raise httpx.ConnectError("offline", request=httpx.Request("GET", url))
 
@@ -251,3 +264,39 @@ def test_without_an_openai_key_openai_is_never_asked() -> None:
     stock = asyncio.run(_source(tree).stock(RELEASE))
     assert stock.source == f"github rust-v{RELEASE}"
     assert _openai_url(RELEASE) not in tree.calls and tree.headers == [None, None], tree.calls
+
+
+def test_every_fetch_caps_the_download_at_the_catalog_byte_limit_while_it_streams() -> None:
+    tree = _RawTree(_tree(RELEASE))
+    asyncio.run(_source(tree).stock(RELEASE))
+    assert tree.byte_limits == [CODEX_CATALOG_MAX_BYTES] * len(tree.calls) and tree.calls, tree.byte_limits
+
+
+def test_a_release_asked_for_while_the_in_flight_fetches_are_at_the_cap_gets_the_vendored_pair_without_a_fetch() -> (
+    None
+):
+    class _Hanging(_RawTree):
+        async def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            timeout: float | None = None,
+            max_response_bytes: int | None = None,
+        ) -> httpx.Response:
+            self.calls.append(url)
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    async def scenario() -> tuple[str, list[str]]:
+        tree = _Hanging({})
+        source = _source(tree, cached_versions=2)
+        hung = [asyncio.ensure_future(source.stock(f"0.{n}.0")) for n in (150, 151)]
+        await asyncio.sleep(0)
+        over_cap = await source.stock("0.152.0")
+        for task in hung:
+            task.cancel()
+        return over_cap.source, list(tree.calls)
+
+    source_label, calls = asyncio.run(scenario())
+    assert source_label == vendored_codex_stock().source and not any("0.152.0" in url for url in calls), calls
