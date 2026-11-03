@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.responses.streaming_iterator import ResponsesWsTurnAdmission
     from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class TestResponsesAPIWebSocketSupport:
@@ -3060,6 +3061,120 @@ def _make_streaming(**kwargs):
     kwargs.setdefault("backend_ws", MagicMock())
     kwargs.setdefault("logging_obj", MagicMock())
     return ResponsesWebSocketStreaming(**kwargs)
+
+
+@pytest.fixture
+async def provider_mcp_auth(monkeypatch: pytest.MonkeyPatch) -> "UserAPIKeyAuth":
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+    from litellm.proxy.mcp_server import mcp_server_manager
+
+    manager: Final = mcp_server_manager.MCPServerManager()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    await manager.load_servers_from_config(
+        {
+            "docs": {
+                "server_id": "native-id",
+                "execution_mode": "provider",
+                "url": "https://native.example/mcp",
+                "allowed_tools": ["search", "fetch"],
+            }
+        }
+    )
+    return UserAPIKeyAuth(
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-grant",
+            mcp_servers=["native-id"],
+            mcp_tool_permissions={"native-id": ["search"]},
+        )
+    )
+
+
+def _native_mcp_tools(tool: str = "search", url: str = "https://native.example/mcp") -> list[dict[str, object]]:
+    return [{"type": "mcp", "server_label": "client_label", "server_url": url, "allowed_tools": [tool]}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True])
+async def test_native_websocket_checks_mcp_permissions_on_first_and_later_frames(
+    provider_mcp_auth: "UserAPIKeyAuth", nested: bool
+) -> None:
+    allowed: Final = {"input": "search docs", "tools": _native_mcp_tools()}
+    denied: Final = {**allowed, "tools": _native_mcp_tools("fetch")}
+    frames: Final = tuple(
+        json.dumps({"type": "response.create", **({"response": body} if nested else body)})
+        for body in (denied, allowed, denied, allowed)
+    )
+    client: Final = _ClientSocket(*frames[1:])
+    backend: Final = AsyncMock()
+    handler: Final = _make_streaming(
+        websocket=client, backend_ws=backend, user_api_key_dict=provider_mcp_auth, first_message=frames[0]
+    )
+
+    await handler.client_to_backend()
+
+    assert [call.args[0] for call in backend.send.await_args_list] == [frames[1], frames[3]]
+    assert [(frame["status"], frame["error"]["type"]) for frame in client.sent] == [
+        (403, "tool_access_denied"), (403, "tool_access_denied")
+    ]
+    assert client.close_code is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["client", "deployment_default", "deployment_override"])
+@pytest.mark.parametrize("denial", ["url", "tool", "unbounded"])
+async def test_native_websocket_authorizes_effective_mcp_tools_before_turn_reservation(
+    provider_mcp_auth: "UserAPIKeyAuth", source: str, denial: str
+) -> None:
+    from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
+
+    selected: Final = {
+        "url": _native_mcp_tools(url="https://unregistered.example/mcp"),
+        "tool": _native_mcp_tools("fetch"),
+        "unbounded": [{"type": "mcp", "server_label": "client_label", "server_url": "https://native.example/mcp"}],
+    }[denial]
+    body: Final = {
+        "type": "response.create",
+        "input": "search docs",
+        **({"tools": selected} if source == "client" else {}),
+        **({"tools": _native_mcp_tools()} if source == "deployment_override" else {}),
+    }
+    client: Final = _ClientSocket()
+    backend: Final = AsyncMock()
+    reserve: Final = AsyncMock(return_value={})
+    handler: Final = _make_streaming(
+        websocket=client,
+        backend_ws=backend,
+        user_api_key_dict=provider_mcp_auth,
+        request_defaults=ResponsesWebSocketRequestDefaults(
+            fill_missing={"tools": selected} if source == "deployment_default" else {},
+            overrides={"tools": selected} if source == "deployment_override" else {},
+        ),
+    )
+
+    await handler._forward_guarded_frame(json.dumps(body), reserve)
+
+    backend.send.assert_not_awaited()
+    reserve.assert_not_awaited()
+    assert [(frame["status"], frame["error"]["type"]) for frame in client.sent] == [(403, "tool_access_denied")]
+
+
+@pytest.mark.asyncio
+async def test_native_websocket_rechecks_registration_on_an_open_connection(provider_mcp_auth: "UserAPIKeyAuth") -> None:
+    from litellm.proxy.mcp_server import mcp_server_manager
+
+    frame: Final = json.dumps({"type": "response.create", "input": "search docs", "tools": _native_mcp_tools()})
+    client: Final = _ClientSocket()
+    backend: Final = AsyncMock()
+    handler: Final = _make_streaming(websocket=client, backend_ws=backend, user_api_key_dict=provider_mcp_auth)
+
+    await handler._forward_guarded_frame(frame)
+    await mcp_server_manager.global_mcp_server_manager.load_servers_from_config({})
+    await handler._forward_guarded_frame(frame)
+
+    backend.send.assert_awaited_once_with(frame)
+    assert [(event["status"], event["error"]["type"]) for event in client.sent] == [(403, "tool_access_denied")]
 
 
 class TestNativeWebSocketGuardrailMasking:

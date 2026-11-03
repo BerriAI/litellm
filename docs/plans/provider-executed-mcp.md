@@ -1,6 +1,12 @@
 # Provider-executed MCP registration
 
-Status: registration, permission integration, and native request authorization are approved and pushed through `18cd30435c`. The provider registration UI and generated API schema refresh are verified and approved for commit and push
+Status: registration, permission integration, native request authorization, and registration UI are approved and pushed through `e8fe7788f9`
+
+## URL identity decision, 2026-11-02
+
+Keep the pushed implementation. Provider registrations have unique canonical URLs, enforced by the partial unique index in the original execution-mode migration and config conflict validation. Responses `server_url` and Messages `url` resolve the registration, then its server ID is used for existing object-permission and tool checks. Client labels do not need to match registration names. Existing permission inputs may use IDs, names, or aliases, which are resolved to server IDs for authorization
+
+The uncommitted label-based request lookup, duplicate-URL support, migration removal, and related UI/test changes were discarded. No additional migration or migration-recovery changes are included. The known missing-history adoption gap remains a separate concern, normal migration-based installs and upgrades execute the unique-index SQL
 
 ## Implementation plan
 
@@ -380,3 +386,12 @@ The revision passed 966 focused tests plus 132 catalog/manager tests. The live p
 The latest revision restores the gateway credential-update flow and its existing transaction rules. The shared writer accepts a preparation callback only for provider updates, keeping their stored-row validation under the lock. Neutral connection fields remain accepted without enabling upstream activity. No strict five-field rewrite or scoped-retrieval implementation was added
 
 Validation after this trim passed 967 focused tests, followed by 606 affected tests after the final adjustment. All 24 live proxy/PostgreSQL checks passed, including neutral fields on create/update, unchanged records after rejection, deleted-record errors, and concurrent edits. Provider connections remained zero. Type comparison found no new diagnostics and strict Ruff rule counts did not increase. The revision was reviewed in VS Code and approved for commit and push
+
+
+## WebSocket authorization follow-up
+
+The managed WebSocket path already calls aresponses per turn and inherits gateway discovery and execution permissions. The native OpenAI/Azure relay forwards frames directly and does not expand litellm_proxy gateway references
+
+The local follow-up reuses authorize_provider_mcp_request inside existing turn admission. Native frames are checked after deployment defaults and masking, before token reservation and upstream forwarding. The existing URL registration lookup, server-ID permissions and tool ceilings remain unchanged. Rejections use the existing turn-failure logging and keep the socket open
+
+All 12 new regression cases failed on the previous implementation. The final rerun passes 604 executed tests and 13 real OpenAI WebSocket checks, including the pre-fix bypass, permitted MCP execution, denied frames with zero upstream forwarding, allow/deny/allow on one connection, deployment defaults and overrides, and existing managed gateway execution/denial. Three legacy async endpoint tests were not awaited and are excluded from the evidence. The follow-up is approved for commit and push. Unicode URL normalization remains a separate unresolved finding

@@ -2159,13 +2159,26 @@ ResponsesWsTurnAdmission: TypeAlias = Callable[[], Awaitable[Mapping[str, object
 
 
 async def _admit_frame_turn(
-    turn_admission: ResponsesWsTurnAdmission | None, raw_message: str
+    turn_admission: ResponsesWsTurnAdmission | None,
+    raw_message: str,
+    *,
+    user_api_key_auth: UserAPIKeyAuth | None = None,
 ) -> _AdmittedTurn | _RefusedTurn:
     frame: Final = _json_object_or_none(raw_message)
-    if turn_admission is None or frame is None or frame.get("type") != "response.create":
+    if frame is None or frame.get("type") != "response.create":
         return _AdmittedTurn()
     try:
-        return _AdmittedTurn(await turn_admission())
+        if user_api_key_auth is not None:
+            from litellm.responses.mcp.request_context import authorize_provider_mcp_request
+
+            nested: Final = frame.get("response")
+            body: Final = nested if _is_json_object(nested) else frame
+            await authorize_provider_mcp_request(
+                body,
+                {"litellm_metadata": {"user_api_key_auth": user_api_key_auth}},
+                provider_bound=True,
+            )
+        return _AdmittedTurn(await turn_admission()) if turn_admission is not None else _AdmittedTurn()
     except RateLimitError as refusal:
         return _RefusedTurn(refusal)
     except Exception as e:
@@ -2180,7 +2193,14 @@ def _turn_refusal_frame(refusal: RateLimitError) -> str:
 
 
 def _turn_admission_error_frame(failure: Exception) -> str:
-    return json.dumps({"type": "error", "status": 500, "error": {"type": "server_error", "message": str(failure)}})
+    _, error_type, error_code = _error_event_fields(failure)
+    return json.dumps(
+        {
+            "type": "error",
+            "status": _status_code_for_error_fields(error_type, error_code),
+            "error": {"type": error_type or "server_error", "message": str(failure)},
+        }
+    )
 
 
 def _turn_rejection_frame(rejection: Exception) -> str:
@@ -2595,12 +2615,12 @@ class ResponsesWebSocketStreaming:
         guarded: Final = await self._guard_frame(message)
         if guarded is None:
             return
-        admitted: Final = await self._admit_or_reject_turn(guarded, message, turn_admission)
-        if admitted is None:
-            return
         if guarded.pii_tokens:
             self._remember_pii_tokens(guarded.pii_tokens)
         masked: Final = await self._mask_response_create(guarded.frame)
+        admitted: Final = await self._admit_or_reject_turn(guarded, masked, turn_admission)
+        if admitted is None:
+            return
         self._record_client_frame(masked, guarded.guardrail_information, admitted.reservation)
         await self.backend_ws.send(masked)
 
@@ -3003,7 +3023,7 @@ class ResponsesWebSocketStreaming:
     async def _admit_or_reject_turn(
         self, guarded: GuardedResponsesWsFrame, message: str, turn_admission: ResponsesWsTurnAdmission | None
     ) -> _AdmittedTurn | None:
-        verdict: Final = await _admit_frame_turn(turn_admission, message)
+        verdict: Final = await _admit_frame_turn(turn_admission, message, user_api_key_auth=self.user_api_key_dict)
         match verdict:
             case _AdmittedTurn():
                 return verdict
