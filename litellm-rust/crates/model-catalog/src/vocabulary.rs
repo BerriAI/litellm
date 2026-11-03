@@ -93,6 +93,12 @@ pub enum Endpoint {
     Realtime,
     #[serde(rename = "/v1/realtime/transcription_sessions")]
     RealtimeTranscriptionSessions,
+    #[serde(rename = "/v1/realtime/translations")]
+    RealtimeTranslations,
+    #[serde(rename = "/v1/realtime/translations/calls")]
+    RealtimeTranslationCalls,
+    #[serde(rename = "/v1/realtime/translations/client_secrets")]
+    RealtimeTranslationClientSecrets,
     #[serde(rename = "/v1/videos")]
     Videos,
     #[serde(rename = "/v1/ocr")]

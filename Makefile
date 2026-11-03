@@ -153,7 +153,7 @@ lint-install:
 # the same set CI's ':(glob)litellm/**/*.py' selects.
 lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	@base_ref=$$($(RESOLVE_BASE)) && \
-	changed=$$(git diff --name-only --diff-filter=ACMR "$$base_ref...HEAD" -- 'litellm/*.py') && \
+	changed=$$(git diff --name-only --diff-filter=ACMR --merge-base "$$base_ref" -- 'litellm/*.py') && \
 	files=$$(printf '%s\n' "$$changed" | grep -v '^litellm/enterprise/' || true) || exit $$?; \
 	if [ -z "$$files" ]; then \
 		echo "No changed litellm Python files to format-check."; \

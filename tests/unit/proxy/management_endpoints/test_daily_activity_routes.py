@@ -628,7 +628,9 @@ def test_aggregated_routes_return_scoped_results(
     assert len(body["results"]) == 2, response.text
 
 
-def _ptu_sized_router(model_group: str, shares: Mapping[str, int] = MappingProxyType({"team-a": 30, "team-b": 20})) -> Router:
+def _ptu_sized_router(
+    model_group: str, shares: Mapping[str, int] = MappingProxyType({"team-a": 30, "team-b": 20})
+) -> Router:
     return Router(
         model_list=[
             {
@@ -1268,13 +1270,15 @@ def test_team_scope_applies_membership_and_user_key_filter(
     assert repository.aggregated.call_args.kwargs["include_entity_breakdown"] is True
 
 
+@pytest.mark.parametrize("api_key", ["key-beta", "unattributed", "raw:unattributed", "raw:raw:unattributed"])
 def test_team_scope_does_not_allow_an_unowned_api_key(
     daily_activity_client: tuple[TestClient, _FakeRepository],
+    api_key: str,
 ) -> None:
     client, _ = daily_activity_client
     response: Final = client.get(
         "/team/daily/activity/aggregated",
-        params={**_entity_params("team_ids", "team-a"), "api_key": "key-beta"},
+        params={**_entity_params("team_ids", "team-a"), "api_key": api_key},
         headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
     )
     assert response.status_code == 200, response.text
@@ -1622,3 +1626,17 @@ def test_export_content_disposition_is_ascii_and_built_from_canonical_dates(
     disposition: Final = response.headers["content-disposition"]
     assert disposition == 'attachment; filename="team-usage-2025-01-01-2025-01-02-daily.csv"'
     assert disposition.isascii()
+
+
+@pytest.mark.parametrize(("prefix", "query_name", "entity_id"), _ENTITY_CASES)
+def test_unattributed_key_filter_does_not_become_an_unfiltered_request(
+    daily_activity_client: tuple[TestClient, _FakeRepository], prefix: str, query_name: str, entity_id: str
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        f"{prefix}/daily/activity/aggregated",
+        params={**_entity_params(query_name, entity_id), "api_key": "unattributed"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["total_spend"] == 0
+    assert repository.aggregated.call_args.args[0].api_keys == ("",)
