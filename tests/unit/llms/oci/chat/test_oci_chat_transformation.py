@@ -10,6 +10,7 @@ import litellm
 
 from litellm import ModelResponse
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.llms.oci.chat.transformation import (
     OCIChatConfig,
     OCIRequestWrapper,
@@ -2194,3 +2195,32 @@ def test_transform_request_sends_a_pdf_file_part_as_an_image_data_url() -> None:
             ],
         }
     ]
+
+
+@pytest.mark.usefixtures("without_ambient_oci_env")
+@pytest.mark.parametrize(
+    ("optional_params", "expected_message", "caused_by_the_caller"),
+    [
+        pytest.param({}, "oci_compartment_id is required", False, id="deployment_without_compartment_id"),
+        pytest.param(
+            {"oci_compartment_id": TEST_COMPARTMENT_ID, "response_format": {"type": "json_schema"}},
+            "json_schema",
+            True,
+            id="caller_json_schema_without_a_schema",
+        ),
+    ],
+)
+def test_transform_request_blames_a_missing_compartment_on_the_deployment_not_the_caller(
+    optional_params: dict[str, object], expected_message: str, caused_by_the_caller: bool
+) -> None:
+    with pytest.raises(OCIError, match=expected_message) as caught:
+        OCIChatConfig().transform_request(
+            model=TEST_MODEL_NAME,
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+    assert caught.value.status_code == 400
+    assert is_client_caused_failure(caught.value) is caused_by_the_caller

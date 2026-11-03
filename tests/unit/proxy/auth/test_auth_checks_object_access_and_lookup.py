@@ -4194,6 +4194,7 @@ async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
 
     from fastapi import HTTPException
 
+    from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
     from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_team_object
 
     mock_cache = MagicMock()
@@ -4209,6 +4210,7 @@ async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
         )
     assert absent_info.value.status_code == 404
     assert "Team doesn't exist in db" in str(absent_info.value.detail)
+    assert is_client_caused_failure(absent_info.value) is True
 
     # The database did not answer. Same status and detail, but not the subclass,
     # so a caller keying on it does not read this as proof the team is gone.
@@ -4221,6 +4223,7 @@ async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
         )
     assert unreadable_info.value.status_code == 404
     assert not isinstance(unreadable_info.value, TeamNotFoundError)
+    assert is_client_caused_failure(unreadable_info.value) is False
 
 
 # Reject Client-Side Metadata Tags Tests
@@ -9480,6 +9483,7 @@ async def test_get_access_object_db_fetch_returns_validated_access_group():
 async def test_get_access_object_distinguishes_absent_group_from_unreadable_row():
     from fastapi import HTTPException
 
+    from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
     from litellm.proxy.auth.auth_checks import AccessGroupNotFoundError, get_access_object
 
     mock_cache = MagicMock()
@@ -9498,6 +9502,8 @@ async def test_get_access_object_distinguishes_absent_group_from_unreadable_row(
         await get_access_object("real-group", unreadable_client, mock_cache)
     assert unreadable_info.value.status_code == 404
     assert not isinstance(unreadable_info.value, AccessGroupNotFoundError)
+    assert is_client_caused_failure(absent_info.value) is True
+    assert is_client_caused_failure(unreadable_info.value) is False
 
 
 @pytest.mark.asyncio

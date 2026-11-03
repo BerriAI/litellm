@@ -72,7 +72,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import OperatorFaultHTTPException, PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure
@@ -1781,6 +1781,7 @@ class JWTAuthManager:
             return None, None
 
         any_claim_team_resolved = False
+        unreadable_team_error: OperatorFaultHTTPException | None = None  # rebind-ok: the denial chains it
         for team_id in sorted(team_ids, key=str):
             try:
                 team_object = await get_team_object(
@@ -1825,6 +1826,9 @@ class JWTAuthManager:
                         )
                         if is_allowed:
                             return team_id, team_object
+            except OperatorFaultHTTPException as error:
+                unreadable_team_error = error
+                continue
             except Exception:
                 continue
 
@@ -1842,7 +1846,7 @@ class JWTAuthManager:
                     else f"No team has access to the requested model: {requested_model}. "
                     f"Checked teams={team_ids}. Check `/models` to see all available models."
                 ),
-            )
+            ) from unreadable_team_error
 
         # No claim team resolved and fallback enabled — defer to fallback.
         return None, None

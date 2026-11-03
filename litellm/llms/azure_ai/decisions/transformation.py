@@ -48,7 +48,7 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
                     for detail in error.errors(include_input=False, include_context=False, include_url=False)
                 )
             )
-            raise litellm.BadRequestError(
+            raise litellm.exceptions.OperatorFaultBadRequestError(
                 message=f"Invalid Azure AI credential parameter(s): {', '.join(f'`{name}`' for name in field_names)}",
                 model=model,
                 llm_provider="azure_ai",

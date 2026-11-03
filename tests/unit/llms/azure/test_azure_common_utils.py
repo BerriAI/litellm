@@ -13,7 +13,9 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.llms.azure.common_utils import (
+    AzureOpenAIError,
     BaseAzureLLM,
     _cached_azure_ad_token_refresh_provider,
     _cached_default_azure_credential_provider,
@@ -2421,6 +2423,33 @@ def test_oidc_tokens_for_different_scopes_are_exchanged_and_cached_separately(mo
 
     assert tokens == ("token-for:api://first/.default", "token-for:api://second/.default") * 2
     assert exchanged_scopes.qsize() == 2
+
+
+@pytest.mark.usefixtures("no_ambient_azure_credentials")
+@pytest.mark.parametrize(
+    ("token_endpoint_reply", "azure_client_id"),
+    [
+        pytest.param({"expires_in": 3600}, "client", id="token_reply_without_access_token"),
+        pytest.param({"access_token": "minted"}, "client", id="token_reply_without_expires_in"),
+        pytest.param({"access_token": "minted", "expires_in": 3600}, None, id="client_id_unset"),
+    ],
+)
+def test_an_oidc_deployment_misconfiguration_keeps_its_422_but_is_not_the_callers_fault(
+    monkeypatch: pytest.MonkeyPatch, token_endpoint_reply: dict[str, object], azure_client_id: str | None
+) -> None:
+    token_endpoint: Final = httpx.MockTransport(lambda _: httpx.Response(200, json=token_endpoint_reply))
+    monkeypatch.setattr(litellm, "sync_transport", token_endpoint, raising=False)
+    monkeypatch.setenv("AZURE_TEST_OIDC_MISCONFIGURED_ASSERTION", "workload-jwt")
+
+    with pytest.raises(AzureOpenAIError) as caught:
+        get_azure_ad_token_from_oidc(
+            azure_ad_token="os.environ/AZURE_TEST_OIDC_MISCONFIGURED_ASSERTION",
+            azure_client_id=azure_client_id,
+            azure_tenant_id=f"tenant-{uuid.uuid4().hex}",
+        )
+
+    assert caught.value.status_code == 422
+    assert is_client_caused_failure(caught.value) is False
 
 
 def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):

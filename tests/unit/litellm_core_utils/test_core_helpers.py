@@ -12,7 +12,7 @@ import pytest
 from fastapi import HTTPException
 from openai.types.chat import ChatCompletionChunk
 
-from litellm.exceptions import BadRequestError, GuardrailRaisedException
+from litellm.exceptions import BadRequestError, GuardrailRaisedException, OperatorFaultBadRequestError
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     RESPONSE_COST_HEADER,
@@ -38,7 +38,9 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+from litellm.llms.openai_like.common_utils import OperatorFaultOpenAILikeError
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import OperatorFaultHTTPException
 from litellm.types.utils import Delta, ImageResponse, ModelResponseStream, StreamingChoices, TranscriptionResponse
 
 
@@ -570,6 +572,22 @@ def _provider_error(status_code: int) -> Exception:
     return AnthropicError(status_code=status_code, message="provider rejected the request")
 
 
+def _provider_400_raised_while_handling(cause: Exception, *, suppress_context: bool = False) -> Exception:
+    try:
+        try:
+            raise cause
+        except Exception:
+            if suppress_context:
+                raise _provider_error(400) from None
+            raise _provider_error(400)
+    except Exception as mapped:
+        return mapped
+
+
+def _missing_deployment_key() -> Exception:
+    return OperatorFaultOpenAILikeError(status_code=400, message="Missing API Key")
+
+
 def _guardrail_backend_failure() -> Exception:
     request: Final = httpx.Request("POST", "https://api.openai.com/v1/moderations")
     rejected: Final = httpx.HTTPStatusError(
@@ -583,6 +601,14 @@ class TestIsClientCausedFailure:
         "exception",
         [
             pytest.param(_provider_error(400), id="provider_400_invalid_request"),
+            pytest.param(
+                _provider_400_raised_while_handling(ValueError("unrelated earlier failure")),
+                id="provider_400_raised_while_handling_an_unmarked_error",
+            ),
+            pytest.param(
+                _provider_400_raised_while_handling(_missing_deployment_key(), suppress_context=True),
+                id="provider_400_that_suppressed_an_operator_fault_context",
+            ),
             pytest.param(_provider_error(413), id="provider_413_request_too_large"),
             pytest.param(_provider_error(422), id="provider_422_unprocessable"),
             pytest.param(
@@ -619,6 +645,19 @@ class TestIsClientCausedFailure:
             ),
             pytest.param(ValueError("boom"), id="no_status"),
             pytest.param(None, id="none"),
+            pytest.param(
+                OperatorFaultBadRequestError(
+                    message="SagemakerException - Unable to locate credentials",
+                    model="sagemaker/qa-endpoint",
+                    llm_provider="sagemaker",
+                ),
+                id="deployment_missing_credentials_400",
+            ),
+            pytest.param(OperatorFaultHTTPException(status_code=404), id="proxy_404_from_failed_db_read"),
+            pytest.param(
+                _provider_400_raised_while_handling(_missing_deployment_key()),
+                id="provider_400_mapped_from_a_missing_deployment_key",
+            ),
         ],
     )
     def test_fault(self, exception: Exception | None) -> None:

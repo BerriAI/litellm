@@ -9,6 +9,7 @@ import pytest
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.microsoft_365_copilot.chat.handler import acompletion, completion
@@ -388,6 +389,47 @@ def test_unknown_token_exchange_profile_fails_without_http_calls() -> None:
     assert error.value.status_code == 400
     assert error.value.message == ("microsoft_365_copilot token_exchange_profile must be 'rfc8693' or 'jwt_bearer_obo'")
     assert len(requests) == 0
+
+
+_OPERATOR_FAULT_EXCHANGE_PARAMS: Final = _token_exchange_params(
+    "operator-fault", "client-operator-fault", "secret-operator-fault"
+)
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        pytest.param(
+            {
+                "token_exchange_endpoint": _OPERATOR_FAULT_EXCHANGE_PARAMS["token_exchange_endpoint"],
+                "client_id": "client-operator-fault",
+            },
+            id="partial_credentials",
+        ),
+        pytest.param({**_OPERATOR_FAULT_EXCHANGE_PARAMS, "client_secret": 404}, id="non_string_credential"),
+        pytest.param({**_OPERATOR_FAULT_EXCHANGE_PARAMS, "client_id": "   "}, id="blank_credential"),
+        pytest.param({**_OPERATOR_FAULT_EXCHANGE_PARAMS, "token_exchange_profile": "saml"}, id="unknown_profile"),
+        pytest.param({**_OPERATOR_FAULT_EXCHANGE_PARAMS, "token_exchange_scope": 404}, id="non_string_scope"),
+        pytest.param({**_OPERATOR_FAULT_EXCHANGE_PARAMS, "token_exchange_audience": 404}, id="non_string_audience"),
+    ],
+)
+def test_token_exchange_misconfiguration_is_a_400_the_operator_owns(litellm_params: Mapping[str, object]) -> None:
+    client, requests = _sync_client()
+
+    with pytest.raises(Microsoft365CopilotError) as error:
+        completion(
+            model=_MODEL,
+            messages=_messages(),
+            api_key=None,
+            litellm_params=litellm_params,
+            optional_params={},
+            secret_fields=_secret_fields("header.operator-fault.signature"),
+            client=client,
+        )
+
+    assert error.value.status_code == 400
+    assert is_client_caused_failure(error.value) is False
+    assert requests == []
 
 
 def test_missing_auth_configuration_fails_without_http_calls() -> None:

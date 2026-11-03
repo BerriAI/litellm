@@ -16,6 +16,7 @@ import httpx
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import OperatorFault
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -56,6 +57,10 @@ class OCIError(BaseLLMException):
             message=message,
             headers=headers,
         )
+
+
+class OperatorFaultOCIError(OperatorFault, OCIError):
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +330,7 @@ def get_oci_base_url(optional_params: Mapping[str, object], api_base: str | None
     creds: Final = resolve_oci_credentials(optional_params)
     region: Final = creds["oci_region"]
     if not isinstance(region, str) or not _OCI_REGION_RE.match(region):
-        raise OCIError(
+        raise OperatorFaultOCIError(
             status_code=400,
             message=(
                 f"Invalid OCI region {region!r}: must match ^[a-z][a-z0-9-]{{0,30}}[a-z0-9]$ (e.g. 'us-ashburn-1')."
@@ -441,7 +446,7 @@ def sign_with_manual_credentials(
     oci_key_content: str | None = None
     if oci_key:
         if not isinstance(oci_key, str):
-            raise OCIError(
+            raise OperatorFaultOCIError(
                 status_code=400,
                 message=(
                     f"oci_key must be a string containing the PEM private key content. "

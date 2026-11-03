@@ -2,6 +2,7 @@ from typing import Literal
 
 import httpx
 
+from litellm.exceptions import OperatorFault
 from litellm.litellm_core_utils.url_utils import join_api_base
 
 
@@ -12,6 +13,10 @@ class OpenAILikeError(Exception):
         self.request = httpx.Request(method="POST", url="https://www.litellm.ai")
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
+
+
+class OperatorFaultOpenAILikeError(OperatorFault, OpenAILikeError):
+    pass
 
 
 class OpenAILikeBase:
@@ -27,13 +32,13 @@ class OpenAILikeBase:
         custom_endpoint: bool | None,
     ) -> tuple[str, dict]:
         if api_key is None and headers is None:
-            raise OpenAILikeError(
+            raise OperatorFaultOpenAILikeError(
                 status_code=400,
                 message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
             )
 
         if api_base is None:
-            raise OpenAILikeError(
+            raise OperatorFaultOpenAILikeError(
                 status_code=400,
                 message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
             )

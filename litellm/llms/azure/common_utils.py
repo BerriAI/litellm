@@ -17,6 +17,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.exceptions import OperatorFault
 from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -79,6 +80,10 @@ class AzureOpenAIError(BaseLLMException):
             headers=headers,
             body=body,
         )
+
+
+class OperatorFaultAzureOpenAIError(OperatorFault, AzureOpenAIError):
+    pass
 
 
 def process_azure_headers(headers: httpx.Headers | dict) -> dict:
@@ -285,10 +290,10 @@ def _exchange_oidc_token(cache_key: str, token_url: str, client_id: str, scope: 
     azure_ad_token_expires_in: Final = azure_ad_token_json.get("expires_in", None)
 
     if azure_ad_token_access_token is None:
-        raise AzureOpenAIError(status_code=422, message="Azure AD Token access_token not returned")
+        raise OperatorFaultAzureOpenAIError(status_code=422, message="Azure AD Token access_token not returned")
 
     if azure_ad_token_expires_in is None:
-        raise AzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned")
+        raise OperatorFaultAzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned")
 
     azure_ad_cache.set_cache(
         key=cache_key,
@@ -323,7 +328,7 @@ def get_azure_ad_token_from_oidc(
     azure_client_id = azure_client_id or os.getenv("AZURE_CLIENT_ID")
     azure_tenant_id = azure_tenant_id or os.getenv("AZURE_TENANT_ID")
     if azure_client_id is None or azure_tenant_id is None:
-        raise AzureOpenAIError(
+        raise OperatorFaultAzureOpenAIError(
             status_code=422,
             message="AZURE_CLIENT_ID and AZURE_TENANT_ID must be set",
         )

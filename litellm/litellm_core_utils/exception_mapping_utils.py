@@ -32,6 +32,7 @@ from ..exceptions import (
     ContextWindowExceededError,
     InternalServerError,
     NotFoundError,
+    OperatorFaultBadRequestError,
     PaymentRequiredError,
     PermissionDeniedError,
     RateLimitError,
@@ -1160,7 +1161,7 @@ def _map_sagemaker_exception(
     extra_information: str,
 ) -> None:
     if "Unable to locate credentials" in error_str:
-        raise BadRequestError(
+        raise OperatorFaultBadRequestError(
             message=f"litellm.BadRequestError: SagemakerException - {error_str}",
             model=model,
             llm_provider="sagemaker",
@@ -1272,7 +1273,7 @@ def _map_vertex_exception(
     status_code: Final[object] = getattr(original_exception, "status_code", None)
     body_code: Final[int | None] = _get_body_error_code(error_str)
     if "Vertex AI API has not been used in project" in error_str or "Unable to find your project" in error_str:
-        raise BadRequestError(
+        raise OperatorFaultBadRequestError(
             message=f"litellm.BadRequestError: {custom_llm_provider}Exception - {error_str}",
             model=model,
             llm_provider=custom_llm_provider,

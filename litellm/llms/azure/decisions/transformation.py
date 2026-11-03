@@ -40,7 +40,7 @@ class AzureDecisionsConfig(OpenAIDecisionsConfig):
         try:
             params: Final = GenericLiteLLMParams.model_validate({**litellm_params, "api_key": api_key})
         except ValidationError as error:
-            raise litellm.BadRequestError(
+            raise litellm.exceptions.OperatorFaultBadRequestError(
                 message="Invalid Azure Decisions credential parameters",
                 model=model,
                 llm_provider="azure",

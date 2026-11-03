@@ -3,11 +3,16 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.exceptions import OperatorFault
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
 
 class Microsoft365CopilotError(BaseLLMException):
+    pass
+
+
+class OperatorFaultMicrosoft365CopilotError(OperatorFault, Microsoft365CopilotError):
     pass
 
 

@@ -175,6 +175,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     spend_counter_batch_scope,
 )
 from litellm.proxy.utils import (
+    OperatorFaultProxyException,
     PrismaClient,
     ProxyLogging,
     normalize_route_for_root_path,
@@ -2306,7 +2307,7 @@ async def user_api_key_auth_builder(
             from litellm.proxy.proxy_server import premium_user
 
             if premium_user is not True:
-                raise ProxyException(
+                raise OperatorFaultProxyException(
                     message="Oauth2 token validation is only available for premium users. "
                     + CommonProxyErrors.not_premium_user.value,
                     type=ProxyErrorTypes.auth_error,
@@ -2326,7 +2327,7 @@ async def user_api_key_auth_builder(
                 from litellm.proxy.proxy_server import premium_user
 
                 if premium_user is not True:
-                    raise ProxyException(
+                    raise OperatorFaultProxyException(
                         message=f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}",
                         type=ProxyErrorTypes.auth_error,
                         param="premium_user",

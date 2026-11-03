@@ -1,5 +1,6 @@
 import json
 import sys
+from collections.abc import Callable
 from functools import partial
 from types import ModuleType, SimpleNamespace
 from typing import Final
@@ -15,6 +16,8 @@ import litellm
 from litellm._version import version
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
+from litellm.llms.databricks.chat.transformation import DatabricksConfig
 from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksException
 
 
@@ -98,6 +101,78 @@ def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(
         assert error.status_code == 400
         assert error.llm_provider == "databricks"
         assert MISSING_SDK_MESSAGE in error.message
+
+
+def _resolve_chat_url(monkeypatch: pytest.MonkeyPatch) -> object:
+    return DatabricksConfig().get_complete_url(
+        api_base=None, api_key=None, model="dbrx-instruct-071224", optional_params={}, litellm_params={}
+    )
+
+
+def _validate_environment(monkeypatch: pytest.MonkeyPatch, *, api_key: str | None, custom_endpoint: bool) -> object:
+    return DatabricksBase().databricks_validate_environment(
+        api_key=api_key,
+        api_base=None,
+        endpoint_type="chat_completions",
+        custom_endpoint=custom_endpoint,
+        headers=None,
+    )
+
+
+def _validate_environment_with_a_rejected_oauth_client(monkeypatch: pytest.MonkeyPatch) -> object:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "synthetic-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "synthetic-secret")
+    responses.post(f"{SDK_HOST}/oidc/v1/token", status=400, json={"error": "invalid_request"})
+    return DatabricksBase().databricks_validate_environment(
+        api_key=None,
+        api_base=f"{SDK_HOST}/serving-endpoints",
+        endpoint_type="chat_completions",
+        custom_endpoint=False,
+        headers=None,
+    )
+
+
+@responses.activate
+@pytest.mark.parametrize(
+    ("deployment_misconfiguration", "expected_message"),
+    [
+        pytest.param(_resolve_chat_url, "or install the databricks-sdk", id="no_api_base_and_no_sdk"),
+        pytest.param(
+            partial(_validate_environment, api_key=None, custom_endpoint=False),
+            MISSING_SDK_MESSAGE,
+            id="no_credentials_and_no_sdk",
+        ),
+        pytest.param(
+            partial(_validate_environment, api_key=None, custom_endpoint=True),
+            "Missing API Key",
+            id="custom_endpoint_without_api_key",
+        ),
+        pytest.param(
+            partial(_validate_environment, api_key="dapimykey", custom_endpoint=True),
+            "Missing API Base",
+            id="custom_endpoint_without_api_base",
+        ),
+        pytest.param(
+            _validate_environment_with_a_rejected_oauth_client,
+            "OAuth M2M token request failed",
+            id="oauth_token_request_rejected",
+        ),
+    ],
+)
+def test_a_deployment_misconfiguration_keeps_its_400_but_is_not_the_callers_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_misconfiguration: Callable[[pytest.MonkeyPatch], object],
+    expected_message: str,
+) -> None:
+    for name in ("DATABRICKS_API_BASE", "DATABRICKS_API_KEY", "DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setitem(sys.modules, "databricks.sdk", None)
+
+    with pytest.raises(DatabricksException, match=expected_message) as caught:
+        deployment_misconfiguration(monkeypatch)
+
+    assert caught.value.status_code == 400
+    assert is_client_caused_failure(caught.value) is False
 
 
 @pytest.mark.respx(assert_all_called=True)

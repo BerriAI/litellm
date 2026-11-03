@@ -141,6 +141,7 @@ from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import (
     GuardrailRaisedException,
+    OperatorFault,
     RejectedRequestError,
     SensitiveDataRouteException,
 )
@@ -9215,6 +9216,14 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
     return with_litellm_call_id(openai_shaped_proxy_exception(e, message, status_code), litellm_call_id)
 
 
+class OperatorFaultHTTPException(OperatorFault, HTTPException):
+    pass
+
+
+class OperatorFaultProxyException(OperatorFault, ProxyException):
+    pass
+
+
 def require_enterprise_license(feature: str | None = None) -> None:
     """
     Raises an HTTPException if the user is not a premium user
@@ -9229,7 +9238,7 @@ def require_enterprise_license(feature: str | None = None) -> None:
         )
 
     if not premium_user:
-        raise HTTPException(
+        raise OperatorFaultHTTPException(
             status_code=403,
             detail={"error": detail_msg},
         )

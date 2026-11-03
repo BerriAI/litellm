@@ -13,6 +13,7 @@ from openai import AsyncOpenAI, OpenAI
 import litellm
 from litellm import completion
 from litellm.exceptions import GuardrailRaisedException
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
@@ -58,6 +59,37 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         assert caught.value.response.status_code == 400
         assert caught.value.request.url == request.url
         assert caught.value.response.headers["x-request-id"] == "cyber-policy-request"
+
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "provider_message"),
+    [
+        pytest.param("sagemaker", "sagemaker/qa-endpoint", "Unable to locate credentials", id="sagemaker_no_credentials"),
+        pytest.param(
+            "vertex_ai",
+            "gemini-3.8-flash",
+            "Vertex AI API has not been used in project 123456 before or it is disabled.",
+            id="vertex_api_disabled",
+        ),
+        pytest.param(
+            "vertex_ai", "gemini-3.8-flash", "Unable to find your project qa-missing", id="vertex_project_missing"
+        ),
+    ],
+)
+def test_deployment_configuration_failure_keeps_its_400_but_is_not_the_callers_fault(
+    custom_llm_provider: str, model: str, provider_message: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model=model,
+            original_exception=Exception(provider_message),
+            custom_llm_provider=custom_llm_provider,
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert caught.value.status_code == 400
+    assert is_client_caused_failure(caught.value) is False
 
 
 def _debug_info_for_api_base(configured_api_base: str) -> str:

@@ -26,6 +26,7 @@ import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
@@ -3154,6 +3155,7 @@ class TestJWTOAuth2Coexistence:
             assert exc_info.value.type == ProxyErrorTypes.auth_error
             assert exc_info.value.code == "403"
             assert "Oauth2 token validation is only available for premium users" in exc_info.value.message
+            assert is_client_caused_failure(exc_info.value) is False
             mock_oauth2.assert_not_called()
 
     @pytest.mark.asyncio
@@ -9309,6 +9311,7 @@ async def test_real_jwt_still_requires_license_when_jwt_auth_enabled(monkeypatch
 
     message = str(getattr(exc_info.value, "message", exc_info.value))
     assert "enterprise only feature" in message
+    assert is_client_caused_failure(exc_info.value) is False
 
 
 @pytest.mark.asyncio

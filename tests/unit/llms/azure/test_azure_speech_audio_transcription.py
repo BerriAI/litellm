@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.llms.azure.audio_transcription.transformation import (
     AzureSpeechAudioTranscriptionConfig,
     AzureSpeechAudioTranscriptionException,
@@ -102,6 +103,31 @@ def test_azure_speech_audio_transcription_rejects_azure_openai_endpoint():
             optional_params={},
             litellm_params={},
         )
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected_message"),
+    [
+        pytest.param(None, "api_base is required", id="api_base_unset"),
+        pytest.param("https://example.openai.azure.com", "not an Azure OpenAI endpoint", id="azure_openai_endpoint"),
+    ],
+)
+def test_a_misconfigured_speech_deployment_keeps_its_400_but_is_not_the_callers_fault(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, expected_message: str
+) -> None:
+    monkeypatch.delenv("AZURE_SPEECH_API_BASE", raising=False)
+
+    with pytest.raises(AzureSpeechAudioTranscriptionException, match=expected_message) as caught:
+        AzureSpeechAudioTranscriptionConfig().get_complete_url(
+            api_base=api_base,
+            api_key="test-key",
+            model="speech/azure-stt",
+            optional_params={},
+            litellm_params={},
+        )
+
+    assert caught.value.status_code == 400
+    assert is_client_caused_failure(caught.value) is False
 
 
 def test_azure_speech_audio_transcription_validate_environment():

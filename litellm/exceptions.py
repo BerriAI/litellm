@@ -372,6 +372,16 @@ class UnsupportedEndpointError(BadRequestError):
     pass
 
 
+class OperatorFault:
+    """Marks a 4xx that only the proxy operator can fix (a deployment's missing credentials, a cloud API the
+    deployment's project has not enabled, a database read that failed), so the proxy logs it at ERROR even
+    though the caller still gets the 4xx."""
+
+
+class OperatorFaultBadRequestError(OperatorFault, BadRequestError):
+    pass
+
+
 class EndpointNotSupportedByModelError(BadRequestError):
     def __init__(self, message: str, model: str, llm_provider: str = "") -> None:
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # inherited public exception constructor is untyped

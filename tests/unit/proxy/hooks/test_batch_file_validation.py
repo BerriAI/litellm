@@ -405,16 +405,17 @@ async def test_pre_call_denies_all_team_models_key_via_member_scope():
 
 
 @pytest.mark.parametrize(
-    ("team_fetch_error", "expected_status"),
+    ("team_fetch_error", "expected_status", "caller_caused"),
     [
-        (HTTPException(status_code=404, detail="team not found"), 404),
-        (Exception("team fetch failed"), 403),
+        (HTTPException(status_code=404, detail="team not found"), 404, True),
+        (Exception("team fetch failed"), 403, False),
     ],
 )
 @pytest.mark.asyncio
 async def test_pre_call_fails_closed_when_current_team_fetch_fails_for_all_team_models_key(
-    team_fetch_error, expected_status
+    team_fetch_error, expected_status, caller_caused
 ):
+    from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
@@ -459,6 +460,7 @@ async def test_pre_call_fails_closed_when_current_team_fetch_fails_for_all_team_
         )
 
     assert exc_info.value.status_code == expected_status
+    assert is_client_caused_failure(exc_info.value) is caller_caused
     mock_get_team_object.assert_awaited_once()
     mock_can_key_call_model.assert_not_awaited()
 

@@ -41,6 +41,7 @@ from litellm.llms.microsoft_365_copilot.chat.transformation import (
 )
 from litellm.llms.microsoft_365_copilot.common_utils import (
     Microsoft365CopilotError,
+    OperatorFaultMicrosoft365CopilotError,
     extract_caller_assertion,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -136,7 +137,7 @@ def _token_exchange_profile(value: object) -> TokenExchangeProfile:
         return "rfc8693"
     if value == "jwt_bearer_obo":
         return "jwt_bearer_obo"
-    raise Microsoft365CopilotError(
+    raise OperatorFaultMicrosoft365CopilotError(
         status_code=400,
         message="microsoft_365_copilot token_exchange_profile must be 'rfc8693' or 'jwt_bearer_obo'",
     )
@@ -154,12 +155,12 @@ def _get_token_exchange_credentials(
     if not any(configured_values):
         return None
     if not all(configured_values):
-        raise Microsoft365CopilotError(
+        raise OperatorFaultMicrosoft365CopilotError(
             status_code=400,
             message="microsoft_365_copilot requires token_exchange_endpoint, client_id, and client_secret together",
         )
     if not isinstance(token_endpoint, str) or not isinstance(client_id, str) or not isinstance(client_secret, str):
-        raise Microsoft365CopilotError(
+        raise OperatorFaultMicrosoft365CopilotError(
             status_code=400,
             message=(
                 "microsoft_365_copilot requires token_exchange_endpoint, client_id, and client_secret "
@@ -167,20 +168,20 @@ def _get_token_exchange_credentials(
             ),
         )
     if not token_endpoint.strip() or not client_id.strip() or not client_secret.strip():
-        raise Microsoft365CopilotError(
+        raise OperatorFaultMicrosoft365CopilotError(
             status_code=400,
             message="microsoft_365_copilot requires token_exchange_endpoint, client_id, and client_secret together",
         )
     profile: Final = _token_exchange_profile(litellm_params.get("token_exchange_profile"))
     scope_value: Final[object] = litellm_params.get("token_exchange_scope")
     if scope_value is not None and not isinstance(scope_value, str):
-        raise Microsoft365CopilotError(
+        raise OperatorFaultMicrosoft365CopilotError(
             status_code=400,
             message="microsoft_365_copilot token_exchange_scope must be a string",
         )
     audience_value: Final[object] = litellm_params.get("token_exchange_audience")
     if audience_value is not None and not isinstance(audience_value, str):
-        raise Microsoft365CopilotError(
+        raise OperatorFaultMicrosoft365CopilotError(
             status_code=400,
             message="microsoft_365_copilot token_exchange_audience must be a string",
         )

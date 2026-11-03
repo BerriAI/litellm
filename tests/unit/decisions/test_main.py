@@ -23,6 +23,7 @@ import litellm
 from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
@@ -2976,6 +2977,8 @@ def test_azure_ai_decisions_malformed_credential_is_a_sanitized_bad_request(
         )
 
     assert caught.value.status_code == 400
+    assert caught.value.llm_provider == "azure_ai"
+    assert is_client_caused_failure(caught.value) is False
     assert "`client_secret`" in str(caught.value)
     assert "123" not in str(caught.value)
     assert not route.called

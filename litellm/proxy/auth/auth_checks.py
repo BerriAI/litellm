@@ -149,7 +149,7 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
 from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
-from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.proxy.utils import OperatorFaultHTTPException, PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -3689,11 +3689,11 @@ async def get_team_object(
         )
     except TeamNotFoundError:
         raise
-    except Exception:
-        raise HTTPException(
+    except Exception as e:
+        raise OperatorFaultHTTPException(
             status_code=404,
             detail={"error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."},
-        )
+        ) from e
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -3792,7 +3792,7 @@ async def get_access_object(
             "Error getting access group for access_group_id: %s",
             access_group_id,
         )
-        raise HTTPException(
+        raise OperatorFaultHTTPException(
             status_code=503 if check_db_only else 404,
             detail=(
                 "Access group policy is unavailable"

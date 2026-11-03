@@ -15985,7 +15985,7 @@ class Router(DeprecatedRouterMembers):
                     )
                     return healthy_deployments
                 else:
-                    raise litellm.BadRequestError(
+                    raise litellm.exceptions.OperatorFaultBadRequestError(
                         message=f"Deployment {healthy_deployments.get('model_info', {}).get('id')} does not support pass-through endpoint (use_in_pass_through=False)",
                         model=model,
                         llm_provider="",
@@ -15995,7 +15995,7 @@ class Router(DeprecatedRouterMembers):
             pass_through_deployments = self._filter_pass_through_deployments(healthy_deployments=healthy_deployments)
 
             if len(pass_through_deployments) == 0:
-                raise litellm.BadRequestError(
+                raise litellm.exceptions.OperatorFaultBadRequestError(
                     message=f"Model {model} has no deployments configured with use_in_pass_through=True. Please add use_in_pass_through: true to the deployment configuration",
                     model=model,
                     llm_provider="",
@@ -16977,7 +16977,7 @@ class Router(DeprecatedRouterMembers):
                 return healthy_deployments
             else:
                 # Specific deployment does not support pass-through
-                raise litellm.BadRequestError(
+                raise litellm.exceptions.OperatorFaultBadRequestError(
                     message=f"Deployment {healthy_deployments.get('model_info', {}).get('id')} does not support pass-through endpoint (use_in_pass_through=False)",
                     model=model,
                     llm_provider="",
@@ -16988,7 +16988,7 @@ class Router(DeprecatedRouterMembers):
 
         if len(pass_through_deployments) == 0:
             # No deployments support pass-through
-            raise litellm.BadRequestError(
+            raise litellm.exceptions.OperatorFaultBadRequestError(
                 message=f"Model {model} has no deployment configured with use_in_pass_through=True. Please add use_in_pass_through: true in the deployment configuration",
                 model=model,
                 llm_provider="",

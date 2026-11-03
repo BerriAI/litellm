@@ -3716,3 +3716,15 @@ async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_ou
     await evict_config_param("router_settings", cache=cache)
 
     assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None
+
+
+def test_missing_enterprise_license_keeps_its_403_but_is_an_operator_fault() -> None:
+    from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
+    from litellm.proxy.utils import require_enterprise_license
+
+    with patch("litellm.proxy.proxy_server.premium_user", False):
+        with pytest.raises(HTTPException) as caught:
+            require_enterprise_license("guardrails on a key")
+
+    assert caught.value.status_code == 403
+    assert is_client_caused_failure(caught.value) is False

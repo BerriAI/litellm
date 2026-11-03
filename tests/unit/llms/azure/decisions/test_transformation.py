@@ -10,6 +10,7 @@ import respx
 from azure.core.credentials import AccessToken
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.llms.azure import common_utils
 from litellm.llms.azure.decisions.transformation import AzureDecisionsConfig
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
@@ -224,3 +225,19 @@ def test_azure_decisions_does_not_echo_invalid_credentials() -> None:
             {"azure_ad_token": {"secret": "sensitive-value"}},
         )
     assert "sensitive-value" not in str(error.value)
+
+
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("systemone", (False, True))
+async def test_azure_decisions_invalid_credential_is_a_400_the_operator_owns(
+    respx_mock: respx.MockRouter, is_async: bool, systemone: bool
+) -> None:
+    route: Final = respx_mock.post(_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError) as error:
+        await call_decisions(is_async, systemone, {"azure_ad_token": {"secret": "sensitive-value"}})
+
+    assert error.value.status_code == 400
+    assert error.value.llm_provider == "azure"
+    assert is_client_caused_failure(error.value) is False
+    assert not route.called

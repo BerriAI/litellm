@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlparse
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.exceptions import OperatorFault
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -30,6 +31,10 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 
 
 class AzureSpeechAudioTranscriptionException(BaseLLMException):
+    pass
+
+
+class OperatorFaultAzureSpeechAudioTranscriptionException(OperatorFault, AzureSpeechAudioTranscriptionException):
     pass
 
 
@@ -96,7 +101,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> str:
         api_base = api_base or get_secret_str("AZURE_SPEECH_API_BASE")
         if api_base is None:
-            raise AzureSpeechAudioTranscriptionException(
+            raise OperatorFaultAzureSpeechAudioTranscriptionException(
                 message=(
                     "api_base is required for Azure AI Speech transcription. "
                     "Use a Cognitive Services endpoint like "
@@ -165,7 +170,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return f"{parsed_url.scheme}://{hostname}"
 
         if self._is_azure_openai_endpoint(hostname=hostname):
-            raise AzureSpeechAudioTranscriptionException(
+            raise OperatorFaultAzureSpeechAudioTranscriptionException(
                 message=(
                     "Azure AI Speech transcription requires a Cognitive Services "
                     "or STT Speech endpoint, not an Azure OpenAI endpoint."

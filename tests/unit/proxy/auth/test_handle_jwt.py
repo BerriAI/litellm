@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
     JWTLiteLLMRoleMap,
@@ -45,6 +46,7 @@ from litellm.proxy.auth.handle_jwt import (
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import OperatorFaultHTTPException
 from litellm.types.agents import AgentResponse
 
 
@@ -3842,6 +3844,48 @@ async def test_find_team_with_model_access_enforce_team_based_access_still_raise
 
     assert exc_info.value.status_code == 403
     assert "enforce_team_based_model_access" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lookup_failure", "caller_caused"),
+    [
+        pytest.param(TeamNotFoundError(team_id="claimed-team"), True, id="claimed_team_absent"),
+        pytest.param(
+            OperatorFaultHTTPException(status_code=404, detail={"error": "Team doesn't exist in db. Team=claimed-team."}),
+            False,
+            id="claimed_team_unreadable",
+        ),
+    ],
+)
+async def test_find_team_with_model_access_denial_keeps_an_unreadable_team_lookup_an_operator_fault(
+    monkeypatch, lookup_failure: HTTPException, caller_caused: bool
+) -> None:
+    proxy_server_module: Final = ModuleType("proxy_server")
+    proxy_server_module.llm_router = None
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    async def failing_get_team_object(*_args, **_kwargs):
+        raise lookup_failure
+
+    monkeypatch.setattr("litellm.proxy.auth.handle_jwt.get_team_object", failing_get_team_object)
+    jwt_handler: Final = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_claim_fallback=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await JWTAuthManager.find_team_with_model_access(
+            team_ids={"claimed-team"},
+            requested_model="gpt-5.5",
+            route="/chat/completions",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert is_client_caused_failure(exc_info.value) is caller_caused
 
 
 @pytest.mark.asyncio

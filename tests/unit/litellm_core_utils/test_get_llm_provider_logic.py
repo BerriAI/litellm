@@ -10,6 +10,7 @@ import pytest
 import litellm
 from litellm import CustomLLM
 from litellm.litellm_core_utils import get_llm_provider_logic
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
@@ -806,3 +807,23 @@ def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
     identity = _resolve_model("chatgpt/gpt-5.4", None)
     assert identity is not None and identity.provider == "chatgpt"
     assert Router._model_group_llm_provider(LiteLLM_Params(model="chatgpt/gpt-5.4")) == ("gpt-5.4", "chatgpt")
+
+
+@pytest.mark.parametrize(
+    ("model", "api_base", "caller_caused"),
+    [
+        pytest.param("not-a-provider-model-qa", None, True, id="caller_named_an_unknown_model"),
+        pytest.param("openai/gpt-5.5", 8000, False, id="internal_failure_wrapped_as_400"),
+    ],
+)
+def test_get_llm_provider_blames_the_caller_only_for_the_model_it_named(
+    model: str, api_base: int | None, caller_caused: bool
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.get_llm_provider(
+            model=model,
+            api_base=api_base,  # pyright: ignore[reportArgumentType]  # a non-string api_base is the internal failure under test
+        )
+
+    assert caught.value.status_code == 400
+    assert is_client_caused_failure(caught.value) is caller_caused

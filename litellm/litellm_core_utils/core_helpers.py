@@ -274,21 +274,41 @@ def is_client_caused_failure(exception: BaseException | None) -> bool:
     saying the request itself is invalid (400, 413, 422). A guardrail that could not reach a
     verdict, a 4xx from a backend the proxy called itself (``httpx.HTTPStatusError``, e.g. a
     moderation API rejecting the proxy's own key), a router 429 because every deployment is
-    cooling down or at its own limit, and provider auth, permission, not-found and rate-limit
-    errors stay faults.
+    cooling down or at its own limit, a 4xx raised from or marked as an ``OperatorFault``, and provider auth,
+    permission, not-found and rate-limit errors stay faults.
     """
-    from litellm.exceptions import GuardrailRaisedException
+    from litellm.exceptions import GuardrailRaisedException, OperatorFault
     from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 
     if exception is None or isinstance(
         exception, (httpx.HTTPStatusError, RouterRateLimitError, RouterRateLimitErrorBasic)
     ):
         return False
+    if any(isinstance(link, OperatorFault) for link in _exception_chain(exception)):
+        return False
     if isinstance(exception, GuardrailRaisedException) and not exception.blocked_content:
         return False
     if is_expected_client_error(exception):
         return True
     return _is_provider_originated(exception) and _http_status(exception) in _CLIENT_REQUEST_STATUSES
+
+
+_MAX_EXCEPTION_CHAIN_LINKS: Final = 8
+
+
+def _exception_chain(
+    exception: BaseException | None, remaining: int = _MAX_EXCEPTION_CHAIN_LINKS
+) -> Iterator[BaseException]:
+    if exception is None or remaining == 0:
+        return
+    yield exception
+    yield from _exception_chain(_raised_from(exception), remaining - 1)
+
+
+def _raised_from(exception: BaseException) -> BaseException | None:
+    if exception.__cause__ is not None or exception.__suppress_context__:
+        return exception.__cause__
+    return exception.__context__
 
 
 def _http_status(exception: BaseException) -> int | None:

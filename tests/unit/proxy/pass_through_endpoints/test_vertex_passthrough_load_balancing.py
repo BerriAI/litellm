@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import Request
 
+import litellm
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     VertexAIPassThroughHandler,
@@ -183,6 +185,49 @@ def test_get_available_deployment_for_pass_through_no_deployments():
         router.get_available_deployment_for_pass_through(model="gemini-pro")
 
     assert "use_in_pass_through=True" in str(exc_info.value)
+
+
+_NO_PASS_THROUGH_MODEL_LIST: Final = (
+    {
+        "model_name": "gemini-pro",
+        "litellm_params": {
+            "model": "vertex_ai/gemini-pro",
+            "vertex_project": "project-1",
+            "vertex_location": "us-central1",
+            "use_in_pass_through": False,
+        },
+        "model_info": {"id": "gemini-pro-deployment"},
+    },
+)
+
+
+@pytest.mark.parametrize("model", ["gemini-pro", "gemini-pro-deployment"])
+def test_pass_through_selection_without_a_pass_through_deployment_is_an_operator_fault(model: str) -> None:
+    from litellm.router import Router
+
+    router: Final = Router(model_list=[dict(deployment) for deployment in _NO_PASS_THROUGH_MODEL_LIST])
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        router.get_available_deployment_for_pass_through(model=model)
+
+    assert exc_info.value.status_code == 400
+    assert is_client_caused_failure(exc_info.value) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gemini-pro", "gemini-pro-deployment"])
+async def test_async_pass_through_selection_without_a_pass_through_deployment_is_an_operator_fault(
+    model: str,
+) -> None:
+    from litellm.router import Router
+
+    router: Final = Router(model_list=[dict(deployment) for deployment in _NO_PASS_THROUGH_MODEL_LIST])
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await router.async_get_available_deployment_for_pass_through(model=model, request_kwargs={})
+
+    assert exc_info.value.status_code == 400
+    assert is_client_caused_failure(exc_info.value) is False
 
 
 def test_get_available_deployment_for_pass_through_load_balancing():

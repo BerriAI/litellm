@@ -9,7 +9,7 @@ import orjson
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from starlette.datastructures import FormData
+from starlette.datastructures import FormData, UploadFile
 from starlette.requests import Request
 
 
@@ -18,6 +18,7 @@ import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
+    check_file_size_under_limit,
     read_request_body,
     safe_get_request_headers,
     _safe_get_request_parsed_body,
@@ -1734,3 +1735,37 @@ async def test_read_request_body_closes_the_otel_server_span_when_the_client_dis
     with pytest.raises(HTTPException):
         await read_request_body(request)
     assert (span.end.called, request.state.parent_otel_span) == (True, None), "the auth-time span must not dangle"
+
+
+@pytest.mark.parametrize(
+    ("premium_user", "file_size_mb", "caller_caused"),
+    [
+        pytest.param(False, 1, False, id="deployment_file_limit_without_license"),
+        pytest.param(True, 3, True, id="caller_file_over_deployment_limit"),
+    ],
+)
+def test_check_file_size_under_limit_blames_the_operator_only_for_an_unlicensed_limit(
+    premium_user: bool, file_size_mb: int, caller_caused: bool
+) -> None:
+    from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
+    from litellm.router import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "whisper",
+                "litellm_params": {"model": "openai/whisper-1", "api_key": "sk-test", "max_file_size_mb": 2},
+            }
+        ]
+    )
+    upload: Final = UploadFile(file=io.BytesIO(b"0" * (file_size_mb * 1024 * 1024)), size=file_size_mb * 1024 * 1024)
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch("litellm.proxy.proxy_server.premium_user", premium_user),
+    ):
+        with pytest.raises(ProxyException) as caught:
+            check_file_size_under_limit(request_data={"model": "whisper"}, file=upload, router_model_names=["whisper"])
+
+    assert caught.value.code == "400"
+    assert is_client_caused_failure(caught.value) is caller_caused

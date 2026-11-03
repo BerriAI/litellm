@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.exceptions import OperatorFault
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -40,6 +41,10 @@ _OAUTH_TOKENS: Final[_TokenCache] = InMemoryCache(max_size_in_memory=64)
 
 
 class DatabricksException(BaseLLMException):
+    pass
+
+
+class OperatorFaultDatabricksException(OperatorFault, DatabricksException):
     pass
 
 
@@ -276,7 +281,7 @@ class DatabricksBase:
                 databricks_client: Final = WorkspaceClient()
                 api_base = f"{databricks_client.config.host}/serving-endpoints"
             except ImportError:
-                raise DatabricksException(
+                raise OperatorFaultDatabricksException(
                     status_code=400,
                     message=(
                         "Either set the DATABRICKS_API_BASE and DATABRICKS_API_KEY environment variables, "
@@ -372,7 +377,7 @@ class DatabricksBase:
             )
 
         if response.status_code != 200:
-            raise DatabricksException(
+            raise OperatorFaultDatabricksException(
                 status_code=response.status_code,
                 message=f"OAuth M2M token request failed: {response.text}",
             )
@@ -413,7 +418,7 @@ class DatabricksBase:
 
             return api_base, headers
         except ImportError:
-            raise DatabricksException(
+            raise OperatorFaultDatabricksException(
                 status_code=400,
                 message=(
                     "If the Databricks base URL and API key are not set, the databricks-sdk "
@@ -470,7 +475,7 @@ class DatabricksBase:
             headers["Content-Type"] = "application/json"
         elif api_key is None and not headers:
             if custom_endpoint is True:
-                raise DatabricksException(
+                raise OperatorFaultDatabricksException(
                     status_code=400,
                     message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
                 )
@@ -483,7 +488,7 @@ class DatabricksBase:
 
         if api_base is None:
             if custom_endpoint:
-                raise DatabricksException(
+                raise OperatorFaultDatabricksException(
                     status_code=400,
                     message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
                 )

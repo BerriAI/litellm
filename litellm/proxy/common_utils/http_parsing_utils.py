@@ -515,10 +515,10 @@ def check_file_size_under_limit(
     """
     from litellm.proxy.proxy_server import (
         CommonProxyErrors,
-        ProxyException,
         llm_router,
         premium_user,
     )
+    from litellm.proxy.utils import OperatorFaultProxyException
 
     file_contents_size: Final = file.size or 0
     file_content_size_in_mb: Final = file_contents_size / (1024 * 1024)
@@ -548,7 +548,7 @@ def check_file_size_under_limit(
             max_file_size_mb,
         )
         if not premium_user:
-            raise ProxyException(
+            raise OperatorFaultProxyException(
                 message=f"Tried setting max_file_size_mb for /audio/transcriptions. {CommonProxyErrors.not_premium_user.value}",
                 code=status.HTTP_400_BAD_REQUEST,
                 type="bad_request",

@@ -31,6 +31,8 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
+from litellm.exceptions import OperatorFaultBadRequestError
+from litellm.proxy.utils import OperatorFaultHTTPException
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
 from litellm.constants import (
@@ -11070,6 +11072,24 @@ def _moderation_backend_rejected_proxy_key() -> Exception:
         ),
         pytest.param(
             RouterRateLimitErrorBasic(model="gpt-4"), False, "ERROR", False, id="no_deployment_available_error"
+        ),
+        pytest.param(
+            OperatorFaultBadRequestError(
+                message="SagemakerException - Unable to locate credentials",
+                model="sagemaker/qa-endpoint",
+                llm_provider="sagemaker",
+            ),
+            False,
+            "ERROR",
+            True,
+            id="deployment_missing_credentials_400_error_with_traceback",
+        ),
+        pytest.param(
+            OperatorFaultHTTPException(status_code=404, detail={"error": "Team doesn't exist in db. Team=t1."}),
+            False,
+            "ERROR",
+            False,
+            id="team_lookup_failed_404_error",
         ),
         pytest.param(
             HTTPException(status_code=400, detail="Invalid model name passed in"),

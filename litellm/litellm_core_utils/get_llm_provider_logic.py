@@ -580,12 +580,12 @@ def get_llm_provider(
             raise e
         else:
             error_str = f"GetLLMProvider Exception - {e}\n\noriginal model: {model}"
-            raise litellm.exceptions.BadRequestError(
+            raise litellm.exceptions.OperatorFaultBadRequestError(
                 message=f"GetLLMProvider Exception - {e}\n\noriginal model: {model}",
                 model=model,
                 response=None,
                 llm_provider="",
-            )
+            ) from e
 
 
 def is_registered_custom_provider(custom_llm_provider: str | None) -> bool:

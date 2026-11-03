@@ -1087,6 +1087,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             key_access_group_grants_model,
         )
         from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj, user_api_key_cache
+        from litellm.proxy.utils import OperatorFaultHTTPException
 
         if target_model_names:
             models = target_model_names
@@ -1111,7 +1112,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             except HTTPException:
                 raise
             except Exception as e:
-                raise HTTPException(
+                raise OperatorFaultHTTPException(
                     status_code=403,
                     detail={
                         "error": ("Batch input file model access could not be validated against the current team.")

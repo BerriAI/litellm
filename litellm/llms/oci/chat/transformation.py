@@ -48,6 +48,7 @@ from litellm.llms.oci.common_utils import (
     OCI_API_VERSION,
     OCIError,
     OCIRequestWrapper,  # re-exported for backwards compatibility
+    OperatorFaultOCIError,
     get_oci_base_url,
     resolve_oci_credentials,
     sign_oci_request,
@@ -624,7 +625,7 @@ class OCIChatConfig(BaseConfig):
         creds: Final = resolve_oci_credentials(optional_params)
         oci_compartment_id: Final = creds["oci_compartment_id"]
         if not oci_compartment_id:
-            raise OCIError(
+            raise OperatorFaultOCIError(
                 status_code=400,
                 message=(
                     "oci_compartment_id is required for OCI chat requests. "

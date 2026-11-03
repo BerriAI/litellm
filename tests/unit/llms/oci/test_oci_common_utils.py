@@ -7,12 +7,15 @@ that require no real OCI credentials or network calls.
 
 import sys
 import types
+from collections.abc import Callable
+from functools import partial
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm.litellm_core_utils.core_helpers import is_client_caused_failure
 from litellm.llms.oci.common_utils import (
     _OCI_REALM_DOMAINS,
     OCI_API_VERSION,
@@ -193,6 +196,39 @@ def test_get_oci_base_url_from_region():
 def test_get_oci_base_url_rejects_unsafe_region(region):
     with pytest.raises(OCIError, match="Invalid OCI region"):
         get_oci_base_url({"oci_region": region})
+
+
+def _sign_with_a_non_string_key() -> object:
+    return sign_oci_request(
+        {},
+        {
+            "oci_user": "ocid1.user.oc1..test",
+            "oci_fingerprint": "aa:bb:cc:dd",
+            "oci_tenancy": "ocid1.tenancy.oc1..test",
+            "oci_key": {"pem": "not-a-string"},
+        },
+        {"input": "hi"},
+        "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/chat",
+    )
+
+
+@pytest.mark.parametrize(
+    ("deployment_misconfiguration", "expected_message"),
+    [
+        pytest.param(
+            partial(get_oci_base_url, {"oci_region": "us_ashburn_1"}), "Invalid OCI region", id="invalid_region"
+        ),
+        pytest.param(_sign_with_a_non_string_key, "oci_key must be a string", id="non_string_private_key"),
+    ],
+)
+def test_a_deployment_misconfiguration_keeps_its_400_but_is_not_the_callers_fault(
+    deployment_misconfiguration: Callable[[], object], expected_message: str
+) -> None:
+    with pytest.raises(OCIError, match=expected_message) as caught:
+        deployment_misconfiguration()
+
+    assert caught.value.status_code == 400
+    assert is_client_caused_failure(caught.value) is False
 
 
 @pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
