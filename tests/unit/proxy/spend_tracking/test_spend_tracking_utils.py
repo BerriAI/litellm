@@ -7159,98 +7159,98 @@ def _stored_request(body: Mapping[str, object]) -> object:
 
 
 _STATELESS_CASES: Final[tuple[tuple[dict[str, object], dict[str, object]], ...]] = (
-        (
-            {"model": "gpt-4o-mini", "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}]},
-            {"model": "gpt-4o-mini", "messages": _user_turn("latest")},
-        ),
-        (
-            {
-                "system": "system prompt",
-                "tools": [{"name": "lookup"}],
-                "messages": [
-                    {"role": "user", "content": "earlier user turn"},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "describe"},
-                            {"type": "image", "source": {"type": "base64", "data": "AAAA"}},
-                            {"type": "document", "source": {"type": "base64", "data": "AAAA"}},
-                        ],
-                    },
-                ],
-            },
-            {"messages": _user_turn("describe\n[image omitted]\n[file omitted]")},
-        ),
-        (
-            {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:,"}}]}]},
-            {"messages": _user_turn("[image omitted]")},
-        ),
-        (
-            {"instructions": "system prompt", "input": "plain responses input"},
-            {"input": _user_turn("plain responses input")},
-        ),
-        (
-            {
-                "input": [
-                    {"role": "user", "content": "earlier user turn"},
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": [
-                            {"type": "input_text", "text": "summarize"},
-                            {"type": "input_file", "file_id": "file-1"},
-                        ],
-                    },
-                ]
-            },
-            {"input": _user_turn("summarize\n[file omitted]")},
-        ),
-        (
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": ""},
-                            {"type": "thinking", "thinking": "hidden"},
-                            {"type": "text", "text": "keep"},
-                        ],
-                    }
-                ]
-            },
-            {"messages": _user_turn("keep")},
-        ),
-        (
-            {"model": "m", "messages": [*_PRIOR_CHAT_TURNS, {"role": "tool", "tool_call_id": "c", "content": "out"}]},
-            {"model": "m"},
-        ),
-        (
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "tool_result", "tool_use_id": "t", "content": "tool out"},
-                            {"type": "text", "text": "reminder next to a tool result"},
-                        ],
-                    }
-                ]
-            },
-            {},
-        ),
-        ({"input": [{"role": "user", "content": "q"}, {"type": "function_call_output", "output": "out"}]}, {}),
-        ({"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "prefill"}]}, {}),
-        (
-            {"messages": [{"role": "user", "content": ["plain part", {"type": "text", "text": "block part"}]}]},
-            {"messages": _user_turn("plain part\nblock part")},
-        ),
-        (
-            {"messages": [{"role": "user", "content": [{"type": []}, {"type": {}}, {"type": "text", "text": "latest"}]}]},
-            {"messages": _user_turn("latest")},
-        ),
-        ({"messages": [{"role": "user", "content": ""}]}, {}),
-        ({"messages": []}, {}),
-        ({"model": "gpt-4o-mini"}, {"model": "gpt-4o-mini"}),
+    (
+        {"model": "gpt-4o-mini", "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}]},
+        {"model": "gpt-4o-mini", "messages": _user_turn("latest")},
+    ),
+    (
+        {
+            "system": "system prompt",
+            "tools": [{"name": "lookup"}],
+            "messages": [
+                {"role": "user", "content": "earlier user turn"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe"},
+                        {"type": "image", "source": {"type": "base64", "data": "AAAA"}},
+                        {"type": "document", "source": {"type": "base64", "data": "AAAA"}},
+                    ],
+                },
+            ],
+        },
+        {"messages": _user_turn("describe\n[image omitted]\n[file omitted]")},
+    ),
+    (
+        {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:,"}}]}]},
+        {"messages": _user_turn("[image omitted]")},
+    ),
+    (
+        {"instructions": "system prompt", "input": "plain responses input"},
+        {"input": _user_turn("plain responses input")},
+    ),
+    (
+        {
+            "input": [
+                {"role": "user", "content": "earlier user turn"},
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "summarize"},
+                        {"type": "input_file", "file_id": "file-1"},
+                    ],
+                },
+            ]
+        },
+        {"input": _user_turn("summarize\n[file omitted]")},
+    ),
+    (
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": ""},
+                        {"type": "thinking", "thinking": "hidden"},
+                        {"type": "text", "text": "keep"},
+                    ],
+                }
+            ]
+        },
+        {"messages": _user_turn("keep")},
+    ),
+    (
+        {"model": "m", "messages": [*_PRIOR_CHAT_TURNS, {"role": "tool", "tool_call_id": "c", "content": "out"}]},
+        {"model": "m"},
+    ),
+    (
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t", "content": "tool out"},
+                        {"type": "text", "text": "reminder next to a tool result"},
+                    ],
+                }
+            ]
+        },
+        {},
+    ),
+    ({"input": [{"role": "user", "content": "q"}, {"type": "function_call_output", "output": "out"}]}, {}),
+    ({"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "prefill"}]}, {}),
+    (
+        {"messages": [{"role": "user", "content": ["plain part", {"type": "text", "text": "block part"}]}]},
+        {"messages": _user_turn("plain part\nblock part")},
+    ),
+    (
+        {"messages": [{"role": "user", "content": [{"type": []}, {"type": {}}, {"type": "text", "text": "latest"}]}]},
+        {"messages": _user_turn("latest")},
+    ),
+    ({"messages": [{"role": "user", "content": ""}]}, {}),
+    ({"messages": []}, {}),
+    ({"model": "gpt-4o-mini"}, {"model": "gpt-4o-mini"}),
 )
 
 
