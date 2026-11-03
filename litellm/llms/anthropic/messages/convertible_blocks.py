@@ -330,34 +330,43 @@ def _is_document(block: object) -> bool:
             return False
 
 
-def _url_sourced_blocks(block: object) -> tuple[tuple[str, object], ...]:
+@dataclass(frozen=True, slots=True, order=True)
+class _UrlBlockPlace:
+    in_tool_result: bool
+    url: str
+
+
+def _url_sourced_blocks(block: object, in_tool_result: bool = False) -> tuple[tuple[_UrlBlockPlace, object], ...]:
     url: Final = _url_source_url(block)
     if url is not None:
-        return ((url, block),)
+        return ((_UrlBlockPlace(in_tool_result, url), block),)
     match as_str_mapping(block):
         case {"type": "tool_result", "content": list() as content}:
-            return tuple(chain.from_iterable(map(_url_sourced_blocks, _list_items(content))))
+            in_this_tool_result: Final = partial(_url_sourced_blocks, in_tool_result=True)
+            return tuple(chain.from_iterable(map(in_this_tool_result, _list_items(content))))
         case _:
             return ()
 
 
-def _entry_url(entry: tuple[str, object]) -> str:
+def _entry_place(entry: tuple[_UrlBlockPlace, object]) -> _UrlBlockPlace:
     return entry[0]
 
 
-def _entry_block(entry: tuple[str, object]) -> object:
+def _entry_block(entry: tuple[_UrlBlockPlace, object]) -> object:
     return entry[1]
 
 
-def _restored_url_document(block: object, originals: Mapping[str, Iterator[object]]) -> object:
+def _restored_url_document(
+    block: object, originals: Mapping[_UrlBlockPlace, Iterator[object]], in_tool_result: bool = False
+) -> object:
     url: Final = _url_source_url(block)
     if url is not None:
-        remaining: Final = originals.get(url)
+        remaining: Final = originals.get(_UrlBlockPlace(in_tool_result, url))
         original: Final = None if remaining is None else next(remaining, None)
         return original if _is_document(original) else block
     match as_str_mapping(block):
         case {"type": "tool_result", "content": list() as content} as tool_result:
-            restore: Final = partial(_restored_url_document, originals=originals)
+            restore: Final = partial(_restored_url_document, originals=originals, in_tool_result=True)
             return {**tool_result, "content": list(map(restore, _list_items(content)))}
         case _:
             return block
@@ -365,11 +374,11 @@ def _restored_url_document(block: object, originals: Mapping[str, Iterator[objec
 
 def keep_url_documents(rewritten: Sequence[object], original: object) -> Sequence[object]:
     blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
-    by_url: Final = tuple(sorted(chain.from_iterable(map(_url_sourced_blocks, blocks)), key=_entry_url))
-    if not any(_is_document(block) for _, block in by_url):
+    by_place: Final = tuple(sorted(chain.from_iterable(map(_url_sourced_blocks, blocks)), key=_entry_place))
+    if not any(_is_document(block) for _, block in by_place):
         return rewritten
     originals_in_order: Final = MappingProxyType(
-        {url: iter(tuple(map(_entry_block, group))) for url, group in groupby(by_url, key=_entry_url)}
+        {place: iter(tuple(map(_entry_block, group))) for place, group in groupby(by_place, key=_entry_place)}
     )
     restore: Final = partial(_restored_url_document, originals=originals_in_order)
     return [_with_user_blocks(message, restore) for message in rewritten]

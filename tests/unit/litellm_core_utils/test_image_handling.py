@@ -719,6 +719,8 @@ class _Served:
     body: bytes = PDF_BODY
     honors_range: bool = True
     barrier: threading.Barrier | None = None
+    declared_length: int | None = None
+    hold_open_until: threading.Event | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -753,9 +755,11 @@ def probe_server(monkeypatch):
             self.send_response(206 if ranged and served.status == 200 else served.status)
             if served.content_type is not None:
                 self.send_header("Content-Type", served.content_type)
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", str(served.declared_length or len(body)))
             self.end_headers()
             self.wfile.write(body)
+            if served.hold_open_until is not None:
+                served.hold_open_until.wait(timeout=30)
 
         def log_message(self, *args):
             pass
@@ -845,11 +849,17 @@ async def test_serves_pdf_is_false_without_a_request_when_the_ssrf_check_blocks_
     assert probe_server.seen == []
 
 
-async def test_async_serves_pdf_stops_reading_a_whole_body_past_the_download_cap(probe_server, monkeypatch):
-    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0.001)
-    url = probe_server.serve("/report.pdf", _Served(honors_range=False))
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_serves_pdf_stops_reading_after_the_leading_kilobyte_when_the_host_ignores_range(probe_server, mode):
+    rest_of_body_sent = threading.Event()
+    url = probe_server.serve(
+        "/report.pdf", _Served(honors_range=False, declared_length=1024**3, hold_open_until=rest_of_body_sent)
+    )
 
-    assert await async_serves_pdf(url) is False
+    try:
+        assert await _serves_pdf(mode, url) is True
+    finally:
+        rest_of_body_sent.set()
 
 
 @pytest.mark.parametrize("mode", ("sync", "async"))

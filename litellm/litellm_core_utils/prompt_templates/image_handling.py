@@ -15,7 +15,7 @@ from typing import Final, TypeVar
 from urllib.parse import urlparse
 
 import httpx
-from httpx import Response
+from httpx import USE_CLIENT_DEFAULT, Response
 
 import litellm
 from litellm import verbose_logger
@@ -220,6 +220,7 @@ _PDF_SIGNATURE_WINDOW: Final = 1024
 _PDF_PROBE_HEADERS: Final = MappingProxyType({"Range": f"bytes=0-{_PDF_SIGNATURE_WINDOW - 1}"})
 _PDF_PROBE_STATUSES: Final = frozenset({200, 206})
 _PDF_PROBE_FAILURES: Final = (httpx.HTTPError, httpx.InvalidURL, ValueError)
+_DECODED_BODY_HEADERS: Final = frozenset({"content-encoding", "content-length", "transfer-encoding"})
 
 
 def _bare_media_type(media_type: str) -> str:
@@ -251,12 +252,69 @@ def _serves_pdf(response: Response) -> bool:
     return _PDF_SIGNATURE in response.content[:_PDF_SIGNATURE_WINDOW]
 
 
+def _with_body_prefix(response: Response, prefix: bytes) -> Response:
+    return Response(
+        response.status_code,
+        headers=[(name, value) for name, value in response.headers.multi_items() if name not in _DECODED_BODY_HEADERS],
+        content=prefix,
+        request=response.request,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _BodyPrefixReader:
+    client: httpx.Client
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Response:
+        with self.client.stream(
+            "GET",
+            url,
+            headers=headers,
+            follow_redirects=follow_redirects,
+            timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
+        ) as response:
+            return _with_body_prefix(response, next(response.iter_bytes(_PDF_SIGNATURE_WINDOW), b""))
+
+
+@dataclass(frozen=True, slots=True)
+class _AsyncBodyPrefixReader:
+    client: httpx.AsyncClient
+
+    async def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
+    ) -> Response:
+        async with self.client.stream(
+            "GET",
+            url,
+            headers=headers,
+            follow_redirects=follow_redirects,
+            timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
+        ) as response:
+            return _with_body_prefix(response, await anext(response.aiter_bytes(max_response_bytes), b""))
+
+
 def serves_pdf(url: str) -> bool:
     if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
         return False
     try:
         response: Final = safe_get(
-            litellm.module_level_client, url, headers=dict(_PDF_PROBE_HEADERS), timeout=NON_LLM_CONNECTION_TIMEOUT
+            _BodyPrefixReader(litellm.module_level_client.client),
+            url,
+            headers=dict(_PDF_PROBE_HEADERS),
+            timeout=NON_LLM_CONNECTION_TIMEOUT,
         )
     except _PDF_PROBE_FAILURES as e:
         verbose_logger.debug("PDF probe of %s failed, sending it as an image link: %s", url, e)
@@ -269,11 +327,11 @@ async def async_serves_pdf(url: str) -> bool:
         return False
     try:
         response: Final = await async_safe_get(
-            litellm.module_level_aclient,
+            _AsyncBodyPrefixReader(litellm.module_level_aclient.client),
             url,
             headers=dict(_PDF_PROBE_HEADERS),
             timeout=NON_LLM_CONNECTION_TIMEOUT,
-            max_response_bytes=int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024),
+            max_response_bytes=_PDF_SIGNATURE_WINDOW,
         )
     except _PDF_PROBE_FAILURES as e:
         verbose_logger.debug("PDF probe of %s failed, sending it as an image link: %s", url, e)
