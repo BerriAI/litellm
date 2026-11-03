@@ -49,7 +49,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
 )
 
-from .common_utils import has_blank_redacted_data, is_unsignable_thinking_block
+from .common_utils import has_blank_redacted_data, is_unsignable_thinking_block, sanitize_anthropic_tool_use_id
 
 CONVERTED_SYSTEM_NOTE: Final = (
     "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
@@ -277,11 +277,25 @@ def _thinking_block_renders(block: object) -> bool:
     )
 
 
-def _assistant_part_renders(part: object) -> bool:
-    """A text part always renders: the converter pads empty text with a placeholder."""
+def native_tool_use_id(block: object) -> str:
+    raw_id: Final = message_field(block, "id")
+    return sanitize_anthropic_tool_use_id(raw_id if isinstance(raw_id, str) else "")
+
+
+def tool_use_is_answered(tool_use_id: str, answered: frozenset[str]) -> bool:
+    return tool_use_id in answered
+
+
+def _assistant_part_renders(part: object, answered: frozenset[str]) -> bool:
+    """A text part always renders: the converter pads empty text with a placeholder.
+
+    A native ``tool_use`` renders only when the next turn answers it, since the converter drops an orphan.
+    """
     part_type: Final = message_field(part, "type")
     if part_type in _THINKING_BLOCK_TYPES:
         return _thinking_block_renders(part)
+    if part_type == "tool_use":
+        return tool_use_is_answered(native_tool_use_id(part), answered)
     return part_type in _RENDERED_ASSISTANT_PART_TYPES or (
         isinstance(part_type, str) and part_type.endswith("_tool_result")
     )
@@ -317,6 +331,7 @@ def _tool_result_ids(answers: Iterable[object]) -> Iterator[str]:
     for message in answers:
         if isinstance(tool_call_id := message_field(message, "tool_call_id"), str) and tool_call_id:
             yield tool_call_id
+            yield sanitize_anthropic_tool_use_id(tool_call_id)
 
 
 def answered_tool_call_ids(messages: Sequence[object], assistant_index: int) -> frozenset[str]:
@@ -343,7 +358,7 @@ def _answered_by_assistant_index(
     return ((index, answered) for index, _ in groups[group_index][1])
 
 
-def _answered_ids_by_index(messages: Sequence[object]) -> Mapping[int, frozenset[str]]:
+def answered_ids_by_index(messages: Sequence[object]) -> Mapping[int, frozenset[str]]:
     """``answered_tool_call_ids`` for every assistant message, computed in one pass over the messages."""
     groups: Final = tuple(
         (role_group, tuple(group))
@@ -407,7 +422,7 @@ def _assistant_renders(message: object, answered: frozenset[str]) -> bool:
         return True
     parts: Final = parts_of(content)
     return (
-        any(_assistant_part_renders(part) for part in parts)
+        any(_assistant_part_renders(part, answered) for part in parts)
         or _separate_thinking_blocks_render(message)
         or _tool_calls_render(message, answered)
         or bool(message_field(message, "function_call"))
@@ -438,7 +453,7 @@ def _renders(message: object, answered: frozenset[str]) -> bool:
 
 
 def _rendered_indices(messages: Sequence[object]) -> frozenset[int]:
-    answered: Final = _answered_ids_by_index(messages)
+    answered: Final = answered_ids_by_index(messages)
     return frozenset(index for index, message in enumerate(messages) if _renders(message, answered.get(index, _NO_IDS)))
 
 

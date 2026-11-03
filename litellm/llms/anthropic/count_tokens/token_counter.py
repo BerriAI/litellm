@@ -144,6 +144,17 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     tokenizer_type="anthropic_api",
                     original_response=result,
                 )
+        except litellm.BadRequestError as e:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="anthropic_api",
+                error=True,
+                error_message=e.message,
+                status_code=400,
+                rejected_before_provider_call=True,
+            )
         except (AnthropicError, AuthenticationError) as e:
             verbose_logger.warning("Anthropic CountTokens error: status=%s, message=%s", e.status_code, e.message)
             return TokenCountResponse(

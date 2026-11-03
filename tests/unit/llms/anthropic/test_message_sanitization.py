@@ -449,7 +449,7 @@ class TestMessageSanitization:
             ],
         }
 
-        sanitized = _sanitize_empty_text_content(message)
+        sanitized = _sanitize_empty_text_content(message, frozenset)
 
         assert [b["type"] for b in sanitized["content"]] == ["thinking"]
         assert PLACEHOLDER not in json.dumps(sanitized)

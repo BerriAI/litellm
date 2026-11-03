@@ -14,12 +14,17 @@ from unittest.mock import AsyncMock, patch, Mock, MagicMock
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import completion, acompletion
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
-from litellm.llms.snowflake.chat.transformation import SnowflakeConfig, SnowflakeStreamingHandler
+from litellm.llms.snowflake.chat.transformation import (
+    SnowflakeConfig,
+    SnowflakeException,
+    SnowflakeStreamingHandler,
+)
 from litellm.types.utils import ModelResponse
 
 
@@ -354,6 +359,15 @@ class TestSnowflakeCortexClaudeFixes:
         )
         assert body["system"] == [{"type": "text", "text": "You are helpful", "cache_control": {"type": "ephemeral"}}]
 
+    def test_string_system_prompt_keeps_its_message_cache_control_without_ttl(self):
+        body = self._transform(
+            [
+                {"role": "system", "content": "You are helpful", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                {"role": "user", "content": "hi"},
+            ]
+        )
+        assert body["system"] == [{"type": "text", "text": "You are helpful", "cache_control": {"type": "ephemeral"}}]
+
     def test_direct_system_param_is_normalized(self):
         body = self._transform(
             [{"role": "user", "content": "hi"}],
@@ -422,6 +436,23 @@ class TestSnowflakeCortexClaudeFixes:
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "ZmFrZQ=="}}
         ]
 
+    def test_remote_image_urls_are_inlined_as_base64(self):
+        with respx.mock(assert_all_called=True) as respx_mock:
+            respx_mock.get("https://example.com/cat.png").respond(
+                content=b"fake", headers={"Content-Type": "image/png"}
+            )
+            body = self._transform(
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
+                    }
+                ]
+            )
+        assert body["messages"][0]["content"] == [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}}
+        ]
+
     def test_tool_result_image_list_is_converted(self):
         body = self._transform(
             [
@@ -458,7 +489,7 @@ class TestSnowflakeCortexClaudeFixes:
                     },
                 ]
             )
-            tool_result = body["messages"][1]["content"][0]
+            tool_result = body["messages"][0]["content"][1]
             assert tool_result["cache_control"] == {"type": "ephemeral"}, tool_content
 
     def test_pdf_data_uri_becomes_a_document_block(self):
@@ -524,7 +555,7 @@ class TestSnowflakeCortexClaudeFixes:
                 },
             ]
         )
-        assert body["messages"][1]["content"][0]["content"] == [
+        assert body["messages"][0]["content"][1]["content"] == [
             {"type": "text", "text": "first"},
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}},
             {"type": "text", "text": "last"},
@@ -534,7 +565,10 @@ class TestSnowflakeCortexClaudeFixes:
         body = self._transform(
             [{"role": "user", "content": "look"}, {"role": "tool", "tool_call_id": "call_1", "content": "done"}]
         )
-        assert body["messages"][1]["content"][0]["content"] == "done"
+        assert body["messages"][0]["content"] == [
+            {"type": "text", "text": "look"},
+            {"type": "tool_result", "tool_use_id": "call_1", "content": "done"},
+        ]
 
     def test_anthropic_tool_schema_strips_only_top_level_schema_key(self):
         tools = [
@@ -686,6 +720,123 @@ class TestSnowflakeCortexClaudeFixes:
                 {"type": "text", "text": "391", "cache_control": {"type": "ephemeral"}},
             ],
         }
+
+    def test_assistant_tool_use_content_block_survives_the_transform(self):
+        body = self._transform(
+            [
+                {"role": "user", "content": "what is the weather in paris"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "let me look that up"},
+                        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}},
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+            ]
+        )
+        assert body["messages"][1]["content"] == [
+            {"type": "text", "text": "let me look that up"},
+            {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}},
+        ]
+        assert body["messages"][2]["content"] == [
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": "sunny"}
+        ]
+
+    def test_native_tool_use_id_is_sanitized_like_its_tool_result(self):
+        body = self._transform(
+            [
+                {"role": "user", "content": "what is the weather in paris"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "functions.Bash:0",
+                            "name": "get_weather",
+                            "input": {"city": "paris"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "sunny"},
+            ]
+        )
+        assert body["messages"][1]["content"] == [
+            {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "paris"}}
+        ]
+        assert body["messages"][2]["content"] == [
+            {"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "sunny"}
+        ]
+
+    def test_system_prompt_keeps_only_its_text_parts(self):
+        body = self._transform(
+            [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "be terse"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+                    ],
+                },
+                {"role": "user", "content": "hi"},
+            ]
+        )
+        assert body["system"] == [{"type": "text", "text": "be terse"}]
+
+    _AUDIO_TURN = (
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hear"},
+                {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}},
+            ],
+        },
+    )
+
+    def test_user_part_cortex_claude_cannot_take_is_a_400_naming_it(self):
+        with pytest.raises(SnowflakeException) as exc_info:
+            self._transform(list(self._AUDIO_TURN))
+        assert exc_info.value.status_code == 400
+        assert "input_audio" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        ("part", "named"),
+        (("hello", "untyped str"), ({"type": "image_url", "image_url": {"detail": "low"}}, "url")),
+    )
+    def test_malformed_user_part_is_a_400_naming_it(self, part, named):
+        with pytest.raises(SnowflakeException) as exc_info:
+            self._transform([{"role": "user", "content": [part]}])
+        assert exc_info.value.status_code == 400
+        assert named in str(exc_info.value)
+
+    def test_drop_params_drops_a_user_part_cortex_claude_cannot_take(self):
+        body = SnowflakeConfig().transform_request(
+            model="snowflake/claude-sonnet-4-6",
+            messages=list(self._AUDIO_TURN),
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )
+        assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hear"}]}]
+
+    def test_unknown_charset_on_a_text_attachment_is_a_400(self):
+        with pytest.raises(SnowflakeException) as exc_info:
+            self._transform(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "file",
+                                "file": {"file_data": "data:text/plain;charset=not-a-charset;base64,aGVsbG8="},
+                            }
+                        ],
+                    }
+                ]
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "not-a-charset" in str(exc_info.value)
 
     def test_thinking_only_assistant_turn_sends_no_empty_text_block(self):
         """Anthropic-shaped APIs reject empty text blocks, so a content-less thinking turn is thinking only."""
