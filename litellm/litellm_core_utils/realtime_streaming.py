@@ -21,6 +21,7 @@ from litellm.constants import (
     REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
     REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
@@ -66,6 +67,10 @@ class BackendClose:
     reason: str
 
     @property
+    def ended_cleanly(self) -> bool:
+        return self.code == 1000
+
+    @property
     def message(self) -> str:
         if not self.reason:
             return f"upstream websocket closed with code {self.code}"
@@ -75,6 +80,7 @@ class BackendClose:
 class ClientLoopExit(Enum):
     CLIENT_DISCONNECTED = auto()
     BACKEND_CLOSED = auto()
+    RELAY_FAILED = auto()
 
 
 def backend_close_from(error: "ConnectionClosed") -> BackendClose:
@@ -2526,7 +2532,7 @@ class RealTimeStreaming:
             return ClientLoopExit.BACKEND_CLOSED
         except Exception as e:
             verbose_logger.debug("Error in client ack messages: %s", e)
-            return ClientLoopExit.CLIENT_DISCONNECTED
+            return ClientLoopExit.RELAY_FAILED
 
     async def bidirectional_forward(self) -> None:
         if self._is_translation_session and translation_guardrails_apply(self.request_data):
@@ -2539,9 +2545,15 @@ class RealTimeStreaming:
         client_task: Final = asyncio.create_task(self.client_ack_messages())
         try:
             await asyncio.wait((forward_task, client_task), return_when=asyncio.FIRST_COMPLETED)
-            if client_task.done() and client_task.result() is ClientLoopExit.CLIENT_DISCONNECTED:
+            client_exit: Final = client_task.result() if client_task.done() else None
+            if client_exit is ClientLoopExit.RELAY_FAILED and self.logging_obj:
+                self.logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True
+            if client_exit in (ClientLoopExit.CLIENT_DISCONNECTED, ClientLoopExit.RELAY_FAILED):
                 return
-            await self._close_client(await forward_task)
+            close: Final = await forward_task
+            if not close.ended_cleanly and self.logging_obj:
+                self.logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True
+            await self._close_client(close)
         finally:
             forward_task.cancel()
             client_task.cancel()
@@ -2551,7 +2563,7 @@ class RealTimeStreaming:
         redacted_message: Final = redact_internal_details_from_client_message(close.message)
         redacted_reason: Final = redact_internal_details_from_client_message(close.reason)
         try:
-            if close.code != 1000:
+            if not close.ended_cleanly:
                 await self.websocket.send_text(realtime_error_event(redacted_message, error_type="server_error"))
             await self.websocket.close(
                 code=client_close_code(close.code),
