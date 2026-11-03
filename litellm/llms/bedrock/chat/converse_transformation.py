@@ -1659,7 +1659,9 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
     ) -> bool:
-        if "guardrailConfig" not in optional_params:
+        if "guardrailConfig" not in optional_params or not bedrock_model_known_to_accept_cache_points(
+            model, deployment_model
+        ):
             return False
         cache_points: Final = (
             sum(1 for block in system_content_blocks if "cachePoint" in block)

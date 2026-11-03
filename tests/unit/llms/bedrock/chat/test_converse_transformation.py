@@ -10369,6 +10369,17 @@ def test_converse_prompt_cache_breakpoint_on_guarded_user_text_keeps_its_cache_p
     assert client_marked["messages"][0]["content"] == [{"guardContent": {"text": {"text": "Hello"}}}]
 
 
+def test_converse_guarded_user_text_keeps_no_cache_point_on_a_model_not_known_to_take_one(local_model_cost_map):
+    request: Final = litellm.AmazonConverseConfig()._transform_request(
+        model="arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unmapped1",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}]}],
+        optional_params={"guardrailConfig": {"guardrailIdentifier": "gr-1", "guardrailVersion": "DRAFT"}},
+        litellm_params={},
+    )
+
+    assert request["messages"][0]["content"] == [{"guardContent": {"text": {"text": "Hello"}}}]
+
+
 def _converse_request_with_30m_breakpoint(model: str, litellm_params: dict) -> dict:
     return litellm.AmazonConverseConfig()._transform_request(
         model=model,

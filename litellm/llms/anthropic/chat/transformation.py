@@ -2359,6 +2359,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             messages, optional_params.get("tools"), optional_params.get("cache_control"), optional_params
         )
 
+    def translates_prompt_cache_breakpoint(self, model: str) -> bool:
+        return True
+
     def transform_request(
         self,
         model: str,
@@ -2378,13 +2381,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
         drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
-        translated_messages: Final = list(
-            AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
-                messages,
-                drop_params,
-                cache_control_count,
-                lambda: AnthropicCacheControlHook.count_chat_external_cache_breakpoints(optional_params),
+        translated_messages: Final = (
+            list(
+                AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
+                    messages,
+                    drop_params,
+                    cache_control_count,
+                    lambda: AnthropicCacheControlHook.count_chat_external_cache_breakpoints(optional_params),
+                )
             )
+            if self.translates_prompt_cache_breakpoint(model)
+            else messages
         )
         capped_messages: Final = (
             list(

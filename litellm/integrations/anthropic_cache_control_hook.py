@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
     prompt_cache_breakpoint_as_cache_control,
     with_prompt_cache_breakpoint,
+    without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     tool_call_ids_answered_by_client,
@@ -750,9 +751,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return model, messages, non_default_params
 
-        # Create a deep copy of messages to avoid modifying the original list
-        processed_messages = copy.deepcopy(messages)
-
         message_points: Final = tuple(
             cast(CacheControlMessageInjectionPoint, point)
             for point in injection_points
@@ -771,6 +769,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 non_default_params.get("api_base") or non_default_params.get("base_url"),
                 non_default_params.get("prompt_cache_options"),
             )
+        )
+        processed_messages = copy.deepcopy(
+            messages
+            if openai_dialect or supports_openai_prompt_cache_breakpoint(model, custom_llm_provider)
+            else [without_prompt_cache_breakpoints(message) for message in messages]
         )
         # A provisional message list defers every role-targeted point to the pass holding
         # the final one: a role with no message here may have one there, and settling all

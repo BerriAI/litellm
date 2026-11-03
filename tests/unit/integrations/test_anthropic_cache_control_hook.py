@@ -1397,6 +1397,48 @@ def _marks_the_route_sends(model: str, custom_llm_provider: str | None, messages
 _SECOND_SEARCH_CALL: Final = {**_SEARCH_CALL, "id": "srvtoolu_02Search"}
 
 
+_CLIENT_MARKED_CONVERSATION: Final = (
+    {"role": "system", "content": [{"type": "text", "text": "Handbook", "prompt_cache_breakpoint": {"mode": "explicit"}}]},
+    {"role": "user", "content": [{"type": "text", "text": "First", "prompt_cache_breakpoint": {"mode": "explicit"}}]},
+    {"role": "assistant", "content": "First answer"},
+    {"role": "user", "content": "Second"},
+)
+
+
+def _hook_output(model: str, **params: object) -> list[AllMessageValues]:
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model=model,
+        messages=cast(list[AllMessageValues], copy.deepcopy(list(_CLIENT_MARKED_CONVERSATION))),
+        non_default_params={"cache_control_injection_points": [{"location": "message", "index": -1}], **params},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+    return processed
+
+
+def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_on_claude():
+    request: Final = AnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=_hook_output("anthropic/claude-sonnet-5-5"),
+        optional_params={"max_tokens": 64},
+        litellm_params={},
+        headers={},
+    )
+
+    assert _marks_in(request["system"]) == 0
+    assert [_marks_in(message) for message in request["messages"]] == [0, 0, 1]
+    assert "prompt_cache_breakpoint" not in json.dumps(request)
+
+
+def test_cache_control_injection_points_keep_client_prompt_cache_breakpoints_for_a_model_that_reads_them():
+    processed: Final = _hook_output("openai/gpt-5.6", api_base="https://gateway.example.com/v1")
+
+    assert [message["content"] for message in processed[:2]] == [
+        message["content"] for message in _CLIENT_MARKED_CONVERSATION[:2]
+    ]
+
+
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider"),
     [
