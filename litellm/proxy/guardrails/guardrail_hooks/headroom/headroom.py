@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     has_tool_with_name,
 )
 from litellm.litellm_core_utils.provider_affinity import get_caller_session_id
+from litellm.litellm_core_utils.routing_common_utils import request_user_api_key_auth
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
@@ -40,7 +41,6 @@ from litellm.proxy.guardrails.guardrail_hooks.content_text import (
     merge_rewritten_text_parts,
 )
 from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
-from litellm.router_utils.common_utils import request_user_api_key_auth
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.integrations.custom_logger import (

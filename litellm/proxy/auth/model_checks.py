@@ -6,7 +6,7 @@ import copy
 import functools
 import itertools
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from types import MappingProxyType
 from typing import Final, TypeVar
@@ -14,13 +14,13 @@ from typing import Final, TypeVar
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.responses.main import strip_responses_routing_prefix
 from litellm.router import Router
-from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
-from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+from litellm.router_api import fallback_chain
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_valid_models, potential_model_names_in_lookup_order
@@ -35,7 +35,9 @@ _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 _MODEL_LISTING_POOL: Final = ThreadPoolExecutor(thread_name_prefix="litellm-model-listing")
 
-_PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT: Final = frozenset({LlmProviders.OPENROUTER.value})
+_PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT: Final = frozenset(
+    {LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value}
+)
 
 _Listed: Final = TypeVar("_Listed")
 
@@ -562,9 +564,27 @@ def _names_no_deployment_serves_by_name(
     return tuple(name for name in names if not deployed_by_name(name, team_id))
 
 
+def _wildcard_pattern_to_expand(model_name: str, litellm_model: str) -> str | None:
+    if not _check_wildcard_routing(model_name):
+        return None
+    if "/" in model_name or model_name == "*":
+        return model_name
+    if _check_wildcard_routing(litellm_model):
+        return litellm_model
+    return model_name
+
+
+def _can_expand_to_an_allowed_name(wildcard_pattern: str, allowed_model_names: Collection[str] | None) -> bool:
+    if allowed_model_names is None:
+        return True
+    pattern: Final = _wildcard_name_regex(wildcard_pattern)
+    return any(pattern.match(name) for name in allowed_model_names)
+
+
 def expand_wildcard_deployments_for_model_info(
     deployments: list[dict[str, object]],
     llm_router: Router | None = None,
+    allowed_model_names: Collection[str] | None = None,
 ) -> list[dict[str, object]]:
     """Expand wildcard deployments into one row per known provider model.
 
@@ -581,18 +601,10 @@ def expand_wildcard_deployments_for_model_info(
         raw_params = deployment.get("litellm_params")
         litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
         litellm_model = str(litellm_params_dict.get("model") or "")
-
-        # Determine the wildcard pattern to expand.
-        # Branch order matters: only fall to litellm_model when model_name is
-        # also a wildcard, so a concrete model_name is never overwritten.
-        if _check_wildcard_routing(model_name) and ("/" in model_name or model_name == "*"):
-            wildcard_pattern = model_name
-        elif _check_wildcard_routing(model_name) and _check_wildcard_routing(litellm_model):
-            wildcard_pattern = litellm_model
-        elif _check_wildcard_routing(model_name):
-            wildcard_pattern = model_name
-        else:
+        if (wildcard_pattern := _wildcard_pattern_to_expand(model_name, litellm_model)) is None:
             expanded.append(deployment)
+            continue
+        if not _can_expand_to_an_allowed_name(wildcard_pattern, allowed_model_names):
             continue
 
         try:
@@ -708,7 +720,7 @@ def get_all_fallbacks(
 
     try:
         # Use existing function to get fallback model group
-        fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks_config, model_group=model)
+        fallback_model_group, _ = fallback_chain(fallbacks=fallbacks_config, model_group=model)
 
         if fallback_model_group is None:
             return []
