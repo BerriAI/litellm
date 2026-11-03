@@ -3882,6 +3882,85 @@ async def test_a_pre_call_after_a_failure_leaves_the_success_charging_project_io
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("steps", "key_tpm_limit", "expected_counters"),
+    [
+        (("failure", "mcp-tool-call", "failure"), 100_000, (0, 0, 0, 0)),
+        (("failure", "tool-model-with-io-limit", "post_call_failure"), None, (0, 0, 0, 0)),
+        (("failure", "mcp-tool-call", "post_call_failure", "success"), 100_000, (20, 7, 0, 0)),
+        (("tool-model-over-io-limit", "success"), 100_000, (20, 7, 0, 0)),
+    ],
+)
+async def test_a_nested_mcp_pre_call_settles_each_project_io_hold_once_v3(
+    steps: tuple[str, ...], key_tpm_limit: Optional[int], expected_counters: tuple[int, int, int, int]
+) -> None:
+    api_key: Final = hash_token("sk-nested-mcp-hold-flags")
+    model: Final = "gpt-4o-mini"
+    tool_model: Final = "tool-model-with-io-limit"
+    project: Final = "proj-nested-mcp-hold-flags"
+    io_limits: Final = {model: 10_000, tool_model: 10_000, "tool-model-over-io-limit": 1}
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    caller: Final = UserAPIKeyAuth(
+        api_key=api_key,
+        tpm_limit=key_tpm_limit,
+        project_id=project,
+        project_metadata={"model_itpm_limit": io_limits, "model_otpm_limit": io_limits},
+    )
+    request: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 50,
+        "litellm_call_id": "nested-mcp-hold-flags",
+    }
+    kwargs: Final = {
+        "litellm_call_id": "nested-mcp-hold-flags",
+        "model": model,
+        "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+    }
+    now: Final = datetime.now()
+    counter_keys: Final = tuple(
+        handler.create_rate_limit_keys(
+            key=f"model_per_project_{kind}", value=f"{project}:{scope}", rate_limit_type="tokens"
+        )
+        for scope, kind in ((model, "itpm"), (model, "otpm"), (tool_model, "itpm"), (tool_model, "otpm"))
+    )
+    mcp_pre_call: Final = partial(
+        handler.async_pre_call_hook, user_api_key_dict=caller, cache=local_cache, call_type="call_mcp_tool"
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=caller, cache=local_cache, data=dict(request), call_type="completion"
+    )
+    for step in steps:
+        match step:
+            case "failure":
+                await handler.async_log_failure_event(
+                    kwargs=dict(kwargs), response_obj=None, start_time=now, end_time=now
+                )
+            case "post_call_failure":
+                await handler.async_post_call_failure_hook(
+                    request_data=dict(request),
+                    original_exception=HTTPException(status_code=429, detail="upstream rate limited"),
+                    user_api_key_dict=caller,
+                )
+            case "success":
+                await handler.async_log_success_event(
+                    kwargs=dict(kwargs),
+                    response_obj=ModelResponse(usage=Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27)),
+                    start_time=now,
+                    end_time=now,
+                )
+            case "tool-model-over-io-limit":
+                with pytest.raises(ProxyRateLimitError):
+                    await mcp_pre_call(data={**request, "model": step})
+            case _:
+                await mcp_pre_call(data={**request, "model": step})
+
+    assert tuple([int(await local_cache.async_get_cache(key=key) or 0) for key in counter_keys]) == expected_counters
+
+
+@pytest.mark.asyncio
 async def test_post_call_failure_hook_settles_reservation_at_recovered_partial_usage_v3():
     """
     Pass-through streams report a mid-stream failure through the proxy-level
