@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -1012,7 +1013,7 @@ _CREATED_OBJECTS: Final = {
 }
 
 
-def _batch_router(api_bases: tuple[str, ...], num_retries: int) -> Router:
+def _batch_router(api_bases: tuple[str, ...], num_retries: int, orders: tuple[int, ...] | None = None) -> Router:
     return Router(
         model_list=[
             {
@@ -1025,10 +1026,15 @@ def _batch_router(api_bases: tuple[str, ...], num_retries: int) -> Router:
                     "order": order,
                 },
             }
-            for order, api_base in enumerate(api_bases, start=1)
+            for order, api_base in zip(orders or range(1, len(api_bases) + 1), api_bases)
         ],
         num_retries=num_retries,
     )
+
+
+_NO_FALLBACK_NOTE: Final = (
+    "\n\nLiteLLM: model group 'batch-primary' failed with the error above. No fallback was attempted."
+)
 
 
 async def _create(router: Router, create: str) -> object:
@@ -1058,6 +1064,7 @@ async def test_a_create_that_times_out_is_neither_retried_nor_sent_to_a_fallback
     orders: int,
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     api_base: Final = f"https://router-{create}-{orders}-create.test"
@@ -1065,10 +1072,16 @@ async def test_a_create_that_times_out_is_neither_retried_nor_sent_to_a_fallback
         side_effect=httpx.ReadTimeout("the provider answered after the caller's timeout")
     )
 
-    with pytest.raises(openai.APITimeoutError):
+    with caplog.at_level(logging.INFO, logger="LiteLLM Router"), pytest.raises(openai.APITimeoutError) as raised:
         await _create(_batch_router((api_base,) * orders, num_retries), create)
 
     assert create_route.call_count == 1
+    assert raised.value.message.endswith(_NO_FALLBACK_NOTE)
+    assert raised.value.message.count(_NO_FALLBACK_NOTE) == 1
+    assert [record.getMessage() for record in caplog.records if "does not resend" in record.getMessage()] == [
+        "Model group 'batch-primary' does not resend a create that timed out after it was sent, "
+        "because the provider may already have created it"
+    ]
 
 
 @pytest.mark.parametrize("create", ["batch", "file"])
@@ -1148,3 +1161,80 @@ async def test_a_create_that_timed_out_before_it_was_sent_is_still_retried_and_s
     assert getattr(created, "id") == _CREATED_OBJECTS[create]["id"]
     assert create_route.call_count == 2
 
+
+_ANTHROPIC_FILE: Final = {
+    "id": "file_011CNha8iCJcU1wXNR6q4V8w",
+    "type": "file",
+    "filename": "batch.jsonl",
+    "mime_type": "application/jsonl",
+    "size_bytes": 52,
+    "created_at": "2026-11-02T00:00:00Z",
+}
+
+
+def _anthropic_files_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "files-anthropic",
+                "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "sk-ant-test"},
+            }
+        ],
+        num_retries=2,
+    )
+
+
+async def test_an_anthropic_upload_that_could_not_connect_in_time_is_retried(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    upload_route: Final = respx_mock.post("https://api.anthropic.com/v1/files").mock(
+        side_effect=[httpx.ConnectTimeout, httpx.Response(200, json=_ANTHROPIC_FILE)]
+    )
+
+    created: Final = await _anthropic_files_router().acreate_file(
+        model="files-anthropic", file=("batch.jsonl", b'{"custom_id": "1"}\n', "application/jsonl"), purpose="batch"
+    )
+
+    assert upload_route.call_count == 2
+    assert created.id == _ANTHROPIC_FILE["id"]
+
+
+async def test_an_anthropic_upload_that_timed_out_after_it_was_sent_is_not_retried(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    upload_route: Final = respx_mock.post("https://api.anthropic.com/v1/files").mock(
+        side_effect=[httpx.ReadTimeout, httpx.Response(200, json=_ANTHROPIC_FILE)]
+    )
+
+    with pytest.raises(openai.APITimeoutError):
+        await _anthropic_files_router().acreate_file(
+            model="files-anthropic", file=("batch.jsonl", b'{"custom_id": "1"}\n', "application/jsonl"), purpose="batch"
+        )
+
+    assert upload_route.call_count == 1
+
+
+async def test_an_upload_that_times_out_on_one_deployment_is_not_hidden_by_a_faster_error_on_another(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    rate_limited_base: Final = "https://router-file-rate-limited.test"
+    slow_base: Final = "https://router-file-slow.test"
+
+    async def time_out_after_a_moment(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.2)
+        raise httpx.ReadTimeout("the provider answered after the caller's timeout", request=request)
+
+    respx_mock.post(url__startswith=rate_limited_base).mock(
+        return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+    )
+    slow_route: Final = respx_mock.post(url__startswith=slow_base).mock(side_effect=time_out_after_a_moment)
+
+    with pytest.raises(openai.APITimeoutError):
+        await _create(_batch_router((rate_limited_base, slow_base), num_retries=2, orders=(1, 1)), "file")
+
+    assert slow_route.call_count == 1

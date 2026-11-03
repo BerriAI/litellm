@@ -6,7 +6,7 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from openai.types.file_deleted import FileDeleted
 
 from litellm._logging import verbose_logger
-from litellm.llms.openai.common_utils import client_for_non_idempotent_request
+from litellm.llms.openai.common_utils import asend_create_without_duplicates, send_create_without_duplicates
 from litellm.types.llms.openai import *
 
 from ..common_utils import BaseAzureLLM
@@ -47,8 +47,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         openai_client: AsyncAzureOpenAI | AsyncOpenAI,
     ) -> OpenAIFileObject:
         verbose_logger.debug("create_file_data=%s", create_file_data)
-        response: Final = await client_for_non_idempotent_request(openai_client).files.create(
-            **self._prepare_create_file_data(create_file_data)
+        prepared_create_file_data: Final = self._prepare_create_file_data(create_file_data)
+        response: Final = await asend_create_without_duplicates(
+            openai_client, lambda client: client.files.create(**prepared_create_file_data)
         )
         verbose_logger.debug("create_file_response=%s", response)
         return OpenAIFileObject.model_validate(response.model_dump())
@@ -84,8 +85,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
             return self.acreate_file(create_file_data=create_file_data, openai_client=openai_client)
-        response: Final = client_for_non_idempotent_request(cast(AzureOpenAI | OpenAI, openai_client)).files.create(
-            **self._prepare_create_file_data(create_file_data)
+        prepared_create_file_data: Final = self._prepare_create_file_data(create_file_data)
+        response: Final = send_create_without_duplicates(
+            cast(AzureOpenAI | OpenAI, openai_client), lambda client: client.files.create(**prepared_create_file_data)
         )
         return OpenAIFileObject.model_validate(response.model_dump())
 

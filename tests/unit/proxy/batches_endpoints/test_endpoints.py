@@ -40,6 +40,7 @@ from typing import Any, Dict, Final, Optional
 from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 
 import httpx
+import openai
 import pytest
 import respx
 from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
@@ -52,7 +53,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_file_id_with_model,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, handle_exception_on_proxy
 from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -1393,6 +1394,61 @@ async def test_create__exception_carries_the_litellm_call_id(harness, openai_env
     record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
     assert record.litellm_call_id == call_id
     assert call_id in record.getMessage()
+
+
+_UPSTREAM_BATCH_CREATE: Final = httpx.Request("POST", "https://api.openai.com/v1/batches")
+
+
+def _raised_from(error: Exception, cause: Exception) -> Exception:
+    try:
+        raise error from cause
+    except Exception as raised:
+        return raised
+
+
+@pytest.mark.parametrize(
+    "create_error, should_retry",
+    [
+        pytest.param(
+            lambda: _raised_from(
+                openai.APITimeoutError(request=_UPSTREAM_BATCH_CREATE), httpx.ReadTimeout("no answer in time")
+            ),
+            "false",
+            id="read-timeout",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APITimeoutError(request=_UPSTREAM_BATCH_CREATE), httpx.ConnectTimeout("no connection in time")
+            ),
+            None,
+            id="connect-timeout",
+        ),
+        pytest.param(
+            lambda: openai.RateLimitError(
+                "slow down", response=httpx.Response(429, request=_UPSTREAM_BATCH_CREATE), body=None
+            ),
+            None,
+            id="rate-limited",
+        ),
+    ],
+)
+async def test_create__tells_the_caller_not_to_resend_only_a_create_that_timed_out_after_it_was_sent(
+    harness, openai_env_creds, create_error, should_retry
+):
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    error: Final = create_error()
+    harness.litellm_acreate.side_effect = error
+    answer_without_the_header: Final = handle_exception_on_proxy(error)
+
+    with pytest.raises(ProxyException) as raised:
+        await call_create(harness)
+
+    assert raised.value.headers.get("x-should-retry") == should_retry
+    assert (raised.value.code, raised.value.message, raised.value.type) == (
+        answer_without_the_header.code,
+        answer_without_the_header.message,
+        answer_without_the_header.type,
+    )
 
 
 # =========================================================================== #

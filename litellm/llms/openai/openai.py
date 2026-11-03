@@ -59,12 +59,13 @@ from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
     OpenAIError,
+    asend_create_without_duplicates,
     build_output_token_limit_response,
-    client_for_non_idempotent_request,
     drop_params_from_unprocessable_entity_error,
     is_openai_backed_api_base,
     is_output_token_limit_error,
     model_dump_provider_response,
+    send_create_without_duplicates,
     upstream_error_response,
 )
 from .workload_identity import (
@@ -1857,7 +1858,9 @@ class OpenAIFilesAPI(BaseLLM):
         create_file_data: CreateFileRequest,
         openai_client: AsyncOpenAI,
     ) -> OpenAIFileObject:
-        response: Final = await client_for_non_idempotent_request(openai_client).files.create(**create_file_data)
+        response: Final = await asend_create_without_duplicates(
+            openai_client, lambda client: client.files.create(**create_file_data)
+        )
         return OpenAIFileObject.model_validate(response.model_dump())
 
     def create_file(
@@ -1893,8 +1896,8 @@ class OpenAIFilesAPI(BaseLLM):
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
             return self.acreate_file(create_file_data=create_file_data, openai_client=openai_client)
-        response: Final = client_for_non_idempotent_request(cast(OpenAI, openai_client)).files.create(
-            **create_file_data
+        response: Final = send_create_without_duplicates(
+            cast(OpenAI, openai_client), lambda client: client.files.create(**create_file_data)
         )
         return OpenAIFileObject.model_validate(response.model_dump())
 
@@ -2230,7 +2233,9 @@ class OpenAIBatchesAPI(BaseLLM):
         create_batch_data: CreateBatchRequest,
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
-        response: Final = await client_for_non_idempotent_request(openai_client).batches.create(**create_batch_data)
+        response: Final = await asend_create_without_duplicates(
+            openai_client, lambda client: client.batches.create(**create_batch_data)
+        )
         return LiteLLMBatch.model_validate(response.model_dump())
 
     def create_batch(
@@ -2266,8 +2271,8 @@ class OpenAIBatchesAPI(BaseLLM):
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
             return self.acreate_batch(create_batch_data=create_batch_data, openai_client=openai_client)
-        response: Final = client_for_non_idempotent_request(cast(OpenAI, openai_client)).batches.create(
-            **create_batch_data
+        response: Final = send_create_without_duplicates(
+            cast(OpenAI, openai_client), lambda client: client.batches.create(**create_batch_data)
         )
 
         return LiteLLMBatch.model_validate(response.model_dump())

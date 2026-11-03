@@ -37,7 +37,7 @@ import litellm.batches.main as bm
 import asyncio
 import datetime
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 import httpx
 import openai
@@ -1214,17 +1214,8 @@ async def _create_batch(sync_mode: bool, batch: Mapping[str, object]) -> LiteLLM
     return await litellm.acreate_batch(**batch)
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
-@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
-async def test_a_batch_create_that_times_out_is_sent_to_the_provider_once(
-    custom_llm_provider: str, sync_mode: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    api_base: Final = f"https://{custom_llm_provider}-{'sync' if sync_mode else 'async'}-batch.test"
-    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
-        side_effect=httpx.ReadTimeout("the provider answered after the caller's timeout")
-    )
-    batch: Final = MappingProxyType(
+def _batch(custom_llm_provider: str, api_base: str, **overrides: object) -> Mapping[str, object]:
+    return MappingProxyType(
         {
             "completion_window": "24h",
             "endpoint": "/v1/chat/completions",
@@ -1233,10 +1224,110 @@ async def test_a_batch_create_that_times_out_is_sent_to_the_provider_once(
             "api_key": "sk-test",
             "api_base": api_base,
             "api_version": "2025-04-01-preview",
+            **overrides,
         }
     )
 
-    with pytest.raises(openai.APITimeoutError):
-        await _create_batch(sync_mode, batch)
+
+def _created_batch() -> httpx.Response:
+    return httpx.Response(200, json=dict(_OPENAI_BATCH_JSON))
+
+
+def _resend_at_once(**_: object) -> float:
+    return 0.0
+
+
+@pytest.fixture
+def resend_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", _resend_at_once)
+
+
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize(
+    "first_answer",
+    [
+        pytest.param(lambda: httpx.Response(429, json={"error": {"message": "slow down"}}), id="429"),
+        pytest.param(lambda: httpx.Response(503, json={"error": {"message": "overloaded"}}), id="503"),
+        pytest.param(lambda: httpx.ConnectError("connection refused"), id="connect-error"),
+        pytest.param(lambda: httpx.ConnectTimeout("no connection in time"), id="connect-timeout"),
+    ],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_batch_create_is_resent_when_a_resend_cannot_create_a_duplicate(
+    first_answer: Callable[[], httpx.Response | Exception],
+    custom_llm_provider: str,
+    sync_mode: bool,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.batch.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(side_effect=[first_answer(), _created_batch()])
+
+    created: Final = await _create_batch(sync_mode, _batch(custom_llm_provider, api_base))
+
+    assert create_route.call_count == 2
+    assert created.id == _OPENAI_BATCH_JSON["id"]
+
+
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize(
+    "first_answer, expected_error",
+    [
+        pytest.param(lambda: httpx.ReadTimeout("no answer in time"), openai.APITimeoutError, id="read-timeout"),
+        pytest.param(
+            lambda: httpx.RemoteProtocolError("connection dropped mid-answer"),
+            openai.APIConnectionError,
+            id="remote-protocol-error",
+        ),
+        pytest.param(
+            lambda: httpx.Response(
+                503, headers={"x-should-retry": "false"}, json={"error": {"message": "do not resend"}}
+            ),
+            openai.APIStatusError,
+            id="503-should-not-retry",
+        ),
+    ],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_batch_create_is_sent_once_when_the_provider_may_have_created_it(
+    first_answer: Callable[[], httpx.Response | Exception],
+    expected_error: type[Exception],
+    custom_llm_provider: str,
+    sync_mode: bool,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.batch.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(side_effect=[first_answer(), _created_batch()])
+
+    with pytest.raises(expected_error):
+        await _create_batch(sync_mode, _batch(custom_llm_provider, api_base))
 
     assert create_route.call_count == 1
+
+
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize("max_retries, expected_posts", [(0, 1), (1, 2), (None, 3)])
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_rate_limited_batch_create_is_resent_up_to_the_callers_max_retries(
+    max_retries: int | None,
+    expected_posts: int,
+    custom_llm_provider: str,
+    sync_mode: bool,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.batch.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+    )
+    explicit_max_retries: Final = {} if max_retries is None else {"max_retries": max_retries}
+
+    with pytest.raises(openai.RateLimitError):
+        await _create_batch(sync_mode, _batch(custom_llm_provider, api_base, **explicit_max_retries))
+
+    assert create_route.call_count == expected_posts

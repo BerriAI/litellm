@@ -10,7 +10,7 @@ import os
 import ssl
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import suppress
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional, Protocol, TypeVar
 from urllib.parse import urlsplit
@@ -53,11 +53,66 @@ _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(Azur
 
 _OPENAI_API_HOST: Final[str] = "api.openai.com"
 
-_SDKClientT = TypeVar("_SDKClientT", bound=OpenAI | AsyncOpenAI)
+_CreatedT = TypeVar("_CreatedT")
+_CAUSES_OF_A_REQUEST_THAT_NEVER_LEFT: Final = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+_STATUSES_THE_SDK_RETRIES: Final = frozenset({408, 409, 429})
 
 
-def client_for_non_idempotent_request(client: _SDKClientT) -> _SDKClientT:
-    return client.with_options(max_retries=0)
+def was_never_sent(error: BaseException) -> bool:
+    return isinstance(error, openai.APIConnectionError) and isinstance(
+        error.__cause__, _CAUSES_OF_A_REQUEST_THAT_NEVER_LEFT
+    )
+
+
+def timed_out_after_send(error: BaseException) -> bool:
+    return isinstance(error, openai.APITimeoutError) and not was_never_sent(error)
+
+
+def _provider_asks_for_a_retry(response: httpx.Response) -> bool:
+    should_retry: Final = response.headers.get("x-should-retry")
+    if should_retry in ("true", "false"):
+        return should_retry == "true"
+    return response.status_code in _STATUSES_THE_SDK_RETRIES or response.status_code >= 500
+
+
+def _resend_cannot_duplicate(error: openai.APIError) -> bool:
+    if isinstance(error, openai.APIStatusError):
+        return _provider_asks_for_a_retry(error.response)
+    return was_never_sent(error)
+
+
+def _seconds_before_resend(error: openai.APIError, max_retries: int, retries_left: int) -> float:
+    return litellm.calculate_retry_after(
+        remaining_retries=retries_left,
+        max_retries=max_retries,
+        response_headers=error.response.headers if isinstance(error, openai.APIStatusError) else None,
+    )
+
+
+def send_create_without_duplicates(client: OpenAI, create: Callable[[OpenAI], _CreatedT]) -> _CreatedT:
+    single_try_client: Final = client.with_options(max_retries=0)
+    for retries_left in range(client.max_retries, 0, -1):
+        try:
+            return create(single_try_client)
+        except openai.APIError as error:
+            if not _resend_cannot_duplicate(error):
+                raise
+            time.sleep(_seconds_before_resend(error, client.max_retries, retries_left))
+    return create(single_try_client)
+
+
+async def asend_create_without_duplicates(
+    client: AsyncOpenAI, create: Callable[[AsyncOpenAI], Awaitable[_CreatedT]]
+) -> _CreatedT:
+    single_try_client: Final = client.with_options(max_retries=0)
+    for retries_left in range(client.max_retries, 0, -1):
+        try:
+            return await create(single_try_client)
+        except openai.APIError as error:
+            if not _resend_cannot_duplicate(error):
+                raise
+            await asyncio.sleep(_seconds_before_resend(error, client.max_retries, retries_left))
+    return await create(single_try_client)
 
 
 class _ModelDumpable(Protocol):

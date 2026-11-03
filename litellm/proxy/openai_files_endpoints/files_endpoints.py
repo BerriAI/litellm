@@ -60,6 +60,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
     openai_error_type,
+    with_no_retry_after_a_sent_timeout,
 )
 from litellm.proxy.openai_files_endpoints.batch_file_validation import (
     BATCH_LINE_SHAPE,
@@ -938,11 +939,14 @@ async def create_file(
             )
         else:
             error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=openai_error_type(e, error_status_code(e, 500)),
-                param=openai_error_param(e),
-                code=error_status_code(e, 500),
+            raise with_no_retry_after_a_sent_timeout(
+                ProxyException(
+                    message=getattr(e, "message", error_msg),
+                    type=openai_error_type(e, error_status_code(e, 500)),
+                    param=openai_error_param(e),
+                    code=error_status_code(e, 500),
+                ),
+                e,
             )
     finally:
         for spool in spools:

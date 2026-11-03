@@ -283,6 +283,41 @@ async def test_timeout_exception_gets_mapped():
     assert received_chunks == [b"chunk1"]
 
 
+class _RequestThatTimesOut:
+    def __init__(self, error: aiohttp.ServerTimeoutError) -> None:
+        self._error: Final = error
+
+    async def __aenter__(self) -> aiohttp.ClientResponse:
+        raise self._error
+
+
+class _SessionThatTimesOut:
+    def __init__(self, error: aiohttp.ServerTimeoutError) -> None:
+        self.closed: Final = False
+        self._loop: Final = asyncio.get_running_loop()
+        self._error: Final = error
+
+    def request(self, **_: object) -> _RequestThatTimesOut:
+        return _RequestThatTimesOut(self._error)
+
+
+@pytest.mark.parametrize(
+    "session_error, transport_error",
+    [
+        (aiohttp.ConnectionTimeoutError("no connection in time"), httpx.ConnectTimeout),
+        (aiohttp.SocketTimeoutError("no answer in time"), httpx.ReadTimeout),
+    ],
+    ids=["connect-timeout", "read-timeout"],
+)
+async def test_a_session_timeout_surfaces_as_the_httpx_timeout_of_the_same_phase(
+    session_error: aiohttp.ServerTimeoutError, transport_error: type[httpx.TimeoutException]
+):
+    transport: Final = LiteLLMAiohttpTransport(client=lambda: _SessionThatTimesOut(session_error))  # pyright: ignore[reportArgumentType]  # a fake session that only raises
+
+    with pytest.raises(transport_error):
+        await transport.handle_async_request(httpx.Request("POST", "https://api.example.test/v1/files"))
+
+
 @pytest.mark.asyncio
 async def test_handle_async_request_uses_env_proxy(monkeypatch):
     """Aiohttp transport should honor HTTP(S)_PROXY env vars"""

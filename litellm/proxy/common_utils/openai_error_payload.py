@@ -12,11 +12,13 @@ from pydantic import TypeAdapter
 
 from litellm._logging import redact_internal_details_from_client_fields
 from litellm.constants import STRINGIFIED_NONE
+from litellm.llms.openai.common_utils import timed_out_after_send
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
 
 LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
+SHOULD_RETRY_HEADER: Final = "x-should-retry"
 
 _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
     {
@@ -208,6 +210,12 @@ def with_litellm_call_id(exc: ProxyException, litellm_call_id: str | None) -> Pr
     """The same error object, answering with ``x-litellm-call-id`` when it was raised without one."""
     if litellm_call_id is not None:
         exc.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
+    return exc
+
+
+def with_no_retry_after_a_sent_timeout(exc: ProxyException, error: BaseException) -> ProxyException:
+    if timed_out_after_send(error):
+        exc.headers[SHOULD_RETRY_HEADER] = "false"  # rebind-ok: ProxyException headers are a plain dict
     return exc
 
 

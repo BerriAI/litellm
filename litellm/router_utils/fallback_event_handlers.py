@@ -8,7 +8,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-import openai
 from pydantic import TypeAdapter
 
 import litellm
@@ -20,6 +19,7 @@ from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import Logging, same_attempt_marker
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+from litellm.llms.openai.common_utils import timed_out_after_send
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
@@ -689,14 +689,20 @@ PROVIDER_SCOPED_RESOURCE_FUNCTION_NAMES: Final = frozenset(
 )
 PROVIDER_SCOPED_CREATION_FUNCTION_NAMES: Final = frozenset({"_acreate_file"})
 NON_IDEMPOTENT_CREATE_FUNCTION_NAMES: Final = frozenset({"_acreate_file", "_acreate_batch"})
-_TIMEOUTS_BEFORE_THE_REQUEST_WAS_SENT: Final = (httpx.ConnectTimeout, httpx.PoolTimeout)
 
 
 def is_timed_out_create(original_function: object, error: BaseException) -> bool:
     return (
-        isinstance(error, openai.APITimeoutError)
-        and not isinstance(error.__cause__, _TIMEOUTS_BEFORE_THE_REQUEST_WAS_SENT)
+        timed_out_after_send(error)
         and getattr(original_function, "__name__", None) in NON_IDEMPOTENT_CREATE_FUNCTION_NAMES
+    )
+
+
+def log_create_not_resent(model_group: str | None) -> None:
+    verbose_router_logger.info(
+        "Model group '%s' does not resend a create that timed out after it was sent, "
+        "because the provider may already have created it",
+        model_group,
     )
 
 

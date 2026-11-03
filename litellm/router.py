@@ -175,6 +175,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.llms.openai.common_utils import timed_out_after_send
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
     MODEL_INFO_DISCOVERY_PROVIDERS,
@@ -327,6 +328,7 @@ from litellm.router_utils.fallback_event_handlers import (
     has_unattempted_fallback_target,
     is_bad_request_without_fallback,
     is_timed_out_create,
+    log_create_not_resent,
     mid_stream_fallback_hop_kwargs,
     mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
@@ -7697,15 +7699,17 @@ class Router(DeprecatedRouterMembers):
 
                 return response
 
-            tasks: Final = []
-
-            if isinstance(healthy_deployments, dict):
-                tasks.append(create_file_for_deployment(healthy_deployments))
-            else:
-                for deployment in healthy_deployments:
-                    tasks.append(create_file_for_deployment(deployment))
-
-            responses: Final = await asyncio.gather(*tasks)
+            deployments_to_upload_to: Final = (
+                (healthy_deployments,) if isinstance(healthy_deployments, dict) else tuple(healthy_deployments)
+            )
+            outcomes: Final = await asyncio.gather(
+                *(create_file_for_deployment(deployment) for deployment in deployments_to_upload_to),
+                return_exceptions=True,
+            )
+            failures: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, BaseException))
+            if failures:
+                raise next((failure for failure in failures if timed_out_after_send(failure)), failures[0])
+            responses: Final = [outcome for outcome in outcomes if not isinstance(outcome, BaseException)]
 
             if len(responses) == 0:
                 raise Exception("No healthy deployments found.")
@@ -7713,7 +7717,7 @@ class Router(DeprecatedRouterMembers):
             model_file_id_mapping: Final = add_model_file_id_mappings(
                 healthy_deployments=healthy_deployments, responses=responses
             )
-            returned_response: Final = cast(OpenAIFileObject, responses[0])
+            returned_response: Final = responses[0]
             returned_response_hidden_params: Final = get_hidden_params(returned_response)
             if returned_response_hidden_params is not None:
                 returned_response_hidden_params["model_file_id_mapping"] = model_file_id_mapping
@@ -8901,9 +8905,16 @@ class Router(DeprecatedRouterMembers):
             or original_model_group is None
             or is_guardrail_intervention(e)
             or unsupported_params_without_fallback
-            or is_timed_out_create(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("original_function"), e)
         ):
             raise e
+        if is_timed_out_create(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("original_function"), e):
+            if (
+                isinstance(original_exception, openai.APIError)
+                and litellm.expose_router_debug_in_errors
+                and not nested_fallback_hop
+            ):
+                original_exception.message += format_fallback_outcome_message(model_group, None, "")
+            raise original_exception
 
         input_kwargs: Final = {
             "litellm_router": self,
@@ -9326,9 +9337,10 @@ class Router(DeprecatedRouterMembers):
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
-            if is_guardrail_intervention(e) or is_timed_out_create(
-                _OPAQUE_VALUE_ADAPTER.validate_python(original_function), e
-            ):
+            if is_guardrail_intervention(e):
+                raise
+            if is_timed_out_create(_OPAQUE_VALUE_ADAPTER.validate_python(original_function), e):
+                log_create_not_resent(model_group if isinstance(model_group, str) else None)
                 raise
             current_attempt = None
             original_exception = e
@@ -9435,6 +9447,7 @@ class Router(DeprecatedRouterMembers):
 
                 except Exception as e:
                     if is_timed_out_create(_OPAQUE_VALUE_ADAPTER.validate_python(original_function), e):
+                        log_create_not_resent(model_group if isinstance(model_group, str) else None)
                         raise
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
