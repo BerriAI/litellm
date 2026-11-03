@@ -1845,6 +1845,25 @@ def test_vertex_ai_map_tools_declares_a_repeated_member_name_once_and_never_a_na
     assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == ["get_weather"]
 
 
+@pytest.mark.parametrize("namespace_first", [True, False], ids=["namespace_first", "top_level_first"])
+def test_vertex_ai_map_tools_declares_a_top_level_function_over_a_namespace_member_with_its_name(
+    namespace_first: bool,
+) -> None:
+    member = {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {"city": {}}}}
+    top_level = {
+        "type": "function",
+        "function": {"name": "lookup", "parameters": {"type": "object", "properties": {"country": {}}}},
+    }
+    namespace = {"type": "namespace", "name": "mcp__weather", "tools": [member]}
+    tools = [namespace, top_level] if namespace_first else [top_level, namespace]
+
+    mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
+
+    declarations = mapped[0]["function_declarations"]
+    assert [declaration["name"] for declaration in declarations] == ["lookup"]
+    assert set(declarations[0]["parameters"]["properties"]) == {"country"}
+
+
 def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent() -> None:
     function = {k: v for k, v in _GET_WEATHER.items() if k != "type"}
 

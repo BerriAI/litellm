@@ -573,16 +573,30 @@ def _is_namespace(tool: JsonValue) -> bool:
     return isinstance(tool, dict) and tool.get("type") == "namespace"
 
 
-def _first_declarations(tools: tuple[JsonValue, ...]) -> tuple[JsonValue, ...]:
-    names: Final = tuple(map(_declared_function_name, tools))
-    first_index: Final = {name: index for index, name in reversed(tuple(enumerate(names)))}
-    return tuple(tool for index, tool in enumerate(tools) if names[index] is None or first_index[names[index]] == index)
+def _declarations_with_origin(tool: JsonValue) -> tuple[tuple[JsonValue, bool], ...]:
+    return tuple((declaration, _is_namespace(tool)) for declaration in _namespace_members_or_tool(tool))
+
+
+def _declaration_precedence(entry: tuple[int, tuple[JsonValue, bool]]) -> tuple[bool, int]:
+    index, (_, from_namespace) = entry
+    return (from_namespace, index)
+
+
+def _kept_declarations(entries: tuple[tuple[JsonValue, bool], ...]) -> tuple[JsonValue, ...]:
+    names: Final = tuple(_declared_function_name(declaration) for declaration, _ in entries)
+    by_precedence: Final = tuple(sorted(enumerate(entries), key=_declaration_precedence, reverse=True))
+    kept_index: Final = {names[index]: index for index, _ in by_precedence}
+    return tuple(
+        declaration
+        for index, (declaration, _) in enumerate(entries)
+        if names[index] is None or kept_index[names[index]] == index
+    )
 
 
 def _with_namespace_members_inlined(tools: JsonValue) -> JsonValue:
     if not isinstance(tools, list) or not any(map(_is_namespace, tools)):
         return tools
-    return list(_first_declarations(tuple(chain.from_iterable(map(_namespace_members_or_tool, tools)))))
+    return list(_kept_declarations(tuple(chain.from_iterable(map(_declarations_with_origin, tools)))))
 
 
 def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:

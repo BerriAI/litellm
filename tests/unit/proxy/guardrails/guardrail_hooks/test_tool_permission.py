@@ -566,6 +566,37 @@ class TestToolPermissionGuardrail:
         assert "Tool 'exec'" in (message.content or "")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("namespace_first", [True, False], ids=["namespace_first", "top_level_first"])
+    async def test_post_call_judges_a_returned_name_a_top_level_function_carries_as_that_function(
+        self, namespace_first: bool
+    ) -> None:
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="post-mcp",
+            rules=[{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        namespace = {"type": "namespace", "name": "mcp__weather", "tools": [{"type": "function", "name": "lookup"}]}
+        top_level = {"type": "function", "function": {"name": "lookup"}}
+        tools = [namespace, top_level] if namespace_first else [top_level, namespace]
+        function = Function(name="lookup", arguments='{"country": "France"}')
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={"tool_calls": [{"id": "call_lookup", "type": "function", "function": function}]},
+                )
+            ]
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data={"guardrails": ["post-mcp"], "tools": tools}, user_api_key_dict=UserAPIKeyAuth(), response=response
+        )
+
+        assert [call.function.name for call in response.choices[0].message.tool_calls or ()] == ["lookup"]
+
+    @pytest.mark.asyncio
     async def test_async_post_call_success_hook_missing_arguments_blocks_param_rule(
         self,
     ):
@@ -1633,6 +1664,33 @@ class TestToolPermissionGuardrailAnthropicMessages:
         result = await self._run_pre_call(guardrail, data, "responses")
 
         assert result["tools"] == [{**partly_denied, "tools": partly_denied["tools"][:1]}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("call_type", "malformed"),
+        [
+            (
+                "agenerate_content",
+                {"toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": [{"a": 1}]}}},
+            ),
+            ("responses", {"input": [{"type": {"x": 1}, "content": "hi"}]}),
+            ("acompletion", {"extra_body": {"input": [{"type": [1]}]}}),
+            ("acompletion", {"extra_body": {"function_call": {"name": 5}}}),
+        ],
+        ids=["unhashable_allowed_function_name", "unhashable_input_type", "extra_body_input_type", "int_function_call"],
+    )
+    async def test_pre_call_rewrite_leaves_a_malformed_value_for_the_provider_to_reject(
+        self, call_type: CallTypesLiteral, malformed: dict[str, object]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}], "rewrite", "deny"
+        )
+        tools = [{"type": "function", "function": {"name": name}} for name in ("get_weather", "shell")]
+
+        result = await self._run_pre_call(guardrail, {"model": "m", "tools": tools, **malformed}, call_type)
+
+        assert result["tools"] == tools[:1]
+        assert {key: result[key] for key in malformed} == malformed
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

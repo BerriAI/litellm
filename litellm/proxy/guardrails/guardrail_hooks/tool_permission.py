@@ -150,11 +150,14 @@ def _gemini_hosted_key_targets(tool: object) -> tuple[_ToolTarget, ...]:
     return (_part_target(fields, keys[0]),) if len(keys) == 1 and keys[0] in _GEMINI_HOSTED_TOOL_KEYS else ()
 
 
+def _is_namespace(tool: object) -> bool:
+    fields: Final = _object_mapping(tool)
+    return fields is not None and fields.get("type") == "namespace"
+
+
 def _namespace_members(tool: object) -> Sequence[object]:
     fields: Final = _object_mapping(tool)
-    members: Final = (
-        _object_list(fields.get("tools")) if fields is not None and fields.get("type") == "namespace" else None
-    )
+    members: Final = _object_list(fields.get("tools")) if fields is not None and _is_namespace(tool) else None
     return members or ()
 
 
@@ -217,7 +220,7 @@ def _part_target(fields: Mapping[str, object], key: str) -> _ToolTarget:
 
 def _input_item_tools(item: object) -> Sequence[object] | None:
     fields: Final = _object_mapping(item)
-    carries_tools: Final = fields is not None and fields.get("type") in _TOOL_CARRYING_INPUT_TYPES
+    carries_tools: Final = fields is not None and _non_empty_string(fields.get("type")) in _TOOL_CARRYING_INPUT_TYPES
     return _object_list(fields.get("tools")) if fields is not None and carries_tools else None
 
 
@@ -408,7 +411,11 @@ def _requires_a_tool(tool_choice: object) -> bool:
 
 def _kept_allowed_function_names(config: Mapping[str, object], removed_names: frozenset[str]) -> Mapping[str, object]:
     listed: Final = tuple((key, _object_list(config.get(key))) for key in _ALLOWED_FUNCTION_NAMES_KEYS)
-    return {key: [name for name in names if name not in removed_names] for key, names in listed if names is not None}
+    return {
+        key: [name for name in names if _non_empty_string(name) not in removed_names]
+        for key, names in listed
+        if names is not None
+    }
 
 
 def _rewritten_function_calling_config(
@@ -985,17 +992,17 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
 
     def _returned_call_names(self, data: Mapping[str, object]) -> Mapping[str, tuple[str, ...]]:
-        member_names: Final = tuple(
-            chain.from_iterable(map(self._bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data))))
-        )
+        sent_tools: Final = _sent_tools(_REQUEST_DATA.validate_python(data))
+        member_names: Final = tuple(chain.from_iterable(map(self._bare_member_names, sent_tools)))
         if not member_names:
             return MappingProxyType({})
+        top_level_names: Final = self._tool_names_in(tuple(tool for tool in sent_tools if not _is_namespace(tool)))
+        member_bare_names: Final = _grouped_values(
+            (bare, name) for name, bare in member_names if bare not in top_level_names
+        )
         listed: Final = frozenset(name for name, _ in self._collect_request_tools(data) if name is not None)
         return MappingProxyType(
-            {
-                bare: (*qualified, *((bare,) if bare in listed else ()))
-                for bare, qualified in _grouped_values((bare, name) for name, bare in member_names).items()
-            }
+            {bare: (*qualified, *((bare,) if bare in listed else ())) for bare, qualified in member_bare_names.items()}
         )
 
     def _judged_name(self, tool_call: ChatCompletionMessageToolCall, bare: str, name: str) -> str:
@@ -1156,7 +1163,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return None
         if isinstance(function_call, str):
             return function_call
-        return self._get_mapping_value(function_call, "name")
+        return _non_empty_string(self._get_mapping_value(function_call, "name"))
 
     def _listed_layer_targets(self, layer: Mapping[str, object]) -> tuple[_ToolTarget, ...]:
         return (
