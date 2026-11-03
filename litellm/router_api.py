@@ -1507,7 +1507,7 @@ class RoutingContext:
         messages: list[dict[str, str]] | None = None,  # mutable-ok: Router._pre_call_checks takes a list
         input: str | list[object] | None = None,  # mutable-ok: Router._pre_call_checks takes a list
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: Router._pre_call_checks takes a dict
-        input_token_count: int | None = None,
+        input_token_counts: Mapping[str | None, int] | None = None,
         skip_inline_token_count: bool = False,
         request_deployments: "Sequence[DeploymentTypedDict] | None" = None,
     ) -> Sequence[object]:
@@ -1517,7 +1517,7 @@ class RoutingContext:
             messages=messages,
             input=input,
             request_kwargs=request_kwargs,
-            input_token_count=input_token_count,
+            input_token_counts=input_token_counts,
             skip_inline_token_count=skip_inline_token_count,
             request_deployments=request_deployments,
         )
@@ -1529,6 +1529,22 @@ class RoutingContext:
         request_kwargs: Mapping[str, object] | None = None,
     ) -> int:
         return self._router._count_pre_call_check_tokens(messages, input, request_kwargs)
+
+    async def acount_pre_call_check_tokens(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        messages: Sequence[Mapping[str, object]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+    ) -> Mapping[str | None, int] | None:
+        return await self._router._acount_pre_call_check_tokens(
+            model=model,
+            healthy_deployments=healthy_deployments,
+            messages=messages,
+            input=input,
+            request_kwargs=request_kwargs,
+        )
 
     def update_kwargs_before_fallbacks(
         self,

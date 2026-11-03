@@ -126,6 +126,7 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -219,11 +220,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_structure,
 )
-from litellm.litellm_core_utils.token_counter import (
-    offload_token_count,
-    served_openai_models,
-    single_encoding_openai_model,
-)
+from litellm.litellm_core_utils.token_counter import is_openai_model, offload_token_count
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, anthropic_error_frame_exception
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
@@ -296,6 +293,13 @@ from litellm.router_strategy.tag_based_routing import (
     tags_with_serving_deployment_tags,
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient, MaxParallelRequestsLimit
+from litellm.router_utils.context_window_fit import (
+    ContextWindow,
+    ContextWindowOverflow,
+    context_window_overflow,
+    pre_call_tokenizer,
+    token_count_key,
+)
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
@@ -337,6 +341,8 @@ from litellm.router_utils.fallback_event_handlers import (
     check_non_standard_fallback_format,
     clear_pre_routing_selection,
     committed_retry_budget_for_request,
+    context_window_fallback_resolves,
+    context_window_fallback_scope,
     continuation_fallback_targets,
     fallback_lookup_groups,
     fallback_target_name,
@@ -486,6 +492,7 @@ from litellm.types.utils import (
     LlmProviders,
     ModelInfo,
     ModelResponseStream,
+    SelectTokenizerResponse,
     StandardLoggingPayload,
     StandardLoggingRoutingDecision,
     Usage,
@@ -1832,7 +1839,6 @@ class PythonCore(DeprecatedRouterMembers):
         self._cached_deployment_tracks_usage = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
             self._deployment_tracks_usage
         )
-        self.served_openai_models = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(self._served_openai_models)
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=max(len(model_list or ()), 1),
             default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
@@ -9472,10 +9478,19 @@ class PythonCore(DeprecatedRouterMembers):
                 content_policy_fallbacks=content_policy_fallbacks,
             )
 
-            if mock_timeout is not None:
-                response = await self.async_function_with_retries(*args, **kwargs, mock_timeout=mock_timeout)
-            else:
-                response = await self.async_function_with_retries(*args, **kwargs)
+            with context_window_fallback_scope(
+                cast(Mapping[str, object], kwargs),  # cast-ok: **kwargs is untyped at this boundary
+                model_group if isinstance(model_group, str) else None,
+                cast(  # cast-ok: the router's fallbacks config shape
+                    Sequence[Mapping[str, list[str]]] | None, context_window_fallbacks
+                ),
+                max_fallbacks=self.max_fallbacks,
+                fallbacks_disabled=disable_fallbacks is True,
+            ):
+                if mock_timeout is not None:
+                    response = await self.async_function_with_retries(*args, **kwargs, mock_timeout=mock_timeout)
+                else:
+                    response = await self.async_function_with_retries(*args, **kwargs)
             if verbose_router_logger.isEnabledFor(logging.DEBUG):
                 verbose_router_logger.debug("Async Response: %s", response)
             response = add_fallback_headers_to_response(
@@ -12399,9 +12414,6 @@ class PythonCore(DeprecatedRouterMembers):
             indices: Final = self._core_model_name_to_deployment_indices.get(model_name)
             return None if indices is None else tuple(self._core_model_list[idx] for idx in indices)
 
-    def _served_openai_models(self, model_name: str) -> tuple[str | None, ...]:
-        return served_openai_models(self._core_deployments_named(model_name) or ())
-
     def team_public_model_names_of(self, team_id: str) -> frozenset[str]:
         """The public names `team_id` serves its own deployments under."""
         with self._deployment_index_lock:
@@ -13825,11 +13837,33 @@ class PythonCore(DeprecatedRouterMembers):
         has_request_input: bool,
     ) -> frozenset[str]:
         """
-        Ids of the cooling deployments in `request_deployments` that region and tag routing would send this request
-        to, each tag routing pick counted along with the picks it falls back to once that one is unavailable, judged
-        without recording a tag match on the request
+        Ids of the cooling deployments in `request_deployments` that region and tag routing would send this request to
         """
         cooled_ids: Final = frozenset(cooldown_deployments)
+        return await self._async_tag_routable_ids(
+            model=model,
+            candidates=tuple(
+                deployment
+                for deployment in self._region_routable_deployments(
+                    request_deployments, request_kwargs, has_request_input
+                )
+                if self._deployment_ids((deployment,)) <= cooled_ids
+            ),
+            request_deployments=request_deployments,
+            request_kwargs=request_kwargs,
+        )
+
+    async def _async_tag_routable_ids(
+        self,
+        model: str,
+        candidates: Sequence[Mapping[str, Any]],
+        request_deployments: Sequence[DeploymentTypedDict],
+        request_kwargs: Mapping[str, object],
+    ) -> frozenset[str]:
+        """
+        Ids of the `candidates` tag routing would send this request to, each pick counted along with the picks it
+        falls back to once that one is unavailable, judged without recording a tag match on the request
+        """
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
         metadata: Final = request_kwargs.get(metadata_variable_name)
         if metadata_variable_name in request_kwargs and not isinstance(metadata, Mapping):
@@ -13840,11 +13874,7 @@ class PythonCore(DeprecatedRouterMembers):
             else request_kwargs
         )
         routable_ids = frozenset[str]()  # rebind-ok: gains each pass's tag routing picks
-        remaining = tuple(  # rebind-ok: each pass drops what tag routing just picked
-            deployment
-            for deployment in self._region_routable_deployments(request_deployments, request_kwargs, has_request_input)
-            if self._deployment_ids((deployment,)) <= cooled_ids
-        )
+        remaining = tuple(candidates)  # rebind-ok: each pass drops what tag routing just picked
         while remaining:
             try:
                 picked = await get_deployments_for_tag(
@@ -14603,7 +14633,6 @@ class PythonCore(DeprecatedRouterMembers):
         self._ptu_share_teams.cache_clear()
         self._cached_team_ptu_ceiling.cache_clear()
         self._cached_deployment_tracks_usage.cache_clear()
-        self.served_openai_models.cache_clear()
         self._zero_cost_cache.clear()
         self._routing_group_rows = None
 
@@ -14863,9 +14892,10 @@ class PythonCore(DeprecatedRouterMembers):
     def _count_pre_call_check_tokens(
         self,
         messages: Sequence[Mapping[str, object]] | None,
-        input: str | list[object] | None,
+        input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None = None,
-        tokenizer_model: str = "",
+        model: str = "",
+        custom_tokenizer: SelectTokenizerResponse | None = None,
     ) -> int:
         """
         Count input tokens for context-window pre-call checks.
@@ -14896,7 +14926,9 @@ class PythonCore(DeprecatedRouterMembers):
         system_message: Final = anthropic_system_to_openai_message(extras.get("system"))
         if messages is not None:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
-            return self._host.invoke("token_counter")(model=tokenizer_model, messages=counted_messages, tools=tools)
+            return self._host.invoke("token_counter")(
+                model=model, custom_tokenizer=custom_tokenizer, messages=counted_messages, tools=tools
+            )
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
@@ -14911,14 +14943,15 @@ class PythonCore(DeprecatedRouterMembers):
                 only_since_compaction=True,
             )
             return self._host.invoke("token_counter")(
-                model=tokenizer_model,
+                model=model,
+                custom_tokenizer=custom_tokenizer,
                 messages=cast(list, input_messages),  # cast-ok: transformed chat messages
                 tools=tools,
             )
         raise ValueError("Either messages or input must be provided to count tokens")
 
-    def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
-        """The deployment's declared context window, or None when it declares none or cannot be resolved."""
+    def _deployment_context_window(self, model: str, deployment: Mapping[str, object]) -> ContextWindow | None:
+        """The deployment's model and declared context window, or None when it declares none or cannot be resolved."""
         try:
             model_info: Final = self._core_get_router_model_info(
                 deployment=cast(dict, deployment),  # cast-ok: router deployments are plain dicts
@@ -14926,32 +14959,63 @@ class PythonCore(DeprecatedRouterMembers):
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
             verbose_router_logger.debug(
-                "litellm.router.py::_deployment_max_input_tokens: skipping deployment. Got - %s", e
+                "litellm.router.py::_deployment_context_window: skipping deployment. Got - %s", e
             )
             return None
         max_input_tokens: Final = model_info.get("max_input_tokens")
-        return max_input_tokens if isinstance(max_input_tokens, int) else None
+        if not isinstance(max_input_tokens, int):
+            return None
+        served_model: Final = model_info["key"]
+        return ContextWindow(
+            openai_model=served_model if is_openai_model(served_model) else None,
+            max_input_tokens=max_input_tokens,
+        )
 
-    def _pre_call_checks_need_token_count(
+    def _pre_call_check_tokenizer_models(
         self, model: str, healthy_deployments: Sequence[Mapping[str, object]]
-    ) -> bool:
-        """Whether any healthy deployment declares a context window that a token count could exceed.
+    ) -> frozenset[str | None]:
+        """The models the prompt is counted for: each OpenAI model, and None for the stand-in shared by every other
+        deployment that declares a context window.
 
         Resolves each deployment the way ``_pre_call_checks`` does, so one unmappable deployment
         cannot hide a later one that does declare a limit.
         """
-        return any(
-            self._deployment_max_input_tokens(model, deployment) is not None for deployment in healthy_deployments
+        windows: Final = tuple(self._deployment_context_window(model, deployment) for deployment in healthy_deployments)
+        return frozenset(window.openai_model for window in windows if window is not None)
+
+    def _pre_call_check_token_counts(
+        self,
+        tokenizer_models: frozenset[str | None],
+        messages: Sequence[Mapping[str, object]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+    ) -> Mapping[str | None, int]:
+        keys: Final = MappingProxyType(
+            {openai_model: token_count_key(openai_model) for openai_model in tokenizer_models}
         )
+        counted_models: Final = MappingProxyType({key: openai_model for openai_model, key in keys.items()})
+        counts: Final = MappingProxyType(
+            {
+                key: self._count_pre_call_check_tokens(
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                    model=openai_model or "",
+                    custom_tokenizer=pre_call_tokenizer(openai_model),
+                )
+                for key, openai_model in counted_models.items()
+            }
+        )
+        return MappingProxyType({openai_model: counts[key] for openai_model, key in keys.items()})
 
     async def _acount_pre_call_check_tokens(
         self,
         model: str,
         healthy_deployments: Sequence[Mapping[str, object]],
-        messages: Sequence[Mapping[str, str]] | None,
+        messages: Sequence[Mapping[str, object]] | None,
         input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None,
-    ) -> int | None:
+    ) -> Mapping[str | None, int] | None:
         """Count input tokens off the event loop, so a multi-MB prompt cannot stall the proxy.
 
         Returns None when no deployment limits its context window, and when counting fails. The
@@ -14962,16 +15026,14 @@ class PythonCore(DeprecatedRouterMembers):
         if messages is None and input is None:
             return None
         try:
-            if not self._pre_call_checks_need_token_count(model, healthy_deployments):
+            tokenizer_models: Final = self._pre_call_check_tokenizer_models(model, healthy_deployments)
+            if not tokenizer_models:
                 return None
-            return await offload_token_count(self._count_pre_call_check_tokens)(
-                messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
-                input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
+            return await offload_token_count(self._pre_call_check_token_counts)(
+                tokenizer_models=tokenizer_models,
+                messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
-                tokenizer_model=single_encoding_openai_model(
-                    self.served_openai_models(model) or served_openai_models(healthy_deployments)
-                )
-                or "",
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
@@ -14979,29 +15041,34 @@ class PythonCore(DeprecatedRouterMembers):
             )
             return None
 
-    def _resolve_pre_call_check_input_tokens(
+    @staticmethod
+    def _context_window_exceeded_line(deployment: Mapping[str, object], overflow: ContextWindowOverflow) -> str:
+        model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
+        litellm_params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+        deployment_model: Final = (
+            model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
+        )
+        return f"Model={deployment_model}, Max Input Tokens={overflow.max_input_tokens}, Got={overflow.tokens}"
+
+    def _resolve_pre_call_check_token_counts(
         self,
         messages: Sequence[Mapping[str, str]] | None,
         input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None,
-        input_token_count: int | None,
+        token_counts: Mapping[str | None, int] | None,
+        tokenizer_models: frozenset[str | None],
         count_inline: bool,
-        model: str,
-        deployments: Sequence[Mapping[str, object]],
-    ) -> int | None:
-        if input_token_count is not None:
-            return input_token_count
+    ) -> Mapping[str | None, int] | None:
+        if token_counts is not None:
+            return token_counts
         if not count_inline:
             return None
         try:
-            return self._count_pre_call_check_tokens(
-                messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
-                input=cast(str | list[object] | None, input),  # cast-ok: forwarded to the sync counter
+            return self._pre_call_check_token_counts(
+                tokenizer_models=tokenizer_models,
+                messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
-                tokenizer_model=single_encoding_openai_model(
-                    self.served_openai_models(model) or served_openai_models(deployments)
-                )
-                or "",
             )
         except Exception as e:
             verbose_router_logger.error(
@@ -15203,6 +15270,47 @@ class PythonCore(DeprecatedRouterMembers):
             if param in _PRE_CALL_CHECK_FILTERED_PARAMS and not isinstance(value, str)
         )
 
+    def _param_excluded_indices(
+        self,
+        candidates: Sequence[tuple[int, DeploymentTypedDict]],
+        model: str,
+        requested_params: frozenset[str],
+        request_settings: Mapping[str, object],
+    ) -> frozenset[int]:
+        lacking_params: Final = tuple(
+            self._deployment_lacks_params(deployment, model, requested_params) for _, deployment in candidates
+        )
+        failing_params: Final = (
+            tuple(
+                self._deployment_rejects_params(deployment, model, requested_params, request_settings)
+                for _, deployment in candidates
+            )
+            if lacking_params and all(lacking_params)
+            else lacking_params
+        )
+        return frozenset(idx for (idx, _), fails in zip(candidates, failing_params, strict=True) if fails)
+
+    def _a_fitting_deployment_stays_routable(
+        self,
+        model: str,
+        typed_deployments: Sequence[DeploymentTypedDict],
+        overflows: Sequence[ContextWindowOverflow | None],
+        region_excluded: frozenset[int],
+        requested_params: frozenset[str],
+        request_settings: Mapping[str, object],
+        tag_routable_ids: frozenset[str] | None,
+    ) -> bool:
+        fitting: Final = tuple(
+            (idx, deployment)
+            for idx, deployment in enumerate(typed_deployments)
+            if overflows[idx] is None and idx not in region_excluded
+        )
+        param_excluded: Final = self._param_excluded_indices(fitting, model, requested_params, request_settings)
+        survivors: Final = tuple(deployment for idx, deployment in fitting if idx not in param_excluded)
+        if tag_routable_ids is None:
+            return bool(survivors)
+        return not self._deployment_ids(survivors).isdisjoint(tag_routable_ids)
+
     def _pre_call_checks(
         self,
         model: str,
@@ -15210,9 +15318,10 @@ class PythonCore(DeprecatedRouterMembers):
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         request_kwargs: dict | None = None,
-        input_token_count: int | None = None,
+        input_token_counts: Mapping[str | None, int] | None = None,
         skip_inline_token_count: bool = False,
         request_deployments: Sequence[DeploymentTypedDict] | None = None,
+        tag_routable_ids: frozenset[str] | None = None,
     ):
         """
         Filter out model in model group, if:
@@ -15228,90 +15337,86 @@ class PythonCore(DeprecatedRouterMembers):
         # We only pop from the list, not modify deployment dicts - 100x+ faster on hot path (every request)
         _returned_deployments = list(healthy_deployments)
 
-        invalid_model_indices: Final = set[int]()  # Use set for O(1) membership checks
-
-        _context_window_error = False
-        _potential_error_str = ""
-
         has_countable_input: Final = (messages is not None or input is not None) and not compaction_pending(
             request_kwargs
         )
-        deployment_max_input_tokens: Final = tuple(
-            self._deployment_max_input_tokens(model, deployment) for deployment in _returned_deployments
+        context_windows: Final = tuple(
+            self._deployment_context_window(model, deployment) for deployment in _returned_deployments
         )
-        input_tokens: Final = self._resolve_pre_call_check_input_tokens(
+        tokenizer_models: Final = frozenset(window.openai_model for window in context_windows if window is not None)
+        token_counts: Final = self._resolve_pre_call_check_token_counts(
             messages=messages,
             input=cast(str | list[object] | None, input),  # cast-ok: forwarded to the resolver
             request_kwargs=cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: forwarded to the resolver
-            input_token_count=input_token_count,
-            count_inline=has_countable_input
-            and not skip_inline_token_count
-            and any(limit is not None for limit in deployment_max_input_tokens),
-            model=model,
-            deployments=_returned_deployments,
+            token_counts=input_token_counts,
+            tokenizer_models=tokenizer_models,
+            count_inline=has_countable_input and not skip_inline_token_count and bool(tokenizer_models),
         )
-        request_settings: Final[Mapping[str, object]] = request_kwargs if request_kwargs is not None else {}
+        overflows: Final = tuple(
+            context_window_overflow(window, token_counts if has_countable_input else None) for window in context_windows
+        )
+        request_settings: Final = cast(  # cast-ok: request_kwargs is the untyped legacy request dict
+            Mapping[str, object], request_kwargs if request_kwargs is not None else {}
+        )
         requested_params: Final[frozenset[str]] = (
             self._pre_call_check_requested_chat_params(request_settings)
             if request_kwargs is not None and self._host.dynamic().drop_params is False
             else frozenset()
         )
-
-        for idx, deployment in enumerate(_returned_deployments):
-            # Cache nested dict access to avoid repeated temporary dict allocations
-            _litellm_params = deployment.get("litellm_params", {})
-            _model_info = deployment.get("model_info", {})
-
-            max_input_tokens = deployment_max_input_tokens[idx]
-            if (
-                max_input_tokens is not None
-                and has_countable_input
-                and input_tokens is not None
-                and input_tokens > max_input_tokens
-            ):
-                invalid_model_indices.add(idx)
-                _context_window_error = True
-                deployment_model = (
-                    _model_info.get("base_model") or _litellm_params.get("base_model") or _litellm_params.get("model")
+        allowed_model_region: Final = request_settings.get("allowed_model_region")
+        region_excluded: Final = (
+            frozenset[int]()
+            if allowed_model_region is None
+            else frozenset(
+                idx
+                for idx, deployment in enumerate(_returned_deployments)
+                if not isinstance(allowed_model_region, str)
+                or not is_region_allowed(
+                    litellm_params=LiteLLM_Params.model_validate(deployment.get("litellm_params", {})),
+                    allowed_model_region=allowed_model_region,
                 )
-                _potential_error_str += (
-                    f"Model={deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
-                )
-                continue
-
-            ## REGION CHECK ##
-            if request_kwargs is not None and request_kwargs.get("allowed_model_region") is not None:
-                allowed_model_region = request_kwargs.get("allowed_model_region")
-
-                if allowed_model_region is not None:
-                    if not is_region_allowed(
-                        litellm_params=LiteLLM_Params.model_validate(_litellm_params),
-                        allowed_model_region=allowed_model_region,
-                    ):
-                        invalid_model_indices.add(idx)
-                        continue
-
+            )
+        )
         typed_deployments: Final = tuple(
             cast(DeploymentTypedDict, deployment)  # cast-ok: router deployments are plain dicts
             for deployment in _returned_deployments
         )
-        param_candidates: Final = tuple(
-            (idx, deployment) for idx, deployment in enumerate(typed_deployments) if idx not in invalid_model_indices
-        )
-        candidates_lacking_params: Final = tuple(
-            self._deployment_lacks_params(deployment, model, requested_params) for _, deployment in param_candidates
-        )
-        no_deployment_takes_params: Final = bool(candidates_lacking_params) and all(candidates_lacking_params)
-        candidates_failing_params: Final = (
-            tuple(
-                self._deployment_rejects_params(deployment, model, requested_params, request_settings)
-                for _, deployment in param_candidates
+        exclude_uncertain_overflows: Final = any(
+            overflow is not None and not overflow.certain for overflow in overflows
+        ) and (
+            self._a_fitting_deployment_stays_routable(
+                model=model,
+                typed_deployments=typed_deployments,
+                overflows=overflows,
+                region_excluded=region_excluded,
+                requested_params=requested_params,
+                request_settings=request_settings,
+                tag_routable_ids=tag_routable_ids,
             )
-            if no_deployment_takes_params
-            else candidates_lacking_params
+            or context_window_fallback_resolves()
         )
-        excluded_indices: Final = frozenset(invalid_model_indices) | frozenset(
-            idx for (idx, _), fails in zip(param_candidates, candidates_failing_params, strict=True) if fails
+        window_excluded: Final = MappingProxyType(
+            {
+                idx: overflow
+                for idx, overflow in enumerate(overflows)
+                if overflow is not None and (overflow.certain or exclude_uncertain_overflows)
+            }
+        )
+        _context_window_error: Final = bool(window_excluded)
+        _potential_error_str: Final = "".join(
+            self._context_window_exceeded_line(_returned_deployments[idx], window_excluded[idx])
+            for idx in sorted(window_excluded)
+        )
+        invalid_model_indices: Final = frozenset(window_excluded) | region_excluded
+        excluded_indices: Final = invalid_model_indices | self._param_excluded_indices(
+            candidates=tuple(
+                (idx, deployment)
+                for idx, deployment in enumerate(typed_deployments)
+                if idx not in invalid_model_indices
+            ),
+            model=model,
+            requested_params=requested_params,
+            request_settings=request_settings,
         )
 
         if len(excluded_indices) == len(_returned_deployments):
@@ -15846,21 +15951,41 @@ class PythonCore(DeprecatedRouterMembers):
 
         if self._core_enable_pre_call_checks and (messages is not None or input is not None):
             deployments_to_check: Final = healthy_deployments
+            pre_call_token_counts: Final = await self._acount_pre_call_check_tokens(
+                model=model,
+                healthy_deployments=deployments_to_check,
+                messages=messages,
+                input=input,
+                request_kwargs=request_kwargs,
+            )
+            typed_deployments_to_check: Final = cast(  # cast-ok: router deployments are plain dicts
+                Sequence[DeploymentTypedDict], deployments_to_check
+            )
+            typed_request_kwargs: Final = cast(  # cast-ok: request_kwargs is the untyped legacy request dict
+                Mapping[str, object], request_kwargs
+            )
+            tag_routable_ids: Final = (
+                None
+                if pre_call_token_counts is None
+                else await self._async_tag_routable_ids(
+                    model=model,
+                    candidates=self._region_routable_deployments(
+                        typed_deployments_to_check, typed_request_kwargs, True
+                    ),
+                    request_deployments=request_deployments,
+                    request_kwargs=typed_request_kwargs,
+                )
+            )
             healthy_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=deployments_to_check,
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
-                input_token_count=await self._acount_pre_call_check_tokens(
-                    model=model,
-                    healthy_deployments=deployments_to_check,
-                    messages=messages,
-                    input=input,
-                    request_kwargs=request_kwargs,
-                ),
+                input_token_counts=pre_call_token_counts,
                 skip_inline_token_count=True,
                 request_deployments=request_deployments,
+                tag_routable_ids=tag_routable_ids,
             )
         # check if user wants to do tag based routing
         healthy_deployments = await get_deployments_for_tag(

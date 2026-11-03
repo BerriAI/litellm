@@ -716,6 +716,21 @@ class _MessageCountParams:
         return pdf_page_pricing(self._model)
 
 
+@dataclass(frozen=True, slots=True)
+class MessageCountFraming:
+    legacy_message_accounting: bool
+    tool_section: ChatTemplateToolSection | None
+    pdf_pricing: PdfPagePricing
+
+
+def message_count_framing(model: str) -> MessageCountFraming:
+    return MessageCountFraming(
+        legacy_message_accounting=uses_legacy_message_accounting(model),
+        tool_section=chat_template_tool_section(model),
+        pdf_pricing=pdf_page_pricing(model),
+    )
+
+
 def _is_openai_chat_model(model: str) -> bool:
     return model in litellm.open_ai_chat_completion_models or model in litellm.azure_llms
 
@@ -1122,7 +1137,13 @@ def _get_exact_count_function(
 
         return count_tokens
     if tokenizer_json["type"] == "openai_tokenizer":
-        encoding: Final = openai_tokenizer_encoding(model or "")
+        encoding: Final = (
+            tokenizer_json["tokenizer"]
+            if custom_tokenizer is not None
+            and isinstance(tokenizer_json["tokenizer"], (tiktoken.Encoding, OpenAIEncoding))
+            and not is_openai_model(model or "")
+            else openai_tokenizer_encoding(model or "")
+        )
 
         def encode_length(text: str) -> int:
             return _encoding_count(encoding, text)
@@ -1198,27 +1219,12 @@ def deployment_openai_model(deployment: object) -> str | None:
     return _as_openai_model(_served_model(deployment))
 
 
-def served_openai_models(deployments: Iterable[object]) -> tuple[str | None, ...]:
-    """The distinct OpenAI models `deployments` serve, with None standing for any deployment serving another model."""
-    served: Final = dict.fromkeys(_served_model(deployment) for deployment in deployments)
-    return tuple(dict.fromkeys(_as_openai_model(model) for model in served))
-
-
 def _served_model(deployment: object) -> str | None:
     return next(iter(deployment_pricing_models(deployment)), None)
 
 
 def _as_openai_model(model: str | None) -> str | None:
     return model if model is not None and is_openai_model(model) else None
-
-
-def single_encoding_openai_model(served: Sequence[str | None]) -> str | None:
-    """An OpenAI model to count a request with, when every `served_openai_models` entry is an OpenAI model on the same
-    encoding, else None."""
-    if not served or None in served:
-        return None
-    encodings: Final = frozenset(openai_tokenizer_encoding_name(model) for model in served if model is not None)
-    return served[0] if len(encodings) == 1 else None
 
 
 def _openai_model_name(model: str) -> str | None:

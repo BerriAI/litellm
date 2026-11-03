@@ -135,7 +135,6 @@ ignored_function_names = [
     "_params_sent_to_deployment",  # Tested through the configured-constraint continuation tests in test_router.py
     "_names_deployment_that_cannot_continue",  # Tested through the deployment-id continuation tests in test_router.py
     "_set_retry_policy",  # Tested through update_settings in test_router_retry_policy_update.py
-    "_resolve_pre_call_check_input_tokens",  # Tested through the token-count failure pre-call check tests in test_router.py
     "_params_neither_dropped_nor_allowed",  # Tested through the allowed-or-dropped param pre-call check tests in test_router.py
     "_deployment_rejects_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_cache_flags_left_to_the_catalog",  # Tested through the wildcard prompt cache flag tests in test_anthropic_cache_control_hook.py
@@ -179,13 +178,15 @@ ignored_function_names = [
     "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
-    "_served_openai_models",  # Cached as served_openai_models, tested through the pre-call check token count tests in test_router.py
     "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
     "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both
     "_responses_event_announces_background_run",  # Tested through the background Responses stream tests in test_router.py
     "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
     "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
     "_mid_stream_error_before_output",  # Tested through the Responses mid-stream fallback and background stream tests
+    "_pre_call_check_token_counts",  # Run by _pre_call_checks and _acount_pre_call_check_tokens, tested through the pre-call check tests in test_router.py
+    "_resolve_pre_call_check_token_counts",  # Run by _pre_call_checks, tested through the precounted and inline pre-call check tests in test_router.py
+    "_context_window_exceeded_line",  # Builds the ContextWindowExceededError text, tested through the stand-in margin refusal test in test_router.py
     "_without_decisions_deployments_refusing_media",  # Tested through the mixed media-flag group tests in tests/unit/decisions/test_main.py
     "_decisions_deployment_refuses_media",  # Read by _without_decisions_deployments_refusing_media, tested through the same group tests
     "_active_default_litellm_params",  # Tested through the router default drop_params test in tests/unit/decisions/test_main.py
