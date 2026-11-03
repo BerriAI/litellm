@@ -10,7 +10,7 @@ pub(super) struct ForwardSettings {
     pub host: String,
     pub port: u16,
     rust_log: Option<String>,
-    litellm_forward_keepalive_timeout: u64,
+    keepalive_timeout: u64,
 }
 
 impl Default for ForwardSettings {
@@ -19,14 +19,14 @@ impl Default for ForwardSettings {
             host: "0.0.0.0".into(),
             port: 4000,
             rust_log: None,
-            litellm_forward_keepalive_timeout: 5,
+            keepalive_timeout: 5,
         }
     }
 }
 
 impl ForwardSettings {
     pub fn upstream_keepalive(&self) -> Duration {
-        Duration::from_secs(self.litellm_forward_keepalive_timeout)
+        Duration::from_secs(self.keepalive_timeout)
     }
 
     pub fn log_level(&self) -> Level {
@@ -105,6 +105,18 @@ mod tests {
                 .iter()
                 .map(|(key, value)| (OsString::from(key), OsString::from(value))),
         )
+    }
+
+    #[rstest]
+    #[case::uvicorn_default(&[], Duration::from_secs(5))]
+    #[case::shared_with_python(&[("KEEPALIVE_TIMEOUT", "2")], Duration::from_secs(2))]
+    fn forwarding_reads_the_keepalive_python_uses(
+        #[case] variables: &[(&str, &str)],
+        #[case] expected: Duration,
+    ) {
+        let settings: ForwardSettings = parse(variables).unwrap();
+
+        assert_eq!(settings.upstream_keepalive(), expected);
     }
 
     #[rstest]
