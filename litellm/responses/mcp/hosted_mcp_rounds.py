@@ -145,7 +145,7 @@ async def run_claimed_rounds(
     original_input: str | ResponseInputParam | None,
 ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     """Run every tool call the model makes on the gateway's MCP tools, round after round up to `max_rounds`, and
-    answer with OpenAI's items: mcp_list_tools first, each executed call as an mcp_call where the model made it, and
-    one bill for all rounds. A round that also calls a tool the gateway does not run ends the loop: the gateway runs its
-    own calls and hands the others back to the caller as function_call items, in the model's order."""
+    answer with OpenAI's items: mcp_list_tools first, each executed call as an mcp_call after its round's other items,
+    and one bill for all rounds. A round that also calls a tool the gateway does not run ends the loop: the gateway
+    runs its own calls and hands the others back to the caller as function_call items ahead of those mcp_call items."""
     return await _next_round(rounds, first, first_breakdown, _initial_history(original_input), (), 1)

@@ -7,7 +7,6 @@ import warnings
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
-from operator import itemgetter
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Final, List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -4249,12 +4248,32 @@ async def _client_response(
     return events[-1].response, events
 
 
-def _added_items(events: Sequence[object]) -> tuple[tuple[object, object], ...]:
+def _added_items(events: Sequence[object]) -> tuple[tuple[int, Mapping[str, object]], ...]:
     return tuple(
-        (_item(event.item)["type"], event.output_index)
+        (event.output_index, _item(event.item))
         for event in events
         if _event_type(event) == "response.output_item.added"
     )
+
+
+def _item_key(item: Mapping[str, object]) -> tuple[object, object]:
+    return item["type"], item.get("id")
+
+
+def _assert_streamed_like_an_openai_accumulator_reads_it(events: Sequence[object], output: Sequence[object]) -> None:
+    added: Final = _added_items(events)
+    assert [index for index, _ in added] == list(range(len(added)))
+    added_at: Final = {
+        event.output_index: position
+        for position, event in enumerate(events)
+        if _event_type(event) == "response.output_item.added"
+    }
+    assert all(
+        added_at[event.output_index] <= position
+        for position, event in enumerate(events)
+        if isinstance(getattr(event, "output_index", None), int)
+    )
+    assert [_item_key(_item(item)) for item in output] == [_item_key(item) for _, item in added]
 
 
 @pytest.mark.asyncio
@@ -4284,22 +4303,20 @@ async def test_a_round_calling_a_claimed_and_a_held_tool_runs_the_claimed_one_an
         )
     )
 
+    if stream:
+        _assert_streamed_like_an_openai_accumulator_reads_it(events, response.output)
     items: Final = tuple(_item(item) for item in response.output)
     assert tuple(item["type"] for item in items) == (
         "mcp_list_tools",
         "mcp_list_tools",
         "reasoning",
-        "mcp_call",
         "function_call",
+        "mcp_call",
     )
-    assert (items[3]["server_label"], items[3]["name"], items[3]["output"]) == ("gitmcp", "ask_question", _ASK_OUTPUT)
-    assert (items[4]["call_id"], items[4]["name"]) == ("call_wiki", "deepwiki-ask_question")
+    assert (items[3]["call_id"], items[3]["name"]) == ("call_wiki", "deepwiki-ask_question")
+    assert (items[4]["server_label"], items[4]["name"], items[4]["output"]) == ("gitmcp", "ask_question", _ASK_OUTPUT)
     assert [call.name for call in server.calls] == ["ask_question"]
     assert mcp_client.call_tool.await_count == 0
-    if stream:
-        assert sorted(_added_items(events), key=itemgetter(1)) == [
-            (item["type"], index) for index, item in enumerate(items)
-        ]
     await _settle(lambda: len(recorder.logged) > 0)
 
     spend_logs: Final = _SpendLogs(
@@ -4328,7 +4345,8 @@ async def test_a_round_calling_a_claimed_and_a_held_tool_runs_the_claimed_one_an
     assert [message["role"] for message in replayed] == ["user", "assistant", "tool", "tool"]
     assistant: Final = replayed[1]
     assert assistant["reasoning_content"] == "Ask both servers."
-    call_ids: Final = [call["id"] for call in assistant["tool_calls"]]
-    assert call_ids[1] == "call_wiki"
-    assert [message["tool_call_id"] for message in replayed[2:]] == call_ids
-    assert [message["content"] for message in replayed[2:]] == [_ASK_OUTPUT, _HANDED_BACK_OUTPUT]
+    assert [call["id"] for call in assistant["tool_calls"]] == ["call_wiki", items[4]["id"]]
+    assert [(message["tool_call_id"], message["content"]) for message in replayed[2:]] == [
+        (items[4]["id"], _ASK_OUTPUT),
+        ("call_wiki", _HANDED_BACK_OUTPUT),
+    ]

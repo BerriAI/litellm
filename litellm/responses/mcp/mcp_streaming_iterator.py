@@ -369,7 +369,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._round_max_output_index = -1
         self._composed_output: list[object] = []  # mutable-ok: grows as each round finishes
         self._pending_mcp_call_items: list[dict[str, object]] = []  # mutable-ok: grows per executed tool
-        self._function_call_indexes: Mapping[str, int] = MappingProxyType({})
         self._ran_calls: Mapping[str, Mapping[str, object]] = MappingProxyType({})
         self._iteration_started = False
         self._round_billing: StreamedRoundBilling | None = None
@@ -678,18 +677,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         return max(len(output_items(response)), self._round_max_output_index + 1)
 
     def _absorb_round(self, response: ResponsesAPIResponse) -> None:
-        """Bank a finished round's items, each function_call the gateway answered replaced by its mcp_call."""
+        """Bank a finished round's items, each function_call the gateway answered replaced by its mcp_call at the end."""
         width: Final = self._round_output_width(response)
         if self._stream_shaper is None:
             self._absorb_legacy_round(response, width)
         else:
             self._composed_output.extend(self._stream_shaper.round_output(output_items(response), self._ran_calls))
-            self._output_index_offset += width + sum(
-                call_id not in self._function_call_indexes for call_id in self._ran_calls
-            )
+            self._output_index_offset += width + len(self._ran_calls)
         self._pending_mcp_call_items.clear()
         self._round_max_output_index = -1
-        self._function_call_indexes = MappingProxyType({})
         self._ran_calls = MappingProxyType({})
 
     def _absorb_legacy_round(self, response: ResponsesAPIResponse, width: int) -> None:
@@ -701,14 +697,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self._composed_output.extend(self._pending_mcp_call_items)
         self._output_index_offset += width + len(self._pending_mcp_call_items)
-
-    def _note_function_call_index(self, chunk: ResponsesAPIStreamingResponse, output_index: int) -> None:
-        if getattr(chunk, "type", None) != ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
-            return
-        call_id: Final = _function_call_id(getattr(chunk, "item", None))
-        if call_id is None:
-            return
-        self._function_call_indexes = MappingProxyType({**self._function_call_indexes, call_id: output_index})
 
     def _final_round_chunk(
         self, chunk: ResponsesAPIStreamingResponse, response_obj: ResponsesAPIResponse
@@ -765,7 +753,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._round_max_output_index = max(self._round_max_output_index, output_index)
             if self._output_index_offset:
                 _set_event_field(chunk, "output_index", output_index + self._output_index_offset)
-            self._note_function_call_index(chunk, output_index + self._output_index_offset)
 
         if self.should_auto_execute and chunk_type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE:
             return self._charge_incomplete_round(chunk)
@@ -903,9 +890,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if tool_call_id:
             self._ran_calls = MappingProxyType({**self._ran_calls, tool_call_id: mcp_call_item})
 
-    def _mcp_call_index(self, tool_call_id: str) -> int | None:
-        return None if self._stream_shaper is None else self._function_call_indexes.get(tool_call_id)
-
     async def _generate_tool_execution_events(self) -> None:
         """Generate tool execution events and execute tools"""
         if not self.collected_response:
@@ -940,9 +924,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 ) = LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_call)
                 if tool_name and tool_call_id:
                     item_id = f"mcp_{uuid.uuid4().hex[:8]}"
-                    placed_index = self._mcp_call_index(tool_call_id)
-                    output_index = next_output_index if placed_index is None else placed_index
-                    next_output_index += int(placed_index is None)
+                    output_index = next_output_index
+                    next_output_index += 1
                     call_items[tool_call_id] = (item_id, output_index)
                     self.tool_execution_events.append(
                         OutputItemAddedEvent.model_validate(

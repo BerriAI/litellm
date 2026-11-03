@@ -235,12 +235,6 @@ def openai_output(items: OpenAIMCPItems, output: Sequence[object]) -> tuple[obje
     )
 
 
-def _is_mcp_call_event(event_type: object, item: object) -> bool:
-    return (isinstance(event_type, str) and event_type.startswith("response.mcp_call")) or _field(
-        item, "type"
-    ) == "mcp_call"
-
-
 def _response_item(item: Mapping[str, object]) -> BaseLiteLLMOpenAIResponseObject:
     return BaseLiteLLMOpenAIResponseObject(**item)
 
@@ -291,8 +285,8 @@ def _failed(held: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingRespons
 @dataclass(frozen=True, slots=True)
 class OpenAIStreamShaper:
     """Rewrites the gateway's MCP stream into OpenAI's event order. The mcp_list_tools items open the output, the
-    function_call events of a gateway-run tool are dropped since its mcp_call events stand for it at the same output
-    index, output indexes are renumbered densely, and every event gets the next sequence number."""
+    function_call events of a gateway-run tool are dropped since its mcp_call events stand for it, output indexes are
+    renumbered densely, and every event gets the next sequence number."""
 
     items: OpenAIMCPItems
     listed: bool = False
@@ -341,13 +335,12 @@ class OpenAIStreamShaper:
             return self, (self._terminal(event),)
         if not isinstance(index, int):
             return self, (event,)
-        if index in self.dropped and not _is_mcp_call_event(event_type, item):
+        if index in self.dropped:
             return self, ()
         if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _is_gateway_function_call(
             self.items.names, item
         ):
-            reserved_state, _ = self._public_index(index)
-            return replace(reserved_state, dropped=reserved_state.dropped | {index}), ()
+            return replace(self, dropped=self.dropped | {index}), ()
         indexed_state, public = self._public_index(index)
         moved: Final = _copied(event, {"output_index": public})
         if event_type == ResponsesAPIStreamEvents.MCP_CALL_COMPLETED:
@@ -389,13 +382,16 @@ def _is_empty_message(item: object) -> bool:
     return all(_field(part, "type") == "output_text" and not _text(part, "text") for part in parts)
 
 
-def _ran_in_place(item: object, ran_calls: Mapping[str, Mapping[str, object]]) -> object:
-    if _field(item, "type") != "function_call":
-        return item
-    return ran_calls.get(_text(item, "call_id") or _text(item, "id") or "", item)
+def _is_ran_call(item: object, ran_calls: Mapping[str, Mapping[str, object]]) -> bool:
+    return _field(item, "type") == "function_call" and (_text(item, "call_id") or _text(item, "id")) in ran_calls
 
 
 def ran_round_output(output: Sequence[object], ran_calls: Mapping[str, Mapping[str, object]]) -> tuple[object, ...]:
-    """A tool round's output with each call the gateway ran, keyed by call id, replaced in place by its mcp_call, and
-    without the empty assistant message a bridged provider adds beside its tool calls, so it reads as OpenAI's."""
-    return tuple(_ran_in_place(item, ran_calls) for item in output if not _is_empty_message(item))
+    """A tool round's output with each call the gateway ran, keyed by call id, moved after the round's other items as
+    its mcp_call, and without the empty assistant message a bridged provider adds beside its tool calls. The mcp_call
+    items come last because the gateway runs a call only once the model's round ends, so this is also the order a
+    stream adds the items in."""
+    return (
+        *(item for item in output if not (_is_ran_call(item, ran_calls) or _is_empty_message(item))),
+        *ran_calls.values(),
+    )
