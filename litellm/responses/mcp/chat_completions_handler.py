@@ -22,6 +22,7 @@ from litellm.responses.mcp.round_billing import (
     first_round_billed_on_failure,
     summed_cost_breakdown,
 )
+from litellm.router_utils.mcp_tool_execution import MCPToolReplayGuard
 from litellm.types.utils import Message, ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
 
@@ -261,6 +262,7 @@ async def acompletion_with_mcp(
                 self.follow_up_stream = None
                 self.follow_up_iterator = None
                 self.follow_up_exhausted = False
+                self.replay_guard = MCPToolReplayGuard()
                 self._round_billing: ChatStreamRoundBilling | None = engaged_round_billing(initial_stream.logging_obj)
                 self._unsent_usage_chunk: ModelResponseStream | None = None
 
@@ -354,7 +356,8 @@ async def acompletion_with_mcp(
 
             async def _follow_up_or_release_first_round(self, usage_chunk: ModelResponseStream | None) -> None:
                 if self.tool_results and self.complete_response:
-                    await self._prepare_follow_up_call()
+                    with self.replay_guard:
+                        await self._prepare_follow_up_call()
                 if self.follow_up_stream is not None:
                     return
                 self._unsent_usage_chunk = usage_chunk
@@ -438,7 +441,8 @@ async def acompletion_with_mcp(
                         verbose_logger.debug("Follow-up stream iterator created")
 
                     try:
-                        chunk = await self.follow_up_iterator.__anext__()
+                        with self.replay_guard:
+                            chunk = await self.follow_up_iterator.__anext__()
                         from litellm._logging import verbose_logger
 
                         verbose_logger.debug("Follow-up chunk yielded: %s", chunk)
@@ -509,6 +513,7 @@ async def acompletion_with_mcp(
                             litellm_trace_id=self.litellm_trace_id,
                             request_tags=self.request_tags,
                             guardrail_context=context.guardrail_context,
+                            on_tool_dispatched=self.replay_guard.record_tool_dispatch,
                         )
 
             async def _prepare_follow_up_call(self):
@@ -679,6 +684,7 @@ async def acompletion_with_mcp(
         )
         return initial_response
 
+    replay_guard: Final = MCPToolReplayGuard()
     with first_round_billed_on_failure(logging_obj, initial_response):
         tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
             tool_server_map=tool_server_map,
@@ -693,6 +699,7 @@ async def acompletion_with_mcp(
             litellm_trace_id=context.litellm_trace_id,
             request_tags=request_tags,
             guardrail_context=context.guardrail_context,
+            on_tool_dispatched=replay_guard.record_tool_dispatch,
         )
 
         if not tool_results:
@@ -713,7 +720,10 @@ async def acompletion_with_mcp(
         follow_up_call_args["messages"] = follow_up_messages
         follow_up_call_args["stream"] = stream
 
-        with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
+        with (
+            internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None),
+            replay_guard,
+        ):
             final_response: Final = await litellm_acompletion(**follow_up_call_args)
 
     if not isinstance(final_response, ModelResponse):

@@ -366,6 +366,7 @@ from litellm.router_utils.kubernetes_pod_discovery import (
     resolve_pods_after,
     resolve_pods_after_bound,
 )
+from litellm.router_utils.mcp_tool_execution import mcp_tools_executed
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     RESPONSES_CONTINUATION_KWARG,
@@ -9135,6 +9136,7 @@ class PythonCore(DeprecatedRouterMembers):
             or original_model_group is None
             or is_guardrail_intervention(e)
             or unsupported_params_without_fallback
+            or mcp_tools_executed(e)
         ):
             raise e
 
@@ -9559,7 +9561,7 @@ class PythonCore(DeprecatedRouterMembers):
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
-            if is_guardrail_intervention(e):
+            if is_guardrail_intervention(e) or mcp_tools_executed(e):
                 raise
             current_attempt = None
             original_exception = e
@@ -9670,6 +9672,8 @@ class PythonCore(DeprecatedRouterMembers):
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
+                    if mcp_tools_executed(e):
+                        raise
 
                     ## LOGGING
                     kwargs = self._core_log_retry(kwargs=kwargs, e=e)

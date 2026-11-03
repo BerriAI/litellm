@@ -1146,6 +1146,7 @@ class MCPClient:
         raise_on_error: bool = False,
         allow_input_required: bool = False,
         persistent_session: "PersistentMCPSession | None" = None,
+        on_dispatch: Callable[[], None] | None = None,
     ) -> MCPCallToolResult | InputRequiredResult:
         """
         Call an MCP Tool.
@@ -1162,6 +1163,8 @@ class MCPClient:
             allow_input_required: When True, a 2026-07-28 upstream may answer with an interim
                 ``InputRequiredResult`` and it is returned as is. The SDK rejects it otherwise, so
                 callers only opt in when the downstream side can carry it.
+            on_dispatch: Called right before the tool call is sent on a ready session, so a caller
+                can tell a call the server may have run from one that never left.
         """
         verbose_logger.info("MCP client calling tool '%s'", call_tool_request_params.name)
 
@@ -1195,6 +1198,8 @@ class MCPClient:
             async def request(
                 responses: InputResponses | None, state: str | None
             ) -> MCPCallToolResult | InputRequiredResult:
+                if on_dispatch is not None:
+                    on_dispatch()
                 return await session.call_tool(
                     name=call_tool_request_params.name,
                     arguments=call_tool_request_params.arguments,

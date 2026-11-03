@@ -6540,6 +6540,7 @@ class MCPServerManager:
         client_ip: str | None = None,
         allow_input_required: bool = False,
         persistent_session: PersistentMCPSession | None = None,
+        on_dispatch: Callable[[], None] | None = None,
     ) -> CallToolResult | InputRequiredResult:
         """Call a token_exchange (OBO) tool; on an upstream 401/403 re-mint the token once and retry.
 
@@ -6556,6 +6557,7 @@ class MCPServerManager:
                     raise_on_error=True,
                     allow_input_required=allow_input_required,
                     persistent_session=persistent_session,
+                    on_dispatch=on_dispatch,
                 )
         except Exception as exc:
             auth_failure: Final = _extract_upstream_auth_failure(exc)
@@ -6583,6 +6585,7 @@ class MCPServerManager:
                     host_progress_callback=host_progress_callback,
                     allow_input_required=allow_input_required,
                     persistent_session=retry_persistent_session,
+                    on_dispatch=on_dispatch,
                 )
 
     async def _call_regular_mcp_tool(
@@ -6603,6 +6606,7 @@ class MCPServerManager:
         allow_input_required: bool = False,
         input_responses: InputResponses | None = None,
         request_state: str | None = None,
+        on_dispatch: Callable[[], None] | None = None,
     ) -> CallToolResult | InputRequiredResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -6759,6 +6763,7 @@ class MCPServerManager:
                 client_ip=client_ip,
                 allow_input_required=allow_input_required,
                 persistent_session=persistent_session,
+                on_dispatch=on_dispatch,
             )
         else:
             # Scoped to the two client-forwarded token modes this stack introduced; legacy
@@ -6776,6 +6781,7 @@ class MCPServerManager:
                             host_progress_callback=host_progress_callback,
                             allow_input_required=allow_input_required,
                             persistent_session=persistent_session,
+                            on_dispatch=on_dispatch,
                         )
                     # The client-forwarded modes carry the caller's own upstream token, so an upstream
                     # 401 (expired/invalid token) is the caller's to resolve: relay it as
@@ -6793,6 +6799,7 @@ class MCPServerManager:
                             raise_on_error=True,
                             allow_input_required=allow_input_required,
                             persistent_session=persistent_session,
+                            on_dispatch=on_dispatch,
                         )
                     except Exception as e:
                         required_scope: Final = upstream_insufficient_scope(e) if managed_per_user else None
@@ -7072,6 +7079,7 @@ class MCPServerManager:
         wire_compat: WireCompat = WireCompat.LEGACY,
         input_responses: InputResponses | None = None,
         request_state: str | None = None,
+        on_dispatch: Callable[[], None] | None = None,
         *,
         guardrail_auth: UserAPIKeyAuth | None = None,
         catalog_auth_header: str | None | EllipsisType = ...,
@@ -7094,6 +7102,8 @@ class MCPServerManager:
             litellm_logging_obj: Optional request logger the guardrail hooks record
                 their evaluations onto, so MCP guardrail activity reaches the
                 Guardrails Monitor. See ``pre_call_tool_check``
+            on_dispatch: Optional callback run right before the call is sent to the server,
+                after its headers and client are ready, even if the server never returns a result
 
 
         Returns:
@@ -7214,6 +7224,8 @@ class MCPServerManager:
                 resolved_token: Final = request_resolved_auth_headers.set(resolved_auth_headers)
                 try:
                     async with self._limit_outbound_concurrency(mcp_server):
+                        if on_dispatch is not None:
+                            on_dispatch()
                         return await self._call_openapi_tool_handler(mcp_server, name, arguments, wire_compat)
                 finally:
                     request_auth_header.reset(auth_token)
@@ -7239,6 +7251,7 @@ class MCPServerManager:
                 allow_input_required=wire_compat is WireCompat.MODERN,
                 input_responses=input_responses,
                 request_state=request_state,
+                on_dispatch=on_dispatch,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
