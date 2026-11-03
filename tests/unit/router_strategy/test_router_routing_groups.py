@@ -20,6 +20,7 @@ import litellm
 from litellm import Router
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_api import RoutingContext
 from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup, RoutingStrategy
 from litellm.utils import Rules, function_setup
 
@@ -235,7 +236,7 @@ async def test_async_dispatch_uses_group_strategy_for_grouped_model():
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
         patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
+            "litellm.router_python_core.simple_shuffle", wraps=litellm.router_python_core.simple_shuffle
         ) as shuffle_spy,
     ):
         await router.async_get_available_deployment(
@@ -270,7 +271,7 @@ async def test_async_dispatch_falls_back_to_default_for_ungrouped_models():
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
         patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
+            "litellm.router_python_core.simple_shuffle", wraps=litellm.router_python_core.simple_shuffle
         ) as shuffle_spy,
     ):
         await router.async_get_available_deployment(
@@ -330,7 +331,7 @@ async def test_async_dispatch_uses_default_selector_when_constructed_with_enum()
             wraps=default_selector.async_get_available_deployments,
         ) as latency_spy,
         patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
+            "litellm.router_python_core.simple_shuffle", wraps=litellm.router_python_core.simple_shuffle
         ) as shuffle_spy,
     ):
         await router.async_get_available_deployment(
@@ -1249,7 +1250,7 @@ async def test_latency_based_override_learns_from_the_overriding_requests():
     )
 
     def samples(deployment_id: str) -> list[float]:
-        recorded = (router.cache.get_cache("grp_map") or {}).get(deployment_id, {}).get("latency", [])
+        recorded = (router.cache.get_cache("grp_map") or {}).get(deployment_id, {}).get("latency_normalized", [])
         return [latency for latency in recorded if latency > 0]
 
     async def overriding_call() -> str:
@@ -1316,7 +1317,7 @@ async def test_override_matching_a_routing_group_strategy_records_each_request_o
     deployment_id = response._hidden_params["model_id"]
     await _async_wait_until(lambda: (router.cache.get_cache("grp_map") or {}).get(deployment_id) is not None)
 
-    assert len(router.cache.get_cache("grp_map")[deployment_id]["latency"]) == 1
+    assert len(router.cache.get_cache("grp_map")[deployment_id]["latency_normalized"]) == 1
     assert request["litellm_logging_obj"].dynamic_success_callbacks is None
 
 
@@ -1375,7 +1376,7 @@ async def test_group_call_dispatches_via_group_selector():
             "async_get_available_deployments",
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
-        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
+        patch("litellm.router_python_core.simple_shuffle", wraps=litellm.router_python_core.simple_shuffle) as shuffle_spy,
     ):
         deployment = await router.async_get_available_deployment(model="quality", request_kwargs={})
 
@@ -1567,7 +1568,7 @@ async def _call_and_get_cooldowns(router, model):
             messages=[{"role": "user", "content": "hi"}],
             mock_response="litellm.RateLimitError",
         )
-    return await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    return await async_get_cooldown_deployments(ctx=router._core_ctx, parent_otel_span=None)
 
 
 @pytest.mark.asyncio
@@ -2060,7 +2061,7 @@ async def test_priority_group_preserves_responses_continuity_on_a_backup() -> No
 
 
 def _recording_fallback_gate(allowed: frozenset[str], checked: list[str]) -> FallbackAccessCheck:
-    async def check(*, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> bool:
+    async def check(*, model: str, request_kwargs: Mapping[str, object], ctx: RoutingContext) -> bool:
         checked.append(model)
         return model in allowed
 

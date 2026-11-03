@@ -10,6 +10,7 @@ import respx
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.huggingface.common_utils import _fetch_inference_provider_mapping
+from litellm.utils import _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
 
 HUGGINGFACE_MODEL: Final = "meta-llama/Meta-Llama-3-8B-Instruct"
 HUGGINGFACE_ROUTER_MODEL: Final = "meta-llama/Meta-Llama-3-8B-Instruct-Turbo"
@@ -83,9 +84,11 @@ def isolate_huggingface_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator
     monkeypatch.delenv("HF_API_BASE", raising=False)
     monkeypatch.delenv("HUGGINGFACE_API_BASE", raising=False)
     monkeypatch.delenv("HUGGINGFACE_API_KEY", raising=False)
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     _fetch_inference_provider_mapping.cache_clear()
     yield
     _fetch_inference_provider_mapping.cache_clear()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
 PROVIDER_MAPPING_RESPONSE = {

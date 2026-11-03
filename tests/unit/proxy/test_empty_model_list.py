@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app
 import litellm.proxy.proxy_server as ps
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 @pytest.fixture
@@ -67,7 +68,7 @@ class TestEmptyModelListHandling:
         Test that /v2/model/info returns paginated empty response instead of 500
         when llm_router exists but model_list is empty.
         """
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.model_list = []
 
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
@@ -93,7 +94,7 @@ class TestEmptyModelListHandling:
         Test that /v2/model/info pagination parameters work correctly
         when there are no models (empty results).
         """
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.model_list = []
 
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
@@ -143,7 +144,7 @@ class TestEmptyModelListHandling:
         Test that /model_group/info returns {"data": []} instead of 500
         when llm_model_list is empty.
         """
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.model_list = []
 
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)

@@ -75,7 +75,7 @@ def test_the_prefetched_response_cache_entry_is_served_from_memory_on_the_next_r
             first: Final = owned.gateway.request("POST", "/v1/chat/completions", body, key=key)
             assert first.status_code == 200, first.text
             entries: Final = eventually(lambda: cache.keys(f"{namespace}:*"), lambda keys: len(keys) == 1, seconds=10)
-            upstream.get("/__observations").raise_for_status()
+            upstream.delete("/__observations").raise_for_status()
             with _monitored(redis) as commands:
                 second: Final = owned.gateway.request("POST", "/v1/chat/completions", body, key=key)
             assert second.status_code == 200, second.text

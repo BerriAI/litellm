@@ -11,6 +11,7 @@ import respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 TIER_MODEL: Final = "tier-priced-test-model"
@@ -31,6 +32,20 @@ PROMPT_TOKENS: Final = 1000
 CACHED_TOKENS: Final = 200
 COMPLETION_TOKENS: Final = 500
 TIER_API_BASE: Final = "https://tier-pricing.invalid/v1"
+AUDIO_TIER_MODEL: Final = "tier-priced-gemini-audio-test-model"
+AUDIO_TIER_ROW: Final[Mapping[str, float]] = MappingProxyType(
+    {
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 8e-06,
+        "cache_read_input_token_cost": 1e-06,
+        "input_cost_per_audio_token": 3e-06,
+        "cache_read_input_audio_token_cost": 2e-06,
+        "input_cost_per_audio_token_flex": 1e-06,
+        "input_cost_per_audio_token_priority": 2e-06,
+        "cache_read_input_audio_token_cost_flex": 4e-07,
+        "cache_read_input_audio_token_cost_priority": 8e-07,
+    }
+)
 
 
 def _cost_at(prices: Mapping[str, float], column_suffix: str) -> float:
@@ -76,6 +91,53 @@ def test_completion_cost_bills_the_price_columns_of_the_service_tier(
     )
 
     assert cost == pytest.approx(_cost_at(TIER_ROW, column_suffix))
+
+
+@pytest.mark.parametrize(
+    ("service_tier", "audio_rate_key", "cache_audio_rate_key"),
+    (
+        pytest.param("flex", "input_cost_per_audio_token_flex", "cache_read_input_audio_token_cost_flex"),
+        pytest.param("priority", "input_cost_per_audio_token_priority", "cache_read_input_audio_token_cost_priority"),
+    ),
+)
+def test_gemini_audio_and_cached_audio_use_service_tier_rates(
+    local_model_cost_map: None, service_tier: str, audio_rate_key: str, cache_audio_rate_key: str
+) -> None:
+    litellm.register_model(
+        {
+            AUDIO_TIER_MODEL: {
+                "litellm_provider": "gemini",
+                "mode": "chat",
+                **AUDIO_TIER_ROW,
+            }
+        }
+    )
+    usage: Final = Usage(
+        prompt_tokens=40,
+        completion_tokens=0,
+        total_tokens=40,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=20,
+            audio_tokens=20,
+            cached_tokens=10,
+            cached_tokens_details=CachedTokensDetails(audio_tokens=10),
+        ),
+    )
+    response: Final = ModelResponse(model=AUDIO_TIER_MODEL, usage=usage)
+
+    cost: Final = litellm.completion_cost(
+        completion_response=response,
+        model=AUDIO_TIER_MODEL,
+        custom_llm_provider="gemini",
+        service_tier=service_tier,
+    )
+
+    expected: Final = (
+        20 * AUDIO_TIER_ROW["input_cost_per_token"]
+        + 10 * AUDIO_TIER_ROW[audio_rate_key]
+        + 10 * AUDIO_TIER_ROW[cache_audio_rate_key]
+    )
+    assert cost == pytest.approx(expected)
 
 
 LONG_CONTEXT_TIER_MODEL: Final = "long-context-tier-priced-test-model"

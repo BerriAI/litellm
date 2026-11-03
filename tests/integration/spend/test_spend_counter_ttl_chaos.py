@@ -21,6 +21,8 @@ from integration._support.spend_counters import (
 from pydantic import JsonValue
 from redis import Redis
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 RATES: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
 ANTHROPIC_HEADERS: Final = {"anthropic-version": "2023-06-01"}
 BURST: Final = 24

@@ -19,6 +19,8 @@ from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.spend_counters import counter_ttl, counter_value, key_counter, outlives, rig_cache
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 ROOT: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
 RATES: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
 ONE_CALL_COST: Final = 0.06

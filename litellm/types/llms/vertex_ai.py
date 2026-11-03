@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from enum import Enum
-from typing import Any, Final, Literal, Protocol
+from typing import Final, Literal, Protocol
 
 from typing_extensions import (
     ReadOnly,
@@ -9,6 +9,7 @@ from typing_extensions import (
 )
 
 from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput
+from litellm.types.token_count import TokenCountSourceFields
 
 # Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
 # opt-in for combined embeddings — a provider-specific extension of the
@@ -139,7 +140,7 @@ class Schema(TypedDict, total=False):
     title: str
     description: str
     nullable: bool
-    default: Any
+    default: ReadOnly[object]
     items: "Schema"
     minItems: str
     maxItems: str
@@ -154,7 +155,7 @@ class Schema(TypedDict, total=False):
     minLength: str
     maxLength: str
     pattern: str
-    example: Any
+    example: ReadOnly[object]
     anyOf: list["Schema"]
 
 
@@ -238,8 +239,18 @@ class VoiceConfig(TypedDict):
     prebuiltVoiceConfig: PrebuiltVoiceConfig
 
 
+class SpeakerVoiceConfig(TypedDict):
+    speaker: ReadOnly[str]
+    voiceConfig: ReadOnly[VoiceConfig]
+
+
+class MultiSpeakerVoiceConfig(TypedDict):
+    speakerVoiceConfigs: ReadOnly[Sequence[SpeakerVoiceConfig]]
+
+
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    multiSpeakerVoiceConfig: ReadOnly[MultiSpeakerVoiceConfig]
     languageCode: str
 
 
@@ -320,12 +331,13 @@ class UsageMetadata(TypedDict, total=False):
     candidatesTokensDetails: list[PromptTokensDetails]  # Alternative key name used in some responses
 
 
-class TokenCountDetailsResponse(TypedDict):
+class TokenCountDetailsResponse(TokenCountSourceFields):
     """
     Response structure for token count details with modality breakdown.
 
     Example:
-        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}],
+         'litellm_count_source': 'provider'}
     """
 
     totalTokens: int
@@ -364,7 +376,7 @@ class RequestBody(TypedDict, total=False):
 class CachedContentRequestBody(TypedDict, total=False):
     contents: Required[list[ContentType]]
     system_instruction: SystemInstructions
-    tools: Tools
+    tools: Tools | None
     toolConfig: ToolConfig
     model: Required[str]  # Format: models/{model}
     ttl: str  # ending in 's' - Example: "3.5s".
@@ -782,9 +794,9 @@ class VertexVideoGenerationResponse(TypedDict, total=False):
 
     name: str
     done: bool
-    response: dict[str, Any]
-    metadata: dict[str, Any]
-    error: dict[str, Any]
+    response: ReadOnly[dict[str, object]]
+    metadata: ReadOnly[dict[str, object]]
+    error: ReadOnly[dict[str, object]]
 
 
 VERTEX_CREDENTIALS_TYPES = str | dict[str, str]

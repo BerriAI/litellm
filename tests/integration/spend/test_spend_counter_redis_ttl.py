@@ -253,7 +253,7 @@ def test_every_counter_scope_outlives_the_batch_write(gateway: Gateway, caller: 
     ):
         entities: Final = _entities(gateway, scenario)
         text: Final = f"counter ttl {caller} {uuid.uuid4().hex}"
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         response_id: Final = CALLERS[caller].call(gateway, entities, text)
         received: Final = upstream.get("/__observations").json()["requests"]
         paths: Final = [request["path"] for request in received if text in json.dumps(request["body"])]
@@ -282,7 +282,7 @@ def test_a_response_cache_hit_keeps_the_counter_and_its_ttl(gateway: Gateway) ->
         row: Final = _one_spend_row(entities.key)
         spend: Final = float(str(row["spend"]))
         before: Final = _assert_every_counter_outlives(cache, entities.counters(), spend)
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         second: Final = gateway.request("POST", "/v1/chat/completions", body, key=entities.key)
         assert second.status_code == 200, second.text
         assert second.json()["id"] == first.json()["id"], (first.text, second.text)

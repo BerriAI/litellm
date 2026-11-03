@@ -17,6 +17,8 @@ from integration._support.wire import Reply, Request, wire_server
 from psycopg import sql
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.covers("other.database.regeneration.writer_updates_dependent_grants")
 def test_key_regeneration_uses_writer_with_a_real_readonly_reader(gateway: Gateway, tmp_path: Path) -> None:

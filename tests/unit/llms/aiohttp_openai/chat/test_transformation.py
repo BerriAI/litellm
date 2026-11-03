@@ -1,15 +1,16 @@
+from typing import Final
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from aiohttp import ClientResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from litellm.types.utils import ModelResponse
 
 
-async def _transform(body: object) -> ModelResponse:
-    raw_response = Mock(spec=ClientResponse)
+async def _transform(body: object, *, requested_tier: str | None = None) -> ModelResponse:
+    raw_response: Final = Mock(spec=ClientResponse)
     raw_response.json = AsyncMock(return_value=body)
     return await AiohttpOpenAIChatConfig().transform_response(
         model="gpt-4o",
@@ -18,7 +19,7 @@ async def _transform(body: object) -> ModelResponse:
         logging_obj=Mock(),
         request_data={},
         messages=[{"role": "user", "content": "Hello"}],
-        optional_params={},
+        optional_params={"service_tier": requested_tier} if requested_tier is not None else {},
         litellm_params={},
         encoding=None,
     )
@@ -99,3 +100,20 @@ async def test_transform_response_rejects_choices_that_are_not_a_list_of_objects
 async def test_transform_response_rejects_a_choice_whose_message_is_not_an_object():
     with pytest.raises(ValidationError, match="validation error for Choices"):
         await _transform({"choices": [{"message": "text"}]})
+
+
+@pytest.mark.parametrize("tier", ("flex", "priority", "default", "custom-tier", None))
+async def test_transform_response_serializes_served_tier_instead_of_requested_tier(tier: str | None) -> None:
+    response: Final = await _transform(
+        {"id": "chatcmpl-1", "choices": [{}], "service_tier": tier}, requested_tier="auto"
+    )
+    serialized: Final = TypeAdapter(dict[str, object]).validate_json(response.model_dump_json())
+
+    assert serialized["service_tier"] == tier
+
+
+async def test_transform_response_does_not_invent_a_served_tier_when_omitted() -> None:
+    response: Final = await _transform({"id": "chatcmpl-1", "choices": [{}]}, requested_tier="flex")
+    serialized: Final = TypeAdapter(dict[str, object]).validate_json(response.model_dump_json())
+
+    assert "service_tier" not in serialized

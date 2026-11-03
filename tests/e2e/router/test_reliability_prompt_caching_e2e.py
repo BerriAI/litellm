@@ -43,6 +43,7 @@ FOLLOW_UPS = 3
 
 
 class TestReliabilityPromptCachingAffinity:
+    @pytest.mark.provider_live
     @pytest.mark.covers("reliability.cache.prompt_caching_model_select.returns_cached")
     @meta(
         Subject(

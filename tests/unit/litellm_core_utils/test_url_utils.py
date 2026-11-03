@@ -1,6 +1,8 @@
 import asyncio
 import socket
 import threading
+from collections.abc import Callable
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -13,6 +15,8 @@ from litellm.litellm_core_utils.url_utils import (
     assert_same_origin,
     encode_url_path_segment,
     encode_url_path_segments,
+    ensure_api_route,
+    join_api_base,
     validate_url,
 )
 
@@ -571,3 +575,80 @@ async def test_async_safe_get_resolves_dns_off_the_event_loop(monkeypatch):
     assert response.status_code == 200
     assert resolver_threads and all(thread is not loop_thread for thread in resolver_threads)
     assert released_by_the_loop and all(released_by_the_loop)
+
+
+@pytest.mark.parametrize(
+    ("api_base", "route", "expected"),
+    [
+        ("https://gw.test/p/", "v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p//", "v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p", "v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p", "/v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p/", "/v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p/v1/messages", "v1/messages", "https://gw.test/p/v1/messages/v1/messages"),
+        ("https://api.test/v1/evals/cancel", "cancel", "https://api.test/v1/evals/cancel/cancel"),
+        ("http://embeddings", "embeddings", "http://embeddings/embeddings"),
+        ("http:/", "v1/files", "http://v1/files"),
+        ("https://gw.test/p/?x=1", "v1/messages", "https://gw.test/p?x=1/v1/messages"),
+    ],
+    ids=(
+        "trailing-slash-base",
+        "repeated-trailing-slashes",
+        "base-without-slash",
+        "route-with-leading-slash",
+        "slashes-on-both-sides",
+        "base-already-ends-in-route",
+        "id-equal-to-the-route",
+        "host-named-like-the-route",
+        "host-stripped-as-a-suffix-leaves-only-the-scheme",
+        "slash-before-the-query-matches-the-base-without-it",
+    ),
+)
+def test_join_api_base_always_appends_the_route_after_exactly_one_slash(
+    api_base: str, route: str, expected: str
+) -> None:
+    assert join_api_base(api_base, route) == expected
+
+
+@pytest.mark.parametrize("api_base", ["https://", "http://", "https:///"])
+@pytest.mark.parametrize("route", ["v1/messages", "models/gemini-flash:generateContent"])
+@pytest.mark.parametrize("join", [join_api_base, ensure_api_route], ids=["join_api_base", "ensure_api_route"])
+def test_a_base_that_is_only_a_scheme_never_turns_the_route_into_the_host(
+    api_base: str, route: str, join: Callable[[str, str], str]
+) -> None:
+    assert urlsplit(join(api_base, route)).netloc == ""
+
+
+@pytest.mark.parametrize(
+    ("api_base", "route", "expected"),
+    [
+        ("https://gw.test/p/v1/messages", "v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p/v1/messages/", "/v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/x/listen", "listen", "https://gw.test/x/listen"),
+        ("https://gw.test/p/", "v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p", "/v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/research", "search", "https://gw.test/research/search"),
+        ("http://embeddings", "embeddings", "http://embeddings/embeddings"),
+        ("http://embeddings:8080/", "embeddings", "http://embeddings:8080/embeddings"),
+        ("http:/", "anthropic/v1/messages", "http://anthropic/v1/messages"),
+        ("https://gw.test/p/v1/messages/?beta=true", "v1/messages", "https://gw.test/p/v1/messages?beta=true"),
+        ("https://gw.test/p/v1/messages?beta=true", "v1/messages", "https://gw.test/p/v1/messages?beta=true"),
+    ],
+    ids=(
+        "path-already-ends-in-route",
+        "path-ends-in-route-before-trailing-slash",
+        "last-segment-is-the-route",
+        "trailing-slash-base",
+        "route-with-leading-slash",
+        "path-ends-in-lookalike-suffix",
+        "host-named-like-the-route",
+        "host-with-port-named-like-the-route",
+        "host-stripped-as-a-suffix-leaves-only-the-scheme",
+        "route-path-with-a-slash-before-the-query",
+        "route-path-before-the-query",
+    ),
+)
+def test_ensure_api_route_appends_the_route_only_when_the_url_path_lacks_it(
+    api_base: str, route: str, expected: str
+) -> None:
+    assert ensure_api_route(api_base, route) == expected

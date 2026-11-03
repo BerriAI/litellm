@@ -905,10 +905,10 @@ async def test_a_failed_request_is_delivered_as_an_error_log_that_keeps_the_erro
 
 @pytest.mark.asyncio
 async def test_a_failing_redis_cache_is_delivered_to_datadog_as_redis_warnings(
-    delivery: tuple[DataDogLogger, respx.Route], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    delivery: tuple[DataDogLogger, respx.Route], monkeypatch: pytest.MonkeyPatch, socket_dir: Path
 ) -> None:
     datadog_logger, intake = delivery
-    absent_socket: Final = str(tmp_path / "absent.sock")
+    absent_socket: Final = str(socket_dir / "absent.sock")
     redis_cache: Final = Cache(type="redis", url=f"unix://{absent_socket}")
     monkeypatch.setattr(redis_cache.cache.service_logger_obj, "dd_logger", datadog_logger, raising=False)
     monkeypatch.setattr(litellm, "service_callback", ["datadog"])

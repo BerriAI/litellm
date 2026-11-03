@@ -1,4 +1,5 @@
 import { Member } from "../networking";
+import type { components } from "@/lib/http/schema";
 import type { ObjectPermission } from "../object_permission_types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./ModelMaxBudgetEditor";
 
@@ -21,6 +22,7 @@ export interface Team {
   keys_count?: number;
   members_count?: number;
   members_with_roles: Member[];
+  caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
   team_member_permissions?: string[] | null;
   spend: number;
   access_group_ids?: string[];
