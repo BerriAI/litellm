@@ -124,7 +124,8 @@ describe("DashboardHeader breadcrumb", () => {
     const tools = await screen.findByRole("dialog", { name: "Gateway tools" });
     expect(within(tools).getByRole("button", { name: "Switch workspace, current: AI Gateway" })).toBeInTheDocument();
     expect(within(tools).getByRole("link", { name: "Docs" })).toBeInTheDocument();
-    expect(within(tools).getByRole("button", { name: "Aria Agent" })).toBeInTheDocument();
+    expect(within(screen.getByRole("banner")).getByRole("button", { name: "Aria Agent" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Aria Agent" })).toHaveLength(1);
   });
 
   it("closes mobile tools when switching to desktop and keeps them closed when returning", async () => {

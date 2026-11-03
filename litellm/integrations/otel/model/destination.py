@@ -42,7 +42,7 @@ class OtelDestination(LiteLLMBaseModel):
     success_sampling_rate: float | None = Field(
         default=None,
         description=(
-            "Share of the request trees forwarded, 0.0..1.0, drawn once per request when its root span ends; "
+            "Share of the request trees forwarded, 0.0..1.0, picked by a hash of the trace id; "
             "``None`` forwards every one."
         ),
     )

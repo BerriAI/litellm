@@ -1,0 +1,199 @@
+name: integration
+
+on:
+  pull_request:
+    types: [labeled]
+  schedule:
+    - cron: "5 8-20/3 * * 1-6"
+      timezone: America/Los_Angeles
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Integration group to run
+        type: choice
+        options:
+          - all
+          - providers
+          - extensions
+          - accounting
+          - management
+          - management-replica
+          - database
+          - database-replica
+          - mcp
+          - security
+          - cost
+          - sdk
+          - browser
+        default: all
+      workers:
+        description: Workers per group, blank keeps each group's default
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name }}-${{ inputs.suite }}-${{ inputs.workers }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  integration:
+    name: integration ${{ matrix.suite }}
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-ci'
+    environment: integration-license
+    runs-on: ${{ fromJSON('{"providers":"ubuntu-latest-64-cores","extensions":"ubuntu-latest-64-cores","accounting":"ubuntu-latest-32-cores","management":"ubuntu-latest-32-cores","management-replica":"ubuntu-latest-32-cores"}')[matrix.suite] || 'ubuntu-latest-16-cores' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["providers","extensions","accounting","management","management-replica","database","database-replica","mcp","security","cost","sdk","browser"]' || format('["{0}"]', inputs.suite)) }}
+    env:
+      UV_PYTHON: "3.12"
+      INTEGRATION_WORKERS: ${{ inputs.workers || fromJSON('{"providers":"32","extensions":"48","accounting":"16","management":"16","management-replica":"16","cost":"16","mcp":"8","security":"8","database":"4","database-replica":"4"}')[matrix.suite] || '' }}
+    services:
+      postgres:
+        image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+        command: -c max_connections=1000 -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: circle_test
+        ports:
+          - 5432:5432
+        options: >-
+          --shm-size 1g
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        timeout-minutes: 3
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.UV_PYTHON }}
+
+      - name: Set up uv
+        timeout-minutes: 3
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache the Rust build
+        timeout-minutes: 5
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Cache Prisma binaries
+        timeout-minutes: 5
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Install dependencies
+        timeout-minutes: 20
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras
+
+      - name: Install redis-server 7.2.16
+        timeout-minutes: 3
+        run: |
+          mkdir -p "$RUNNER_TEMP/redis-bin"
+          cid="$(docker create redis:7.2.16@sha256:0637954999d01b7c9ce9167db2da50656e2590d3b884f1c600c5f63bb6e6773c)"
+          docker cp "${cid}:/usr/local/bin/redis-server" "$RUNNER_TEMP/redis-bin/redis-server"
+          docker rm "$cid"
+          "$RUNNER_TEMP/redis-bin/redis-server" --version | grep -q 'v=7.2.16'
+          echo "$RUNNER_TEMP/redis-bin" >> "$GITHUB_PATH"
+
+      - name: Install MCP SDK1 peer
+        if: matrix.suite == 'mcp'
+        timeout-minutes: 5
+        run: |
+          uv venv --python 3.12 .venv-mcp-peer
+          uv pip install --no-config --exclude-newer "3 days" --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+          echo "MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        if: matrix.suite == 'browser'
+        timeout-minutes: 5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: ui/litellm-dashboard/.nvmrc
+          cache: "npm"
+          cache-dependency-path: |
+            ui/litellm-dashboard/package-lock.json
+            tests/e2e/ui/package-lock.json
+
+      - name: Install browser dependencies and build the dashboard
+        if: matrix.suite == 'browser'
+        timeout-minutes: 20
+        run: |
+          (cd ui/litellm-dashboard && npm ci)
+          (cd tests/e2e/ui && npm ci)
+          sudo env PATH="$PATH" DEBIAN_FRONTEND=noninteractive \
+            node tests/e2e/ui/node_modules/@playwright/test/cli.js install-deps chromium
+          node tests/e2e/ui/node_modules/@playwright/test/cli.js install chromium
+          (cd ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build)
+
+      - name: Run integration contracts
+        timeout-minutes: 45
+        env:
+          SUITE: ${{ matrix.suite }}
+          INTEGRATION_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          INTEGRATION_REDIS_CONTAINER: ${{ job.services.redis.id }}
+          LITELLM_LICENSE: ${{ secrets.LITELLM_LICENSE }}
+        run: |
+          case "$SUITE" in
+            *-replica) bash .circleci/scripts/run_integration.sh "${SUITE%-replica}" replica ;;
+            *) bash .circleci/scripts/run_integration.sh "$SUITE" ;;
+          esac
+
+      - name: Verify every case ran exactly once
+        if: ${{ !cancelled() && matrix.suite != 'browser' }}
+        timeout-minutes: 2
+        run: |
+          record="$(find test-results -mindepth 2 -maxdepth 2 -name execution.json -print -quit)"
+          test -n "$record"
+          mkdir -p "$RUNNER_TEMP/shards/0"
+          cp "$record" "$RUNNER_TEMP/shards/0/execution.json"
+          .venv/bin/python -m tests.integration._support.sharding "$RUNNER_TEMP/shards" --shards 1
+
+      - name: Report MCP coverage
+        if: ${{ !cancelled() && matrix.suite == 'mcp' }}
+        timeout-minutes: 5
+        run: |
+          coverage_dir=test-results/integration-mcp/coverage
+          test -f "$coverage_dir/coverage.txt" && exit 0
+          export COVERAGE_FILE="$PWD/$coverage_dir/data"
+          .venv/bin/python -m coverage combine --rcfile=tests/integration/mcp_coverage.toml
+          .venv/bin/python -m coverage report --rcfile=tests/integration/mcp_coverage.toml > "$coverage_dir/coverage.txt"
+          .venv/bin/python -m coverage html --rcfile=tests/integration/mcp_coverage.toml -d "$coverage_dir/html"
+          tail -n 1 "$coverage_dir/coverage.txt"
+
+      - name: Check results for the license
+        id: secret-scan
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          SCANNED_SECRET: ${{ secrets.LITELLM_LICENSE }}
+        run: python .github/scripts/assert_secret_absent.py test-results
+
+      - name: Upload results
+        if: ${{ !cancelled() && steps.secret-scan.outcome == 'success' }}
+        timeout-minutes: 10
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: integration-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/
+          retention-days: 14

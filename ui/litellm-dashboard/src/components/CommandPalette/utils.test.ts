@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { visibleMenuGroups, type MenuGroup, menuGroups } from "@/components/leftnav";
+import { toSiTerminology } from "@/lib/terminology";
 import { flattenNavItems, matchNavItems, paletteScopeForRoute, shortcutLabel, type PaletteNavItem } from "./utils";
 
 describe("paletteScopeForRoute", () => {
@@ -26,6 +27,16 @@ describe("flattenNavItems", () => {
     ];
 
     expect(flattenNavItems(groups).map(({ label }) => label)).toEqual(["Search Tools", "Logs"]);
+  });
+
+  it("applies the terminology to page labels and section names", () => {
+    const groups: MenuGroup[] = [
+      { groupLabel: "AI GATEWAY", items: [{ key: "model-hub-table", page: "model-hub-table", label: "AI Hub" }] },
+    ];
+
+    expect(flattenNavItems(groups, toSiTerminology).map(({ label, section }) => ({ label, section }))).toEqual([
+      { label: "SI Hub", section: "SI Gateway" },
+    ]);
   });
 });
 

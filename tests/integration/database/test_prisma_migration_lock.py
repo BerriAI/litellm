@@ -19,7 +19,8 @@ def _can_take_prismas_session_lock(connection: psycopg.Connection[tuple[object, 
 
 def _granted_advisory_keys(connection: psycopg.Connection[tuple[object, ...]]) -> frozenset[int]:
     rows: Final = connection.execute(
-        "SELECT (classid::bigint << 32) | objid::bigint FROM pg_locks WHERE locktype = 'advisory' AND granted"
+        "SELECT (classid::bigint << 32) | objid::bigint FROM pg_locks WHERE locktype = 'advisory' AND granted "
+        "AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
     ).fetchall()
     return frozenset(int(row[0]) for row in rows)
 

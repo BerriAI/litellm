@@ -716,12 +716,16 @@ def test_config_list_exposes_config_reload_interval(client, auth_as, mock_prisma
     assert entry["field_default_value"] == 30
 
 
-@pytest.mark.parametrize("enabled", (True, False))
+@pytest.mark.parametrize(
+    ("sent", "enabled"),
+    ((True, True), (False, False), ("true", True), ("yes", True), (1, True), ("off", False)),
+)
 def test_config_list_exposes_and_saves_wildcard_routes_toggle(
     client: TestClient,
     auth_as: Callable[..., contextlib.AbstractContextManager[object]],
     mock_prisma: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
+    sent: object,
     enabled: bool,
 ) -> None:
     from pydantic import TypeAdapter
@@ -747,13 +751,11 @@ def test_config_list_exposes_and_saves_wildcard_routes_toggle(
 
         saved: Final = client.post(
             "/config/field/update",
-            json={"field_name": "return_wildcard_routes", "field_value": enabled, "config_type": "general_settings"},
+            json={"field_name": "return_wildcard_routes", "field_value": sent, "config_type": "general_settings"},
         )
         assert saved.status_code == 200, saved.text
-        persisted: Final = TypeAdapter(dict[str, bool]).validate_json(
-            table.upsert.call_args.kwargs["data"]["create"]["param_value"]
-        )
-        assert persisted == {"return_wildcard_routes": enabled}
+        persisted: Final = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+        assert persisted["return_wildcard_routes"] is enabled
 
         after: Final = client.get("/config/list", params={"config_type": "general_settings"})
         assert after.status_code == 200, after.text

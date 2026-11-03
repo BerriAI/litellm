@@ -7,6 +7,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Kbd } from "@/components/ui/kbd";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { keyDetailHref } from "@/utils/entityLinks";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
@@ -29,9 +31,6 @@ interface PaletteGroup {
   emptyMessage?: string;
   isLoading?: boolean;
 }
-
-const shortcutChipClass =
-  "rounded-sm border border-border border-b-2 bg-muted px-[3px] font-mono text-muted-foreground";
 
 export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (open: boolean) => void }) {
   if (!open) return null;
@@ -68,7 +67,8 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
   const isInitialKeyLoad = keyResults.isFetching && !keyResults.data;
   const isLoadingKeys = scope === "keys" && (isPendingQuery || hasPlaceholderKeyResults || isInitialKeyLoad);
   const visibleGroups = useVisibleMenuGroups();
-  const navItems = useMemo(() => flattenNavItems(visibleGroups), [visibleGroups]);
+  const term = useTerminology();
+  const navItems = useMemo(() => flattenNavItems(visibleGroups, term), [visibleGroups, term]);
   const navMatches = useMemo(
     () => (scope === "global" || trimmedQuery ? matchNavItems(navItems, query) : []),
     [navItems, query, scope, trimmedQuery],
@@ -303,13 +303,13 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
           </div>
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <kbd className={shortcutChipClass}>↵</kbd> Open
+              <Kbd>↵</Kbd> Open
             </span>
             <span className="flex items-center gap-1">
-              <kbd className={shortcutChipClass}>↑↓</kbd> Navigate
+              <Kbd>↑↓</Kbd> Navigate
             </span>
             <span className="flex items-center gap-1">
-              <kbd className={shortcutChipClass}>esc</kbd> Close
+              <Kbd>esc</Kbd> Close
             </span>
           </div>
         </div>
