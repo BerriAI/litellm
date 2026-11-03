@@ -387,8 +387,9 @@ async def count_tokens(
     except ProxyException as e:
         return _anthropic_error_json_response(e, request)
     except Exception as e:
-        log_llm_api_exception(e, litellm_call_id)
-        return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
+        answered: Final = with_answered_status(e)
+        log_llm_api_exception(answered, litellm_call_id)
+        return _anthropic_error_json_response(proxy_exception_from_route_error(answered), request)
     else:
         return {
             "input_tokens": token_response.total_tokens,
