@@ -4,7 +4,7 @@ import time
 import webbrowser
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
-from typing import Any, Final, Protocol, TypeVar
+from typing import Any, Final, NoReturn, Protocol, TypeVar
 from urllib.parse import urlencode
 
 import click
@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.cli_keyring import (
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
     CredentialNotCleared,
+    CredentialNotLoaded,
     CredentialNotRecorded,
     CredentialNotSaved,
     SecretSave,
@@ -40,7 +41,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     cli_token_lock,
     get_cli_token_file_path,
     is_cli_token_fresh,
-    load_cli_token,
+    read_cli_token,
     save_cli_token,
 )
 
@@ -226,13 +227,14 @@ def context_secret_vault(ctx: click.Context) -> SecretVault:
 
 
 def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] | None:
-    """The stored credential as a plain mapping, with the secret resolved out of the vault.
-
-    The PKCE renewal and revocation helpers read records by field name, so this is the
-    shape they get; the keychain split lives underneath, in `load_cli_token`.
-    """
-    record: Final = load_cli_token(vault=vault)
-    return None if record is None else record.model_dump(exclude_none=True)
+    """Read a stored credential, reporting lock failures separately from a missing login."""
+    match read_cli_token(vault=vault):
+        case CliTokenRecord() as record:
+            return record.model_dump(exclude_none=True)
+        case CredentialNotLoaded(detail=detail):
+            _raise_credential_error(detail)
+        case None:
+            return None
 
 
 def save_token(record: CliTokenData, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:
@@ -287,11 +289,16 @@ def get_stored_api_key(
         requests.Session(),
         reload=_renewal_reader(vault),
         warn=_warn,
+        lock_failure=_raise_credential_error,
     )
 
 
 def _warn(message: str) -> None:
     click.echo(message, err=True)
+
+
+def _raise_credential_error(message: str) -> NoReturn:
+    raise click.ClickException(message)
 
 
 def _login_command(renews: bool) -> str:
@@ -1094,6 +1101,7 @@ def print_token(ctx: click.Context):
             requests.Session(),
             reload=_renewal_reader(vault),
             warn=_warn,
+            lock_failure=_raise_credential_error,
         )
     )
     if not api_key:

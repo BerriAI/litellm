@@ -499,6 +499,7 @@ def fresh_api_key(
     reload: Callable[[], Mapping[str, object] | None],
     now: Callable[[], float] = time.time,
     warn: Callable[[str], None] = _ignore_warning,
+    lock_failure: Callable[[str], None] = _ignore_warning,
 ) -> str | None:
     """Refresh under the shared credential lock, reloading before spending a single-use token.
 
@@ -513,15 +514,20 @@ def fresh_api_key(
     ):
         return _fresh_api_key(token_data, save, http, reload=reload, now=now, warn=warn)
     key: Final = token_data.get("key")
-    still_valid: Final = key if isinstance(key, str) and now() < expires_at else None
     try:
         lock: Final = cli_token_lock()
         lock.acquire()
     except (OSError, Timeout):
+        fallback: Final = key if isinstance(key, str) and now() < expires_at else None
+        if fallback is None:
+            lock_failure(
+                "Could not lock the CLI credential store for renewal. Retry this command. No refresh was attempted."
+            )
         warn("Could not renew the key: the CLI credential store could not be locked; no refresh was attempted")
-        return still_valid
+        return fallback
     try:
         current: Final = reload()
+        still_valid: Final = key if isinstance(key, str) and now() < expires_at else None
         if current is None or any(current.get(field) != token_data.get(field) for field in _CREDENTIAL_IDENTITY_FIELDS):
             return still_valid
         if not isinstance(current.get("expires_at"), (int, float)):

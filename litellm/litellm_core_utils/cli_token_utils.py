@@ -49,6 +49,11 @@ from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
 @dataclass(frozen=True, slots=True)
+class CredentialNotLoaded:
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
 class CredentialNotSaved:
     """The credential was minted but no store would keep it, so this machine has none.
 
@@ -148,18 +153,31 @@ def cli_token_lock() -> FileLock:
     directory: Final = Path(get_cli_token_file_path()).parent
     directory.parent.mkdir(parents=True, exist_ok=True)
     path: Final = directory.with_name(f"{directory.name}-token.lock")
-    return FileLock(str(path), timeout=10, mode=0o600, is_singleton=True)
+    return FileLock(str(path), timeout=60, mode=0o600, is_singleton=True)
 
 
 def load_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | None:
-    """Load the stored CLI credential, or None when this machine has none"""
+    """Load a stored CLI credential, or None when it cannot be loaded."""
+    outcome: Final = read_cli_token(vault=vault)
+    return outcome if isinstance(outcome, CliTokenRecord) else None
+
+
+def read_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | CredentialNotLoaded | None:
     if not Path(get_cli_token_file_path()).exists():
         return None
     try:
         with cli_token_lock():
             return _load_cli_token(vault)
-    except (OSError, Timeout):
-        return None
+    except Timeout:
+        return CredentialNotLoaded(
+            "CLI credential store is busy. Retry this command after the other credential operation finishes. "
+            "This command did not change your stored login."
+        )
+    except OSError:
+        return CredentialNotLoaded(
+            "Could not lock the CLI credential store. Retry this command after checking the lock file permissions. "
+            "This command did not change your stored login."
+        )
 
 
 def _load_cli_token(vault: SecretVault) -> CliTokenRecord | None:

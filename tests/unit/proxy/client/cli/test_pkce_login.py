@@ -12,6 +12,7 @@ import urllib.request
 from base64 import urlsafe_b64encode
 from pathlib import Path
 from typing import Final
+from unittest.mock import Mock, call
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -719,6 +720,7 @@ def test_fresh_api_key_reports_a_lock_failure_without_reading_or_spending_the_re
 ) -> None:
     Path(cli_token_lock().lock_file).mkdir()
     http: Final = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(200, TOKEN_JSON)})
+    lock_failure: Final = Mock()
     key: Final = _fresh(
         STORED,
         lambda _: pytest.fail("Unexpected credential save"),
@@ -726,6 +728,12 @@ def test_fresh_api_key_reports_a_lock_failure_without_reading_or_spending_the_re
         reload=lambda: pytest.fail("Credential read without the lock"),
         now=lambda: now,
         warn=lambda message: print(message, file=sys.stderr),
+        lock_failure=lock_failure,
+    )
+    assert tuple(lock_failure.call_args_list) == (
+        (call("Could not lock the CLI credential store for renewal. Retry this command. No refresh was attempted."),)
+        if expected is None
+        else ()
     )
     assert key == expected
     assert http.calls == []

@@ -47,6 +47,24 @@ _HOLD_LOCK: Final = textwrap.dedent(
     """
 )
 _CLI: Final = "from litellm_cli.main import cli; cli()"
+_PRINT_TOKEN: Final = textwrap.dedent(
+    """
+    import sys
+    from litellm.proxy.client.cli.main import cli
+    print("ready", flush=True)
+    sys.stdin.readline()
+    cli(["--base-url", sys.argv[1], "auth", "print-token"])
+    """
+)
+_SHORT_WAIT: Final = textwrap.dedent(
+    """
+    from unittest.mock import patch
+    from filelock import FileLock
+    def bounded_lock(path, **options):
+        return FileLock(path, **{**options, "timeout": 0.1})
+    with patch("litellm.litellm_core_utils.cli_token_utils.FileLock", side_effect=bounded_lock):
+    """
+)
 
 
 class _TokenEndpoint(ThreadingHTTPServer):
@@ -56,6 +74,8 @@ class _TokenEndpoint(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _TokenHandler)
         self.requests: list[dict[str, list[str]]] = []
         self.guard = threading.Lock()
+        self.response_delay = 0.0
+        self.request_started = threading.Event()
 
     @property
     def origin(self) -> str:
@@ -84,6 +104,8 @@ class _TokenHandler(BaseHTTPRequestHandler):
             if accepted
             else {"error": "invalid_grant", "error_description": "the refresh token was already used"}
         )
+        self.server.request_started.set()
+        threading.Event().wait(self.server.response_delay)
         body: Final = json.dumps(payload).encode()
         self.send_response(200 if accepted else 400)
         self.send_header("Content-Type", "application/json")
@@ -152,9 +174,9 @@ def _seed(home: Path, origin: str, *, fresh: bool = False) -> None:
 
 
 @contextmanager
-def _worker(script: str, home: Path) -> Generator[subprocess.Popen[str], None, None]:
+def _worker(script: str, home: Path, args: tuple[str, ...] = ()) -> Generator[subprocess.Popen[str], None, None]:
     process: Final = subprocess.Popen(
-        (sys.executable, "-P", "-c", script),
+        (sys.executable, "-P", "-c", script, *args),
         env=_environment(home),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -170,9 +192,9 @@ def _worker(script: str, home: Path) -> Generator[subprocess.Popen[str], None, N
         process.communicate(timeout=20)
 
 
-def _print_token(home: Path, origin: str) -> subprocess.CompletedProcess[str]:
+def _print_token(home: Path, origin: str, script: str = _CLI) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        (sys.executable, "-P", "-c", _CLI, "--base-url", origin, "auth", "print-token"),
+        (sys.executable, "-P", "-c", script, "--base-url", origin, "auth", "print-token"),
         env=_environment(home),
         capture_output=True,
         text=True,
@@ -231,8 +253,56 @@ def test_lock_contention_never_sends_an_unlocked_refresh(
     token_endpoint: _TokenEndpoint,
 ) -> None:
     _seed(tmp_path, token_endpoint.origin)
-    with _worker(_REFRESH, tmp_path) as reader, _worker(_HOLD_LOCK, tmp_path):
+    bounded_refresh: Final = _SHORT_WAIT + textwrap.indent(_REFRESH, "    ")
+    with _worker(bounded_refresh, tmp_path) as reader, _worker(_HOLD_LOCK, tmp_path):
         output: Final = reader.communicate(input="refresh\n", timeout=20)
         assert reader.returncode == 1, output
         assert output == ("", "")
     assert token_endpoint.requests == []
+
+
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize("reader_script", (_REFRESH, _PRINT_TOKEN), ids=("renewal-helper", "cli"))
+def test_helpers_wait_for_a_slow_sibling_renewal_without_logging_in_again(
+    tmp_path: Path,
+    token_endpoint: _TokenEndpoint,
+    reader_script: str,
+) -> None:
+    _seed(tmp_path, token_endpoint.origin)
+    token_endpoint.response_delay = 11.0
+    with (
+        _worker(_REFRESH, tmp_path) as renewer,
+        _worker(reader_script, tmp_path, (token_endpoint.origin,)) as reader,
+    ):
+        assert renewer.stdin is not None
+        renewer.stdin.write("refresh\n")
+        renewer.stdin.flush()
+        assert token_endpoint.request_started.wait(timeout=10)
+        reader_output: Final = reader.communicate(input="read\n", timeout=25)
+        renewer_output: Final = renewer.communicate(timeout=20)
+        assert reader.returncode == renewer.returncode == 0, (reader_output, renewer_output)
+        assert reader_output == renewer_output == (f"{FRESH_KEY}\n", "")
+    assert len(token_endpoint.requests) == 1
+
+
+@pytest.mark.timeout(60)
+def test_print_token_reports_lock_contention_and_can_retry_without_logging_in_again(
+    tmp_path: Path,
+    token_endpoint: _TokenEndpoint,
+) -> None:
+    _seed(tmp_path, token_endpoint.origin)
+    path: Final = tmp_path / ".litellm" / "token.json"
+    original: Final = path.read_bytes()
+    with _worker(_HOLD_LOCK, tmp_path):
+        result: Final = _print_token(tmp_path, token_endpoint.origin, _SHORT_WAIT + textwrap.indent(_CLI, "    "))
+        assert result.returncode == 1, result.stderr
+        assert result.stdout == ""
+        assert "Retry this command" in result.stderr
+        assert "lite login" not in result.stderr
+        assert "Not authenticated" not in result.stderr
+        assert path.read_bytes() == original
+        assert token_endpoint.requests == []
+    retried: Final = _print_token(tmp_path, token_endpoint.origin)
+    assert retried.returncode == 0, retried.stderr
+    assert retried.stdout == f"{FRESH_KEY}\n"
+    assert len(token_endpoint.requests) == 1
