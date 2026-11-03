@@ -6,6 +6,10 @@ from urllib.parse import unquote
 import httpx
 
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.responses.transformation import (
+    STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES,
+    ReasoningFieldValues,
+)
 from litellm.llms.fireworks_ai.common_utils import (
     FIREWORKS_FORWARD_USER_ID_PARAM,
     get_fireworks_forwarded_user_id,
@@ -25,6 +29,7 @@ from litellm.utils import (
     declared_mid_conversation_system_support,
     deployment_declared_mid_conversation_system_support,
     deployment_model_info,
+    get_bundled_model_cost_map,
 )
 
 if TYPE_CHECKING:
@@ -47,6 +52,15 @@ def _forwarded_user_params(litellm_params: GenericLiteLLMParams) -> Mapping[str,
             FIREWORKS_FORWARD_USER_ID_PARAM: litellm_params.fireworks_forward_user_id,
             "litellm_metadata": extras.get("litellm_metadata"),
         }
+    )
+
+
+def _bundled_cost_map_declares_mid_conversation_system(model: str) -> bool:
+    bundled_cost_map: Final[Mapping[str, object]] = get_bundled_model_cost_map()
+    names: Final = (model.removeprefix("fireworks_ai/"), resolve_fireworks_resource_name(model))
+    return any(
+        deployment_declared_mid_conversation_system_support(bundled_cost_map.get(f"fireworks_ai/{name}")) is True
+        for name in names
     )
 
 
@@ -86,9 +100,13 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         validated_input: Final = self._validate_input_param(input)
         model_info: Final = deployment_model_info(litellm_params)
         declared: Final = declared_mid_conversation_system_support(model, self.custom_llm_provider.value, model_info)
+        keeps_developer_items_in_place: Final = declared is True and (
+            deployment_declared_mid_conversation_system_support(model_info) is True
+            or _bundled_cost_map_declares_mid_conversation_system(model)
+        )
         folded: Final = (
             None
-            if deployment_declared_mid_conversation_system_support(model_info) is True
+            if keeps_developer_items_in_place
             else instruction_items_folded(
                 validated_input, response_api_optional_request_params, "user" if declared is False else "system"
             )
@@ -129,3 +147,9 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def supports_native_file_search(self) -> bool:
         return False
+
+    def reasoning_field_values(self) -> ReasoningFieldValues:
+        return STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES
+
+    def ignores_unsupported_reasoning_fields(self) -> bool:
+        return True

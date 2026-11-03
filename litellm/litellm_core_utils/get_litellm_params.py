@@ -84,7 +84,9 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "github_copilot_host",
             "github_copilot_user_session",
             "fireworks_forward_user_id",
+            "thought_signature_in_tool_call_id",
             "responses_api_version",
+            "allowed_openai_params",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
@@ -97,6 +99,8 @@ OPTIONAL_KWARGS_KEYS: Final = (
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
+
+SUPPLEMENTAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS | {"provider_specific_header", "extra_headers"}
 
 _CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
 _CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))
