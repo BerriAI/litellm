@@ -642,12 +642,27 @@ def _with_namespace_members_inlined(tools: JsonValue, outside_declarations: Json
     return list(_members_named_once(tuple(declared), top_level_names))
 
 
-def _qualified_names_of(member_name: str, tool: JsonValue, declarable: Counter[str | None]) -> tuple[str, ...]:
+def _names_each_tool_declares(candidates: tuple[JsonValue, ...]) -> tuple[tuple[str, ...], ...]:
+    declarable: Final = Counter(_declarable_names_in(candidates))
+    top_level_names: Final = _top_level_names_in(candidates)
+    declared: Final = tuple(
+        tuple(filter(None, map(declared_function_name, _as_declared(tool, declarable, top_level_names))))
+        for tool in candidates
+    )
+    return tuple(
+        tuple(name for name in names if name not in frozenset(chain.from_iterable(declared[:index])))
+        for index, names in enumerate(declared)
+    )
+
+
+def _qualified_names_of(
+    member_name: str, tool: JsonValue, declarable: Counter[str | None], declared: tuple[str, ...]
+) -> tuple[str, ...]:
     namespace: Final = _top_level_name(tool)
-    holds_member: Final = member_name in map(declared_function_name, _namespace_members_or_tool(tool))
-    if not _is_namespace(tool) or namespace is None or not holds_member or _inlines_members(tool, declarable):
+    if not _is_namespace(tool) or namespace is None or _inlines_members(tool, declarable):
         return ()
-    return (qualified_member_name(namespace, member_name),)
+    qualified: Final = qualified_member_name(namespace, member_name)
+    return (qualified,) if qualified in declared else ()
 
 
 def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
@@ -655,11 +670,16 @@ def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
     if any(not _is_namespace(tool) and declared_function_name(tool) == name for tool in candidates):
         return (name,)
     declarable: Final = Counter(_declarable_names_in(candidates))
-    named: Final = next((tool for tool in candidates if _is_namespace(tool) and _top_level_name(tool) == name), None)
+    declared_by_tool: Final = tuple(zip(candidates, _names_each_tool_declares(candidates), strict=True))
+    named: Final = next(
+        (declared for tool, declared in declared_by_tool if _is_namespace(tool) and _top_level_name(tool) == name),
+        None,
+    )
     if named is not None:
-        declared: Final = map(declared_function_name, _as_declared(named, declarable, frozenset()))
-        return tuple(member for member in declared if member is not None) or (name,)
-    qualified: Final = chain.from_iterable(_qualified_names_of(name, tool, declarable) for tool in candidates)
+        return named or (name,)
+    qualified: Final = chain.from_iterable(
+        _qualified_names_of(name, tool, declarable, declared) for tool, declared in declared_by_tool
+    )
     return tuple(qualified) or (name,)
 
 

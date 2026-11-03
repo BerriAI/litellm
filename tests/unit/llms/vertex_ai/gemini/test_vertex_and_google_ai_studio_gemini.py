@@ -1961,6 +1961,36 @@ def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent
             [{"type": "namespace", "name": "gitlab", "tools": [{"type": "function", "name": "close_issue"}]}],
             ["github__close_issue", "gitlab__close_issue"],
         ),
+        (
+            "github",
+            [
+                {"type": "function", "function": {"name": "close_issue"}},
+                {"type": "function", "function": {"name": "github__close_issue"}},
+            ],
+            ["github__create_issue"],
+        ),
+        (
+            "close_issue",
+            [
+                {"type": "namespace", "name": "gitlab", "tools": [{"type": "function", "name": "close_issue"}]},
+                {"type": "function", "function": {"name": "github__close_issue"}},
+            ],
+            ["gitlab__close_issue"],
+        ),
+        (
+            "mcp",
+            [
+                {"type": "namespace", "name": "mcp__ops", "tools": [{"type": "function", "name": "exec"}]},
+                {
+                    "type": "namespace",
+                    "name": "mcp",
+                    "tools": [{"type": "function", "name": "ops__exec"}, {"type": "function", "name": "status"}],
+                },
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "ops__exec"}},
+            ],
+            ["mcp__status"],
+        ),
     ],
     ids=[
         "names_the_namespace",
@@ -1968,6 +1998,9 @@ def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent
         "names_a_function_sharing_the_namespace_name",
         "names_a_namespace_whose_member_a_function_repeats",
         "names_a_member_two_namespaces_share",
+        "names_a_namespace_whose_generated_name_a_function_holds",
+        "names_a_member_whose_generated_name_a_function_holds",
+        "names_a_namespace_whose_generated_name_another_namespace_holds",
     ],
 )
 def test_vertex_ai_tool_choice_forces_only_functions_gemini_is_sent(
