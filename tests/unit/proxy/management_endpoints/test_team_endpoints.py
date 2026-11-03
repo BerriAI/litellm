@@ -2684,7 +2684,7 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
     from litellm.proxy._types import BlockTeamRequest
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.team_grants import team_model_aliases
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, budget_windows_absent_cache_key
     from litellm.proxy.management_endpoints import team_endpoints
 
     team_id: Final = "team-kill-switch"
@@ -2721,7 +2721,11 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
     seen_by_auth: Final = await get_team_object(team_id=team_id, prisma_client=prisma_client, user_api_key_cache=cache)
     assert seen_by_auth.blocked is blocked
     assert team_model_aliases(seen_by_auth) == {"fast": "gpt-4o"}
-    assert redis.broadcast_keys == [f"team_id:{team_id}", "team_alias:kill-switch"]
+    assert redis.broadcast_keys == [
+        f"team_id:{team_id}",
+        "team_alias:kill-switch",
+        budget_windows_absent_cache_key("team", team_id),
+    ]
     assert (response.blocked, response.litellm_model_table, response.object_permission) == (blocked, None, None)
 
 

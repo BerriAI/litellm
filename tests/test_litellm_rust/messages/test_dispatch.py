@@ -570,6 +570,12 @@ async def test_strict_tools_stay_native_unless_python_could_drop_strict(
 ASYNC_ONLY_FEATURES: Final = (
     pytest.param(Feature.PRE_REQUEST_HOOK, {}, {"callbacks": [_Rewrite()]}, id="pre-request-hook"),
     pytest.param(
+        Feature.FOUNDRY_BETA_ROW,
+        {"api_base": "https://team.services.ai.azure.com/anthropic"},
+        {},
+        id="foundry-beta-row",
+    ),
+    pytest.param(
         Feature.WEBSEARCH_INTERCEPTION, {}, {"callbacks": [WebSearchInterceptionLogger()]}, id="websearch-interception"
     ),
     pytest.param(

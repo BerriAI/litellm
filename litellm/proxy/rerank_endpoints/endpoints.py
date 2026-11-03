@@ -20,6 +20,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
 )
+from litellm.types.utils import CallTypes
 
 router: Final = APIRouter()
 
@@ -114,7 +115,10 @@ async def rerank(
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+            dispatched_call_type=CallTypes.arerank.value,
         )
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):

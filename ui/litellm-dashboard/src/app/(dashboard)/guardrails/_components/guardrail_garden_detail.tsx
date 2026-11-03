@@ -1,17 +1,28 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState } from "react";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import AddGuardrailForm from "./add_guardrail_form";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
-import { GuardrailCardInfo } from "./guardrail_garden_data";
+import { GuardrailCardInfo, gardenCardDescription, gardenCardName, gardenTagLabel } from "./guardrail_garden_data";
 
-const CATEGORY_LABELS: Record<GuardrailCardInfo["category"], { provider: string; type: string }> = {
-  litellm: { provider: "LiteLLM Content Filter", type: "Content Filter" },
-  decision_model: { provider: "Decision Model", type: "Decision Model" },
-  partner: { provider: "Partner Guardrail", type: "Partner" },
+const CATEGORY_LABEL_KEYS: Record<GuardrailCardInfo["category"], { provider: ParseKeys; type: ParseKeys }> = {
+  litellm: {
+    provider: "guardrails.gardenDetail.categories.litellm.provider",
+    type: "guardrails.gardenDetail.categories.litellm.type",
+  },
+  decision_model: {
+    provider: "guardrails.gardenDetail.categories.decisionModel.provider",
+    type: "guardrails.gardenDetail.categories.decisionModel.type",
+  },
+  partner: {
+    provider: "guardrails.gardenDetail.categories.partner.provider",
+    type: "guardrails.gardenDetail.categories.partner.type",
+  },
 };
 
 interface GuardrailDetailViewProps {
@@ -22,34 +33,66 @@ interface GuardrailDetailViewProps {
 }
 
 const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack, accessToken, onGuardrailCreated }) => {
+  const { t } = useTranslation();
   const term = useTerminology();
+  const name = gardenCardName(card, t);
+  const description = term(gardenCardDescription(card, t));
   const [isAddFormVisible, setIsAddFormVisible] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
 
   const detailRows = [
-    { property: "Provider", value: CATEGORY_LABELS[card.category].provider },
-    ...(card.subcategory ? [{ property: "Subcategory", value: card.subcategory }] : []),
-    ...(card.category === "decision_model"
-      ? [{ property: "Cost", value: "Billed per call by the decision model provider" }]
+    {
+      property: t("guardrails.gardenDetail.detailRows.provider"),
+      value: t(CATEGORY_LABEL_KEYS[card.category].provider),
+    },
+    ...(card.subcategoryKey
+      ? [{ property: t("guardrails.gardenDetail.detailRows.subcategory"), value: t(card.subcategoryKey) }]
       : []),
-    ...(card.category === "litellm" ? [{ property: "Cost", value: "$0 / request" }] : []),
-    ...(card.category === "litellm" ? [{ property: "External Dependencies", value: "None" }] : []),
-    ...(card.category === "litellm" ? [{ property: "Latency", value: card.eval?.latency || "<1ms" }] : []),
+    ...(card.category === "decision_model"
+      ? [
+          {
+            property: t("guardrails.gardenDetail.detailRows.cost"),
+            value: t("guardrails.gardenDetail.detailValues.decisionModelCost"),
+          },
+        ]
+      : []),
+    ...(card.category === "litellm"
+      ? [
+          {
+            property: t("guardrails.gardenDetail.detailRows.cost"),
+            value: t("guardrails.gardenDetail.detailValues.litellmCost"),
+          },
+        ]
+      : []),
+    ...(card.category === "litellm"
+      ? [
+          {
+            property: t("guardrails.gardenDetail.detailRows.externalDependencies"),
+            value: t("guardrails.gardenDetail.detailValues.noExternalDependencies"),
+          },
+        ]
+      : []),
+    ...(card.category === "litellm"
+      ? [{ property: t("guardrails.gardenDetail.detailRows.latency"), value: card.eval?.latency || "<1ms" }]
+      : []),
   ];
 
   const evalRows = card.eval
     ? [
-        { metric: "Precision", value: `${card.eval.precision}%` },
-        { metric: "Recall", value: `${card.eval.recall}%` },
-        { metric: "F1 Score", value: `${card.eval.f1}%` },
-        { metric: "Test Cases", value: String(card.eval.testCases) },
-        { metric: "False Positives", value: "0" },
-        { metric: "False Negatives", value: "0" },
-        { metric: "Latency (p50)", value: card.eval.latency },
+        { metric: t("guardrails.gardenDetail.evalMetrics.precision"), value: `${card.eval.precision}%` },
+        { metric: t("guardrails.gardenDetail.evalMetrics.recall"), value: `${card.eval.recall}%` },
+        { metric: t("guardrails.gardenDetail.evalMetrics.f1Score"), value: `${card.eval.f1}%` },
+        { metric: t("guardrails.gardenDetail.evalMetrics.testCases"), value: String(card.eval.testCases) },
+        { metric: t("guardrails.gardenDetail.evalMetrics.falsePositives"), value: "0" },
+        { metric: t("guardrails.gardenDetail.evalMetrics.falseNegatives"), value: "0" },
+        { metric: t("guardrails.gardenDetail.evalMetrics.latencyP50"), value: card.eval.latency },
       ]
     : [];
 
-  const tabs = [{ key: "overview", label: "Overview" }, ...(card.eval ? [{ key: "eval", label: "Eval Results" }] : [])];
+  const tabs = [
+    { key: "overview", label: t("guardrails.gardenDetail.tabs.overview") },
+    ...(card.eval ? [{ key: "eval", label: t("guardrails.gardenDetail.tabs.evalResults") }] : []),
+  ];
 
   return (
     <div className="mx-auto max-w-[960px]">
@@ -59,21 +102,21 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
         className="mb-6 inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground"
       >
         <ArrowLeft className="size-3" />
-        <span>{card.name}</span>
+        <span>{name}</span>
       </div>
 
       {/* ── Header block (Vertex-style) ── */}
       <div className="mb-2 flex items-center gap-4">
-        <Logo src={card.logo} label={card.name} className="w-10 h-10 rounded-lg object-contain shrink-0" />
-        <h1 className="m-0 text-[28px] font-normal leading-tight text-foreground">{card.name}</h1>
+        <Logo src={card.logo} label={name} className="w-10 h-10 rounded-lg object-contain shrink-0" />
+        <h1 className="m-0 text-[28px] font-normal leading-tight text-foreground">{name}</h1>
       </div>
 
-      <p className="m-0 mb-5 text-sm leading-relaxed text-muted-foreground">{term(card.description)}</p>
+      <p className="m-0 mb-5 text-sm leading-relaxed text-muted-foreground">{description}</p>
 
       {/* Action buttons — outlined style like Vertex */}
       <div className="mb-8 flex gap-2.5">
         <Button variant="outline" className="rounded-full" onClick={() => setIsAddFormVisible(true)}>
-          Create Guardrail
+          {t("guardrails.gardenDetail.createGuardrail")}
         </Button>
       </div>
 
@@ -102,17 +145,23 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
         <div className="flex gap-16">
           {/* Left column — overview + details table */}
           <div className="min-w-0 flex-1">
-            <h2 className="m-0 mb-3 text-lg font-normal text-foreground">Overview</h2>
-            <p className="m-0 mb-8 text-sm leading-[1.7] text-foreground">{term(card.description)}</p>
+            <h2 className="m-0 mb-3 text-lg font-normal text-foreground">
+              {t("guardrails.gardenDetail.overviewHeading")}
+            </h2>
+            <p className="m-0 mb-8 text-sm leading-[1.7] text-foreground">{description}</p>
 
-            <h2 className="m-0 mb-1 text-lg font-normal text-foreground">Guardrail Details</h2>
-            <p className="m-0 mb-4 text-[13px] text-muted-foreground">Details are as follows</p>
+            <h2 className="m-0 mb-1 text-lg font-normal text-foreground">
+              {t("guardrails.gardenDetail.detailsHeading")}
+            </h2>
+            <p className="m-0 mb-4 text-[13px] text-muted-foreground">{t("guardrails.gardenDetail.detailsSubtitle")}</p>
 
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="w-50 py-3 text-left font-medium text-muted-foreground">Property</th>
-                  <th className="py-3 text-left font-medium text-muted-foreground">{card.name}</th>
+                  <th className="w-50 py-3 text-left font-medium text-muted-foreground">
+                    {t("guardrails.gardenDetail.propertyColumn")}
+                  </th>
+                  <th className="py-3 text-left font-medium text-muted-foreground">{name}</th>
                 </tr>
               </thead>
               <tbody>
@@ -130,27 +179,27 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
           <div className="w-60 shrink-0">
             {/* Guardrail ID */}
             <div className="mb-7">
-              <div className="mb-1 text-xs text-muted-foreground">Guardrail ID</div>
+              <div className="mb-1 text-xs text-muted-foreground">{t("guardrails.gardenDetail.guardrailIdLabel")}</div>
               <div className="break-all text-[13px] text-foreground">litellm/{card.id}</div>
             </div>
 
             {/* Type */}
             <div className="mb-7">
-              <div className="mb-1 text-xs text-muted-foreground">Type</div>
-              <div className="text-[13px] text-foreground">{CATEGORY_LABELS[card.category].type}</div>
+              <div className="mb-1 text-xs text-muted-foreground">{t("guardrails.gardenDetail.typeLabel")}</div>
+              <div className="text-[13px] text-foreground">{t(CATEGORY_LABEL_KEYS[card.category].type)}</div>
             </div>
 
             {/* Tags — pill style like Vertex */}
             {card.tags.length > 0 && (
               <div className="mb-7">
-                <div className="mb-2 text-xs text-muted-foreground">Tags</div>
+                <div className="mb-2 text-xs text-muted-foreground">{t("guardrails.gardenDetail.tagsLabel")}</div>
                 <div className="flex flex-wrap gap-1.5">
                   {card.tags.map((tag) => (
                     <span
                       key={tag}
                       className="rounded-2xl border border-border bg-card px-3 py-1 text-xs text-foreground"
                     >
-                      {tag}
+                      {gardenTagLabel(tag, t)}
                     </span>
                   ))}
                 </div>
@@ -162,12 +211,18 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
 
       {activeTab === "eval" && (
         <div>
-          <h2 className="m-0 mb-4 text-lg font-normal text-foreground">Eval Results</h2>
+          <h2 className="m-0 mb-4 text-lg font-normal text-foreground">
+            {t("guardrails.gardenDetail.evalResultsHeading")}
+          </h2>
           <table className="w-full max-w-[560px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-border bg-muted">
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Metric</th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Value</th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                  {t("guardrails.gardenDetail.metricColumn")}
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                  {t("guardrails.gardenDetail.valueColumn")}
+                </th>
               </tr>
             </thead>
             <tbody>
