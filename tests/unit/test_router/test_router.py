@@ -8869,6 +8869,7 @@ def _embedding_router(max_input_tokens: int) -> litellm.Router:
     [
         pytest.param(["one two three four five six"] * 3, id="texts"),
         pytest.param([list(range(6))] * 3, id="token-id-lists"),
+        pytest.param(list(range(10)), id="token-ids-at-the-limit"),
     ],
 )
 async def test_aembedding_accepts_a_batch_whose_inputs_each_fit_the_context_window(embedding_input):
@@ -8900,6 +8901,43 @@ def test_embedding_rejects_a_batch_with_one_input_over_the_context_window():
 
     with pytest.raises(litellm.ContextWindowExceededError):
         router.embedding(model="embed", input=["one", " ".join(["word"] * 20)])
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+@pytest.mark.parametrize(
+    "prompt_kwargs",
+    [
+        pytest.param({"instructions": "you are a helpful assistant. " * 20}, id="instructions"),
+        pytest.param(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "description": "look up a record by its identifier. " * 20,
+                        "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                    }
+                ]
+            },
+            id="tools",
+        ),
+    ],
+)
+async def test_aresponses_with_empty_input_still_counts_its_other_prompt_content(prompt_kwargs):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": 50},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aresponses(model="small-ctx", input=[], **prompt_kwargs)
 
 
 def test_get_deployment_model_info_base_model_flow():

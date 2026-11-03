@@ -14928,16 +14928,18 @@ class PythonCore(DeprecatedRouterMembers):
 
     def _longest_embedding_input_tokens(self, items: list[object], tokenizer_model: str) -> int | None:
         """An embedding model's context window bounds each input on its own, so a batch is never summed."""
+        if not items:
+            return None
         if all(isinstance(item, str) for item in items):
             count_tokens: Final = self._host.invoke("token_counter")
-            return max((count_tokens(model=tokenizer_model, text=item) for item in items), default=0)
-        if all(isinstance(item, int) for item in items):
+            return max(count_tokens(model=tokenizer_model, text=item) for item in items)
+        if all(isinstance(item, int) and not isinstance(item, bool) for item in items):
             return len(items)
         try:
             token_id_batch: Final = _EMBEDDING_TOKEN_ID_BATCH_ADAPTER.validate_python(items, strict=True)
         except ValidationError:
             return None
-        return max((len(token_ids) for token_ids in token_id_batch), default=0)
+        return max(len(token_ids) for token_ids in token_id_batch)
 
     def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
         """The deployment's declared context window, or None when it declares none or cannot be resolved."""
