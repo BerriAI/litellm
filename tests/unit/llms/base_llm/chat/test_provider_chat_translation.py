@@ -1387,7 +1387,7 @@ def test_image_url(case: _Case, detail: str | None, image_url: str, respx_mock: 
         source: Final = _mapping(image_block["source"])
         assert source["type"] == "base64"
         assert source["data"] == _PNG_B64
-        assert source["media_type"] == "image/png"
+        assert source["media_type"] == ("image/jpeg" if image_url.endswith(".jpg") else "image/png")
     else:
         assert image_block["type"] == "image_url"
         assert image_block["image_url"] == image_url_part

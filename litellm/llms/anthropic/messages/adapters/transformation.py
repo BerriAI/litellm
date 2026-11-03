@@ -376,8 +376,8 @@ _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.va
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self, url_documents_as_pdf: bool = False) -> None:
-        self.url_documents_as_pdf = url_documents_as_pdf
+    def __init__(self):
+        pass
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -1378,10 +1378,8 @@ class LiteLLMAnthropicMessagesAdapter:
             case "text":
                 text: Final = tool_result_text_part(block)
                 return None if text is None else ChatCompletionTextObject(type="text", text=text)
-            case "image":
+            case "image" | "document":
                 return self._source_image_url_part(block.get("source"))
-            case "document":
-                return self._document_source_image_url_part(block.get("source"))
             case "tool_reference":
                 return ChatCompletionToolReferenceObject(
                     type="tool_reference", tool_name=str(block.get("tool_name") or "")
@@ -1394,28 +1392,19 @@ class LiteLLMAnthropicMessagesAdapter:
     ) -> ChatCompletionFileObject | ChatCompletionImageObject | None:
         inline_document: Final = anthropic_inline_document(document)
         if inline_document is None:
-            return self._document_source_image_url_part(document.get("source"))
+            return self._source_image_url_part(document.get("source"))
         return ChatCompletionFileObject(
             type="file",
             file=ChatCompletionFileObjectFile(filename=inline_document.filename, file_data=inline_document.file_data),
         )
 
-    def _source_image_url_part(self, image_source: object, as_pdf: bool = False) -> ChatCompletionImageObject | None:
+    def _source_image_url_part(self, image_source: object) -> ChatCompletionImageObject | None:
         if not isinstance(image_source, dict):
             return None
         openai_image_url = self._translate_anthropic_image_to_openai(image_source)
         if not openai_image_url:
             return None
-        image_url: Final = (
-            ChatCompletionImageUrlObject(url=openai_image_url, format="application/pdf")
-            if as_pdf
-            else ChatCompletionImageUrlObject(url=openai_image_url)
-        )
-        return ChatCompletionImageObject(type="image_url", image_url=image_url)
-
-    def _document_source_image_url_part(self, document_source: object) -> ChatCompletionImageObject | None:
-        is_url_document: Final = isinstance(document_source, dict) and document_source.get("type") == "url"
-        return self._source_image_url_part(document_source, as_pdf=self.url_documents_as_pdf and is_url_document)
+        return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
 
     def _translate_openai_content_to_anthropic(
         self,

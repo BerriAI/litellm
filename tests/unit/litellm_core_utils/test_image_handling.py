@@ -1,23 +1,34 @@
 import asyncio
 import base64
 import copy
+import threading
 import time
 import uuid
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Final
 
 import pytest
 from httpx import Request, Response
 
 import litellm
+from litellm.litellm_core_utils import url_utils
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     MAX_CONCURRENT_REMOTE_MEDIA_FETCHES,
     RemoteMedia,
     async_convert_url_to_base64,
+    async_format_pdf_links,
     async_inline_remote_media,
+    async_serves_pdf,
     convert_url_to_base64,
+    format_pdf_links,
     inline_remote_media,
+    is_unformatted_pdf_link_image,
+    serves_pdf,
 )
 from litellm.litellm_core_utils.url_utils import SSRFError
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 @pytest.fixture(autouse=True)
@@ -695,3 +706,217 @@ async def test_async_inline_remote_media_raises_image_fetch_error_when_the_fetch
 
     with pytest.raises(litellm.ImageFetchError, match="Status code: 404"):
         await async_inline_remote_media([{"role": "user", "content": [{"type": "image_url", "image_url": url}]}])
+
+
+PDF_BODY: Final = b"%PDF-1.7\n" + b"0" * 4096
+PNG_BODY: Final = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+
+
+@dataclass(frozen=True, slots=True)
+class _Served:
+    status: int = 200
+    content_type: str | None = "application/octet-stream"
+    body: bytes = PDF_BODY
+    honors_range: bool = True
+    barrier: threading.Barrier | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ProbeServer:
+    base_url: str
+    routes: dict[str, _Served]
+    seen: list[tuple[str, str | None]]
+
+    def serve(self, path: str, served: _Served) -> str:
+        self.routes[path] = served
+        return f"{self.base_url}{path}"
+
+
+@pytest.fixture
+def probe_server(monkeypatch):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(image_handling, "safe_get", url_utils.safe_get)
+    monkeypatch.setattr(litellm, "module_level_client", HTTPHandler())
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler())
+    routes: Final[dict[str, _Served]] = {}
+    seen: Final[list[tuple[str, str | None]]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            served = routes[self.path]
+            requested_range = self.headers.get("Range")
+            seen.append((self.path, requested_range))
+            if served.barrier is not None:
+                served.barrier.wait()
+            ranged = served.honors_range and requested_range == "bytes=0-1023"
+            body = served.body[:1024] if ranged else served.body
+            self.send_response(206 if ranged and served.status == 200 else served.status)
+            if served.content_type is not None:
+                self.send_header("Content-Type", served.content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield _ProbeServer(f"http://127.0.0.1:{server.server_port}", routes, seen)
+    server.shutdown()
+    server.server_close()
+
+
+async def _serves_pdf(mode: str, url: str) -> bool:
+    return serves_pdf(url) if mode == "sync" else await async_serves_pdf(url)
+
+
+async def _format_pdf_links(mode, messages):
+    if mode == "sync":
+        return format_pdf_links(messages, should_probe=is_unformatted_pdf_link_image)
+    return await async_format_pdf_links(messages, should_probe=is_unformatted_pdf_link_image)
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_serves_pdf_asks_for_only_the_leading_kilobyte(probe_server, mode):
+    url = probe_server.serve("/files/report.pdf", _Served())
+
+    assert await _serves_pdf(mode, url) is True
+    assert probe_server.seen == [("/files/report.pdf", "bytes=0-1023")]
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+@pytest.mark.parametrize(
+    ("served", "expected"),
+    (
+        (_Served(content_type="application/pdf", body=PNG_BODY), True),
+        (_Served(content_type="Application/X-PDF; charset=binary", body=b""), True),
+        (_Served(content_type="binary/octet-stream", body=PDF_BODY), True),
+        (_Served(content_type=None, body=PDF_BODY), True),
+        (_Served(content_type="application/octet-stream", body=b"\n" * 1000 + PDF_BODY), True),
+        (_Served(content_type="application/octet-stream", body=b"\n" * 1024 + PDF_BODY), False),
+        (_Served(content_type="binary/octet-stream", body=PNG_BODY), False),
+        (_Served(content_type="image/png", body=PDF_BODY), False),
+        (_Served(content_type="text/html", body=b"<html>%PDF-</html>"), False),
+        (_Served(status=404, content_type="application/pdf"), False),
+        (_Served(honors_range=False), True),
+    ),
+    ids=(
+        "served-pdf",
+        "served-x-pdf",
+        "generic-type-pdf-bytes",
+        "no-type-pdf-bytes",
+        "signature-inside-the-first-kilobyte",
+        "signature-past-the-first-kilobyte",
+        "generic-type-png-bytes",
+        "served-png",
+        "served-html",
+        "not-found",
+        "range-ignored",
+    ),
+)
+async def test_serves_pdf_trusts_a_specific_served_type_and_sniffs_a_generic_one(probe_server, mode, served, expected):
+    url = probe_server.serve(f"/{uuid.uuid4()}/report.pdf", served)
+
+    assert await _serves_pdf(mode, url) is expected
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_serves_pdf_makes_no_request_when_url_downloads_are_disabled(probe_server, monkeypatch, mode):
+    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0)
+    url = probe_server.serve("/report.pdf", _Served(content_type="application/pdf"))
+
+    assert await _serves_pdf(mode, url) is False
+    assert probe_server.seen == []
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_serves_pdf_is_false_when_the_host_refuses_the_connection(probe_server, mode):
+    assert await _serves_pdf(mode, "http://127.0.0.1:1/report.pdf") is False
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_serves_pdf_is_false_without_a_request_when_the_ssrf_check_blocks_the_link(probe_server, monkeypatch, mode):
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    url = probe_server.serve("/report.pdf", _Served(content_type="application/pdf"))
+
+    assert await _serves_pdf(mode, url) is False
+    assert probe_server.seen == []
+
+
+async def test_async_serves_pdf_stops_reading_a_whole_body_past_the_download_cap(probe_server, monkeypatch):
+    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0.001)
+    url = probe_server.serve("/report.pdf", _Served(honors_range=False))
+
+    assert await async_serves_pdf(url) is False
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_format_pdf_links_marks_only_links_that_serve_a_pdf(probe_server, mode):
+    pdf_link = probe_server.serve("/a/report.pdf", _Served())
+    query_link = probe_server.serve("/a/download?file=summary.pdf", _Served(content_type="application/pdf"))
+    png_at_pdf_link = probe_server.serve("/a/page.pdf?fm=png", _Served(content_type="image/png", body=PNG_BODY))
+    png_link = f"{probe_server.base_url}/a/photo.png"
+    messages = [
+        {"role": "system", "content": "read the files"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "compare"},
+                {"type": "image_url", "image_url": {"url": pdf_link, "detail": "high"}, "cache_control": {"type": "ephemeral"}},
+                {"type": "image_url", "image_url": query_link},
+                {"type": "image_url", "image_url": {"url": png_at_pdf_link}},
+                {"type": "image_url", "image_url": {"url": png_link}},
+                {"type": "image_url", "image_url": {"url": pdf_link, "format": "image/png"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link}}]},
+    ]
+    original = copy.deepcopy(messages)
+
+    formatted = await _format_pdf_links(mode, messages)
+
+    assert messages == original
+    assert formatted == (
+        messages[0],
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "compare"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": pdf_link, "detail": "high", "format": "application/pdf"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "image_url", "image_url": {"url": query_link, "format": "application/pdf"}},
+                {"type": "image_url", "image_url": {"url": png_at_pdf_link}},
+                {"type": "image_url", "image_url": {"url": png_link}},
+                {"type": "image_url", "image_url": {"url": pdf_link, "format": "image/png"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link, "format": "application/pdf"}}]},
+    )
+    assert sorted(path for path, _ in probe_server.seen) == ["/a/download?file=summary.pdf", "/a/page.pdf?fm=png", "/a/report.pdf"]
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_format_pdf_links_probes_every_link_at_once(probe_server, mode):
+    both_in_flight = threading.Barrier(2, timeout=5)
+    links = [probe_server.serve(f"/{name}.pdf", _Served(barrier=both_in_flight)) for name in ("first", "second")]
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": link}} for link in links]}]
+
+    formatted = await _format_pdf_links(mode, messages)
+
+    assert [part["image_url"]["format"] for part in formatted[0]["content"]] == ["application/pdf", "application/pdf"]
+
+
+@pytest.mark.parametrize("mode", ("sync", "async"))
+async def test_format_pdf_links_leaves_messages_without_pdf_links_alone(probe_server, mode):
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": f"{probe_server.base_url}/a.png"}}]},
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:application/pdf;base64,JVBERi0="}}]},
+    ]
+
+    assert await _format_pdf_links(mode, messages) == tuple(messages)
+    assert probe_server.seen == []

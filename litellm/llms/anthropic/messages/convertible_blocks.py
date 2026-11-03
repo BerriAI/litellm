@@ -314,6 +314,67 @@ def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: obj
     return [_with_user_blocks(message, partial(_restored_block, kept=kept_in_order)) for message in rewritten]
 
 
+def _url_source_url(block: object) -> str | None:
+    match as_str_mapping(block):
+        case {"type": "image" | "document", "source": {"type": "url", "url": str(url)}}:
+            return url
+        case _:
+            return None
+
+
+def _is_document(block: object) -> bool:
+    match as_str_mapping(block):
+        case {"type": "document"}:
+            return True
+        case _:
+            return False
+
+
+def _url_sourced_blocks(block: object) -> tuple[tuple[str, object], ...]:
+    url: Final = _url_source_url(block)
+    if url is not None:
+        return ((url, block),)
+    match as_str_mapping(block):
+        case {"type": "tool_result", "content": list() as content}:
+            return tuple(chain.from_iterable(map(_url_sourced_blocks, _list_items(content))))
+        case _:
+            return ()
+
+
+def _entry_url(entry: tuple[str, object]) -> str:
+    return entry[0]
+
+
+def _entry_block(entry: tuple[str, object]) -> object:
+    return entry[1]
+
+
+def _restored_url_document(block: object, originals: Mapping[str, Iterator[object]]) -> object:
+    url: Final = _url_source_url(block)
+    if url is not None:
+        remaining: Final = originals.get(url)
+        original: Final = None if remaining is None else next(remaining, None)
+        return original if _is_document(original) else block
+    match as_str_mapping(block):
+        case {"type": "tool_result", "content": list() as content} as tool_result:
+            restore: Final = partial(_restored_url_document, originals=originals)
+            return {**tool_result, "content": list(map(restore, _list_items(content)))}
+        case _:
+            return block
+
+
+def keep_url_documents(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
+    by_url: Final = tuple(sorted(chain.from_iterable(map(_url_sourced_blocks, blocks)), key=_entry_url))
+    if not any(_is_document(block) for _, block in by_url):
+        return rewritten
+    originals_in_order: Final = MappingProxyType(
+        {url: iter(tuple(map(_entry_block, group))) for url, group in groupby(by_url, key=_entry_url)}
+    )
+    restore: Final = partial(_restored_url_document, originals=originals_in_order)
+    return [_with_user_blocks(message, restore) for message in rewritten]
+
+
 def _without_non_string_text(block: object) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "content": list()} as tool_result:

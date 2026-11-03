@@ -24,6 +24,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
+from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
@@ -41,10 +42,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
-    async_inline_reachable_media,
+    async_format_pdf_links,
     async_inline_remote_media,
+    format_pdf_links,
     inline_remote_image_urls,
-    is_unformatted_pdf_link,
+    is_unformatted_pdf_link_image,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     place_mid_conversation_system,
@@ -447,13 +449,6 @@ def tools_without_unsupported_tool_search(
         )
     litellm.verbose_logger.warning(DROP_UNSUPPORTED_TOOL_SEARCH_WARNING, model, route)
     return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
-
-
-def _is_unformatted_pdf_link_image(media: RemoteMedia) -> bool:
-    image_format: Final = media.fields.get("format")
-    return inline_remote_image_urls(media) and is_unformatted_pdf_link(
-        media.url, image_format if isinstance(image_format, str) else None
-    )
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -2245,6 +2240,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def inlines_remote_media(self, media: RemoteMedia) -> bool:
         return inline_remote_image_urls(media) and media.url.startswith("http://")
 
+    def probes_pdf_link(self, media: RemoteMedia) -> bool:
+        return is_unformatted_pdf_link_image(media) and not self.inlines_remote_media(media)
+
+    def _with_pdf_links_formatted(self, messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+        return messages if is_event_loop_running() else format_pdf_links(messages, should_probe=self.probes_pdf_link)
+
     async def async_transform_request(
         self,
         model: str,
@@ -2256,7 +2257,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         inlined: Final = await async_inline_remote_media(messages, should_inline=self.inlines_remote_media)
         return self.transform_request(
             model=model,
-            messages=await async_inline_reachable_media(inlined, should_inline=_is_unformatted_pdf_link_image),
+            messages=list(await async_format_pdf_links(inlined, should_probe=self.probes_pdf_link)),
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
@@ -2363,7 +2364,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         try:
             anthropic_messages = anthropic_messages_pt(
                 model=model,
-                messages=list(conversation),
+                messages=list(self._with_pdf_links_formatted(conversation)),
                 llm_provider=self._resolved_provider,
                 drop_params=drop_params,
             )

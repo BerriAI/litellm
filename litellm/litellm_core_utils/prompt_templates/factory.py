@@ -21,8 +21,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, REDACTED_BY_LITELLM
-from litellm.litellm_core_utils.asyncify import is_event_loop_running
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
@@ -75,7 +74,7 @@ from .common_utils import (
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
 )
-from .image_handling import convert_url_to_base64, is_unformatted_pdf_link
+from .image_handling import convert_url_to_base64, is_pdf_media_type
 
 
 def default_pt(messages):
@@ -909,39 +908,13 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
         )
 
 
-_PDF_MEDIA_TYPES: Final = frozenset({"application/pdf", "application/x-pdf"})
-
-
-def _is_pdf_media_type(media_type: str) -> bool:
-    return media_type.split(";", 1)[0].strip().lower() in _PDF_MEDIA_TYPES
-
-
-def _anthropic_url_image_block(image_url: str) -> AnthropicMessagesImageParam:
-    return AnthropicMessagesImageParam(
-        type="image",
-        source=AnthropicContentParamSourceUrl(type="url", url=image_url),
-    )
-
-
-def _downloaded_block_or_link(image_url: str) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    try:
-        data_url: Final = convert_url_to_base64(url=image_url, timeout=NON_LLM_CONNECTION_TIMEOUT)
-    except litellm.ImageFetchError:
-        return _anthropic_url_image_block(image_url)
-    return anthropic_content_element_factory(convert_to_anthropic_image_obj(openai_image_url=data_url, format=None))
-
-
 def _anthropic_https_url_block(
     image_url: str, image_format: str | None
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    if is_unformatted_pdf_link(image_url, image_format) and not is_event_loop_running():
-        return _downloaded_block_or_link(image_url)
-    if image_format and _is_pdf_media_type(image_format):
-        return AnthropicMessagesDocumentParam(
-            type="document",
-            source=AnthropicContentParamSourceUrl(type="url", url=image_url),
-        )
-    return _anthropic_url_image_block(image_url)
+    source: Final = AnthropicContentParamSourceUrl(type="url", url=image_url)
+    if image_format and is_pdf_media_type(image_format):
+        return AnthropicMessagesDocumentParam(type="document", source=source)
+    return AnthropicMessagesImageParam(type="image", source=source)
 
 
 def create_anthropic_image_param(
@@ -2211,7 +2184,7 @@ def add_cache_control_to_content(
 def anthropic_content_element_factory(
     image_chunk: GenericImageParsingChunk,
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    if _is_pdf_media_type(image_chunk["media_type"]):
+    if is_pdf_media_type(image_chunk["media_type"]):
         _anthropic_content_element: AnthropicMessagesDocumentParam | AnthropicMessagesImageParam = (
             AnthropicMessagesDocumentParam(
                 type="document",

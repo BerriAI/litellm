@@ -217,11 +217,21 @@ async def test_write_back_sends_the_client_url_blocks_as_the_client_sent_them(as
                 {
                     "type": "tool_result",
                     "tool_use_id": "tu_1",
-                    "content": [{"type": "document", "source": {"type": "url", "url": document_link}}],
+                    "content": [
+                        {"type": "document", "source": {"type": "url", "url": document_link}, "title": "Q3 attachment"}
+                    ],
                 },
                 {"type": "text", "text": "compare these"},
                 {"type": "image", "source": {"type": "url", "url": image_link}},
-                {"type": "document", "source": {"type": "url", "url": document_link}},
+                {
+                    "type": "document",
+                    "source": {"type": "url", "url": document_link},
+                    "title": "Q3 report",
+                    "context": "Board copy",
+                    "citations": {"enabled": True},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "document", "source": {"type": "url", "url": document_link}, "title": "Q3 report, again"},
             ],
         },
     ]

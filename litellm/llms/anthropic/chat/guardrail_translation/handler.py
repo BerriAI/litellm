@@ -34,6 +34,7 @@ from litellm.llms.anthropic.messages.adapters.transformation import (
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
     keep_non_string_tool_result_texts,
+    keep_url_documents,
     scannable_tool_result_request,
 )
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
@@ -785,7 +786,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter(url_documents_as_pdf=True).translate_anthropic_to_openai(
+        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
             anthropic_message_request=cast(AnthropicMessagesRequest, scannable_tool_result_request(data)),
             preserve_midturn_system=True,
         )
@@ -1187,7 +1188,10 @@ class AnthropicMessagesHandler(BaseTranslation):
             cast(Sequence[object], converted),  # cast-ok: Anthropic message payload
             original_tool_names,
         )
-        data["messages"] = keep_non_string_tool_result_texts(converted, data.get("messages"))
+        original_messages: Final = data.get("messages")
+        data["messages"] = keep_url_documents(
+            keep_non_string_tool_result_texts(converted, original_messages), original_messages
+        )
 
     @staticmethod
     def _extract_midturn_system_text(
