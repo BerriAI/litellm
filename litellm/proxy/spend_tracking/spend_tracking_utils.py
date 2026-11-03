@@ -607,6 +607,7 @@ def get_logging_payload(
         kwargs = {}
 
     rejected_as_unknown_model: Final = isinstance(response_obj, ProxyModelNotFoundError)
+    failure_exception: Final = response_obj if isinstance(response_obj, BaseException) else None
     response_served_from_cache: Final = served_from_cache(response_obj)
     if response_obj is None:
         response_obj = {}
@@ -897,14 +898,11 @@ def get_logging_payload(
                 additional_usage_values["cache_creation_input_tokens"] = cache_write_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
     drop_requester_ip_address: Final = requester_ip_address_logging_disabled()
-    error_information: Final = clean_metadata["error_information"]
     if drop_requester_ip_address:
         clean_metadata["requester_ip_address"] = None
-    if drop_requester_ip_address and isinstance(error_information, Mapping):
-        clean_metadata["error_information"] = cast(  # cast-ok: same keys, only the str values are masked
-            StandardLoggingPayloadErrorInformation,
-            _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(error_information)),
-        )
+    clean_metadata["error_information"] = sanitize_error_information_for_spend_logs(
+        clean_metadata["error_information"], original_exception=failure_exception
+    )
 
     if litellm.cache is None:
         cache_key = "Cache OFF"
