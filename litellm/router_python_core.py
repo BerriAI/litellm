@@ -84,6 +84,8 @@ from litellm.constants import (
     MID_STREAM_FAILURE_LOG_WAIT_SECONDS,
     OUTPUT_TOKEN_CEILING_PARAMS,
     PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
@@ -673,6 +675,7 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CALL_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
@@ -848,9 +851,11 @@ def _with_router_resolved_session_model(session: object, model_name: str) -> Map
         typed_session: Final = _SESSION_ADAPTER.validate_python(session)
     except ValidationError:
         return _NO_SESSION_KWARGS
-    if "model" not in typed_session:
+    if "model" not in typed_session and typed_session.get("type") != "transcription":
         return _NO_SESSION_KWARGS
-    return MappingProxyType({"session": {**typed_session, "model": model_name}})
+    from litellm.realtime_api.main import with_resolved_session_model
+
+    return MappingProxyType({"session": with_resolved_session_model(dict(typed_session), model_name)})
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
@@ -2865,6 +2870,14 @@ class PythonCore(DeprecatedRouterMembers):
         self.acreate_realtime_transcription_session = self.factory_function(
             self._host.invoke("acreate_realtime_transcription_session"),
             call_type="acreate_realtime_transcription_session",
+        )
+        self.acreate_realtime_translation_client_secret = self.factory_function(
+            self._host.invoke("acreate_realtime_translation_client_secret"),
+            call_type="acreate_realtime_translation_client_secret",
+        )
+        self.arealtime_translation_calls = self.factory_function(
+            self._host.invoke("arealtime_translation_calls"),
+            call_type="arealtime_translation_calls",
         )
         self._aresponses_websocket = self.factory_function(
             self._host.invoke("_aresponses_websocket"), call_type="_aresponses_websocket"
@@ -6895,6 +6908,22 @@ class PythonCore(DeprecatedRouterMembers):
                 raise safeguard_refusal_error(model=model, stop_details=refusal_details)
 
             self.success_calls[model_name] += 1
+            realtime_session_logging: Final = (
+                _CALL_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
+                if generic_function_name == "_arealtime"
+                else None
+            )
+            realtime_session_deployment_id: Final = (
+                _MODEL_INFO_ADAPTER.validate_python(kwargs["model_info"]).get("id")
+                if isinstance(realtime_session_logging, LiteLLMLogging)
+                and realtime_session_logging.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+                and realtime_session_logging.model_call_details.get(REALTIME_SESSION_ENDED_ABNORMALLY_KEY) is not True
+                else None
+            )
+            if realtime_session_deployment_id is not None:
+                increment_deployment_successes_for_current_minute(
+                    ctx=self._core_ctx, deployment_id=str(realtime_session_deployment_id)
+                )
             verbose_router_logger.info("ageneric_api_call_with_fallbacks(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             return response
@@ -8438,6 +8467,8 @@ class PythonCore(DeprecatedRouterMembers):
             "acreate_realtime_client_secret",
             "arealtime_calls",
             "acreate_realtime_transcription_session",
+            "acreate_realtime_translation_client_secret",
+            "arealtime_translation_calls",
             "_aresponses_websocket",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
@@ -8708,6 +8739,8 @@ class PythonCore(DeprecatedRouterMembers):
                 "acreate_realtime_client_secret",
                 "arealtime_calls",
                 "acreate_realtime_transcription_session",
+                "acreate_realtime_translation_client_secret",
+                "arealtime_translation_calls",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -9157,11 +9190,17 @@ class PythonCore(DeprecatedRouterMembers):
         if include_fallback_errors:
             input_kwargs["include_fallback_errors"] = True
 
-        # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
-        # Skip for error types that have their own dedicated fallback handlers
-        _skip_order_fallback: Final = isinstance(
-            e,
-            (litellm_exceptions.ContextWindowExceededError, litellm_exceptions.ContentPolicyViolationError),
+        context_window_fallback_model_group: Final = (
+            self._get_fallback_model_group_for_lookup_groups(
+                fallbacks=context_window_fallbacks,
+                lookup_groups=lookup_groups,
+            )
+            if isinstance(e, litellm_exceptions.ContextWindowExceededError) and context_window_fallbacks is not None
+            else None
+        )
+        _skip_order_fallback: Final = (
+            isinstance(e, litellm_exceptions.ContentPolicyViolationError)
+            or context_window_fallback_model_group is not None
         )
         _request_team_id: Final[str | None] = (kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")
         # Use wildcard-aware lookup so order-based fallback also works for model
@@ -9207,14 +9246,23 @@ class PythonCore(DeprecatedRouterMembers):
                         "original_model_group": original_model_group,
                     }
                 )
-                response = await run_async_fallback(
-                    *args,
-                    **input_kwargs,
-                )
-                return response
+                try:
+                    return await run_async_fallback(
+                        *args,
+                        **input_kwargs,
+                    )
+                except Exception:
+                    if isinstance(original_exception, litellm_exceptions.ContextWindowExceededError):
+                        raise original_exception
+                    raise
 
         # Weighted intra-group failover (simple-shuffle only); see _maybe_run_weighted_failover.
-        if self.enable_weighted_failover and not _skip_order_fallback and original_model_group is not None:
+        if (
+            self.enable_weighted_failover
+            and not _skip_order_fallback
+            and not isinstance(e, litellm_exceptions.ContextWindowExceededError)
+            and original_model_group is not None
+        ):
             response = await self._maybe_run_weighted_failover(
                 exception=e,
                 original_model_group=original_model_group,
@@ -9232,7 +9280,7 @@ class PythonCore(DeprecatedRouterMembers):
             # check if client-side fallbacks are used (e.g. fallbacks = ["gpt-3.5-turbo", "claude-3-haiku"] or fallbacks=[{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey, how's it going?"}]}]
             is_non_standard_fallback_format: Final = check_non_standard_fallback_format(fallbacks=fallbacks)
 
-            if is_non_standard_fallback_format:
+            if is_non_standard_fallback_format and context_window_fallback_model_group is None:
                 input_kwargs.update(
                     {
                         "fallback_model_group": fallbacks,
@@ -9248,16 +9296,7 @@ class PythonCore(DeprecatedRouterMembers):
                 return response
 
             if isinstance(e, litellm_exceptions.ContextWindowExceededError):
-                if context_window_fallbacks is not None:
-                    context_window_fallback_model_group: Final[list[str] | None] = (
-                        self._get_fallback_model_group_for_lookup_groups(
-                            fallbacks=context_window_fallbacks,
-                            lookup_groups=lookup_groups,
-                        )
-                    )
-                    if context_window_fallback_model_group is None:
-                        raise original_exception
-
+                if context_window_fallback_model_group is not None:
                     input_kwargs.update(
                         {
                             "fallback_model_group": context_window_fallback_model_group,
@@ -9271,7 +9310,7 @@ class PythonCore(DeprecatedRouterMembers):
                     )
                     return response
 
-                else:
+                elif context_window_fallbacks is None:
                     error_message = f"model={model_group}. context_window_fallbacks={mask_sensitive_structure(context_window_fallbacks)}. fallbacks={mask_sensitive_structure(fallbacks)}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks"
                     verbose_router_logger.info(
                         msg=f"Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \

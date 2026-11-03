@@ -216,6 +216,7 @@ def _reset_aws_auth_caches() -> None:
 def _flush_client_caches() -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
+    image_handling_module.pdf_probe_verdicts.flush_cache()
     _reset_aws_auth_caches()
 
 
