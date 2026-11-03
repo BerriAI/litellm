@@ -59,6 +59,7 @@ class KeyMetadata(BaseModel):
     batch_enqueued_token_limit: int | None = None
     tag: str | None = None
     guardrails: list[str] | None = None
+    webhook_token: str | None = None
 
 
 class ObjectPermission(BaseModel):

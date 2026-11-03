@@ -242,10 +242,14 @@ async def test_repository_queries_and_exports_seeded_daily_activity(monkeypatch:
             "user@example.com",
         )
         assert deleted_key_export.key_metadata == {"tags": ["archived"]}
-        assert deleted_key_export.user_metadata == {"department": "research"}
+        assert deleted_key_export.user_metadata == {"department": "research", "ldap_password": "REDACTED"}
         active_key_export: Final = next(row for row in exports if row.api_key == "key-a")
-        assert active_key_export.key_metadata == {"tags": ["blue", "gold"], "cost_center": "cc-1"}
-        assert active_key_export.user_metadata == {"department": "research"}
+        assert active_key_export.key_metadata == {
+            "tags": ["blue", "gold"],
+            "cost_center": "cc-1",
+            "webhook_token": "REDACTED",
+        }
+        assert active_key_export.user_metadata == {"department": "research", "ldap_password": "REDACTED"}
         unprivileged_exports: Final = tuple(
             [row async for row in repository.export_rows(team_scope, export_type=ExportType.DAILY_WITH_KEYS)]
         )
@@ -265,7 +269,7 @@ async def test_repository_queries_and_exports_seeded_daily_activity(monkeypatch:
             "user@example.com",
             273.0,
         )
-        assert user_exports[0].user_metadata == {"department": "research"}
+        assert user_exports[0].user_metadata == {"department": "research", "ldap_password": "REDACTED"}
         assert user_exports[0].key_metadata == {}
         daily_export: Final = tuple(
             [

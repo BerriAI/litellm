@@ -46,10 +46,12 @@ class UsageExportParams(BaseModel):
 
 class UsageExportKeyMetadata(BaseModel):
     tag: str | None = None
+    webhook_token: str | None = None
 
 
 class UsageExportUserMetadata(BaseModel):
     department: str | None = None
+    ldap_password: str | None = None
 
 
 class UsageExportRow(BaseModel):
@@ -99,7 +101,7 @@ class TestUsageExportMetadata:
                     user_email=f"e2e-usage-export-{marker}@example.com",
                     user_role="internal_user",
                     user_id=f"e2e-usage-export-{marker}",
-                    metadata={"department": f"research-{marker}"},
+                    metadata={"department": f"research-{marker}", "ldap_password": f"pw-{marker}"},
                 ),
                 response_type=UserNewResponse,
             )
@@ -110,7 +112,7 @@ class TestUsageExportMetadata:
                 user_id=user_id,
                 models=[model],
                 key_alias=f"e2e-usage-export-{marker}",
-                metadata=KeyMetadata(tag=f"cost-center-{marker}"),
+                metadata=KeyMetadata(tag=f"cost-center-{marker}", webhook_token=f"whsec-{marker}"),
             )
         )
         resources.defer(lambda: client.proxy.delete_key(record.key))
@@ -151,6 +153,9 @@ class TestUsageExportMetadata:
             assert row.key_metadata.tag == f"cost-center-{marker}", f"key metadata not exported: {row.key_metadata}"
             assert row.user_metadata.department == f"research-{marker}", (
                 f"user metadata not exported: {row.user_metadata}"
+            )
+            assert (row.key_metadata.webhook_token, row.user_metadata.ldap_password) == ("REDACTED", "REDACTED"), (
+                f"credential-named metadata values reached the export unmasked: {row}"
             )
 
         own_view: Final = client.proxy.transport.probe(

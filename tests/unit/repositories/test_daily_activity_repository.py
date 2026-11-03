@@ -679,6 +679,39 @@ async def test_daily_rows_exclusion_without_entity_filter_keeps_null_entity_rows
 
 
 @pytest.mark.asyncio
+async def test_export_redacts_credential_named_values_inside_metadata_objects() -> None:
+    database = _FakeDatabase(
+        (
+            (
+                {
+                    **_export_row("key-1"),
+                    "key_metadata": {
+                        "cost_center": "cc-1",
+                        "api_key": "sk-live-1234567890",
+                        "webhook": {"url": "https://hooks.example", "auth_token": "t0k3n"},
+                        "owners": [{"name": "ops", "password": "pw"}],
+                    },
+                    "user_metadata": {"department": "research", "github_token": "ghp_secret"},
+                },
+                {**_export_row("key-2"), "key_metadata": {}, "user_metadata": {}},
+            ),
+        )
+    )
+    repository, _ = _repository(database)
+
+    rows = [row async for row in repository.export_rows(_scope(), export_type=ExportType.DAILY_WITH_KEYS)]
+
+    assert rows[0].key_metadata == {
+        "cost_center": "cc-1",
+        "api_key": "REDACTED",
+        "webhook": {"url": "https://hooks.example", "auth_token": "REDACTED"},
+        "owners": [{"name": "ops", "password": "REDACTED"}],
+    }
+    assert rows[0].user_metadata == {"department": "research", "github_token": "REDACTED"}
+    assert (rows[1].key_metadata, rows[1].user_metadata) == ({}, {})
+
+
+@pytest.mark.asyncio
 async def test_export_is_lazy_and_uses_the_last_row_as_the_next_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(constants, "USAGE_EXPORT_BATCH_SIZE", 2)
     database = _FakeDatabase(

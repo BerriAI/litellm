@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 from itertools import groupby
 from types import MappingProxyType
@@ -11,6 +12,7 @@ from typing_extensions import assert_never
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.daily_activity_sql import (
     ExportCursor,
@@ -138,6 +140,16 @@ def _daily_rows_table(
         return prisma_client.db.litellm_dailyagentspend
     assert_never(table)
     raise AssertionError("unreachable")
+
+
+def _with_redacted_metadata(row: ExportRow) -> ExportRow:
+    if not row.key_metadata and not row.user_metadata:
+        return row
+    return replace(
+        row,
+        key_metadata=redact_credentials_in_payload(row.key_metadata),
+        user_metadata=redact_credentials_in_payload(row.user_metadata),
+    )
 
 
 def _next_export_cursor(batch: tuple[ExportRow, ...], export_type: ExportType) -> ExportCursor:
@@ -276,7 +288,7 @@ class DailyActivityRepository:
                 )
             )
             for row in batch:
-                yield row
+                yield _with_redacted_metadata(row)
             if len(batch) < batch_size:
                 return
             cursor = _next_export_cursor(batch, export_type)
