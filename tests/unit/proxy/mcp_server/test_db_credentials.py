@@ -510,6 +510,10 @@ class _MapTable:
     async def find_many(self, where: object = None) -> list[PrismaMCPServer]:
         return [_prisma_map_row(row, self.quoted) for row in self.rows.values()]
 
+    async def find_unique(self, *, where: dict[str, str]) -> PrismaMCPServer | None:
+        row: Final = self.rows.get(where["server_id"])
+        return None if row is None else _prisma_map_row(row, self.quoted)
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["static_headers", "env"])

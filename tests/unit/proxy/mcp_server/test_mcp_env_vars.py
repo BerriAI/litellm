@@ -1562,6 +1562,7 @@ async def test_create_mcp_server_decrypts_env_vars_when_prisma_returns_json_stri
     mock_prisma.db.litellm_mcpservertable.create = AsyncMock(
         return_value=_prisma_row_with_json_string_env_vars()
     )
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
 
     created = await create_mcp_server(
         mock_prisma,
@@ -1579,6 +1580,9 @@ async def test_create_mcp_server_decrypts_env_vars_when_prisma_returns_json_stri
 
     mock_prisma_upd = MagicMock()
     mock_prisma_upd.db.litellm_mcpservertable.update = AsyncMock(
+        return_value=_prisma_row_with_json_string_env_vars()
+    )
+    mock_prisma_upd.db.litellm_mcpservertable.find_unique = AsyncMock(
         return_value=_prisma_row_with_json_string_env_vars()
     )
     updated = await update_mcp_server(
