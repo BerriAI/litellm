@@ -102,9 +102,7 @@ async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks):
                 },
             },
         ],
-        default_fallbacks=(
-            ["my-good-model"] if litellm_module_fallbacks is False else None
-        ),
+        default_fallbacks=(["my-good-model"] if litellm_module_fallbacks is False else None),
     )
 
     if sync_mode:
@@ -180,9 +178,7 @@ async def test_client_side_fallbacks_list(sync_mode):
 @pytest.mark.parametrize("content_filter_response_exception", [True, False])
 @pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
 @pytest.mark.asyncio
-async def test_router_content_policy_fallbacks(
-    sync_mode, content_filter_response_exception, fallback_type
-):
+async def test_router_content_policy_fallbacks(sync_mode, content_filter_response_exception, fallback_type):
     os.environ["LITELLM_LOG"] = "DEBUG"
 
     if content_filter_response_exception:
@@ -237,13 +233,9 @@ async def test_router_content_policy_fallbacks(
             },
         ],
         content_policy_fallbacks=(
-            [{"claude-sonnet-4-5-20250929": ["my-fallback-model"]}]
-            if fallback_type == "model-specific"
-            else None
+            [{"claude-sonnet-4-5-20250929": ["my-fallback-model"]}] if fallback_type == "model-specific" else None
         ),
-        default_fallbacks=(
-            ["my-default-fallback-model"] if fallback_type == "default" else None
-        ),
+        default_fallbacks=(["my-default-fallback-model"] if fallback_type == "default" else None),
     )
 
     if sync_mode is True:
@@ -484,18 +476,14 @@ class MyCustomHandler(CustomLogger):
 
     def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
-        print(
-            f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}"
-        )
+        print(f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}")
         self.previous_models = len(
             kwargs["litellm_params"]["metadata"].get("previous_models", [])
         )  # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
         print(f"self.previous_models: {self.previous_models}")
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
-        print(
-            f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}"
-        )
+        print(f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}")
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Stream")
@@ -851,7 +839,7 @@ def test_model_id_fallback_returns_selected_deployment(
                     "api_base": "https://fallback-migration.local/v1",
                 },
                 "model_info": {"id": "deployment-123"},
-            }
+            },
         ],
         fallbacks=[{"primary": ["deployment-123"]}],
         num_retries=0,
@@ -958,9 +946,7 @@ async def test_fallback_request_does_not_retry_primary_when_retries_are_disabled
     )
 
     with pytest.raises(litellm.ServiceUnavailableError):
-        await router.acompletion(
-            model="primary", messages=[{"role": "user", "content": "retry control"}]
-        )
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "retry control"}])
 
     assert route.call_count == 1
 
@@ -980,9 +966,7 @@ async def test_default_and_model_fallbacks_do_not_repeat_failed_models(
     )
 
     with pytest.raises(litellm.AuthenticationError):
-        await router.acompletion(
-            model="primary", messages=[{"role": "user", "content": "fallback prompt"}]
-        )
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "fallback prompt"}])
 
     outbound_models: Final = tuple(json.loads(call.request.content)["model"] for call in route.calls)
     assert outbound_models == ("primary", "backup")
@@ -1000,9 +984,7 @@ async def test_unknown_default_fallback_raises_after_primary_failure(
     )
 
     with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
-        await router.acompletion(
-            model="primary", messages=[{"role": "user", "content": "fallback prompt"}]
-        )
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "fallback prompt"}])
 
     assert route.call_count == 1
     assert "missing" in str(exc_info.value)
@@ -1094,8 +1076,11 @@ async def test_responses_context_error_does_not_restart_committed_or_disabled_st
         "tool": {
             "type": "response.output_item.added",
             "item": {
-                "type": "function_call", "id": "fc_primary", "call_id": "call_primary",
-                "name": "lookup", "arguments": "",
+                "type": "function_call",
+                "id": "fc_primary",
+                "call_id": "call_primary",
+                "name": "lookup",
+                "arguments": "",
             },
             "output_index": 0,
             "sequence_number": 1,
@@ -1122,22 +1107,34 @@ async def test_chat_context_error_falls_back_after_role_only_but_not_after_outpu
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _fallback_router(fallbacks=[{"primary": ["missing"]}])
     delta: Final = (
-        {"role": "assistant", "tool_calls": [{
-            "index": 0, "id": "call_primary", "type": "function", "function": {"name": "lookup", "arguments": ""}
-        }]}
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"index": 0, "id": "call_primary", "type": "function", "function": {"name": "lookup", "arguments": ""}}
+            ],
+        }
         if emission == "tool"
         else {"role": "assistant", "content": "visible" if emission == "text" else ""}
     )
     first_chunk: Final = {
-        "id": "chatcmpl-primary", "object": "chat.completion.chunk", "created": 1700000000, "model": "primary",
+        "id": "chatcmpl-primary",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "primary",
         "choices": [{"index": 0, "delta": delta}],
     }
-    error: Final = {"error": {
-        "type": "invalid_request_error", "code": "context_length_exceeded",
-        "message": "This model's maximum context length is 128000 tokens. Your messages resulted in 130000 tokens.",
-    }}
+    error: Final = {
+        "error": {
+            "type": "invalid_request_error",
+            "code": "context_length_exceeded",
+            "message": "This model's maximum context length is 128000 tokens. Your messages resulted in 130000 tokens.",
+        }
+    }
     backup: Final = {
-        "id": "chatcmpl-backup", "object": "chat.completion.chunk", "created": 1700000000, "model": "backup",
+        "id": "chatcmpl-backup",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "backup",
         "choices": [{"index": 0, "delta": {"role": "assistant", "content": "backup answer"}, "finish_reason": "stop"}],
     }
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
@@ -1147,7 +1144,9 @@ async def test_chat_context_error_falls_back_after_role_only_but_not_after_outpu
         )
     )
     request: Final = {
-        "model": "primary", "messages": [{"role": "user", "content": "oversized prompt"}], "stream": True,
+        "model": "primary",
+        "messages": [{"role": "user", "content": "oversized prompt"}],
+        "stream": True,
         "context_window_fallbacks": [{"primary": ["backup"]}],
     }
     stream: Final = router.completion(**request) if sync_mode else await router.acompletion(**request)
@@ -1181,8 +1180,13 @@ def test_context_stream_fallback_obeys_all_output_receipts(
     original: Final = litellm.ContextWindowExceededError(message="too long", model="primary", llm_provider="openai")
     error: Final = (
         MidStreamFallbackError(
-            message="too long", model="primary", llm_provider="openai", original_exception=original,
-            is_pre_first_chunk=True, generated_content=generated_content, emitted_disqualifying_content=disqualifying,
+            message="too long",
+            model="primary",
+            llm_provider="openai",
+            original_exception=original,
+            is_pre_first_chunk=True,
+            generated_content=generated_content,
+            emitted_disqualifying_content=disqualifying,
         )
         if wrapped
         else original
@@ -1207,3 +1211,117 @@ def test_context_stream_fallback_preserves_other_errors_for_existing_continuatio
         message="provider unavailable", model="primary", llm_provider="openai", generated_content="already visible"
     )
     assert _context_window_stream_fallback_error(error, "primary", "openai", True) is error
+
+
+def _context_fallback_precedence_router(context_key: str | None, ordered: bool) -> Router:
+    deployments: Final = (
+        ("primary", "primary", 1),
+        ("primary" if ordered else "unused", "ordered", 2),
+        ("generic", "generic", 1),
+        ("context", "context", 1),
+    )
+    return Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": f"openai/{model}",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                    "order": order,
+                },
+            }
+            for group, model, order in deployments
+        ],
+        fallbacks=[{"primary": ["generic"]}],
+        context_window_fallbacks=None if context_key is None else [{context_key: ["context"]}],
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+
+
+@pytest.mark.parametrize("sync_mode", (False, True))
+@pytest.mark.parametrize(
+    ("context_key", "ordered", "flat_fallbacks", "expected_model"),
+    (
+        (None, True, False, "ordered"),
+        ("unrelated", True, False, "ordered"),
+        ("unrelated", False, False, "generic"),
+        ("primary", True, False, "context"),
+        ("*", True, False, "context"),
+        ("primary", True, True, "context"),
+        ("primary", False, True, "context"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_context_fallback_precedence_is_specific_to_the_requested_group(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    context_key: str | None,
+    ordered: bool,
+    flat_fallbacks: bool,
+    expected_model: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _context_fallback_precedence_router(context_key, ordered)
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "This model's maximum context length is 10 tokens",
+                        "type": "invalid_request_error",
+                        "code": "context_length_exceeded",
+                    }
+                },
+            ),
+            _fallback_chat_response(expected_model, f"served by {expected_model}"),
+        )
+    )
+
+    response: Final = (
+        router.completion(
+            model="primary",
+            messages=[{"role": "user", "content": "long prompt"}],
+            fallbacks=["generic"] if flat_fallbacks else [{"primary": ["generic"]}],
+        )
+        if sync_mode
+        else await router.acompletion(
+            model="primary",
+            messages=[{"role": "user", "content": "long prompt"}],
+            fallbacks=["generic"] if flat_fallbacks else [{"primary": ["generic"]}],
+        )
+    )
+
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", expected_model)
+    assert response.choices[0].message.content == f"served by {expected_model}"
+
+
+@pytest.mark.parametrize("matching_context", (False, True))
+@pytest.mark.asyncio
+async def test_context_fallback_exhaustion_preserves_the_selected_chain(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    matching_context: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _context_fallback_precedence_router("primary" if matching_context else "unrelated", True)
+    refusal: Final = httpx.Response(
+        400,
+        json={"error": {"message": "This model's maximum context length is 10 tokens"}},
+    )
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(refusal, refusal, _fallback_chat_response("generic", "generic answer"))
+    )
+
+    if matching_context:
+        with pytest.raises(litellm.ContextWindowExceededError):
+            await router.acompletion(model="primary", messages=[{"role": "user", "content": "long prompt"}])
+        assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "context")
+        return
+
+    response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "long prompt"}])
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "ordered", "generic")
+    assert response.choices[0].message.content == "generic answer"
