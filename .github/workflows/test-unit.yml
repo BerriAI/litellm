@@ -1009,16 +1009,6 @@ jobs:
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
-      - name: Fetch schema comparison history
-        if: steps.changes.outputs.decision != 'skip' && matrix.shard == 'db-and-spend'
-        timeout-minutes: 3
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          git fetch --no-tags --filter=tree:0 --unshallow origin \
-            "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" \
-            "$(git rev-parse HEAD)"
-
       - name: Install dependencies and check schema
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 8
@@ -1038,6 +1028,11 @@ jobs:
           fi
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
           if [ "$UNIT_SHARD" = "db-and-spend" ]; then
+            echo "::group::Fetch schema comparison history"
+            timeout 180 git fetch --no-tags --filter=tree:0 --unshallow origin \
+              "+refs/heads/${SCHEMA_BASE_REF#origin/}:refs/remotes/$SCHEMA_BASE_REF" \
+              "$(git rev-parse HEAD)"
+            echo "::endgroup::"
             uv run --no-sync python scripts/check_schema_compatibility.py --base-ref "$SCHEMA_BASE_REF"
           fi
 
