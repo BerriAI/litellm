@@ -5,7 +5,9 @@ use serde::{
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
-use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
+use litellm_auth::{InputSource, Sourced, TokenProviderHandle};
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
 use litellm_http::outbound::RequestSigner;
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};

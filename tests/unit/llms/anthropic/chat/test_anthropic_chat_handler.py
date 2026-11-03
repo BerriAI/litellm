@@ -3651,6 +3651,51 @@ def test_streamed_refusal_stop_details_reach_the_assembled_message():
     assert provider_fields["stop_details"] == stop_details
 
 
+def test_streamed_refusal_explanation_reaches_the_client_as_the_message_refusal():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
+
+    assert assembled.choices[0].message.refusal == stop_details["explanation"]
+
+
+def test_streamed_refusal_without_an_explanation_sets_no_message_refusal():
+    assembled: Final = _assemble_stream(
+        _message_stream_events("refusal", {"type": "refusal", "category": "cyber", "explanation": None})
+    )
+
+    assert assembled.choices[0].message.get("refusal") is None
+
+
+def _paused_search_stream_events() -> tuple[dict, ...]:
+    message_start, message_delta, message_stop = _message_stream_events("pause_turn", None)
+    return (
+        message_start,
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_pending", "name": "web_search", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query": "next city"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {**message_delta, "delta": {"stop_reason": "pause_turn", "stop_sequence": None}},
+        message_stop,
+    )
+
+
+def test_streamed_pause_turn_is_an_unfinished_turn_listing_the_query_it_will_run():
+    assembled: Final = _assemble_stream(_paused_search_stream_events())
+
+    assert assembled.choices[0].finish_reason == "length"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "pause_turn"
+    pending: Final = provider_fields["web_search_calls"]["srvtoolu_pending"]
+    assert (pending.status, pending.action.query) == ("in_progress", "next city")
+
+
 def test_streamed_end_turn_carries_no_stop_details():
     assembled: Final = _assemble_stream(_message_stream_events("end_turn", None))
 
@@ -3658,6 +3703,40 @@ def test_streamed_end_turn_carries_no_stop_details():
     provider_fields: Final = assembled.choices[0].message.provider_specific_fields or {}
     assert "stop_details" not in provider_fields
     assert "stop_reason" not in provider_fields
+
+
+def test_message_start_surfaces_input_transformations_on_the_first_chunk() -> None:
+    input_transformations: Final = [{"type": "thinking_block_binding", "count": 2}]
+    chunk: Final = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+            "input_transformations": input_transformations,
+        },
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    first_chunk: Final = iterator.chunk_parser(chunk=chunk)
+
+    assert first_chunk.choices[0].delta.provider_specific_fields == {"input_transformations": input_transformations}
+    assert first_chunk.model == "claude-sonnet-4-6"
+
+
+def test_message_start_without_input_transformations_has_no_provider_specific_fields() -> None:
+    chunk: Final = {
+        "type": "message_start",
+        "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-6", "content": []},
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    assert iterator.chunk_parser(chunk=chunk).choices[0].delta.provider_specific_fields is None
 
 
 def _anthropic_chat_request_for_bound_thinking(
@@ -3734,3 +3813,76 @@ def test_anthropic_chat_sends_block_binding_as_is_without_drop_params(monkeypatc
     monkeypatch.setattr(litellm, "drop_params", False)
     body: Final = _anthropic_chat_body_for_bound_thinking(None)
     assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+
+
+class _AnthropicChatUpstream:
+    def __init__(self) -> None:
+        self.anthropic_beta: tuple[str, ...] = ()
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.anthropic_beta = tuple(request.headers.get_list("anthropic-beta"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_beta_row",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+
+_BETAS_FOUNDRY_REJECTS_AND_ACCEPTS: Final = "advisor-tool-2026-03-01,thinking-binding-controls-2026-08-01"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "forwarded_betas"),
+    [
+        pytest.param(
+            "https://res.services.ai.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry",
+        ),
+        pytest.param(
+            "https://res.cognitiveservices.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry-cognitiveservices",
+        ),
+        pytest.param(
+            "https://res.openai.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry-openai",
+        ),
+        pytest.param(
+            "https://api.anthropic.com",
+            frozenset(_BETAS_FOUNDRY_REJECTS_AND_ACCEPTS.split(",")),
+            id="anthropic",
+        ),
+    ],
+)
+def test_anthropic_chat_completion_picks_the_beta_row_by_api_base(
+    monkeypatch: pytest.MonkeyPatch, api_base: str, forwarded_betas: frozenset[str]
+) -> None:
+    from litellm import anthropic_beta_headers_manager
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    upstream: Final = _AnthropicChatUpstream()
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream.respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Say ok"}],
+            api_base=api_base,
+            api_key="test-key",
+            extra_headers={"anthropic-beta": _BETAS_FOUNDRY_REJECTS_AND_ACCEPTS},
+            client=client,
+        )
+    finally:
+        client.close()
+
+    assert frozenset(",".join(upstream.anthropic_beta).split(",")) == forwarded_betas

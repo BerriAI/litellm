@@ -2585,6 +2585,81 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert compact["kwargs"]["response_cost"] > 0
 
 
+DECISIONS_URL: Final = "https://api.openai.com/v1/decisions"
+DECISIONS_MODEL: Final = "gpt-6-luna"
+DECISIONS_INPUT_TOKENS: Final = 1000
+DECISIONS_OUTPUT_TOKENS: Final = 7
+DECISIONS_REQUEST: Final = {
+    "input": "The package arrived crushed and the screen is cracked.",
+    "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is the product defective?"}],
+}
+DECISION: Final = {
+    "model": DECISIONS_MODEL,
+    "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.97}],
+    "usage": {
+        "input_tokens": DECISIONS_INPUT_TOKENS,
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "output_tokens": DECISIONS_OUTPUT_TOKENS,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": DECISIONS_INPUT_TOKENS + DECISIONS_OUTPUT_TOKENS,
+    },
+}
+
+
+class TestOpenAIPassthroughDecisionsSpendLog:
+    @staticmethod
+    async def _spend_row(method: str, url_route: str, request_body: dict[str, object]) -> SpendLogsPayload:
+        logged: Final = await TestOpenAIPassthroughResponsesSubRouteBilling()._logged_call(
+            method, "", request_body, DECISION, "4e9b2c71-8a3d-4f5e-b6c0-1d2e3f4a5b6c", url_route
+        )
+        return logged.spend_row
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("url_route", "requested_model"),
+        [
+            pytest.param(DECISIONS_URL, DECISIONS_MODEL, id="openai"),
+            pytest.param(f"{DECISIONS_URL}/", DECISIONS_MODEL, id="trailing_slash"),
+            pytest.param(DECISIONS_URL, "luna-prod-alias", id="unpriced_alias_billed_as_served_model"),
+        ],
+    )
+    async def test_decisions_passthrough_spend_log_is_priced_like_native_decisions(
+        self, local_model_cost_map, url_route: str, requested_model: str
+    ):
+        decisions_rates: Final = litellm.model_cost[DECISIONS_MODEL]
+
+        spend_log_row: Final = await self._spend_row(
+            "POST", url_route, {**DECISIONS_REQUEST, "model": requested_model}
+        )
+
+        assert spend_log_row["prompt_tokens"] == DECISIONS_INPUT_TOKENS
+        assert spend_log_row["completion_tokens"] == DECISIONS_OUTPUT_TOKENS
+        assert spend_log_row["spend"] == pytest.approx(
+            DECISIONS_INPUT_TOKENS * decisions_rates["input_cost_per_token_decisions"]
+            + DECISIONS_OUTPUT_TOKENS * decisions_rates["output_cost_per_token_decisions"]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method", "url_route"),
+        [
+            pytest.param("GET", DECISIONS_URL, id="list"),
+            pytest.param("GET", f"{DECISIONS_URL}/dec_6a0b0f8e", id="retrieve"),
+            pytest.param("POST", f"{DECISIONS_URL}/dec_6a0b0f8e/cancel", id="sub_route"),
+        ],
+    )
+    async def test_decisions_reads_and_sub_routes_are_not_billed(
+        self, local_model_cost_map, caplog: pytest.LogCaptureFixture, method: str, url_route: str
+    ):
+        with caplog.at_level(logging.WARNING):
+            spend_log_row: Final = await self._spend_row(
+                method, url_route, {**DECISIONS_REQUEST, "model": DECISIONS_MODEL}
+            )
+
+        assert not spend_log_row["spend"]
+        assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
 

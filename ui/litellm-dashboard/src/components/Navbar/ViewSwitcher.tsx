@@ -32,12 +32,11 @@ function activeWorkspaceFor(
   isChatRoute: boolean,
   isMoyaiRoute: boolean,
   pluginLabel: string | undefined,
-  gatewayLabel: string,
-  chatLabel: string,
+  labels: { gateway: string; chat: string },
 ): { label: string; icon: WorkspaceIconName } {
-  if (isChatRoute) return { label: chatLabel, icon: CHAT };
+  if (isChatRoute) return { label: labels.chat, icon: CHAT };
   if (isMoyaiRoute) return { label: "Moyai", icon: MOYAI };
-  return { label: pluginLabel ?? gatewayLabel, icon: GATEWAY };
+  return { label: pluginLabel ?? labels.gateway, icon: GATEWAY };
 }
 
 function WorkspaceIcon({ workspace }: { workspace: WorkspaceIconName }) {
@@ -102,8 +101,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
     isChatRoute,
     isMoyaiRoute,
     plugins.find((p) => p.name === mode)?.display_name,
-    gatewayLabel,
-    t("Chat"),
+    { gateway: gatewayLabel, chat: t("Chat") },
   );
 
   const modeEntries = [

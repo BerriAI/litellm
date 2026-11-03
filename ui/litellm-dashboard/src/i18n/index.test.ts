@@ -18,7 +18,9 @@ describe("dashboard translations", () => {
     expect(instance.t("Access your LiteLLM Admin UI.")).toBe("登录 LiteLLM 管理界面。");
     instance.addResource("en", "translation", "English fallback.", "English fallback.");
     expect(instance.t("English fallback.", { defaultValue: "Missing fallback" })).toBe("English fallback.");
-    expect(instance.t("An untranslated label", { defaultValue: "An untranslated label" })).toBe("An untranslated label");
+    expect(instance.t("An untranslated label", { defaultValue: "An untranslated label" })).toBe(
+      "An untranslated label",
+    );
   });
 
   it("keeps nested workflow messages and pluralization available alongside literal display keys", () => {
@@ -27,6 +29,16 @@ describe("dashboard translations", () => {
     expect(instance.t("workflows.drawer.eventCount", { count: 1 })).toBe("1 event");
     expect(instance.t("workflows.drawer.eventCount", { count: 2 })).toBe("2 events");
     expect(instance.t("login.credentialsHelp")).toBe(zhCN["login.credentialsHelp"]);
+  });
+
+  it.each(["en", "zh-CN"] as const)("retains untranslated dashboard messages when the language is %s", (language) => {
+    const instance = createDashboardI18n(language);
+    expect(instance.t("agents.killSwitchFields.errors.tokenRequired")).toBe(
+      en.agents.killSwitchFields.errors.tokenRequired,
+    );
+    expect(instance.t("modelSelector.placeholder")).toBe(en.modelSelector.placeholder);
+    expect(instance.t("mcpOAuthCallback.authorizationComplete")).toBe(en.mcpOAuthCallback.authorizationComplete);
+    expect(instance.t("agents.killSwitchFields.removeItem", { item: "Authorization" })).toBe("Remove Authorization");
   });
 
   it("keeps server-rendered and standalone instances independent of another user's selection", async () => {

@@ -37,8 +37,13 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._internal_context import internal_sub_call
 from litellm._logging import redact_string, verbose_logger
-from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, update_headers_with_filtered_beta
+from litellm.anthropic_beta_headers_manager import (
+    aload_beta_headers_config,
+    resolve_beta_provider,
+    update_headers_with_filtered_beta,
+)
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
@@ -131,6 +136,8 @@ from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
+    TokenLimitCallback,
+    with_token_limit_checks,
 )
 from litellm.types.containers.main import (
     ContainerFileListResponse,
@@ -249,7 +256,7 @@ if TYPE_CHECKING:
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
     from litellm.types.google_genai.main import GenerateContentResponse
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
@@ -453,6 +460,20 @@ def _google_genai_streaming_hidden_params(
     }
 
 
+def _log_generate_content_request(
+    logging_obj: LiteLLMLoggingObj,
+    contents: object,
+    api_base: str,
+    headers: Mapping[str, object],
+    body: Mapping[str, object],
+) -> None:
+    logging_obj.pre_call(
+        input=contents,
+        api_key="",
+        additional_args={"complete_input_dict": body, "api_base": api_base, "headers": headers},
+    )
+
+
 @lru_cache(maxsize=None)
 def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
@@ -598,10 +619,10 @@ def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
     )
 
 
-def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
-    """Duck-type discover proxy hooks exposing per-frame project ITPM/OTPM
-    enforcement, so the Responses WebSocket loop can charge every
-    ``response.create`` frame, not just the connection's first one.
+def _ws_callbacks_exposing(method_name: str) -> tuple[object, ...]:
+    """Duck-type discover proxy hooks exposing a per-frame check, so the
+    Responses WebSocket loop can run it on every ``response.create`` frame,
+    not just the connection's first one.
 
     Uses duck-typing on ``litellm.callbacks`` (rather than importing the
     proxy hook directly) to avoid a layering violation (SDK importing from
@@ -612,11 +633,26 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
     callbacks: Final = cast(  # cast-ok: callback registry is inspected before protocol use
         Sequence[object], _litellm.callbacks
     )
+    return tuple(callback for callback in callbacks if callable(getattr(callback, method_name, None)))
+
+
+def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
     return tuple(
         cast(ProjectQuotaCallback, callback)  # cast-ok: required callback method is callable
-        for callback in callbacks
-        if callable(getattr(callback, "enforce_project_io_token_quota_for_frame", None))
+        for callback in _ws_callbacks_exposing("enforce_project_io_token_quota_for_frame")
     )
+
+
+def _collect_ws_token_limit_callbacks() -> tuple[TokenLimitCallback, ...]:
+    return tuple(
+        cast(TokenLimitCallback, callback)  # cast-ok: required callback method is callable
+        for callback in _ws_callbacks_exposing("enforce_token_limits_for_frame")
+    )
+
+
+def _ws_model_group(litellm_metadata: Mapping[str, object] | None, model: str) -> str:
+    model_group: Final = (litellm_metadata or {}).get("model_group")
+    return model_group if isinstance(model_group, str) and model_group else model
 
 
 def _unwrap_provider_error(error: Exception) -> Exception:
@@ -2564,14 +2600,16 @@ class BaseLLMHTTPHandler:
             litellm_params.get("additional_drop_params") or (),
             anthropic_messages_optional_request_params,
         )
-        if (
-            request_params.get("safeguards") is not None
-            and anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
-        ):
-            await aload_beta_headers_config()
         affinity_api_base: Final = (
             AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
         )
+        takes_another_beta_row: Final = (
+            resolve_beta_provider(custom_llm_provider, affinity_api_base) != custom_llm_provider
+        )
+        provider_filters_betas: Final = anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
+        filters_beta_headers: Final = provider_filters_betas or takes_another_beta_row
+        if request_params.get("safeguards") is not None and filters_beta_headers:
+            await aload_beta_headers_config()
         default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
         (
             headers,
@@ -2590,8 +2628,14 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
         )
 
-        if anthropic_messages_provider_config.should_filter_anthropic_beta_headers():
-            headers = update_headers_with_filtered_beta(headers=headers, provider=custom_llm_provider)
+        if filters_beta_headers and headers.get("anthropic-beta") is not None:
+            await aload_beta_headers_config()
+            headers = update_headers_with_filtered_beta(
+                headers=headers,
+                provider=custom_llm_provider,
+                api_base=affinity_api_base,
+                unlisted="drop" if provider_filters_betas else "forward",
+            )
 
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
@@ -6209,12 +6253,13 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
-                model=patch.model or model,
-                input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
-                **optional_params,
-                **kwargs_for_followup,
-            )
+            with internal_sub_call(logging_obj.litellm_call_id):
+                response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
+                    model=patch.model or model,
+                    input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
+                    **optional_params,
+                    **kwargs_for_followup,
+                )
 
             if callback is not None:
                 try:
@@ -6303,6 +6348,7 @@ class BaseLLMHTTPHandler:
         max_loops: int,
         fingerprints: list[str],
         fingerprint: str,
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> ModelResponse | CustomStreamWrapper:
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
@@ -6342,12 +6388,14 @@ class BaseLLMHTTPHandler:
             fingerprint=fingerprint,
         )
 
-        return await litellm.acompletion(
-            model=full_model_name,
-            messages=patch.messages,
-            **optional_params_for_followup,
-            **kwargs_for_followup,
-        )
+        with internal_sub_call(logging_obj.litellm_call_id if logging_obj is not None else None):
+            response: Final = await litellm.acompletion(
+                model=full_model_name,
+                messages=patch.messages,
+                **optional_params_for_followup,
+                **kwargs_for_followup,
+            )
+        return response
 
     def _maybe_wrap_in_fake_stream(
         self,
@@ -6696,6 +6744,7 @@ class BaseLLMHTTPHandler:
                     messages=messages,
                     optional_params=optional_params,
                     kwargs=kwargs_with_provider,
+                    logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     depth=depth,
                     max_loops=max_loops,
@@ -6973,14 +7022,19 @@ class BaseLLMHTTPHandler:
                     ),
                 )
 
-                # Auto-send session setup if the provider requires it (e.g.
-                # Gemini/Vertex AI Live needs a `setup` before any realtime_input).
+                # Auto-send session setup at connect unless the provider builds it from the
+                # client's first session.update (Gemini/Vertex AI Live accept exactly one
+                # setup, so RealTimeStreaming sends theirs on the first client message).
                 # Build the streaming handler first so a transcription guardrail's
                 # auto-response disable can be folded into this one setup: Gemini
                 # rejects a second setup, so a follow-up disable would be dropped
                 # and the guardrail bypassed.
                 _session_config: str | None = None
-                if provider_config.requires_session_configuration():
+                sends_setup_at_connect: Final = (
+                    provider_config.requires_session_configuration()
+                    and not provider_config.builds_setup_from_session_update()
+                )
+                if sends_setup_at_connect:
                     _session_config = provider_config.session_configuration_request(model)
                     if _session_config:
                         _session_config = realtime_streaming.maybe_inject_guardrail_auto_response_disable(
@@ -7264,7 +7318,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
-        turn_admission: Callable[[], Awaitable[None]] | None = None,
+        turn_admission: "ResponsesWsTurnAdmission | None" = None,
         frame_guard: "ResponsesWsFrameGuard | None" = None,
         **kwargs: object,
     ) -> Exception | None:
@@ -7280,6 +7334,12 @@ class BaseLLMHTTPHandler:
         - Forwards events over the websocket connection
         """
         _ws_quota_callbacks: Final = _collect_ws_project_quota_callbacks()
+        _ws_turn_admission: Final = with_token_limit_checks(
+            turn_admission,
+            _collect_ws_token_limit_callbacks(),
+            user_api_key_dict,
+            _ws_model_group(litellm_metadata, model),
+        )
 
         _ws_guardrail_callbacks: list = []
         _ws_output_guardrail_callbacks: list = []
@@ -7327,7 +7387,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
-                turn_admission=turn_admission,
+                turn_admission=_ws_turn_admission,
                 guardrail_callbacks=_ws_guardrail_callbacks,  # pyright: ignore[reportUnknownArgumentType]  # duck-typed callbacks from litellm.callbacks
                 frame_guard=frame_guard,
                 **kwargs,
@@ -7424,7 +7484,7 @@ class BaseLLMHTTPHandler:
                     authorized_model=model,
                     custom_llm_provider=custom_llm_provider,
                     request_defaults=request_defaults,
-                    turn_admission=turn_admission,
+                    turn_admission=_ws_turn_admission,
                     frame_guard=frame_guard,
                 )
                 return await streaming.bidirectional_forward()
@@ -8045,7 +8105,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8241,7 +8301,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8422,7 +8482,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8586,7 +8646,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8727,7 +8787,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8900,7 +8960,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9087,7 +9147,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9220,7 +9280,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9302,7 +9362,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9487,7 +9547,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -12415,6 +12475,10 @@ class BaseLLMHTTPHandler:
         from litellm.google_genai.streaming_iterator import (
             GoogleGenAIGenerateContentStreamingIterator,
         )
+        from litellm.llms.vertex_ai.gemini.rejected_thought_signature_retry import (
+            post_with_accepted_thought_signatures_sync,
+            with_placeholder_native_thought_signatures,
+        )
 
         if _is_async:
             return self.async_generate_content_handler(
@@ -12466,27 +12530,19 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=contents,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_content_request, logging_obj, contents, api_base, headers)
+        log_request(data)
+
+        def post(body: Mapping[str, object]) -> httpx.Response:
+            return sync_httpx_client.post(
+                url=api_base, headers=headers, json=dict(body), timeout=timeout, stream=stream
+            )
 
         try:
+            sent_body, response = post_with_accepted_thought_signatures_sync(
+                data, with_placeholder_native_thought_signatures, None, post, log_request
+            )
             if stream:
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                    stream=True,
-                )
-                # Return streaming iterator
                 return GoogleGenAIGenerateContentStreamingIterator(
                     response=response,
                     model=model,
@@ -12494,20 +12550,13 @@ class BaseLLMHTTPHandler:
                     generate_content_provider_config=generate_content_provider_config,
                     litellm_metadata=litellm_metadata or {},
                     custom_llm_provider=custom_llm_provider,
-                    request_body=data,
+                    request_body=dict(sent_body),
                     hidden_params=_google_genai_streaming_hidden_params(
                         api_base=api_base,
                         litellm_params=litellm_params,
                         logging_obj=logging_obj,
                         response_headers=response.headers,
                     ),
-                )
-            else:
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
                 )
         except Exception as e:
             raise self._handle_error(
@@ -12546,6 +12595,10 @@ class BaseLLMHTTPHandler:
         from litellm.google_genai.streaming_iterator import (
             AsyncGoogleGenAIGenerateContentStreamingIterator,
         )
+        from litellm.llms.vertex_ai.gemini.rejected_thought_signature_retry import (
+            post_with_accepted_thought_signatures_async,
+            with_placeholder_native_thought_signatures,
+        )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -12581,27 +12634,19 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=contents,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_content_request, logging_obj, contents, api_base, headers)
+        log_request(data)
+
+        async def post(body: Mapping[str, object]) -> httpx.Response:
+            return await async_httpx_client.post(
+                url=api_base, headers=headers, json=dict(body), timeout=timeout, stream=stream
+            )
 
         try:
+            sent_body, response = await post_with_accepted_thought_signatures_async(
+                data, with_placeholder_native_thought_signatures, None, post, log_request
+            )
             if stream:
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                    stream=True,
-                )
-                # Return async streaming iterator
                 return AsyncGoogleGenAIGenerateContentStreamingIterator(
                     response=response,
                     model=model,
@@ -12609,20 +12654,13 @@ class BaseLLMHTTPHandler:
                     generate_content_provider_config=generate_content_provider_config,
                     litellm_metadata=litellm_metadata or {},
                     custom_llm_provider=custom_llm_provider,
-                    request_body=data,
+                    request_body=dict(sent_body),
                     hidden_params=_google_genai_streaming_hidden_params(
                         api_base=api_base,
                         litellm_params=litellm_params,
                         logging_obj=logging_obj,
                         response_headers=response.headers,
                     ),
-                )
-            else:
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
                 )
         except Exception as e:
             raise self._handle_error(

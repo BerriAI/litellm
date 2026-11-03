@@ -461,30 +461,6 @@ describe("Sidebar (leftnav)", () => {
       });
       expect(screen.queryByText("Prompts")).not.toBeInTheDocument();
     });
-
-    it("should hide Old Usage from internal users while keeping other Experimental children", async () => {
-      mockUseAuthorized.mockReturnValue(internalAuth);
-      renderWithProviders(<Sidebar {...defaultProps} />);
-
-      act(() => {
-        fireEvent.click(screen.getByText("Experimental"));
-      });
-      await waitFor(() => {
-        expect(screen.getByText("API Playground")).toBeInTheDocument();
-      });
-      expect(screen.queryByText("Old Usage")).not.toBeInTheDocument();
-    });
-
-    it("should show Old Usage to admins", async () => {
-      renderWithProviders(<Sidebar {...defaultProps} />);
-
-      act(() => {
-        fireEvent.click(screen.getByText("Experimental"));
-      });
-      await waitFor(() => {
-        expect(screen.getByText("Old Usage")).toBeInTheDocument();
-      });
-    });
   });
 
   // Workflow Runs, Memory and Guardrails Monitor render a shell and then 401
@@ -721,7 +697,6 @@ describe("Sidebar (leftnav)", () => {
     expectHref("Models + Endpoints", "/ui/models-and-endpoints");
     expectHref("Usage", "/ui/usage");
     expectHref("API Reference", "/ui/api-reference");
-    expectHref("Old Usage", "/ui/old-usage");
   });
 
   it("never links a leaf to the legacy ?page= switch", () => {
@@ -777,7 +752,6 @@ describe("getBreadcrumb", () => {
   it("resolves routes whose segment differs from the sidebar page id", () => {
     expect(getBreadcrumb("/ui/models-and-endpoints")).toEqual({ section: "AI Gateway", title: "Models + Endpoints" });
     expect(getBreadcrumb("/ui/usage")).toEqual({ section: "Observability", title: "Usage" });
-    expect(getBreadcrumb("/ui/old-usage")).toEqual({ section: "Developer Tools", title: "Old Usage" });
   });
 
   it("titles the dashboard root as Home", () => {
