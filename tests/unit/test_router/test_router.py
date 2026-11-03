@@ -8194,7 +8194,7 @@ def _embedding_context_router(backend: str, window: int = _EMBEDDING_CONTEXT_WIN
 
 async def test_context_window_pre_call_check_counts_an_embedding_image_as_media_on_an_image_backend():
     router: Final = _embedding_context_router("vertex_ai/gemini-embedding-2")
-    deployments: Final = router.get_model_list(model_name="embedder")
+    deployments: Final = router.registry().deployments("embedder")
 
     kept: Final = router._pre_call_checks(model="embedder", healthy_deployments=deployments, input=_EMBEDDING_IMAGE_INPUT)
     counted: Final = await router._acount_pre_call_check_tokens(
@@ -8207,21 +8207,31 @@ async def test_context_window_pre_call_check_counts_an_embedding_image_as_media_
         router._pre_call_checks(model="embedder", healthy_deployments=deployments, input="word " * 20_000)
 
 
-@pytest.mark.parametrize("shape", ["data_uri", "file_block", "two_data_uris"])
-def test_context_window_pre_call_check_keeps_embedding_pdfs_bounded_by_the_model_input_limit(shape: str):
-    backend: Final = "vertex_ai/gemini-embedding-2"
+@pytest.mark.parametrize(
+    ("backend", "shape"),
+    [
+        ("vertex_ai/gemini-embedding-2", "pdf"),
+        ("vertex_ai/gemini-embedding-2", "pdf_file_block"),
+        ("vertex_ai/gemini-embedding-2", "two_pdfs"),
+        ("bedrock/amazon.titan-embed-image-v1", "image"),
+        ("bedrock/amazon.titan-embed-image-v1", "two_images"),
+    ],
+)
+def test_context_window_pre_call_check_leaves_embedding_media_to_the_backend(backend: str, shape: str):
     window: Final = litellm.get_model_info(backend)["max_input_tokens"]
     assert window is not None
     router: Final = _embedding_context_router(backend, window)
     pdf: Final = f"data:application/pdf;base64,{base64.b64encode(bytes(window * 8)).decode()}"
     inputs: Final = {
-        "data_uri": pdf,
-        "file_block": [{"type": "file", "file": {"file_data": pdf}}],
-        "two_data_uris": [pdf, pdf],
+        "pdf": pdf,
+        "pdf_file_block": [{"type": "file", "file": {"file_data": pdf}}],
+        "two_pdfs": [pdf, pdf],
+        "image": _EMBEDDING_IMAGE_INPUT,
+        "two_images": [_EMBEDDING_IMAGE_INPUT, _EMBEDDING_IMAGE_INPUT],
     }
 
     kept: Final = router._pre_call_checks(
-        model="embedder", healthy_deployments=router.get_model_list(model_name="embedder"), input=inputs[shape]
+        model="embedder", healthy_deployments=router.registry().deployments("embedder"), input=inputs[shape]
     )
 
     assert len(kept) == 1
@@ -8232,7 +8242,7 @@ def test_context_window_pre_call_check_counts_an_embedding_image_as_text_on_a_te
 
     with pytest.raises(litellm.ContextWindowExceededError):
         router._pre_call_checks(
-            model="embedder", healthy_deployments=router.get_model_list(model_name="embedder"), input=_EMBEDDING_IMAGE_INPUT
+            model="embedder", healthy_deployments=router.registry().deployments("embedder"), input=_EMBEDDING_IMAGE_INPUT
         )
 
 

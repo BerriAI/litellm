@@ -1,9 +1,8 @@
 import json
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
-from functools import partial
 from itertools import groupby
 from typing import Any, Final, Literal, cast
 
@@ -13,7 +12,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
-from litellm.litellm_core_utils.token_counter import split_embedding_input_tokens
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.llms.bedrock.batches.transformation import titan_embedding_usage_from_batch_output
 from litellm.llms.vertex_ai.batches.transformation import (
@@ -753,14 +751,9 @@ def estimate_batch_entry_tokens(raw_line: bytes) -> int:
 _estimate_batch_entry_tokens = estimate_batch_entry_tokens
 
 
-def _row_model_only(model: str) -> tuple[str, ...]:
-    return (model,)
-
-
 def count_entry_tokens(
     entry: Mapping[str, object],
     model_name: str | None = None,
-    media_models: Callable[[str], Sequence[str]] = _row_model_only,
 ) -> int:
     """Token-count a single batch input entry's body (chat / text / embedding)."""
     body: Final = cast(  # cast-ok: batch payload bodies come from provider JSON
@@ -778,8 +771,7 @@ def count_entry_tokens(
 
     input_data: Final = body.get("input")
     if input_data:
-        text_input, media_tokens = split_embedding_input_tokens(input_data, partial(media_models, model))
-        return _count_prompt_or_input_tokens(model=model, value=text_input) + media_tokens
+        return _count_prompt_or_input_tokens(model=model, value=input_data)
 
     return 0
 

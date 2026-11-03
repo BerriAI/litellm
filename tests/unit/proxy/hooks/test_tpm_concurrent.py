@@ -4133,37 +4133,40 @@ def test_text_only_embedding_model_counts_data_uri_as_text(
 
 
 def _project_limited_embedding_call(
-    limit_field: str, backends: tuple[str, ...]
+    limit_field: str, backends: tuple[str, ...], kind: str = "image"
 ) -> tuple[RateLimitHandler, DualCache, UserAPIKeyAuth, dict[str, object]]:
     cache: Final = DualCache()
     handler: Final = RateLimitHandler(
         internal_usage_cache=InternalUsageCache(cache), media_model_resolver=lambda _model, _team_id: backends
     )
-    scope: Final = f"{limit_field}-{'-'.join(backends)}"
+    scope: Final = f"{limit_field}-{kind}-{'-'.join(backends)}"
     auth: Final = UserAPIKeyAuth(
         api_key=hash_token(f"sk-embedding-backends-{scope}"),
         project_id=f"proj-embedding-backends-{scope}",
         project_metadata={limit_field: {"team-embedder": 75_000}},
     )
-    return handler, cache, auth, {"model": "team-embedder", "input": _embedding_media_uri("image", False)}
+    return handler, cache, auth, {"model": "team-embedder", "input": _embedding_uri(kind)}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
 @pytest.mark.parametrize(
-    "backends",
+    ("backends", "kind"),
     [
-        (_TEXT_ONLY_EMBEDDING_MODEL,),
-        (_EMBEDDING_MODEL, _TEXT_ONLY_EMBEDDING_MODEL),
-        ("voyage/voyage-multimodal-3.5",),
-        ("oci/cohere.embed-v4.0",),
+        ((_TEXT_ONLY_EMBEDDING_MODEL,), "image"),
+        ((_EMBEDDING_MODEL, _TEXT_ONLY_EMBEDDING_MODEL), "image"),
+        (("voyage/voyage-multimodal-3.5",), "image"),
+        (("oci/cohere.embed-v4.0",), "image"),
+        (("bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",), "image"),
+        (("bedrock/twelvelabs.marengo-embed-3-0-v1:0",), "image"),
+        (("bedrock/amazon.nova-2-multimodal-embeddings-v1:0",), "pdf"),
     ],
-    ids=["text", "mixed", "voyage", "oci"],
+    ids=["text", "mixed", "voyage", "oci", "marengo_2_7", "marengo_3", "nova_pdf"],
 )
-async def test_project_token_limit_rejects_image_embedding_a_text_only_backend_reads_as_text(
-    limit_field: str, backends: tuple[str, ...]
+async def test_project_token_limit_rejects_embedding_media_a_backend_reads_as_text(
+    limit_field: str, backends: tuple[str, ...], kind: str
 ) -> None:
-    handler, cache, auth, request = _project_limited_embedding_call(limit_field, backends)
+    handler, cache, auth, request = _project_limited_embedding_call(limit_field, backends, kind)
 
     with pytest.raises(HTTPException) as error:
         await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=request, call_type="aembedding")
@@ -4172,10 +4175,19 @@ async def test_project_token_limit_rejects_image_embedding_a_text_only_backend_r
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+@pytest.mark.parametrize(
+    "backend",
+    [
+        _EMBEDDING_MODEL,
+        "bedrock/amazon.titan-embed-image-v1",
+        "bedrock/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+    ],
+    ids=["gemini", "titan", "nova_async_invoke"],
+)
 async def test_project_token_limit_admits_image_embedding_through_an_alias_of_an_image_backend(
-    limit_field: str,
+    limit_field: str, backend: str
 ) -> None:
-    handler, cache, auth, request = _project_limited_embedding_call(limit_field, (_EMBEDDING_MODEL,))
+    handler, cache, auth, request = _project_limited_embedding_call(limit_field, (backend,))
 
     await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=request, call_type="aembedding")
     with pytest.raises(HTTPException) as error:

@@ -20,7 +20,6 @@ Quick summary:
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
-from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, TypeAlias
 from urllib.parse import parse_qs, urlsplit
@@ -989,10 +988,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             total_tokens = 0
             output_tokens = 0  # rebind-ok: accumulated per JSONL row in the loop below
             request_count = 0
-            row_media_models: Final = partial(
-                self.parallel_request_limiter.media_models,
-                team_id=user_api_key_dict.team_id if user_api_key_dict is not None else None,
-            )
             for raw_line in iter_batch_input_lines(file_content_bytes):
                 request_count += 1
                 try:
@@ -1019,7 +1014,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 output_tokens += entry_output_tokens
 
                 try:
-                    entry_total_tokens = count_entry_tokens(entry, media_models=row_media_models)
+                    entry_total_tokens = count_entry_tokens(entry)
                 except Exception:
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens

@@ -1083,9 +1083,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """Return the current time for rate limiting calculations."""
         return self._time_provider()
 
-    def media_models(self, model: str, team_id: str | None) -> tuple[str, ...]:
-        return self._media_model_resolver(model, team_id)
-
     @staticmethod
     def no_max_tokens_output_floor(
         min_configured_tpm_limit: int | None,

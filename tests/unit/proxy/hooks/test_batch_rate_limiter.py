@@ -6,7 +6,6 @@ batch under a per-minute RPM/TPM budget. Scopes that configure `tpd_limit`
 are charged against a 24h token window instead of their minute counters.
 """
 
-import base64
 import json
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -343,21 +342,7 @@ def _batch_rows(messages: Sequence[str]) -> tuple[_BatchLine, ...]:
     )
 
 
-class _EmbeddingBatchBody(TypedDict):
-    model: ReadOnly[str]
-    input: ReadOnly[Sequence[str]]
-
-
-class _EmbeddingBatchLine(TypedDict):
-    custom_id: ReadOnly[str]
-    method: ReadOnly[Literal["POST"]]
-    url: ReadOnly[Literal["/v1/embeddings"]]
-    body: ReadOnly[_EmbeddingBatchBody]
-
-
-def _serve_file(
-    router: respx.MockRouter, file_id: str, rows: Sequence[_BatchLine] | Sequence[_EmbeddingBatchLine]
-) -> respx.Route:
+def _serve_file(router: respx.MockRouter, file_id: str, rows: Sequence[_BatchLine]) -> respx.Route:
     jsonl: Final = "\n".join(json.dumps(row) for row in rows)
     return router.get(f"https://api.openai.com/v1/files/{file_id}/content").mock(
         return_value=httpx.Response(200, content=jsonl.encode())
@@ -383,45 +368,6 @@ async def test_count_input_file_usage_matches_token_counter(openai_files: respx.
     assert content_route.call_count == 1
     assert usage.request_count == 3
     assert usage.total_tokens == _token_counter_total(rows)
-
-
-_BATCH_EMBEDDING_IMAGE: Final = f"data:image/png;base64,{base64.b64encode(bytes(range(256)) * 1024).decode()}"
-
-
-async def _embedding_image_batch_tokens(openai_files: respx.MockRouter, backend: str) -> int:
-    rate_limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=InternalUsageCache(dual_cache=DualCache()),
-        media_model_resolver=lambda _model, _team_id: (backend,),
-    )
-    batch_limiter: Final = rate_limiter._get_batch_rate_limiter()
-    assert batch_limiter is not None
-    row: Final = _EmbeddingBatchLine(
-        custom_id="request-1",
-        method="POST",
-        url="/v1/embeddings",
-        body=_EmbeddingBatchBody(model="team-embedder", input=(_BATCH_EMBEDDING_IMAGE,)),
-    )
-    _serve_file(openai_files, "file-embed", (row,))
-    usage: Final = await batch_limiter.count_input_file_usage(file_id="file-embed", custom_llm_provider="openai")
-    return usage.total_tokens
-
-
-@pytest.mark.asyncio
-async def test_count_input_file_usage_counts_an_embedding_image_as_media_when_the_alias_serves_an_image_backend(
-    openai_files: respx.MockRouter,
-):
-    image_backend_tokens: Final = await _embedding_image_batch_tokens(openai_files, "vertex_ai/gemini-embedding-2")
-
-    assert 0 < image_backend_tokens < litellm.token_counter(model="team-embedder", text=_BATCH_EMBEDDING_IMAGE) // 10
-
-
-@pytest.mark.asyncio
-async def test_count_input_file_usage_counts_an_embedding_image_as_text_when_the_alias_serves_a_text_only_backend(
-    openai_files: respx.MockRouter,
-):
-    text_backend_tokens: Final = await _embedding_image_batch_tokens(openai_files, "text-embedding-3-small")
-
-    assert text_backend_tokens == litellm.token_counter(model="team-embedder", text=_BATCH_EMBEDDING_IMAGE)
 
 
 @pytest.mark.asyncio
