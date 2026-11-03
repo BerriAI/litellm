@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning_params
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
+    AZURE_AI_AUTH_PARAM_KEYS,
     api_key_header_for_base,
     is_foundry_model_inference_base,
 )
@@ -432,6 +433,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
         optional_params.pop("max_retries", None)
+        for key in AZURE_AI_AUTH_PARAM_KEYS:
+            optional_params.pop(key, None)
         return {
             "model": model,
             "messages": self._transform_messages(

@@ -695,3 +695,42 @@ def test_messages_feature_beta_headers(feature: str, explicit_beta: bool) -> Non
     betas: Final = headers["anthropic-beta"].split(",")
     assert betas.count(beta) == int(feature != "none" or explicit_beta)
     assert betas.count("existing-beta") == 1
+
+
+@pytest.mark.parametrize("location", ["top_level", "extra_body"])
+def test_native_messages_excludes_authentication_fields_from_the_body(location: str) -> None:
+    credentials: Final = {
+        "api_key": "synthetic-key",
+        "azure_ad_token": "synthetic-token",
+        "azure_ad_token_provider": "synthetic-provider",
+        "client_id": "synthetic-client",
+        "tenant_id": "synthetic-tenant",
+        "client_secret": "synthetic-secret",
+        "azure_scope": "synthetic-scope",
+        "azure_username": "synthetic-user",
+        "azure_password": "synthetic-password",
+    }
+    optional: Final = {
+        "max_tokens": 128,
+        "service_tier": "auto",
+        **(credentials if location == "top_level" else {"extra_body": credentials}),
+    }
+    config: Final = AzureAnthropicMessagesConfig()
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="claude-sonnet-5-5",
+        messages=[],
+        optional_params=optional,
+        litellm_params={"azure_ad_token": "synthetic-token"},
+    )
+    body: Final = config.transform_anthropic_messages_request(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hello"}],
+        anthropic_messages_optional_request_params=optional,
+        litellm_params=GenericLiteLLMParams(azure_ad_token="synthetic-token"),
+        headers=headers,
+    )
+
+    assert set(credentials).isdisjoint(body)
+    assert body["service_tier"] == "auto"
+    assert headers["Authorization"] == "Bearer synthetic-token"

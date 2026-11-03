@@ -568,3 +568,38 @@ def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> Non
 
     assert params["thinking"] == thinking
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")
+
+
+@pytest.mark.parametrize("location", ["top_level", "extra_body"])
+def test_authentication_fields_do_not_reach_the_anthropic_body(location: str) -> None:
+    credentials = {
+        "api_key": "synthetic-key",
+        "azure_ad_token": "synthetic-token",
+        "azure_ad_token_provider": "synthetic-provider",
+        "client_id": "synthetic-client",
+        "tenant_id": "synthetic-tenant",
+        "client_secret": "synthetic-secret",
+        "azure_scope": "synthetic-scope",
+        "azure_username": "synthetic-user",
+        "azure_password": "synthetic-password",
+    }
+    params = {"service_tier": "auto", **(credentials if location == "top_level" else {"extra_body": credentials})}
+    config = AzureAnthropicConfig()
+    headers = config.validate_environment(
+        headers={},
+        model="claude-sonnet-5-5",
+        messages=[],
+        optional_params=params,
+        litellm_params={"azure_ad_token": "synthetic-token"},
+    )
+    body = config.transform_request(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params=params,
+        litellm_params={"azure_ad_token": "synthetic-token"},
+        headers=headers,
+    )
+
+    assert set(credentials).isdisjoint(body)
+    assert body["service_tier"] == "auto"
+    assert headers["Authorization"] == "Bearer synthetic-token"

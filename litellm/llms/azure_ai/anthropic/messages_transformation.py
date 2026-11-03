@@ -10,6 +10,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
+from litellm.llms.azure_ai.common_utils import AZURE_AI_AUTH_PARAM_KEYS
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -149,4 +150,6 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
         )
         self._remove_scope_from_cache_control(anthropic_messages_request)
+        for key in AZURE_AI_AUTH_PARAM_KEYS:
+            anthropic_messages_request.pop(key, None)
         return anthropic_messages_request

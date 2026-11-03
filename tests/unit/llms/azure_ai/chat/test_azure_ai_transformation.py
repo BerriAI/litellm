@@ -20,6 +20,45 @@ from litellm.llms.azure_ai.azure_model_router.transformation import (
 from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
 
 
+@pytest.mark.parametrize("config_type", [AzureAIStudioConfig, AzureModelRouterConfig])
+@pytest.mark.parametrize("location", ["top_level", "extra_body"])
+def test_request_body_excludes_azure_authentication(config_type: type[AzureAIStudioConfig], location: str) -> None:
+    credentials: Final = {
+        "api_key": "synthetic-key",
+        "azure_ad_token": "synthetic-token",
+        "azure_ad_token_provider": "synthetic-provider",
+        "client_id": "synthetic-client",
+        "tenant_id": "synthetic-tenant",
+        "client_secret": "synthetic-secret",
+        "azure_scope": "synthetic-scope",
+        "azure_username": "synthetic-user",
+        "azure_password": "synthetic-password",
+    }
+    optional: Final = {
+        "service_tier": "auto",
+        **(credentials if location == "top_level" else {"extra_body": credentials}),
+    }
+    config: Final = config_type()
+    headers: Final = config.validate_environment(
+        headers={},
+        model="mistral-medium-3-5",
+        messages=[],
+        optional_params=optional,
+        litellm_params={"azure_ad_token": "synthetic-token"},
+    )
+    body: Final = config.transform_request(
+        model="mistral-medium-3-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params=optional,
+        litellm_params={"azure_ad_token": "synthetic-token"},
+        headers=headers,
+    )
+
+    assert set(credentials).isdisjoint(body)
+    assert body["service_tier"] == "auto"
+    assert headers["Authorization"] == "Bearer synthetic-token"
+
+
 @pytest.mark.asyncio
 async def test_get_openai_compatible_provider_info():
     """

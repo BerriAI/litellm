@@ -28,6 +28,42 @@ COHERE_CHAT_RESPONSE: Final = {
 }
 
 
+@pytest.mark.parametrize("source", ["kwargs", "extra_body"])
+def test_azure_ai_authentication_is_excluded_from_inference_params(source: str) -> None:
+    credentials: Final = {
+        "api_key": "synthetic-key",
+        "azure_ad_token": "synthetic-token",
+        "azure_ad_token_provider": "synthetic-provider",
+        "client_id": "synthetic-client",
+        "client_secret": "synthetic-secret",
+        "tenant_id": "synthetic-tenant",
+        "azure_scope": "synthetic-scope",
+        "azure_username": "synthetic-user",
+        "azure_password": "synthetic-password",
+    }
+    supplied: Final = {**credentials, "top_k": 7}
+    params: Final = get_optional_params(
+        model="mistral-medium-3-5",
+        custom_llm_provider="azure_ai",
+        **(supplied if source == "kwargs" else {"extra_body": supplied}),
+    )
+
+    body: Final = params["extra_body"]
+    assert set(credentials).isdisjoint(body)
+    assert body["top_k"] == 7
+    assert supplied == {**credentials, "top_k": 7}
+
+
+def test_azure_openai_keeps_the_token_for_its_authentication_path() -> None:
+    params: Final = get_optional_params(
+        model="gpt-6.1-sol",
+        custom_llm_provider="azure",
+        azure_ad_token="synthetic-token",
+    )
+
+    assert params["extra_body"]["azure_ad_token"] == "synthetic-token"
+
+
 def _check_additional_properties(schema):
     if isinstance(schema, dict):
         if "additionalProperties" in schema or "strict" in schema:

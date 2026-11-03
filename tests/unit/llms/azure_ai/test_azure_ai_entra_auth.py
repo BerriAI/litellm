@@ -5,9 +5,14 @@ Every azure_ai route must authenticate with an Entra ID token when no API key is
 instead of requiring an API key.
 """
 
+import json
+import queue
+from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.azure_ai.common_utils import (
@@ -17,7 +22,152 @@ from litellm.llms.azure_ai.common_utils import (
     resolve_azure_ai_agent_auth_header,
 )
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
 ENTRA_PARAMS = {"azure_ad_token": "entra-token"}
+
+
+_REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _azure_ai_answer(request: httpx.Request) -> httpx.Response:
+    body: Final = _REQUEST_BODY.validate_json(request.content)
+    claude: Final = "claude" in str(body.get("model"))
+    if body.get("stream"):
+        if claude:
+            events: Final = (
+                (
+                    "message_start",
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_test",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": body["model"],
+                            "content": [],
+                            "usage": {"input_tokens": 1, "output_tokens": 0},
+                        },
+                    },
+                ),
+                (
+                    "content_block_start",
+                    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                ),
+                (
+                    "content_block_delta",
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "OK"}},
+                ),
+                ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                (
+                    "message_delta",
+                    {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+                ),
+                ("message_stop", {"type": "message_stop"}),
+            )
+            content = "".join(f"event: {name}\ndata: {json.dumps(event)}\n\n" for name, event in events)
+        else:
+            chunks: Final = (
+                {
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": body["model"],
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "OK"}, "finish_reason": None}],
+                },
+                {
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": body["model"],
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                },
+            )
+            content = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
+    if claude:
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": body["model"],
+                "content": [{"type": "text", "text": "OK"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": body["model"],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-6.1-sol", "mistral-medium-3-5", "claude-sonnet-5-5"])
+@pytest.mark.parametrize("async_call", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("auth_method", ["entra", "api_key"])
+async def test_completion_authentication_stays_in_headers(
+    model: str, async_call: bool, stream: bool, auth_method: str
+) -> None:
+    received: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        received.put(request)
+        return _azure_ai_answer(request)
+
+    transport: Final = httpx.MockTransport(answer)
+    upstream: Final = (
+        AsyncHTTPHandler(transport=transport) if async_call else HTTPHandler(client=httpx.Client(transport=transport))
+    )
+    credentials: Final = (
+        {"azure_ad_token": "synthetic-token", "client_id": "synthetic-client", "tenant_id": "synthetic-tenant"}
+        if auth_method == "entra"
+        else {"api_key": "synthetic-key"}
+    )
+    params: Final = {
+        "model": f"azure_ai/{model}",
+        "api_base": "https://example-resource.services.ai.azure.com",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": stream,
+        "extra_body": {"service_tier": "auto"},
+        "client": upstream,
+        **credentials,
+    }
+    try:
+        response = await litellm.acompletion(**params) if async_call else litellm.completion(**params)
+        if stream:
+            if async_call:
+                text = "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+            else:
+                text = "".join(chunk.choices[0].delta.content or "" for chunk in response)
+            assert text == "OK"
+        else:
+            assert response.choices[0].message.content == "OK"
+    finally:
+        if isinstance(upstream, AsyncHTTPHandler):
+            await upstream.close()
+        else:
+            upstream.close()
+
+    sent: Final = received.get_nowait()
+    body: Final = _REQUEST_BODY.validate_json(sent.content)
+    assert {"api_key", "azure_ad_token", "client_id", "tenant_id"}.isdisjoint(body)
+    assert body["service_tier"] == "auto"
+    if auth_method == "entra":
+        assert sent.headers["authorization"] == "Bearer synthetic-token"
+    else:
+        assert sent.headers["api-key"] == "synthetic-key"
 
 
 @pytest.fixture(autouse=True)

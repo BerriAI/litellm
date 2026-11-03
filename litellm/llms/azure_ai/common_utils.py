@@ -52,6 +52,7 @@ AZURE_ENTRA_CREDENTIAL_PARAM_KEYS: Final = frozenset({"azure_ad_token", "client_
 AZURE_ENTRA_LITELLM_PARAM_KEYS: Final = AZURE_ENTRA_CREDENTIAL_PARAM_KEYS | frozenset(
     {"tenant_id", "client_id", "azure_username", "azure_scope"}
 )
+AZURE_AI_AUTH_PARAM_KEYS: Final = AZURE_ENTRA_LITELLM_PARAM_KEYS | frozenset({"api_key", "azure_ad_token_provider"})
 AZURE_ENTRA_CREDENTIAL_HELP: Final = (
     "Set `tenant_id` + `client_id` + `client_secret`, `azure_ad_token` (an `oidc/` token also needs "
     "`tenant_id` + `client_id`), or `client_id` + `azure_username` + `azure_password` in the agent's `litellm_params`"

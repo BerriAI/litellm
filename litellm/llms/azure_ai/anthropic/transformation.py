@@ -7,6 +7,7 @@ from typing import Final
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.common_utils import AZURE_AI_AUTH_PARAM_KEYS
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
@@ -145,5 +146,7 @@ class AzureAnthropicConfig(AnthropicConfig):
         data.pop("extra_body", None)
         data.pop("max_retries", None)
         data.pop("stream_options", None)
+        for key in AZURE_AI_AUTH_PARAM_KEYS:
+            data.pop(key, None)
 
         return data
