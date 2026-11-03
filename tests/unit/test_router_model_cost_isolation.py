@@ -2744,6 +2744,70 @@ def test_deleting_a_flagged_deployment_keeps_what_a_deployment_whose_id_names_th
     assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is catalog_answer
 
 
+_ID_ALIAS_BACKEND: Final = "hosted_vllm/withdraw-test-id-alias"
+
+
+def _id_alias_deployment(model_id: str, **model_info: object) -> DeploymentTypedDict:
+    return _cache_point_deployment(model_id, model=_ID_ALIAS_BACKEND, **model_info)
+
+
+def test_deleting_a_deployment_whose_id_resolves_to_a_catalog_row_gives_that_row_back() -> None:
+    catalog_answer: Final = bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    router: Final = Router(
+        model_list=[_id_alias_deployment(_CACHE_POINT_DEPLOYMENT_MODEL, **{_CACHE_POINT_FLAG: not catalog_answer})]
+    )
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is not catalog_answer
+
+    assert router.delete_deployment(id=_CACHE_POINT_DEPLOYMENT_MODEL) is not None
+
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is catalog_answer
+
+
+def test_editing_the_flag_off_a_deployment_whose_id_resolves_to_a_catalog_row_gives_that_row_back() -> None:
+    catalog_answer: Final = bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    router: Final = Router(
+        model_list=[_id_alias_deployment(_CACHE_POINT_DEPLOYMENT_MODEL, **{_CACHE_POINT_FLAG: not catalog_answer})]
+    )
+
+    assert router.upsert_deployment(Deployment(**_id_alias_deployment(_CACHE_POINT_DEPLOYMENT_MODEL))) is not None
+
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is catalog_answer
+
+
+def test_replacing_the_model_list_without_a_deployment_whose_id_resolves_to_a_catalog_row_gives_that_row_back() -> None:
+    catalog_answer: Final = bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    other: Final = _cache_point_deployment("other", model="hosted_vllm/withdraw-test-other")
+    router: Final = Router(
+        model_list=[
+            other,
+            _id_alias_deployment(_CACHE_POINT_DEPLOYMENT_MODEL, **{_CACHE_POINT_FLAG: not catalog_answer}),
+        ]
+    )
+
+    router.set_model_list([other])
+
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is catalog_answer
+
+
+def test_deleting_a_flagged_deployment_keeps_what_each_deployment_whose_id_resolves_to_the_row_wrote() -> None:
+    row: Final = _shared_cache_point_row()
+    catalog_answer: Final = bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    router: Final = Router(
+        model_list=[
+            _id_alias_deployment(_CACHE_POINT_DEPLOYMENT_MODEL, withdraw_test_first_note="kept"),
+            _id_alias_deployment(f"bedrock/converse/{_CACHE_POINT_MODEL}", withdraw_test_second_note="kept"),
+            _cache_point_deployment("flagged", **{_CACHE_POINT_FLAG: not catalog_answer}),
+        ]
+    )
+    assert litellm.model_cost[row].get("withdraw_test_first_note") == "kept"
+
+    assert router.delete_deployment(id="flagged") is not None
+
+    assert litellm.model_cost[row].get("withdraw_test_first_note") == "kept"
+    assert litellm.model_cost[row].get("withdraw_test_second_note") == "kept"
+    assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is catalog_answer
+
+
 def test_deleting_a_deployment_keeps_a_limit_registered_on_a_row_the_rebuild_leaves_alone() -> None:
     shared_row: Final = "azure/gpt-4o"
     responses_model: Final = "azure/responses/gpt-4o"
@@ -2829,6 +2893,47 @@ def test_deleting_a_flagged_deployment_keeps_a_price_an_sdk_user_set_on_the_cata
 
     assert litellm.model_cost[row].get("input_cost_per_token") == sdk_price
     assert bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL) is catalog_answer
+
+
+def test_deleting_deployments_keeps_a_limit_an_sdk_user_set_in_place_after_a_sibling_wrote_it() -> None:
+    row: Final = _shared_cache_point_row()
+    written_limit: Final = _unseen_max_output_tokens(row)
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment("plain"),
+            _cache_point_deployment("limited", max_output_tokens=written_limit),
+        ]
+    )
+    litellm.model_cost[row]["max_output_tokens"] = written_limit + 1
+    flagged: Final = _cache_point_deployment(
+        "flagged", **{_CACHE_POINT_FLAG: not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)}
+    )
+    assert router.upsert_deployment(Deployment(**flagged)) is not None
+
+    assert router.delete_deployment(id="flagged") is not None
+    assert litellm.model_cost[row].get("max_output_tokens") == written_limit + 1
+    assert router.delete_deployment(id="plain") is not None
+    assert litellm.model_cost[row].get("max_output_tokens") == written_limit + 1
+
+
+def test_deleting_a_flagged_deployment_gives_back_a_limit_a_sibling_wrote_over_an_earlier_in_place_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row: Final = _shared_cache_point_row()
+    written_limit: Final = _unseen_max_output_tokens(row)
+    monkeypatch.setitem(litellm.model_cost[row], "max_output_tokens", written_limit + 1)
+    router: Final = Router(
+        model_list=[
+            _cache_point_deployment("limited", max_output_tokens=written_limit),
+            _cache_point_deployment(
+                "flagged", **{_CACHE_POINT_FLAG: not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)}
+            ),
+        ]
+    )
+
+    assert router.delete_deployment(id="flagged") is not None
+
+    assert litellm.model_cost[row].get("max_output_tokens") == written_limit
 
 
 def test_deleting_a_flagged_deployment_keeps_the_limit_a_sibling_spelling_the_same_row_differently_sets() -> None:
@@ -2959,6 +3064,33 @@ def test_deleting_one_of_many_differently_priced_deployments_rewrites_the_shared
     assert litellm.model_cost["sibling-7"].get("input_cost_per_token") == pytest.approx(8e-7)
 
 
+def test_deleting_one_of_many_deployments_alternating_two_flags_rewrites_the_shared_row_once_per_flag() -> None:
+    row: Final = _shared_cache_point_row()
+    flag: Final = not bedrock_model_accepts_cache_points(_CACHE_POINT_MODEL)
+    host: Final = _CostMapWriteRecordingHost()
+    router: Final = Router.from_config(
+        build_router_config(
+            router_arguments(
+                model_list=[
+                    *(
+                        _cache_point_deployment(f"sibling-{n}", **{_CACHE_POINT_FLAG: (flag, not flag)[n % 2]})
+                        for n in range(51)
+                    ),
+                    _cache_point_deployment("doomed", max_output_tokens=_unseen_max_output_tokens(row)),
+                ]
+            )
+        ),
+        host=host,
+    )
+    host.cost_map_writes.reset_mock()
+
+    assert router.delete_deployment(id="doomed") is not None
+
+    assert host.cost_map_writes.call_count == 2
+    assert litellm.model_cost[row].get(_CACHE_POINT_FLAG) is flag
+    assert litellm.model_cost[row].get("max_output_tokens") == _catalog_field(row, "max_output_tokens")
+
+
 @pytest.mark.parametrize(
     ("registered_before_the_router", "deleted", "saved_flag_wins"),
     [(True, "plain", False), (False, "plain", True), (True, "flagged", True)],
@@ -3006,9 +3138,7 @@ def test_editing_a_priced_deployment_keeps_its_price_on_its_row_throughout_the_e
     host: Final = _IdRowPriceRecordingHost("edited")
     router: Final = Router.from_config(
         build_router_config(
-            router_arguments(
-                model_list=[_priced_cache_point_deployment("edited", 3e-6, **{_CACHE_POINT_FLAG: True})]
-            )
+            router_arguments(model_list=[_priced_cache_point_deployment("edited", 3e-6, **{_CACHE_POINT_FLAG: True})])
         ),
         host=host,
     )

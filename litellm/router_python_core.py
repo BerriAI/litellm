@@ -517,11 +517,14 @@ from litellm.utils import (
     is_generalized_model_info,
     is_region_allowed,
     lookup_model_info_for_registration,
+    model_cost_fields_set_in_place,
+    model_cost_keys_written_onto_other_rows,
     model_cost_registration_key,
     model_cost_row_writers,
     model_cost_rows_written_by,
     model_info_with_pricing_overrides,
     provider_rejectable_params,
+    put_back_model_cost_fields_set_in_place,
     restore_model_cost_rows_to_catalog,
     runtime_model_cost_registrations_on,
     runtime_model_cost_registrations_written_last,
@@ -1138,10 +1141,14 @@ class _SharedCostWrite:
     def lands_on(self, writers: frozenset[str]) -> bool:
         return self.model_id in writers or not writers.isdisjoint(self.backend_keys)
 
-    def replay_key(self, stale: frozenset[str]) -> tuple[str | None, str]:
-        """Equal for two entries only when replaying both writes the ``stale`` rows exactly as replaying one does. A
-        shared row never takes a price, only what a price being set pulls in from the backend model, so prices count
-        only as set or unset, and a stale id row keeps its write apart by its id."""
+    @property
+    def sets_mode(self) -> bool:
+        return isinstance(self.model_info.get("mode"), str)
+
+    def replay_key(self, targets: frozenset[str]) -> tuple[str | None, str]:
+        """Equal for two entries only when replaying both writes the ``targets`` rows exactly as replaying one does.
+        A shared row never takes a price, only what a price being set pulls in from the backend model, so prices count
+        only as set or unset, and an id that names a target row or wrote onto one keeps its write apart by its id."""
         write_inputs: Final = (
             self.model,
             self.custom_llm_provider,
@@ -1149,7 +1156,7 @@ class _SharedCostWrite:
             _SharedCostWrite._write_inputs(self.litellm_params, _LITELLM_PARAMS_COST_WRITE_INPUTS),
         )
         return (
-            self.model_id if self.model_id in stale else None,
+            self.model_id if self.model_id in targets else None,
             json.dumps(write_inputs, sort_keys=True, default=repr),
         )
 
@@ -12128,7 +12135,11 @@ class PythonCore(DeprecatedRouterMembers):
                 # OLD model_name/tags) before the re-add below re-registers it.
                 self._unregister_pre_routing_strategy_for_deployment(deployment=_deployment_on_router)
                 self._rebuild_model_cost_rows(
-                    lambda: self._rebuild_cost_rows_written_by(PythonCore._backend_write_keys(_deployment_on_router))
+                    lambda: self._rebuild_cost_rows_written_by(
+                        PythonCore._shared_write_keys(
+                            (PythonCore._deployment_shared_cost_write(_deployment_on_router),)
+                        )
+                    )
                 )
 
             # if the model_id is not in router
@@ -12265,7 +12276,8 @@ class PythonCore(DeprecatedRouterMembers):
 
         Takes only a ``Deployment``, so it registers pricing for a deployment that
         is never added to ``self._core_model_list`` (a per-request client-side-credential
-        deployment) just as readily as one that is. ``onto`` limits the writes to those rows.
+        deployment) just as readily as one that is. ``onto`` limits the writes to those rows, and the id's write to an
+        id it names, which is how a rebuild replays an id whose write landed on a rebuilt row named otherwise.
         """
         PythonCore._register_deployment_in_model_cost(
             model_id=deployment.model_info.id,
@@ -12391,13 +12403,14 @@ class PythonCore(DeprecatedRouterMembers):
         )
 
     @staticmethod
-    def _backend_write_keys(deployment: Deployment) -> frozenset[str]:
-        return frozenset(
-            PythonCore._backend_cost_map_keys(
-                model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
-        )
+    def _shared_write_keys(writes: Iterable[_SharedCostWrite]) -> frozenset[str]:
+        """The ``register_model`` keys of ``writes`` whose rows other deployments read too: every backend key, and
+        each id whose write landed on a row named otherwise, such as the ``gpt-4o`` row an ``openai/gpt-4o`` id
+        resolves to."""
+        listed: Final = tuple(writes)
+        ids: Final = frozenset(write.model_id for write in listed if write.model_id is not None)
+        backend_keys: Final = chain.from_iterable(write.backend_keys for write in listed)
+        return frozenset(backend_keys) | model_cost_keys_written_onto_other_rows(ids)
 
     def _rebuild_rows_a_replaced_model_list_wrote(self, previous: Iterable[object]) -> None:
         """Rebuild the shared rows a replaced ``model_list`` wrote and trim the id rows of the deployments still
@@ -12406,7 +12419,7 @@ class PythonCore(DeprecatedRouterMembers):
         writes: Final = tuple(
             write for write in map(PythonCore._entry_shared_cost_write, previous) if write is not None
         )
-        self._rebuild_cost_rows_written_by(frozenset(chain.from_iterable(write.backend_keys for write in writes)))
+        self._rebuild_cost_rows_written_by(PythonCore._shared_write_keys(writes))
         self._give_back_id_row_fields(
             write.model_id
             for write in writes
@@ -12458,38 +12471,54 @@ class PythonCore(DeprecatedRouterMembers):
     def _rebuild_cost_rows_written_by(self, written_keys: frozenset[str]) -> None:
         """Rebuild the rows ``register_model`` writes of ``written_keys`` landed on: the loaded catalog row, then the
         ``register_model`` registrations replayed on every reload, then every live deployment that wrote it in
-        ``model_list`` order, then again the fields of those registrations no deployment wrote over since, so each
-        field keeps the order its writes came in, whether the registration came before the router or after it. The
-        replay writes only those rows, so a row it leaves alone keeps what later deployments and registrations put
-        there, and a run of deployments with the same write replays it once, which leaves the rows as replaying
-        every one of them does."""
+        ``model_list`` order, then again the fields of those registrations no deployment wrote over since, then the
+        fields set in place after their last write, so each field keeps the order its writes came in, whether the
+        registration came before the router or after it. The replay writes only those rows, so a row it leaves alone
+        keeps what later deployments and registrations put there, and deployments with the same write replay it once,
+        which leaves the rows as replaying every one of them does."""
         stale: Final = model_cost_rows_written_by(written_keys) if written_keys else frozenset[str]()
         if not stale:
             return
         writers: Final = model_cost_row_writers(stale)
+        targets: Final = stale | writers
         routers: Final = tuple(_live_routers)
         entries: Final = tuple(chain.from_iterable(router._model_list_entries() for router in routers))
         writes: Final = (PythonCore._entry_shared_cost_write(entry) for entry in entries)
         landing: Final = tuple(
-            (position, write.replay_key(stale))
-            for position, write in enumerate(writes)
-            if write is not None and write.lands_on(writers)
+            (position, write) for position, write in enumerate(writes) if write is not None and write.lands_on(writers)
         )
-        replay_runs: Final = groupby(landing, key=itemgetter(1))
         replayed: Final = tuple(
-            PythonCore._buildable_deployments(entries[tuple(run)[-1][0]] for _replay_key, run in replay_runs)
+            PythonCore._buildable_deployments(
+                entries[position] for position in PythonCore._replayed_positions(landing, targets)
+            )
         )
         persisted: Final = runtime_model_cost_registrations_on(stale)
         written_last: Final = runtime_model_cost_registrations_written_last(persisted)
+        set_in_place: Final = model_cost_fields_set_in_place(stale)
         restore_model_cost_rows_to_catalog(stale)
         if persisted:
             self._host.invoke("register_model")(model_cost=dict(persisted))
         for deployment in replayed:
-            PythonCore._register_deployment_pricing(deployment, onto=stale, host=self._host)
+            PythonCore._register_deployment_pricing(deployment, onto=targets, host=self._host)
         if written_last:
             self._host.invoke("register_model")(model_cost=dict(written_last))
+        if set_in_place:
+            put_back_model_cost_fields_set_in_place(set_in_place)
         for router in routers:
             router._invalidate_model_group_info_cache()
+
+    @staticmethod
+    def _replayed_positions(
+        landing: tuple[tuple[int, _SharedCostWrite], ...], targets: frozenset[str]
+    ) -> tuple[int, ...]:
+        """The position of the last of each set of ``landing`` writes that leave the ``targets`` rows as one of them
+        does. Each field keeps the last value written to it, so only the last write of each set counts, unless a write
+        sets ``mode``: what a ``mode`` write does depends on the mode the row holds, so then only back-to-back runs
+        collapse."""
+        keyed: Final = tuple((position, write.replay_key(targets)) for position, write in landing)
+        if any(write.sets_mode for _position, write in landing):
+            return tuple(tuple(run)[-1][0] for _replay_key, run in groupby(keyed, key=itemgetter(1)))
+        return tuple(sorted({replay_key: position for position, replay_key in keyed}.values()))
 
     def _core_delete_deployment(self, id: str) -> Deployment | None:
         """
@@ -12526,7 +12555,9 @@ class PythonCore(DeprecatedRouterMembers):
                     id,
                 )
             self._rebuild_model_cost_rows(
-                lambda: self._rebuild_cost_rows_written_by(PythonCore._backend_write_keys(removed_deployment()))
+                lambda: self._rebuild_cost_rows_written_by(
+                    PythonCore._shared_write_keys((PythonCore._deployment_shared_cost_write(removed_deployment()),))
+                )
             )
         except Exception:
             return None

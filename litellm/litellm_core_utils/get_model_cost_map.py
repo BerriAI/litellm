@@ -570,6 +570,7 @@ class AliasedCostEntry(dict[str, object]):
         "registered_fields",
         "saved_write_fields",
         "written_fields",
+        "written_values",
     )
 
     def __init__(
@@ -583,6 +584,7 @@ class AliasedCostEntry(dict[str, object]):
         displaced_values: tuple[tuple[str, object], ...] = (),
         saved_write_fields: frozenset[str] = frozenset(),
         latest_unsaved_write_fields: frozenset[str] = frozenset(),
+        written_values: tuple[tuple[str, object], ...] = (),
     ) -> None:
         super().__init__(entry)
         self.names: tuple[str, ...] = names
@@ -593,6 +595,7 @@ class AliasedCostEntry(dict[str, object]):
         self.displaced_values: tuple[tuple[str, object], ...] = displaced_values
         self.saved_write_fields: frozenset[str] = saved_write_fields
         self.latest_unsaved_write_fields: frozenset[str] = latest_unsaved_write_fields
+        self.written_values: tuple[tuple[str, object], ...] = written_values
 
 
 def _alias_groups(alias_owners: Mapping[str, str]) -> Mapping[str, tuple[str, ...]]:

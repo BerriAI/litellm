@@ -3810,6 +3810,7 @@ def _replace_cost_map_entry(
         }.items()
     )
     created_by_registration: Final = previous.created_by_registration if current is previous else current is None
+    written_now: Final = {name: value for name, value in entry.items() if name in changed_fields or name in set_fields}
     cost_map.update(
         dict.fromkeys(
             (key, *_names_sharing_entry(cost_map, key)),
@@ -3825,6 +3826,10 @@ def _replace_cost_map_entry(
                     previous.saved_write_fields | set_fields if saved else previous.saved_write_fields - set_fields
                 ),
                 latest_unsaved_write_fields=previous.latest_unsaved_write_fields if saved else set_fields,
+                written_values=(
+                    *((name, value) for name, value in previous.written_values if name not in written_now),
+                    *written_now.items(),
+                ),
             ),
         )
     )
@@ -4110,6 +4115,17 @@ def model_cost_rows_written_by(keys: Collection[str]) -> frozenset[str]:
     )
 
 
+def model_cost_keys_written_onto_other_rows(keys: Collection[str]) -> frozenset[str]:
+    """Each of ``keys`` whose ``register_model`` write landed on a row named otherwise, as an ``openai/gpt-4o``
+    write lands on the ``gpt-4o`` row."""
+    cost_map: Final = _builtin_cost_map()
+    entries: Final = (entry for entry in tuple(cost_map.values()) if isinstance(entry, AliasedCostEntry))
+    writes: Final = itertools.chain.from_iterable(
+        ((key, entry) for key in entry.registered_by.intersection(keys)) for entry in entries
+    )
+    return frozenset(key for key, entry in writes if cost_map.get(key) is not entry)
+
+
 def model_cost_row_writers(rows: Iterable[str]) -> frozenset[str]:
     """Every ``register_model`` key whose write landed on one of ``rows``."""
     entries: Final = (_builtin_cost_map().get(row) for row in rows)
@@ -4184,6 +4200,52 @@ def _without_fields_left_by_earlier_writes(
         displaced_values=tuple((name, value) for name, value in current.displaced_values if name not in dropped),
         saved_write_fields=current.saved_write_fields,
         latest_unsaved_write_fields=current.latest_unsaved_write_fields,
+        written_values=tuple((name, value) for name, value in current.written_values if name not in dropped),
+    )
+
+
+def model_cost_fields_set_in_place(rows: Iterable[str]) -> Mapping[str, Mapping[str, object]]:
+    """The fields of each of ``rows`` set in place, as ``litellm.model_cost[row][field] = value`` does, since the
+    ``register_model`` write that last put a value there, read before the rows are rebuilt so the rebuild can set
+    them back last."""
+    cost_map: Final = _builtin_cost_map()
+    entries: Final = ((row, cost_map.get(row)) for row in rows)
+    set_in_place: Final = (
+        (row, _fields_set_in_place(entry)) for row, entry in entries if isinstance(entry, AliasedCostEntry)
+    )
+    return MappingProxyType({row: fields for row, fields in set_in_place if fields})
+
+
+def _fields_set_in_place(entry: AliasedCostEntry) -> Mapping[str, object]:
+    fields: Final = ((name, entry.get(name), written) for name, written in entry.written_values)
+    return MappingProxyType({name: value for name, value, written in fields if value is not None and value != written})
+
+
+def put_back_model_cost_fields_set_in_place(fields: Mapping[str, Mapping[str, object]]) -> None:
+    """Set each row's ``fields`` back over what a rebuild wrote there, so the next rebuild still reads them as set in
+    place."""
+    cost_map: Final = _builtin_cost_map()
+    entries: Final = ((row, cost_map.get(row), values) for row, values in fields.items())
+    for row, entry, values in entries:
+        if isinstance(entry, AliasedCostEntry):
+            cost_map.update(
+                dict.fromkeys((row, *_names_sharing_entry(cost_map, row)), _with_fields_set_in_place(entry, values))
+            )
+    _invalidate_model_cost_lowercase_map()
+
+
+def _with_fields_set_in_place(entry: AliasedCostEntry, values: Mapping[str, object]) -> AliasedCostEntry:
+    return AliasedCostEntry(
+        {**entry, **values},
+        entry.names,
+        registered_fields=entry.registered_fields,
+        created_by_registration=entry.created_by_registration,
+        registered_by=entry.registered_by,
+        written_fields=entry.written_fields,
+        displaced_values=entry.displaced_values,
+        saved_write_fields=entry.saved_write_fields,
+        latest_unsaved_write_fields=entry.latest_unsaved_write_fields,
+        written_values=entry.written_values,
     )
 
 
