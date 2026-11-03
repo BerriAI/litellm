@@ -1152,6 +1152,15 @@ async def test_converse_streaming_completion_yields_text_and_finish_reason(
 _CONVERSE_PROSE: Final = "Let me work this out. "
 
 
+async def _stream_chunks(
+    request: Mapping[str, object], transport: httpx.MockTransport, async_mode: bool
+) -> tuple[ModelResponseStream, ...]:
+    if not async_mode:
+        return tuple(litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport))))
+    async_stream: Final = await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
+    return tuple([chunk async for chunk in async_stream])
+
+
 @pytest.mark.parametrize("async_mode", [False, True])
 @pytest.mark.parametrize(
     ("tool_block", "stop_reason", "expected_content", "expected_tools", "expected_finish_reason"),
@@ -1225,19 +1234,18 @@ async def test_converse_json_schema_stream_sends_claude_prose_only_when_claude_s
         ],
         "stream": True,
     }
-    if async_mode:
-        async_stream: Final = await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
-        chunks: tuple[ModelResponseStream, ...] = tuple([chunk async for chunk in async_stream])
-    else:
-        chunks = tuple(litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport))))
+    chunks: Final = await _stream_chunks(request, transport, async_mode)
 
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == expected_content
-    tool_calls: Final = tuple(call for chunk in chunks for call in chunk.choices[0].delta.tool_calls or ())
-    assert tuple(
+    tool_calls: Final = tuple(
+        itertools.chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks)
+    )
+    named_calls: Final = tuple(
         (call.function.name, "".join(c.function.arguments or "" for c in tool_calls))
         for call in tool_calls
         if call.function.name
-    ) == expected_tools
+    )
+    assert named_calls == expected_tools
     assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [
         expected_finish_reason
     ]
