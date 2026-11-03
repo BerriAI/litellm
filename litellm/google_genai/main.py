@@ -8,6 +8,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 
 # Import the adapter for fallback to completion format
@@ -41,7 +42,7 @@ else:
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
 _GENERATE_CONTENT_RESULT: Final = TypeAdapter(object)
-_FORWARDED_HEADERS: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+_FORWARDED_HEADERS: Final = TypeAdapter[Mapping[str, str]](Mapping[str, str])
 #################################################
 
 
@@ -238,12 +239,13 @@ def _merge_native_request_fields(
     return {**native_request_fields, **(extra_body or {})}
 
 
-def _validated_client_headers(client_headers: object) -> Mapping[str, object] | None:
+def _validated_client_headers(client_headers: object) -> Mapping[str, str] | None:
     if client_headers is None:
         return None
     try:
         return _FORWARDED_HEADERS.validate_python(client_headers)
-    except ValidationError:
+    except ValidationError as exc:
+        verbose_logger.debug("Ignoring forwarded `headers` that are not a str-to-str mapping: %s", exc)
         return None
 
 
