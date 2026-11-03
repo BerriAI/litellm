@@ -5318,3 +5318,131 @@ async def test_apply_guardrail_raises_on_flagged_when_not_logging_only():
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     flagged = [e for e in entries if e["guardrail_status"] == "guardrail_flagged"]
     assert len(flagged) == 1
+
+
+# invocationResult values from Google's SanitizationResult reference (checked 2026-11-03)
+# https://docs.cloud.google.com/security-command-center/docs/reference/model-armor/rest/v1/SanitizationResult
+def _invocation_armor_response(
+    invocation_result: str | None, filter_results: dict[str, object] | None = None
+) -> dict[str, object]:
+    invocation: dict[str, object] = {} if invocation_result is None else {"invocationResult": invocation_result}
+    return {
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND" if filter_results else "NO_MATCH_FOUND",
+            "filterResults": filter_results or {},
+            **invocation,
+        }
+    }
+
+
+def _invocation_guardrail(
+    response: dict[str, object],
+    fail_on_error: bool,
+    event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+) -> ModelArmorGuardrail:
+    return ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-invocation",
+        event_hook=event_hook,
+        default_on=True,
+        fail_on_error=fail_on_error,
+        async_handler=_FakeArmorHandler([response]),
+        access_token_provider=_async_token_provider,
+    )
+
+
+def _invocation_request() -> dict[str, object]:
+    return {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invocation_result", ["PARTIAL", "FAILURE"])
+async def test_incomplete_scan_fails_closed(invocation_result: str):
+    guardrail = _invocation_guardrail(_invocation_armor_response(invocation_result), fail_on_error=True)
+
+    with pytest.raises(ModelArmorAPIError) as exc_info:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=_invocation_request(),
+            call_type="completion",
+        )
+
+    assert invocation_result in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invocation_result", ["PARTIAL", "FAILURE"])
+async def test_incomplete_scan_passes_when_fail_open(invocation_result: str):
+    guardrail = _invocation_guardrail(_invocation_armor_response(invocation_result), fail_on_error=False)
+    request_data = _invocation_request()
+
+    result = await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=MagicMock(spec=DualCache),
+        data=request_data,
+        call_type="completion",
+    )
+
+    assert result is request_data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invocation_result", ["SUCCESS", "INVOCATION_RESULT_UNSPECIFIED", None])
+async def test_complete_scan_without_findings_passes(invocation_result: str | None):
+    guardrail = _invocation_guardrail(_invocation_armor_response(invocation_result), fail_on_error=True)
+    request_data = _invocation_request()
+
+    result = await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=MagicMock(spec=DualCache),
+        data=request_data,
+        call_type="completion",
+    )
+
+    assert result is request_data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_error", [True, False])
+async def test_incomplete_scan_with_a_finding_still_blocks(fail_on_error: bool):
+    response = _invocation_armor_response(
+        "PARTIAL", filter_results={"rai": {"raiFilterResult": {"matchState": "MATCH_FOUND"}}}
+    )
+    guardrail = _invocation_guardrail(response, fail_on_error=fail_on_error)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=_invocation_request(),
+            call_type="completion",
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_incomplete_streaming_scan_yields_error_instead_of_output():
+    guardrail = _invocation_guardrail(
+        _invocation_armor_response("PARTIAL"), fail_on_error=True, event_hook=GuardrailEventHooks.post_call
+    )
+
+    async def stream():
+        yield _stream_chunk("streamed output")
+
+    chunks = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=stream(),
+            request_data=_invocation_request(),
+        )
+    ]
+
+    assert len(chunks) == 1
+    assert isinstance(chunks[0], str)
+    assert "PARTIAL" in chunks[0]
+    assert "streamed output" not in chunks[0]

@@ -108,6 +108,7 @@ class _Filter(TypedDict):
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SanitizationResult(TypedDict):
+    invocationResult: NotRequired[ReadOnly[str]]
     filterResults: NotRequired[ReadOnly[Mapping[str, _Filter] | Sequence[_Filter] | str | int | float | bool | None]]
 
 
@@ -153,6 +154,8 @@ class ModelArmorAPIError(Exception):
         super().__init__(detail)
         self.detail = detail
 
+
+_COMPLETE_INVOCATION_RESULTS: Final = frozenset({"SUCCESS", "INVOCATION_RESULT_UNSPECIFIED"})
 
 _SCANNED_CONTENT_KEYS: Final = frozenset({"text", "sanitizedText", "findings", "maliciousUriMatchedItems"})
 
@@ -418,9 +421,21 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             raise ModelArmorAPIError(detail)
 
         json_response: Final = _RESPONSE_JSON.validate_python(response.json())
-        if isinstance(json_response, _AwaitableJSON):
-            return _ModelArmorResponseRoot.model_validate(await json_response).root
-        return _ModelArmorResponseRoot.model_validate(json_response).root
+        armor_response: Final = _ModelArmorResponseRoot.model_validate(
+            await json_response if isinstance(json_response, _AwaitableJSON) else json_response
+        ).root
+        self._raise_if_incomplete_without_findings(armor_response)
+        return armor_response
+
+    def _raise_if_incomplete_without_findings(self, armor_response: _ModelArmorResponse) -> None:
+        invocation_result: Final = armor_response.get("sanitizationResult", {}).get("invocationResult")
+        if invocation_result is None or invocation_result in _COMPLETE_INVOCATION_RESULTS:
+            return
+        if self._should_block_content(armor_response, allow_sanitization=False):
+            return
+        detail: Final = f"Model Armor scan incomplete (invocationResult {invocation_result})"
+        verbose_proxy_logger.error("Model Armor API error - Detail: %s", detail)
+        raise ModelArmorAPIError(detail)
 
     def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict:
         """
