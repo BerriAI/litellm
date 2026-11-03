@@ -1,7 +1,9 @@
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from openai._models import BaseModel as OpenAIObject
-from pydantic import ConfigDict
+from pydantic import ConfigDict, SerializerFunctionWrapHandler, model_serializer
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
@@ -83,3 +85,29 @@ class CachedTokensDetails(LiteLLMBaseModel):
     text_tokens: int | None = None
     audio_tokens: int | None = None
     image_tokens: int | None = None
+
+
+class OutputTextTopLogprob(TypedDict):
+    token: ReadOnly[str]
+    logprob: ReadOnly[float]
+    bytes: NotRequired[ReadOnly[Sequence[int] | None]]
+
+
+class OutputTextLogprob(TypedDict):
+    token: ReadOnly[str]
+    logprob: ReadOnly[float]
+    bytes: NotRequired[ReadOnly[Sequence[int] | None]]
+    top_logprobs: ReadOnly[Sequence[OutputTextTopLogprob]]
+
+
+class CarriesOutputTextLogprobs(BaseLiteLLMOpenAIResponseObject):  # frozen-ok: guardrails rewrite these in place
+    """A Responses text payload carries ``logprobs`` only when the chat choice behind it sent them."""
+
+    logprobs: Sequence[OutputTextLogprob] | None = None
+
+    @model_serializer(mode="wrap")
+    def _without_absent_logprobs(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202  # a return annotation here replaces the model's OpenAPI schema with a bare object
+        dumped: Final[Mapping[str, object]] = handler(self)
+        if self.logprobs is not None:
+            return dumped
+        return {key: value for key, value in dumped.items() if key != "logprobs"}

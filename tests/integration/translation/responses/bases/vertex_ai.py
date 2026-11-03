@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from typing import Final
 from unittest.mock import ANY
 
@@ -1856,5 +1857,39 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
             "cost": None,
         },
         "provider_specific_fields": {"traffic_type": "ON_DEMAND"},
+    },
+)
+
+
+GEMINI_2_5_FLASH_TEST_CASE: Final = replace(
+    GEMINI_3_5_FLASH_TEST_CASE,
+    litellm_request={**GEMINI_3_5_FLASH_TEST_CASE.litellm_request, "model": "vertex_ai/gemini-2.5-flash"},
+    expected_provider_endpoint=(
+        "/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-2.5-flash:generateContent"
+    ),
+    mock_provider_response={
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "Hello."}]}, "finishReason": "STOP"}],
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 2,
+            "totalTokenCount": 32,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 9}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 2}],
+            "thoughtsTokenCount": 21,
+        },
+        "modelVersion": "gemini-2.5-flash",
+        "createTime": "2026-10-31T23:26:23.954987Z",
+        "responseId": "H3nmauukOrv46tkPw5vggAo",
+    },
+    expected_litellm_response={
+        **GEMINI_3_5_FLASH_TEST_CASE.expected_litellm_response,
+        "model": "vertex_ai/gemini-2.5-flash",
+        "usage": {
+            **GEMINI_3_5_FLASH_TEST_CASE.expected_litellm_response["usage"],
+            "output_tokens": 23,
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 21, "text_tokens": 2},
+            "total_tokens": 32,
+        },
     },
 )

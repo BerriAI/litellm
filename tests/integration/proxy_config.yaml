@@ -501,6 +501,13 @@ model_list:
       vertex_project: synthetic-vertex-project
       vertex_location: global
       vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: vertex_ai/gemini-2.5-flash
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
   - model_name: vertex_ai/gemini-3.8-flash
     litellm_params:
       model: vertex_ai/gemini-3.8-flash
