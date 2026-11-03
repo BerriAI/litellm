@@ -19,7 +19,7 @@ from datetime import datetime as dt_object
 from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, TypeVar, cast
 
 from httpx import Response, Timeout
 from openai import AsyncStream as OpenAIAsyncStream
@@ -283,8 +283,6 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
     from litellm.proxy.hooks.autorouter_baseline_cache import BaselineCacheContext, CapturedBaselineObservation
     from litellm.proxy.hooks.search_free_tier import SearchAllowanceAllocation
-    from litellm.proxy.spend_tracking.usage_capture import CapturedUsage
-    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureError
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -662,54 +660,7 @@ class UsageObservation(Enum):
     ESTIMATED = "estimated"
 
 
-@dataclass(frozen=True, slots=True)
-class UsageCaptureObservation:
-    usage_json: str | None
-    provenance: UsageObservation
-    response_cost: float | None = None
-
-    @classmethod
-    def from_usage(
-        cls, usage: Usage | None, provenance: UsageObservation, response_cost: float | None = None
-    ) -> "UsageCaptureObservation | UsageCaptureError":
-        from litellm.proxy.spend_tracking.usage_meter import UsageCaptureError
-
-        try:
-            serialized: Final = (
-                None if usage is None or provenance is UsageObservation.UNKNOWN else usage.model_dump_json()
-            )
-        except Exception as error:  # noqa: BLE001  # observation failures must not interrupt legacy retry handling
-            return UsageCaptureError(str(error))
-        else:
-            return cls(serialized, provenance, response_cost)
-
-
 class Logging(LiteLLMLoggingBaseClass):
-    usage_capture_callback: ClassVar[
-        Callable[
-            ["Logging", object, datetime.datetime, datetime.datetime, bool], "CapturedUsage | UsageCaptureError | None"
-        ]
-        | None
-    ] = None
-
-    def capture_usage_before_logging(
-        self,
-        response: object,
-        start_time: datetime.datetime | None = None,
-        end_time: datetime.datetime | None = None,
-        *,
-        freeze_only: bool = False,
-    ) -> None:
-        capture: Final = type(self).usage_capture_callback
-        if capture is not None and (not self.stream or self._is_assembled_stream_success(response)):
-            capture(
-                self,
-                response,
-                start_time or self.start_time,
-                end_time or datetime.datetime.now(datetime.timezone.utc),
-                freeze_only,
-            )
-
     global \
         supabaseClient, \
         promptLayerLogger, \
@@ -949,7 +900,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self._stash_owed_on_success: bool = False
         self._stash_billed_by_continuation: bool = False
         self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
-        self._failed_attempt_ids_owed_on_success: tuple[str, ...] = ()
         self.failed_attempts_billed_on_success: tuple[ServedRound, ...] = ()
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2582,11 +2532,6 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             return
 
-        self.capture_usage_before_logging(
-            TypeAdapter(object).validate_python(result),
-            TypeAdapter[datetime.datetime | None](datetime.datetime | None).validate_python(start_time),
-            TypeAdapter[datetime.datetime | None](datetime.datetime | None).validate_python(end_time),
-        )
         await self.async_success_handler(
             result,
             start_time=start_time,
@@ -2698,20 +2643,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self.finalized_cost = finalized
         self.model_call_details["response_cost"] = finalized.amount
 
-    def record_usage_capture(self, captured: "CapturedUsage") -> None:
-        self.model_call_details["_accounting_capture"] = captured
-
-    def record_usage_pricing(self, pricing: object) -> None:
-        self.model_call_details["_accounting_pricing_snapshot"] = pricing
-
     def record_partial_usage_for_failure(
         self, usage: Usage, response_cost: float, *, observation: UsageObservation = UsageObservation.KNOWN
     ) -> None:
         """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
-        if type(self).usage_capture_callback is not None:
-            self.model_call_details["_accounting_usage_observed"] = observation
 
     def record_failure_after_earlier_rounds(
         self, earlier: BilledRoundsSpend, failed_usage: Usage, failed_cost: float
@@ -2795,12 +2732,6 @@ class Logging(LiteLLMLoggingBaseClass):
         owed_on_success: Final = self._stash_owed_on_success
         self._stash_billed_by_continuation = False
         self._stash_owed_on_success = False
-        captured_attempt_ids: Final = (
-            self.capture_failed_attempt_usage(usage)
-            if isinstance(usage, Usage) and type(self).usage_capture_callback is not None
-            else ()
-        )
-        self.model_call_details.pop("_accounting_capture", None)
         self.model_call_details.pop("_accounting_pricing_snapshot", None)
         self.model_call_details.pop("_accounting_usage_observed", None)
         self.model_call_details.pop("combined_usage_object", None)
@@ -2816,59 +2747,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if not owed_on_success or billed_by_continuation:
             return
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, attempt)
-        self._failed_attempt_ids_owed_on_success = (*self._failed_attempt_ids_owed_on_success, *captured_attempt_ids)
 
     def mark_stash_billed_by_continuation(self) -> None:
         self._stash_billed_by_continuation = True
-
-    def capture_failed_attempt_usage(self, usage: Usage) -> tuple[str, ...]:
-        from litellm.constants import BILLED_RETRY_ATTEMPT_METADATA_KEY
-        from litellm.proxy.spend_tracking.usage_capture import CapturedUsage
-
-        capture: Final = type(self).usage_capture_callback
-        if capture is None:
-            return ()
-        attempt: Final = self.attempt_scoped_copy()
-        attempt.prepared_cost = None
-        attempt.finalized_cost = None
-        identity: Final = (
-            f"{self.litellm_call_id}-attempt-{len(self.model_call_details.get('failed_attempts_usage', ()))}"
-        )
-        params: Final = _LITELLM_PARAMS.validate_python(self.model_call_details.get("litellm_params") or {})
-        metadata: Final = StandardLoggingPayloadSetup.merge_litellm_metadata(params)
-        observed: Final[object] = self.model_call_details.get("_accounting_usage_observed")
-        cost: Final[object] = self.model_call_details.get("response_cost")
-        attempt.model_call_details = {
-            **attempt.model_call_details,
-            "litellm_call_id": identity,
-            "parent_request_id": self.litellm_call_id,
-            "_accounting_capture": None,
-            "_accounting_prior_captures": (),
-            "_accounting_usage_snapshot": UsageCaptureObservation.from_usage(
-                usage,
-                observed if isinstance(observed, UsageObservation) else UsageObservation.KNOWN,
-                float(cost) if isinstance(cost, (int, float)) else None,
-            ),
-            "litellm_params": {
-                **params,
-                "metadata": {**metadata, BILLED_RETRY_ATTEMPT_METADATA_KEY: True, "status": "failure"},
-                "litellm_metadata": {**metadata, BILLED_RETRY_ATTEMPT_METADATA_KEY: True, "status": "failure"},
-            },
-        }
-        captured: Final = capture(
-            attempt,
-            {"id": identity, "usage": usage.model_dump(), "status": "failed"},
-            self.start_time,
-            datetime.datetime.now(datetime.timezone.utc),
-            False,
-        )
-        if not isinstance(captured, CapturedUsage):
-            return ()
-        self.model_call_details["_accounting_prior_captures"] = (
-            *self.model_call_details.get("_accounting_prior_captures", ()),
-            captured,
-        )
-        return tuple(write.event.event_id for write in captured.writes)
 
     def record_continued_partial(self, usage: Usage, response_cost: float, response_id: str) -> None:
         """Bill what a cut stream already consumed on this continuation's success log, under the id the caller saw."""
@@ -2909,8 +2790,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details.pop("failed_attempts_usage", None)
         self.failed_attempts_billed_on_success = failed_attempts
         self.model_call_details["failed_attempts_billed_on_success"] = failed_attempts
-        if self._failed_attempt_ids_owed_on_success:
-            self.model_call_details["_accounting_included_attempt_ids"] = self._failed_attempt_ids_owed_on_success
         self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
             usage_objects=[own_usage, *(usage for usage, _ in failed_attempts)]
         )
@@ -3072,45 +2951,6 @@ class Logging(LiteLLMLoggingBaseClass):
         if call_type in (CallTypes.asend_message.value, CallTypes.send_message.value):
             return self._handle_a2a_response_logging(result=result)
         return result
-
-    def usage_capture_response(self, result: object) -> object:
-        if self.stream and not self._is_assembled_stream_success(result):
-            return None
-        copied: Final = result.model_copy(deep=True) if isinstance(result, BaseModel) else result
-        normalized: Final = self.normalize_logging_result(self.normalize_endpoint_logging_result(copied))
-        if self.model_call_details.get("call_type") == CallTypes.arealtime.value and isinstance(result, list):
-            frames: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(result)
-            measured: Final = any(
-                isinstance(_LITELLM_PARAMS.validate_python(frame.get("response") or {}).get("usage"), Mapping)
-                for frame in frames
-                if frame.get("type") == "response.done"
-            )
-            if not measured:
-                metered: Final = self.model_call_details.get(REALTIME_METERED_USAGE_KEY)
-                return {
-                    "id": self.litellm_call_id,
-                    "usage": {"metered_usage": TypeAdapter(object).dump_python(metered, mode="json")}
-                    if metered is not None
-                    else None,
-                }
-        assembled: Final = self._get_assembled_streaming_response(
-            normalized, self.start_time, self.start_time, True, []
-        )
-        return normalized if assembled is None else assembled
-
-    def usage_capture_pricing(self, result: object) -> Mapping[str, JsonValue]:
-        from litellm.utils import count_characters
-
-        return TypeAdapter(dict[str, JsonValue]).validate_python(
-            {
-                "custom_pricing": self.custom_pricing_for(result),
-                "custom_cost_per_token": self.custom_cost_per_token,
-                "custom_cost_per_second": self.custom_cost_per_second,
-                "prompt_characters": count_characters(self._prompt_for_cost_calculation())
-                if self.model_call_details.get("call_type") in (CallTypes.speech.value, CallTypes.aspeech.value)
-                else None,
-            }
-        )
 
     def normalize_logging_result(self, result: object) -> object:
         """
@@ -3830,7 +3670,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     self._as_served_chat_response(complete_streaming_response)
                 )
                 self.model_call_details["complete_streaming_response"] = logged_streaming_response
-                self.capture_usage_before_logging(logged_streaming_response, start_time, end_time)
                 ## STANDARDIZED LOGGING PAYLOAD
                 if not for_async_request:
                     self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
@@ -4355,8 +4194,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     total_cost=batch_result.cost,
                     cost_for_built_in_tools_cost_usd_dollar=0.0,
                 )
-
-        self.capture_usage_before_logging(result, start_time, end_time)
 
         self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
             StandardLoggingPayloadSetup.append_system_prompt_messages(
