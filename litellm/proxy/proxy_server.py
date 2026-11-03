@@ -7173,6 +7173,9 @@ class ProxyConfig:
         _hc_staleness = None
         _hc_ignore_transient = False
         if general_settings:
+            if "litellm_license" in general_settings:
+                _license_check.license_str = general_settings["litellm_license"]
+                premium_user = _license_check.is_premium()
             ### LOAD KEY MANAGEMENT SETTINGS ###
             # The secret manager itself is brought up by get_config(), which runs before the
             # `os.environ/` references in this config were resolved. Re-reading the settings here
@@ -7394,11 +7397,6 @@ class ProxyConfig:
             ## check if user has set a premium feature in general_settings
             if general_settings.get("enforced_params") is not None and premium_user is not True:
                 raise ValueError("Trying to use `enforced_params`" + CommonProxyErrors.not_premium_user.value)
-
-            # check if litellm_license in general_settings
-            if "litellm_license" in general_settings:
-                _license_check.license_str = general_settings["litellm_license"]
-                premium_user = _license_check.is_premium()
 
         router_params: Final[dict] = {
             "cache_responses": litellm.cache is not None,  # cache if user passed in cache values

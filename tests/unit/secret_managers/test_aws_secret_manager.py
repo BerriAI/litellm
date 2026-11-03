@@ -38,7 +38,7 @@ def test_decrypt_value_turns_only_boolean_literals_into_bools(monkeypatch, plain
     assert type(decrypted) is type(expected)
 
 
-def test_kms_v2_without_a_license_tells_the_user_to_set_one(monkeypatch):
+def test_kms_v2_without_a_license_tells_the_user_to_set_one(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
     monkeypatch.delenv("LITELLM_LICENSE", raising=False)
     monkeypatch.delenv("LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE", raising=False)

@@ -2688,6 +2688,32 @@ async def test_load_config_refuses_allowed_ips_without_a_license(tmp_path: Path,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("gated_setting", ['allowed_ips: ["127.0.0.1"]', "enforced_params: [user]"])
+async def test_load_config_lets_a_config_license_unlock_its_enterprise_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gated_setting: str
+):
+    from litellm.proxy import proxy_server
+
+    config_file: Final = tmp_path / "licensed.yaml"
+    config_file.write_text(
+        f'model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  litellm_license: "config-license"\n  {gated_setting}\n'
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server._license_check.license_str", None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._license_check.is_premium",
+        lambda: proxy_server._license_check.license_str == "config-license",
+    )
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert proxy_server.premium_user is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "setting", ["vector_store_deny_by_default", "search_tool_deny_by_default", "claude_code_marketplace_auth_required"]
 )
