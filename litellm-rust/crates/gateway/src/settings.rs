@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::{ffi::OsString, time::Duration};
 
 use litellm_secret_value::SecretValue;
 use litellm_tracing::Level;
@@ -10,6 +10,7 @@ pub(super) struct ForwardSettings {
     pub host: String,
     pub port: u16,
     rust_log: Option<String>,
+    litellm_forward_keepalive_timeout: u64,
 }
 
 impl Default for ForwardSettings {
@@ -18,11 +19,16 @@ impl Default for ForwardSettings {
             host: "0.0.0.0".into(),
             port: 4000,
             rust_log: None,
+            litellm_forward_keepalive_timeout: 5,
         }
     }
 }
 
 impl ForwardSettings {
+    pub fn upstream_keepalive(&self) -> Duration {
+        Duration::from_secs(self.litellm_forward_keepalive_timeout)
+    }
+
     pub fn log_level(&self) -> Level {
         self.rust_log
             .as_deref()

@@ -47,10 +47,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             level: settings.log_level(),
         })
         .install_global()?;
-        let forward = litellm_gateway::forward::Forward::new(
+        let forward = litellm_gateway_forward::Forward::new(
             &upstream
                 .into_string()
                 .map_err(|_| "invalid upstream encoding")?,
+            settings.upstream_keepalive(),
         )?;
         let listener =
             tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;

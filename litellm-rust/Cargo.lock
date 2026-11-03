@@ -3808,12 +3808,11 @@ dependencies = [
  "envy",
  "futures-util",
  "http-body-util",
- "hyper 1.10.1",
- "hyper-util",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-error",
  "litellm-gateway-auth",
+ "litellm-gateway-forward",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
  "litellm-gateway-ui",
@@ -3831,7 +3830,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
- "tokio-tungstenite",
  "tokio-util",
  "tower",
  "tower-sessions-moka-store",
@@ -3859,6 +3857,26 @@ dependencies = [
  "tower",
  "tower-sessions",
  "veil",
+]
+
+[[package]]
+name = "litellm-gateway-forward"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures-util",
+ "http-body-util",
+ "httparse",
+ "hyper 1.10.1",
+ "hyper-util",
+ "proptest",
+ "rstest",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
