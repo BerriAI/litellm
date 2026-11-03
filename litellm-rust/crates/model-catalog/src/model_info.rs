@@ -96,6 +96,7 @@ pub struct ModelInfoFields {
     pub output_cost_per_token_ultrafast: Option<f64>,
     pub regional_processing_uplift_multiplier_eu: Option<f64>,
     pub regional_processing_uplift_multiplier_us: Option<f64>,
+    pub regional_processing_uplift_multiplier_fedramp: Option<f64>,
     pub regional_endpoint_uplift_multiplier: Option<f64>,
     pub output_cost_per_audio_token: Option<f64>,
     pub output_cost_per_character: Option<f64>,

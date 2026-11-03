@@ -29,6 +29,8 @@ struct PriceBlocks {
     regional_processing_uplift_multiplier_eu: Option<Multiplier>,
     /// Multiplier applied to all token costs for US data residency (e.g. 1.10 = +10%).
     regional_processing_uplift_multiplier_us: Option<Multiplier>,
+    /// Multiplier applied to all token costs for FedRAMP data residency (e.g. 1.10 = +10%).
+    regional_processing_uplift_multiplier_fedramp: Option<Multiplier>,
     /// USD cost per web search query, keyed by search context size.
     search_context_cost_per_query: Option<SearchContextCostPerQuery>,
     /// Context-length or result-count tiered rates; each tier's costs apply within its range.

@@ -24,6 +24,7 @@ pub struct EntryWire {
     pub regional_endpoint_uplift: Option<Multiplier>,
     pub residency_uplift_eu: Option<Multiplier>,
     pub residency_uplift_us: Option<Multiplier>,
+    pub residency_uplift_fedramp: Option<Multiplier>,
     pub unknown: Fields,
     pub problems: Vec<Error>,
 }
@@ -56,6 +57,9 @@ impl EntryWire {
             }
             "regional_processing_uplift_multiplier_us" => {
                 self.residency_uplift_us = reader.value(path(), value)
+            }
+            "regional_processing_uplift_multiplier_fedramp" => {
+                self.residency_uplift_fedramp = reader.value(path(), value)
             }
             _ => self.read_open_key(reader, key, value),
         }

@@ -161,6 +161,7 @@ pub enum Uplift {
 pub enum Residency {
     Eu,
     Us,
+    Fedramp,
 }
 
 impl Band {
