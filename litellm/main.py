@@ -1502,9 +1502,10 @@ def _token_rates_cleared_for_per_second_overrides(custom: Mapping[str, object]) 
 
 def _tiers_with_flat_overrides(catalog: Mapping[str, object], custom: Mapping[str, object]) -> Mapping[str, object]:
     """A ``tiered_pricing`` table wins over flat rates in the cost calculator, so a flat rate the caller set is written
-    into every tier for that direction, and the other direction keeps each tier's own rate."""
+    into every tier of the table in force (the caller's own, else the inherited one) for that direction, and the other
+    direction keeps each tier's own rate."""
     overrides: Final = {key: custom[key] for key in _FLAT_TOKEN_RATE_FIELDS if key in custom}
-    tiers: Final = catalog.get("tiered_pricing")
+    tiers: Final = custom.get("tiered_pricing", catalog.get("tiered_pricing"))
     if not overrides or not isinstance(tiers, (list, tuple)) or not tiers:
         return {}
     return {"tiered_pricing": [{**tier, **overrides} for tier in _TIERS.validate_python(tiers)]}

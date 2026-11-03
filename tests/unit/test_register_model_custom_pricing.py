@@ -1667,3 +1667,35 @@ def test_direct_call_with_only_a_per_second_rate_on_a_mapped_model_is_billed_per
     finally:
         litellm.model_cost.pop(model_key, None)
         _invalidate_model_cost_lowercase_map()
+
+
+def test_direct_call_flat_rate_applies_to_the_callers_own_tiers_not_the_catalogs():
+    model_key: Final = "openai/lit-caller-tiers-model"
+    litellm.register_model(
+        {
+            model_key: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "tiered_pricing": [
+                    {"range": [0, 1000000], "input_cost_per_token": 3e-07, "output_cost_per_token": 6e-07}
+                ],
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        response: Final = litellm.completion(
+            model=model_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            mock_response="ok",
+            input_cost_per_token=1e-05,
+            tiered_pricing=[{"range": [0, 1000000], "input_cost_per_token": 5e-06, "output_cost_per_token": 9e-06}],
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            response.usage.prompt_tokens * 1e-05 + response.usage.completion_tokens * 9e-06
+        )
+        assert litellm.model_cost[model_key]["tiered_pricing"][0]["output_cost_per_token"] == 6e-07
+    finally:
+        litellm.model_cost.pop(model_key, None)
+        _invalidate_model_cost_lowercase_map()
