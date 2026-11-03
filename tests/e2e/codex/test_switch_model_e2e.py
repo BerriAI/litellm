@@ -83,4 +83,5 @@ class TestCodexSwitchModel:
             reasoning_effort="high",
         )
         assert second.exit_code == 0, second
+        assert codex.turn_models(first.thread_id) == (setup.model, second_model), second
         assert marker in second.answer, second

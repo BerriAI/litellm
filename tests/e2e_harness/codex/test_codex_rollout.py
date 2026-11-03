@@ -8,7 +8,7 @@ from typing import Final
 
 from cli_harness.rate_limiter import RateBucket, RateLimiter
 from codex.harness import CodexHarness
-from codex.rollout import Compaction, rollout_compactions
+from codex.rollout import Compaction, rollout_compactions, rollout_turn_models
 
 THREAD_ID: Final = "01a18fea-b2e8-7ed2-a29b-1ce4d2b138c3"
 USER_PROMPT: Final = {
@@ -58,6 +58,19 @@ class TestRolloutCompactions:
 
     def test_a_rollout_without_compactions_has_none(self) -> None:
         assert rollout_compactions(_rollout()) == ()
+
+
+def test_turn_models_are_the_models_each_turn_ran_on_in_order() -> None:
+    rollout: Final = "\n".join(
+        (
+            _line("turn_context", {"turn_id": "turn-1", "model": "first-model", "effort": "high"}),
+            _line("response_item", USER_PROMPT),
+            _line("compacted", REMOTE),
+            _line("turn_context", {"turn_id": "turn-2", "model": "second-model", "effort": "high"}),
+        )
+    )
+
+    assert rollout_turn_models(rollout) == ("first-model", "second-model")
 
 
 def test_the_harness_reads_only_the_rollout_of_the_thread_it_is_asked_about(tmp_path: Path) -> None:
