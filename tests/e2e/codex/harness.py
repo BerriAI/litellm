@@ -72,7 +72,7 @@ class CodexHarness:
             _ = (workspace / name).write_text(content)
         return workspace
 
-    @step('Run Codex on {model} through the proxy with the prompt "{prompt}", fast={fast}')
+    @step('Run Codex on {model} through the proxy with the prompt "{prompt}"')
     def exec(
         self, prompt: str, *, model: str, cwd: Path, compact_after_tokens: int | None = None, fast: bool = False
     ) -> CodexRun:
