@@ -702,7 +702,7 @@ MESSAGE_THREADS_BETA: Final = "message-threads-2026-08-12"
     ids=("create", "continue"),
 )
 def test_messages_request_forwards_the_thread_field_to_anthropic(thread: dict[str, str]) -> None:
-    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
         model="claude-opus-4-8",
         messages=[{"role": "user", "content": "what did I just say"}],
         anthropic_messages_optional_request_params={"max_tokens": 64, "thread": dict(thread)},
@@ -714,27 +714,27 @@ def test_messages_request_forwards_the_thread_field_to_anthropic(thread: dict[st
 
 
 def test_messages_headers_add_the_message_threads_beta_next_to_the_callers_betas() -> None:
-    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
         headers={"anthropic-beta": "context-1m-2025-08-07"},
         optional_params={"thread": {"type": "continue", "previous_message_id": "msg_01previous"}},
         messages=[],
     )
-    assert sorted(headers["anthropic-beta"].split(",")) == ["context-1m-2025-08-07", MESSAGE_THREADS_BETA]
+    assert headers["anthropic-beta"] == f"context-1m-2025-08-07,{MESSAGE_THREADS_BETA}"
 
 
 def test_messages_headers_add_no_message_threads_beta_without_a_thread() -> None:
-    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
         headers={}, optional_params={"max_tokens": 64}, messages=[]
     )
-    assert MESSAGE_THREADS_BETA not in headers.get("anthropic-beta", "")
+    assert MESSAGE_THREADS_BETA not in headers.get("anthropic-beta", "")  # pyright: ignore[reportUnknownMemberType]  # bare-dict result
 
 
 def test_the_thread_beta_is_the_same_on_the_create_and_the_continue_turn() -> None:
     config: Final = AnthropicMessagesConfig()
-    create: Final = config._update_headers_with_anthropic_beta(
+    create: Final = config._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
         headers={}, optional_params={"thread": {"type": "create"}, "system": "be terse"}, messages=[]
     )
-    cont: Final = config._update_headers_with_anthropic_beta(
+    cont: Final = config._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
         headers={}, optional_params={"thread": {"type": "continue", "previous_message_id": "msg_01p"}}, messages=[]
     )
     assert create["anthropic-beta"] == cont["anthropic-beta"] == MESSAGE_THREADS_BETA
@@ -759,7 +759,7 @@ def _advisor_turn() -> list[dict[str, object]]:
 
 
 def test_a_thread_continue_turn_keeps_advisor_blocks_the_stored_tools_still_explain() -> None:
-    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
         model="claude-opus-4-8",
         messages=_advisor_turn(),
         anthropic_messages_optional_request_params={
@@ -773,7 +773,7 @@ def test_a_thread_continue_turn_keeps_advisor_blocks_the_stored_tools_still_expl
 
 
 def test_a_request_without_a_thread_still_strips_advisor_blocks_when_the_tool_is_absent() -> None:
-    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
         model="claude-opus-4-8",
         messages=_advisor_turn(),
         anthropic_messages_optional_request_params={"max_tokens": 64},

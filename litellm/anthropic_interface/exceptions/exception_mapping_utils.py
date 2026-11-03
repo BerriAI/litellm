@@ -195,12 +195,13 @@ class AnthropicExceptionMapping:
             embedded, _ = _JSON_DECODER.raw_decode(raw_message, start)
         except ValueError:
             return None
-        if not isinstance(embedded, dict) or not AnthropicExceptionMapping._is_anthropic_error_dict(embedded):
-            return None
         try:
-            return _ERROR_DETAILS.validate_python(embedded["error"].get("details"), strict=True)
+            envelope: Final = _ERROR_DETAILS.validate_python(embedded, strict=True)
+            error: Final = _ERROR_DETAILS.validate_python(envelope.get("error"), strict=True)
+            details: Final = _ERROR_DETAILS.validate_python(error.get("details"), strict=True)
         except ValidationError:
             return None
+        return details if envelope.get("type") == "error" else None
 
 
 class AnthropicErrorSseFrame(str):

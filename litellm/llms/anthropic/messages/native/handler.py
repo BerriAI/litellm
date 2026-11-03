@@ -766,7 +766,7 @@ def anthropic_messages_handler(
     anthropic_messages_provider_config: Final = _native_messages_config(
         model, custom_llm_provider, kwargs.get("model_info"), api_base
     )
-    if kwargs.get("thread") is not None and not supports_message_threads(
+    if kwargs.get("thread") is not None and not supports_message_threads(  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
         custom_llm_provider, has_native_config=anthropic_messages_provider_config is not None
     ):
         raise AnthropicError(

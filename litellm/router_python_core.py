@@ -306,6 +306,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     is_failure_outside_selected_deployment,
+    is_message_thread_not_found,
     is_video_lookup_not_found,
     mark_deployment_selection_failure,
     set_cooldown_deployments,
@@ -10207,6 +10208,13 @@ class PythonCore(DeprecatedRouterMembers):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "Provider 404 says the video is not on this deployment's account, not that the deployment is down."
+                )
+                return False
+
+            if is_message_thread_not_found(exception):  # pyright: ignore[reportUnknownArgumentType]  # router callback kwargs arrive untyped
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Anthropic 404 says the caller's message thread is gone, not that the deployment is down."
                 )
                 return False
 

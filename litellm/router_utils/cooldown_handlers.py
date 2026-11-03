@@ -39,6 +39,7 @@ from litellm.types.utils import (
     CooldownDeploymentInfo,
     InternalCallOrigin,
 )
+from litellm.types.llms.anthropic import MESSAGE_THREAD_NOT_FOUND_ERROR_CODE
 from litellm.types.videos.utils import VIDEO_ID_CALL_TYPES
 
 from .router_callbacks.track_deployment_metrics import (
@@ -106,6 +107,12 @@ def is_background_response_poll_not_found(exception: Exception, litellm_params: 
 def is_video_lookup_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
     """Whether a call on an existing video id failed with a provider 404: the video is not on that account."""
     return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in VIDEO_ID_CALL_TYPES
+
+
+def is_message_thread_not_found(exception: object) -> bool:
+    """Whether a message-thread continue failed with Anthropic's 404 ``thread_not_found``: the caller's
+    ``previous_message_id`` is stale and the SDK replays the conversation, the deployment is healthy."""
+    return getattr(exception, "status_code", None) == 404 and MESSAGE_THREAD_NOT_FOUND_ERROR_CODE in str(exception)
 
 
 _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (

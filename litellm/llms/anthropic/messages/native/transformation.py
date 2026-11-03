@@ -773,7 +773,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         tools: Final = anthropic_messages_optional_request_params.get("tools")
         _tools: Final = tools or []
         _has_advisor: Final = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _tools)
-        if not _has_advisor and not continues_message_thread(anthropic_messages_optional_request_params.get("thread")):
+        if not _has_advisor and not continues_message_thread(
+            anthropic_messages_optional_request_params.get("thread")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the request params arrive as a bare dict
+        ):
             messages = strip_advisor_blocks_from_messages(messages)
 
         gated: Final = (
@@ -796,7 +798,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             ),
             max_tokens=max_tokens,
             model=model,
-            **anthropic_messages_optional_request_params,
+            **anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # the request params arrive as a bare dict
         )
         request: Final = (
             {**dict(anthropic_messages_request), "thinking": gated.thinking}
@@ -913,7 +915,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
-        if optional_params.get("thread") is not None:
+        if optional_params.get("thread") is not None:  # pyright: ignore[reportUnknownMemberType]  # the optional params arrive as a bare dict
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.MESSAGE_THREADS_2026_08_12.value)
 
         tools: Final = optional_params.get("tools")
