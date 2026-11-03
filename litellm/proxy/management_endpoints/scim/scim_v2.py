@@ -229,7 +229,11 @@ class UserProvisionerHelpers:
             return None
 
         requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
-        new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
+        new_teams: Final = (
+            list(_keep_record_team_order(existing_user.teams or [], requested_teams))
+            if requested_teams
+            else list(existing_user.teams or [])
+        )
 
         if new_user_request.user_id != existing_user.user_id:
             verbose_proxy_logger.info(
@@ -1165,7 +1169,7 @@ async def _handle_team_membership_changes(
     existing_teams_set: Final = set(existing_teams)
     new_teams_set: Final = set(new_teams)
 
-    teams_to_add: Final = new_teams_set - existing_teams_set
+    teams_to_add: Final = tuple(team for team in dict.fromkeys(new_teams) if team not in existing_teams_set)
     teams_to_remove: Final = existing_teams_set - new_teams_set
 
     if teams_to_add or teams_to_remove:
@@ -1948,7 +1952,11 @@ async def update_user(
 
         # SCIM User.groups is readOnly (RFC 7643 4.1.2): IdPs sync membership via /Groups and send
         # no groups or `groups: []` on profile PUTs, so empty means unspecified, not "remove from every team"
-        target_teams: Final = user_data["teams"] or existing_user.teams
+        target_teams: Final = (
+            list(_keep_record_team_order(existing_user.teams, user_data["teams"]))
+            if user_data["teams"]
+            else existing_user.teams
+        )
         await _handle_team_membership_changes(
             user_id=user_id,
             existing_teams=existing_user.teams,
@@ -2241,19 +2249,29 @@ def _handle_name_update(path: str, op_type: str, value: object, scim_metadata: d
             scim_metadata["familyName"] = str(value)
 
 
-def _handle_group_operations(op_type: str, value: object, teams_set: set[str], path: str | None) -> set[str] | None:
-    """Handle group/team membership operations."""
-    group_values = _extract_group_values(value)
-    if not group_values and value is None:
-        group_values = _extract_ids_from_path_filter(path, "groups")
-    if op_type == "replace":
-        return set(group_values)
-    elif op_type == "add":
-        teams_set.update(group_values)
-    elif op_type == "remove":
-        for gid in group_values:
-            teams_set.discard(gid)
-    return None
+def _is_group_path(path: str | None) -> bool:
+    return isinstance(path, str) and path.lower().startswith("groups")
+
+
+def _apply_group_operation(teams: tuple[str, ...], op: SCIMPatchOperation) -> tuple[str, ...]:
+    listed: Final = _extract_group_values(op.value)
+    group_values: Final = listed if listed or op.value is not None else _extract_ids_from_path_filter(op.path, "groups")
+    if op.op == "replace":
+        return tuple(dict.fromkeys(group_values))
+    if op.op == "add":
+        return tuple(dict.fromkeys((*teams, *group_values)))
+    removed: Final = frozenset(group_values)
+    return tuple(team for team in teams if team not in removed)
+
+
+def _keep_record_team_order(record_teams: Sequence[str], target_teams: Sequence[str]) -> tuple[str, ...]:
+    target: Final = frozenset(target_teams)
+    record: Final = tuple(dict.fromkeys(record_teams))
+    known: Final = frozenset(record)
+    return (
+        *(team for team in record if team in target),
+        *(team for team in dict.fromkeys(target_teams) if team not in known),
+    )
 
 
 def _multi_valued_attribute_base(path: str) -> str:
@@ -2520,8 +2538,8 @@ def _handle_generic_metadata(path: str, op_type: str, value: object, metadata: d
 def _apply_patch_ops(
     existing_user: LiteLLM_UserTable,
     patch_ops: SCIMPatchOp,
-) -> tuple[dict[str, object], set[str]]:
-    """Apply patch operations and return update data and final team set."""
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Apply patch operations and return update data and the final teams in order."""
     update_data: Final[dict[str, object]] = {}
     stored_metadata: Final[object] = TypeAdapter(object).validate_python(existing_user.model_dump().get("metadata"))
     metadata: Final = _JSON_OBJECT_ADAPTER.validate_python(stored_metadata) if isinstance(stored_metadata, dict) else {}
@@ -2540,9 +2558,6 @@ def _apply_patch_ops(
     )
     if isinstance(enterprise, _InvalidEnterpriseValue):
         _raise_invalid_enterprise_value(enterprise)
-
-    teams_set: Final[set[str]] = set(existing_user.teams or [])
-    replace_team_set: set[str] | None = None
 
     for op in patch_ops.Operations:
         path = op.path.lower() if isinstance(op.path, str) else ""
@@ -2585,16 +2600,20 @@ def _apply_patch_ops(
             _handle_name_update(path, op_type, value, scim_metadata)
         elif _multi_valued_attribute_base(path) in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
             _handle_multi_valued_attribute_update(path, op_type, value, metadata)
-        elif path.startswith("groups"):
-            new_replace_set = _handle_group_operations(op_type, value, teams_set, op.path)
-            if new_replace_set is not None:
-                replace_team_set = new_replace_set
-        elif _enterprise_extension_sub_path(path) is not None:
+        elif _is_group_path(path) or _enterprise_extension_sub_path(path) is not None:
             continue
         else:
             _handle_generic_metadata(path, op_type, value, metadata)
 
-    final_team_set: Final = replace_team_set if replace_team_set is not None else teams_set
+    record_teams: Final = tuple(existing_user.teams or [])
+    group_ops: Final = tuple(op for op in patch_ops.Operations if _is_group_path(op.path))
+    last_replace: Final = next((op for op in reversed(group_ops) if op.op == "replace"), None)
+    final_teams: Final = _keep_record_team_order(
+        record_teams,
+        _apply_group_operation(record_teams, last_replace)
+        if last_replace is not None
+        else reduce(_apply_group_operation, group_ops, record_teams),
+    )
     final_metadata: Final = (
         {
             **{key: metadata_value for key, metadata_value in metadata.items() if key != SCIM_ENTERPRISE_METADATA_KEY},
@@ -2605,7 +2624,7 @@ def _apply_patch_ops(
         else {**metadata, "scim_metadata": scim_metadata}
     )
     update_data["metadata"] = final_metadata
-    return update_data, final_team_set
+    return update_data, final_teams
 
 
 def _is_user_not_in_team_error(exc: HTTPException) -> bool:
@@ -2758,7 +2777,7 @@ async def patch_user(
 
         prev_active: Final = _user_scim_active(existing_user)
 
-        update_data, final_team_set = _apply_patch_ops(
+        update_data, final_teams = _apply_patch_ops(
             existing_user=existing_user,
             patch_ops=patch_ops,
         )
@@ -2770,15 +2789,15 @@ async def patch_user(
         await _handle_team_membership_changes(
             user_id=user_id,
             existing_teams=existing_user.teams or [],
-            new_teams=list(final_team_set),
+            new_teams=list(final_teams),
         )
 
-        update_data["teams"] = list(final_team_set)
+        update_data["teams"] = list(final_teams)
 
         admin_group: Final = await _get_scim_admin_group()
         if admin_group is not None:
             update_data["user_role"] = _resolve_scim_user_role(
-                await _scim_groups_from_team_ids(prisma_client, list(final_team_set)),
+                await _scim_groups_from_team_ids(prisma_client, list(final_teams)),
                 admin_group,
                 _default_scim_user_role(),
             )

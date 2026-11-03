@@ -11,10 +11,17 @@ import contextlib
 import os
 import sys
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, Final, Iterator, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+if TYPE_CHECKING:
+    import respx
+
+    from litellm import Router
+
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 # Repo root, anchored to this file (not CWD) so the path is correct no
 # matter where pytest is invoked from. With the project installed via
@@ -418,7 +425,7 @@ def mock_router() -> MagicMock:
     ]
     router.model_names = ["gpt-4", "claude-sonnet", "bedrock-claude"]
     router.get_model_list = MagicMock(return_value=router.model_list)
-    return router
+    return route_entry_points_to_stubs(router)
 
 
 # ---------------------------------------------------------------------------
@@ -536,3 +543,94 @@ def reset_login_throttle(monkeypatch):
     _drop_throttle_keys()
     yield _drop_throttle_keys
     _drop_throttle_keys()
+
+
+@pytest.fixture
+def openai_only_router(monkeypatch: pytest.MonkeyPatch) -> Router:
+    from litellm import Router
+    from litellm.proxy import proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                "model_info": {"id": "gpt-4-id"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    return router
+
+
+@pytest.fixture
+def failed_spend_row(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> Iterator[Callable[[], tuple[str, str]]]:
+    """Route tts-1, whisper-1 and omni-moderation to an OpenAI deployment whose provider answers 400,
+    and return a reader for the (status, call_type) of the spend row the failure wrote."""
+    import litellm
+    from litellm import Router
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.proxy.utils import ProxyLogging
+
+    api_base: Final = "https://failing-provider.example/v1"
+    respx_mock.post(url__startswith=api_base).respond(
+        400, json={"error": {"message": "rejected by the provider", "type": "invalid_request_error"}}
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": f"openai/{provider_model}",
+                    "api_base": api_base,
+                    "api_key": "provider-key",
+                    "max_retries": 0,
+                },
+            }
+            for model_name, provider_model in (
+                ("tts-1", "tts-1"),
+                ("whisper-1", "whisper-1"),
+                ("omni-moderation", "omni-moderation-latest"),
+            )
+        ],
+        num_retries=0,
+    )
+    cache: Final = UserApiKeyCache()
+    spend_writer: Final = MagicMock(update_database=AsyncMock())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    for name, value in (
+        ("llm_router", router),
+        ("llm_model_list", router.model_list),
+        ("prisma_client", None),
+        ("general_settings", {}),
+        ("user_model", None),
+        ("proxy_config", ProxyConfig()),
+        ("proxy_logging_obj", ProxyLogging(user_api_key_cache=cache)),
+        ("user_api_key_cache", cache),
+        ("version", "test-version"),
+    ):
+        monkeypatch.setattr(proxy_server, name, value)
+
+    def last_row() -> tuple[str, str]:
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        return payload["status"], payload["call_type"]
+
+    yield last_row
+    ProxyLogging._callback_capabilities_cache.clear()

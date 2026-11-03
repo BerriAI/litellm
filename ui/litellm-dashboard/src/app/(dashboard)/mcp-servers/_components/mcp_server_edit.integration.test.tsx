@@ -136,6 +136,11 @@ const CASES: readonly Case[] = [
     expected: { ...EXPECTED_BASE, auth_type: "basic", credentials: { auth_value: "secret-value" } },
   },
   {
+    label: "authorization sends only auth_value under credentials",
+    server: { ...BASE, auth_type: "authorization", credentials: CREDS },
+    expected: { ...EXPECTED_BASE, auth_type: "authorization", credentials: { auth_value: "secret-value" } },
+  },
+  {
     label: "oauth2 m2m mounts token_url and omits the interactive endpoints entirely",
     server: {
       ...BASE,

@@ -1,12 +1,11 @@
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_http::request::string_headers as shared_string_headers;
-pub(super) use litellm_http::request::truncate_error_body;
 use litellm_llms::tencent::messages::transformation::TENCENT_MESSAGES_CONFIG;
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::transformation::BaseMessagesConfig,
-    bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+    bedrock::messages::invoke_transformations::anthropic_claude_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
     minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
@@ -77,7 +76,7 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{messages_provider, string_headers, truncate_error_body};
+    use super::{messages_provider, string_headers};
     use crate::Error;
     use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
@@ -104,19 +103,6 @@ mod tests {
         #[case] model: &str,
     ) {
         assert!(messages_provider(provider, model).is_none());
-    }
-
-    #[test]
-    fn truncate_error_body_caps_long_payloads() {
-        let body = "x".repeat(400);
-        let truncated = truncate_error_body(&body);
-        assert!(truncated.ends_with("... (truncated)"));
-        let prefix_chars = truncated
-            .strip_suffix("... (truncated)")
-            .expect("truncated marker present")
-            .chars()
-            .count();
-        assert_eq!(prefix_chars, 256);
     }
 
     #[test]

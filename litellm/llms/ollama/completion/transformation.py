@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     inline_remote_image_urls,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -43,7 +44,7 @@ from litellm.types.utils import (
     generate_id,
 )
 
-from ..common_utils import OllamaError, OllamaModelInfo, convert_image
+from ..common_utils import OllamaError, OllamaModelInfo, convert_image, ollama_think
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -249,10 +250,7 @@ class OllamaConfig(BaseConfig):
             elif param == "stop":
                 optional_params["stop"] = value
             elif param == "reasoning_effort" and value is not None:
-                if model.startswith("gpt-oss"):
-                    optional_params["think"] = value
-                else:
-                    optional_params["think"] = value in {"low", "medium", "high"}
+                optional_params["think"] = ollama_think(model, OPAQUE_VALUE.validate_python(value))
             elif param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
@@ -547,7 +545,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
         held: Final = self.held_content
         self.held_content = ""
         try:
-            parsed: Final[object] = json.loads(_strip_json_code_fence(held))
+            parsed: Final = _JSON_VALUE.validate_python(json.loads(_strip_json_code_fence(held)))
         except json.JSONDecodeError:
             return GenericStreamingChunk(text=held, is_finished=True, finish_reason="stop", usage=usage)
         if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:

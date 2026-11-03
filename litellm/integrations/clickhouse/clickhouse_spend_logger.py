@@ -19,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
 from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
+from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.tracing.types import SpendLogPayload, SpendLogRecord
@@ -134,7 +135,7 @@ def spend_log_row_from_payload(
     usage: Mapping[str, Any] = metadata.get("usage_object") or hidden_params.get("usage_object") or MappingProxyType({})
     cache_read_tokens, cache_write_tokens = _cache_tokens(usage)
     trace_id, span_id = _find_traceparent(metadata, kwargs)
-    request_id = str(payload.get("id") or "")
+    response_id: Final = str(payload.get("id") or "")
     redact = litellm.turn_off_message_logging is True
     track_end_user: Final = not litellm.disable_end_user_cost_tracking
     completion_start_ms = _to_ms(payload.get("completionStartTime"))
@@ -157,8 +158,8 @@ def spend_log_row_from_payload(
         )
     )
     return SpendLogRecord(
-        request_id=request_id,
-        response_id=strip_cache_hit_suffix(request_id),
+        request_id=logged_event_key(kwargs, response_id),
+        response_id=strip_cache_hit_suffix(response_id),
         provider_request_id=(
             get_provider_request_id(kwargs.get("response_headers"))
             or get_provider_request_id(hidden_params.get("additional_headers"))
