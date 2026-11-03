@@ -1081,3 +1081,31 @@ async def test_provider_permission_identifiers_and_groups_follow_config_reload(m
     assert manager.get_all_mcp_server_ids() == set()
     assert manager.get_allow_all_keys_server_ids() == []
     assert await MCPRequestHandler.get_mcp_servers_from_access_groups(["research"]) == []
+
+
+@pytest.mark.asyncio
+async def test_exact_provider_id_grant_ignores_another_registrations_matching_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.models.mcp_server import LiteLLM_MCPServerTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    granted: Final = LiteLLM_MCPServerTable(
+        server_id="native-id", execution_mode="provider", transport=None,
+        url="https://granted.example/mcp", allowed_tools=["search"],
+    )
+    other: Final = LiteLLM_MCPServerTable(
+        server_id="other-id", alias="native-id", execution_mode="provider", transport=None,
+        url="https://other.example/mcp", allowed_tools=["delete"],
+    )
+    tables: Final = SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=AsyncMock(return_value=[granted, other])),
+        litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace(reload_revision=1))),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=tables, writer_db=tables))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    manager: Final = MCPServerManager()
+    async with manager.catalog.operation():
+        assert len(await manager.get_all_mcp_servers_unfiltered()) == 2
+        assert manager.expand_permission_list(["native-id"]) == ["native-id"]

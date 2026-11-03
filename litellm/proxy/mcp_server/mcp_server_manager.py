@@ -7536,7 +7536,7 @@ class MCPServerManager:
         providers: Final = self.catalog.provider_registrations()
         expanded: Final[set[str]] = set()
         for identifier in identifiers:
-            if identifier in registry:
+            if identifier in registry or identifier in providers:
                 expanded.add(identifier)
                 continue
             matches: list[str] = [
