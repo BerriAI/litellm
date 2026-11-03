@@ -1905,6 +1905,51 @@ def test_transform_request_system_only_message_maps_to_system_input_item():
     assert not result.get("instructions")
 
 
+_JSON_SYSTEM_PROMPT: Final = "You output JSON objects."
+_PLAIN_USER_ITEM: Final = {
+    "type": "message",
+    "role": "user",
+    "content": [{"type": "input_text", "text": "List three colors."}],
+}
+_COLORS_SCHEMA: Final = {
+    "type": "json_schema",
+    "json_schema": {"name": "colors", "schema": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize(
+    ("response_format", "expected_input", "expected_instructions"),
+    [
+        (
+            {"type": "json_object"},
+            [
+                {"type": "message", "role": "system", "content": [{"type": "input_text", "text": _JSON_SYSTEM_PROMPT}]},
+                _PLAIN_USER_ITEM,
+            ],
+            None,
+        ),
+        (_COLORS_SCHEMA, [_PLAIN_USER_ITEM], _JSON_SYSTEM_PROMPT),
+    ],
+    ids=["json_object_keeps_system_in_input", "json_schema_keeps_system_in_instructions"],
+)
+def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_check_reads_it(
+    response_format, expected_input, expected_instructions
+):
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.4-mini",
+        messages=[
+            {"role": "system", "content": _JSON_SYSTEM_PROMPT},
+            {"role": "user", "content": "List three colors."},
+        ],
+        optional_params={"response_format": response_format},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert (result["input"], result.get("instructions")) == (expected_input, expected_instructions), result
+
+
 def test_transform_request_single_char_keys_not_matched():
     """Test that single-character keys are not incorrectly matched to 'metadata' or 'previous_response_id'
 
