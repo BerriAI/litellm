@@ -485,6 +485,7 @@ from litellm.types.utils import (
     GenericBudgetConfigType,
     LiteLLMBatch,
     LlmProviders,
+    LlmProvidersSet,
     ModelInfo,
     ModelResponseStream,
     StandardLoggingPayload,
@@ -12292,15 +12293,30 @@ class PythonCore(DeprecatedRouterMembers):
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
         backend_keys: Final = PythonCore._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
-        potential_names: Final = get_potential_model_names(model, custom_llm_provider)
+        model_provider_prefix: Final = model.partition("/")[0]
+        catalog_provider: Final = (
+            custom_llm_provider
+            if custom_llm_provider is not None
+            else model_provider_prefix
+            if model_provider_prefix in LlmProvidersSet
+            else None
+        )
+        potential_names: Final = (
+            get_potential_model_names(model, catalog_provider) if catalog_provider is not None else None
+        )
         catalog_backend_keys: Final = (
-            *backend_keys,
-            potential_names["split_model"],
-            potential_names["stripped_model_name"],
-            potential_names["combined_model_name"],
-            potential_names["combined_stripped_model_name"],
-            potential_names["provider_prefixed_model_name"],
-            potential_names["region_free_combined_model_name"],
+            (
+                *backend_keys,
+                model,
+                potential_names["split_model"],
+                potential_names["stripped_model_name"],
+                potential_names["combined_model_name"],
+                potential_names["combined_stripped_model_name"],
+                potential_names["provider_prefixed_model_name"],
+                potential_names["region_free_combined_model_name"],
+            )
+            if potential_names is not None
+            else (*backend_keys, model)
         )
 
         # For the shared backend key, keep only cost-map schema fields
