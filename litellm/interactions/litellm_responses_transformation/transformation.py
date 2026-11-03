@@ -12,6 +12,7 @@ from typing import Final, cast
 
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.core_helpers import billed_usage_cost
 from litellm.types.interactions import (
     InteractionInput,
     InteractionsAPIOptionalRequestParams,
@@ -190,6 +191,7 @@ class LiteLLMResponsesInteractionsConfig:
     def transform_responses_response_to_interactions_response(
         responses_response: ResponsesAPIResponse,
         model: str | None = None,
+        custom_llm_provider: str | None = None,
     ) -> InteractionsAPIResponse:
         """
         Transform a Responses API response to an Interactions API response.
@@ -266,9 +268,11 @@ class LiteLLMResponsesInteractionsConfig:
         # (total_input_tokens, total_output_tokens)
         usage: Final[object] = getattr(responses_response, "usage", None)
         if usage:
+            reported_cost: Final = billed_usage_cost(responses_response, custom_llm_provider)
             interactions_response_dict["usage"] = {
                 "total_input_tokens": getattr(usage, "input_tokens", 0),
                 "total_output_tokens": getattr(usage, "output_tokens", 0),
+                **({} if reported_cost is None else {"cost": reported_cost}),
             }
 
         # Add updated (same as created for now)

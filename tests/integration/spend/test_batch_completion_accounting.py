@@ -4,11 +4,16 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from pathlib import Path
+from queue import SimpleQueue
 from typing import Final
 
 import pytest
+import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
-from integration._support.database import read_rows
+from integration._support.database import read_rows, scratch_database
+from integration._support.process import owned_proxy
+from integration._support.wire import Reply, Request, wire_server
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
@@ -299,3 +304,129 @@ def test_completed_batch_spend_lands_under_batches_in_team_endpoint_activity(gat
         endpoint_metrics: Final = object_value(object_value(endpoints["/batches"])["metrics"])
         assert float(endpoint_metrics["spend"]) == pytest.approx(BATCH_SPEND), endpoints
         assert endpoint_metrics["total_tokens"] == BATCH_PROMPT_TOKENS + BATCH_COMPLETION_TOKENS, endpoints
+
+
+def test_batch_reconciliation_delivers_each_configured_logger_once(gateway: Gateway, tmp_path: Path) -> None:
+    events: Final[SimpleQueue[dict[str, JsonValue]]] = SimpleQueue()
+
+    def receive(request: Request) -> Reply:
+        payload: Final = JSON_OBJECT.validate_json(request.body)
+        standard: Final = object_value(payload.get("standard"))
+        if standard.get("call_type") == "aretrieve_batch" and standard.get("response_cost"):
+            events.put(payload)
+        return Reply()
+
+    config: Final = tmp_path / "batch-callbacks.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": [
+                    {
+                        "model_name": "batch-bootstrap",
+                        "litellm_params": {
+                            "model": "openai/gpt-6.1-sol",
+                            "api_base": gateway.upstream_url + "/v1",
+                            "api_key": "integration-provider-key",
+                        },
+                    }
+                ],
+                "litellm_settings": {
+                    "callbacks": [
+                        "integration._support.redaction_probe.sync_probe",
+                        "integration._support.redaction_probe.probe",
+                        "integration._support.redaction_probe.dual_probe",
+                    ],
+                },
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                    "disable_model_info_refresh": True,
+                    "proxy_batch_polling_interval": 1,
+                },
+            }
+        )
+    )
+    with scratch_database() as database, wire_server(receive) as sink:
+        with (
+            owned_proxy(
+                gateway,
+                tmp_path,
+                {"DATABASE_URL": database, "REDACTION_PROBE_URL": sink.url, "PROXY_BATCH_POLLING_ENABLED": "true"},
+                config=config,
+            ) as proxy,
+            proxy.scenario() as scenario,
+        ):
+            scenario_id: Final = f"batch-callbacks-{uuid.uuid4().hex}"
+            routes: Final = batch_routes("gpt-6.1-sol")
+            handle: Final = register_scenario(scenario_id, routes)
+            scenario.cleanups.callback(delete_scenario, handle)
+            model: Final = scenario.model(
+                model="openai/gpt-6.1-sol",
+                api_base=handle.api_base(),
+                input_cost_per_token=INPUT_COST_PER_TOKEN,
+                output_cost_per_token=OUTPUT_COST_PER_TOKEN,
+            )
+            register_scenario(
+                scenario_id,
+                routes.model_copy(
+                    update={
+                        "routes": {
+                            **routes.routes,
+                            "GET /files/file-in-$REQUEST_ID/content": TextResponse(
+                                content_type="application/jsonl", body=batch_input_file(model).decode()
+                            ),
+                        }
+                    }
+                ),
+            )
+            key: Final = scenario.key(models=[model])
+            uploaded: Final = proxy.request_multipart(
+                "/v1/files",
+                {"purpose": "batch", "target_model_names": model},
+                {"file": ("in.jsonl", batch_input_file(model), "application/jsonl")},
+                key=key,
+            )
+            assert uploaded.status_code == 200, uploaded.text
+            created: Final = proxy.request(
+                "POST",
+                "/v1/batches",
+                {
+                    "input_file_id": string_value(JSON_OBJECT.validate_json(uploaded.content)["id"]),
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                    "model": model,
+                },
+                key=key,
+            )
+            assert created.status_code == 200, created.text
+            assert eventually(events.qsize, lambda count: count >= 3, seconds=90) == 3
+            rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT spend, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" '
+                    "WHERE api_key=%s AND call_type='aretrieve_batch'",
+                    (sha256(key.encode()).hexdigest(),),
+                    database_url=database,
+                ),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+            assert float(rows[0]["spend"]) == pytest.approx(BATCH_SPEND)
+            assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (
+                BATCH_PROMPT_TOKENS,
+                BATCH_COMPLETION_TOKENS,
+            )
+        assert events.qsize() == 3
+        received: Final = tuple(events.get_nowait() for _ in range(3))
+        assert {(event["logger"], event["hook"]) for event in received} == {
+            ("SyncRedactionProbe", "sync"),
+            ("RedactionProbe", "async"),
+            ("DualRedactionProbe", "async"),
+        }
+        for event in received:
+            standard: Final = object_value(event["standard"])
+            assert standard["response_cost"] == pytest.approx(BATCH_SPEND)
+            usage: Final = object_value(object_value(event["response"])["usage"])
+            assert (usage["prompt_tokens"], usage["completion_tokens"]) == (
+                BATCH_PROMPT_TOKENS,
+                BATCH_COMPLETION_TOKENS,
+            )

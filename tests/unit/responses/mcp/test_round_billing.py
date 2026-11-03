@@ -4,9 +4,10 @@ from typing import Final
 
 import pytest
 
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.responses.mcp.round_billing import billed_for_every_round, merged_round_usage, summed_cost_breakdown
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-from litellm.types.utils import CostBreakdown
+from litellm.types.utils import CostBreakdown, ModelResponse, Usage
 
 
 def _round(response_id: str, response_cost: object, served_from_cache: bool = False) -> ResponsesAPIResponse:
@@ -216,3 +217,71 @@ def test_a_round_served_from_the_response_cache_drops_out_of_the_breakdown(
     )
 
     assert breakdown == (None if kept_breakdown is None else breakdowns[kept_breakdown])
+
+
+def _anthropic_chat_round(response_id: str, anthropic_usage: Mapping[str, object]) -> ModelResponse:
+    response: Final = ModelResponse(
+        id=response_id,
+        model="claude-haiku-5-5",
+        usage=AnthropicConfig().calculate_usage(anthropic_usage, reasoning_content=None),
+    )
+    response._hidden_params["response_cost"] = 0.001
+    return response
+
+
+def _usage_of(response: ModelResponse) -> Usage:
+    usage: Final = response.usage
+    assert isinstance(usage, Usage)
+    return usage
+
+
+def test_billed_chat_usage_sums_every_provider_counter_and_adds_no_field_the_rounds_lacked():
+    first: Final = _anthropic_chat_round(
+        "msg_first",
+        MappingProxyType(
+            {
+                "input_tokens": 400,
+                "output_tokens": 10,
+                "cache_creation_input_tokens": 50,
+                "cache_read_input_tokens": 30,
+                "cache_creation": MappingProxyType({"ephemeral_5m_input_tokens": 50, "ephemeral_1h_input_tokens": 0}),
+                "server_tool_use": MappingProxyType({"web_search_requests": 1}),
+                "service_tier": "standard",
+            }
+        ),
+    )
+    final: Final = _anthropic_chat_round(
+        "msg_final",
+        MappingProxyType(
+            {
+                "input_tokens": 500,
+                "output_tokens": 20,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 80,
+                "cache_creation": MappingProxyType({"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}),
+                "server_tool_use": MappingProxyType({"web_search_requests": 2}),
+                "service_tier": "priority",
+            }
+        ),
+    )
+
+    billed: Final = _usage_of(billed_for_every_round(first=first, first_breakdown=None, final=final, final_breakdown=None))
+    first_usage: Final = _usage_of(first)
+    final_usage: Final = _usage_of(final)
+
+    assert billed.model_dump(exclude_none=True).keys() == first_usage.model_dump(exclude_none=True).keys()
+    assert billed.prompt_tokens == first_usage.prompt_tokens + final_usage.prompt_tokens
+    assert billed.completion_tokens == first_usage.completion_tokens + final_usage.completion_tokens
+    assert billed["cache_read_input_tokens"] == 30 + 80
+    assert billed["cache_creation_input_tokens"] == 50 + 0
+    assert billed.server_tool_use is not None
+    assert billed.server_tool_use.web_search_requests == 1 + 2
+    assert billed.prompt_tokens_details is not None
+    assert billed.prompt_tokens_details.cached_tokens == 30 + 80
+    assert billed.prompt_tokens_details.model_dump(exclude_none=True) == {
+        key: first_value + final_value
+        for key, first_value in first_usage.prompt_tokens_details.model_dump(exclude_none=True).items()
+        if isinstance(first_value, int)
+        and isinstance(final_value := final_usage.prompt_tokens_details.model_dump()[key], int)
+    } | {"cache_creation_token_details": {"ephemeral_5m_input_tokens": 50, "ephemeral_1h_input_tokens": 0}}
+    assert billed["service_tier"] == "priority"

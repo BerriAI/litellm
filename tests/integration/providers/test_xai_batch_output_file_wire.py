@@ -220,11 +220,10 @@ def test_xai_batch_output_file_is_sized_by_the_batch_job_and_never_downloaded_or
             raw_batch_id,
             len(content.content),
         ), listed_output
-        assert _results_reads(gateway, batch, raw_batch_id) == settled_reads
-
-        file_lookups: Final = tuple(
-            path for path in _upstream_paths(gateway, batch.upstream.scenario_id) if "/v1/files/batch_" in path
-        )
+        upstream_paths: Final = _upstream_paths(gateway, batch.upstream.scenario_id)
+        results_reads: Final = sum(path.endswith(f"/{raw_batch_id}/results") for path in upstream_paths)
+        assert results_reads == settled_reads > 0, upstream_paths
+        file_lookups: Final = tuple(path for path in upstream_paths if "/v1/files/batch_" in path)
         assert file_lookups == (), f"xAI batch id was looked up as a file: {file_lookups}"
 
 

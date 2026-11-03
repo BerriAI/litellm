@@ -48,6 +48,8 @@ from tests.integration._support.database import read_rows
 from tests.integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 T = TypeVar("T")
 
 

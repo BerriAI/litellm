@@ -119,6 +119,9 @@ class PromptGuardGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,

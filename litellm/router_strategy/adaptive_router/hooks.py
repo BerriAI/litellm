@@ -170,12 +170,7 @@ def _assistant_content_and_tool_calls(response_obj: Any) -> tuple[object, Sequen
     return content, tool_calls
 
 
-class AdaptiveRouterPostCallHook(CustomLogger):
-    """One hook instance per AdaptiveRouter. Registered into litellm.callbacks."""
-
-    def __init__(self, adaptive_router: AdaptiveRouter) -> None:
-        self.adaptive_router = adaptive_router
-
+class AdaptiveRouterResponseHeaderHook(CustomLogger):
     async def async_post_call_response_headers_hook(
         self,
         data: Mapping[str, object],
@@ -199,6 +194,13 @@ class AdaptiveRouterPostCallHook(CustomLogger):
         if not chosen:
             return None
         return {ADAPTIVE_ROUTER_RESPONSE_HEADER: chosen}
+
+
+class AdaptiveRouterPostCallHook(CustomLogger):
+    """One hook instance per AdaptiveRouter. Registered into litellm.callbacks."""
+
+    def __init__(self, adaptive_router: AdaptiveRouter) -> None:
+        self.adaptive_router = adaptive_router
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._record(kwargs, response_obj, response_status=200)

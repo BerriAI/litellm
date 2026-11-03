@@ -9,6 +9,7 @@ use pyo3::{
 use serde_json::Value;
 
 use super::service::CacheCall;
+use crate::cache::HandleError;
 
 enum Pending {
     Lookup(Reply<Result<Option<Value>, Error>>),
@@ -43,16 +44,12 @@ impl PythonCache {
 
     pub fn begin(&mut self, py: Python<'_>, call: CacheCall) -> PyResult<Option<Py<PyAny>>> {
         let Some(cache) = self.cache.as_ref() else {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "cache operation without configured cache",
-            ));
+            return Err(HandleError::Unconfigured.into());
         };
         let arguments = self
             .arguments
             .as_ref()
-            .ok_or_else(|| {
-                pyo3::exceptions::PyRuntimeError::new_err("cache arguments unavailable")
-            })?
+            .ok_or(HandleError::MissingArguments)?
             .bind(py)
             .copy()?;
         let (method, result) = match call {
@@ -97,33 +94,30 @@ impl PythonCache {
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<Option<Py<PyAny>>> {
-        if let Err(error) = &result
-            && !error.is_instance_of::<pyo3::exceptions::PyException>(py)
-        {
-            self.pending = None;
-            return Err(result.err().unwrap());
-        }
+        let result = match result {
+            Err(error) if !error.is_instance_of::<pyo3::exceptions::PyException>(py) => {
+                self.pending = None;
+                return Err(error);
+            }
+            result => result,
+        };
         match self.pending.take() {
             Some(Pending::Lookup(reply)) => {
-                let value = result.map_err(|_| Error::Unavailable).and_then(|value| {
+                let value = result.map_err(Error::unavailable).and_then(|value| {
                     if value.bind(py).is_none() {
                         Ok(None)
                     } else {
                         from_py(value.bind(py))
                             .map(Some)
-                            .map_err(|_| Error::InvalidEntry)
+                            .map_err(Error::invalid_entry)
                     }
                 });
                 reply.send(value);
             }
             Some(Pending::Store(reply)) => {
-                reply.send(result.map(|_| ()).map_err(|_| Error::Unavailable));
+                reply.send(result.map(|_| ()).map_err(Error::unavailable));
             }
-            None => {
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "cache reply without pending operation",
-                ));
-            }
+            None => return Err(HandleError::NothingPending.into()),
         }
         Ok(None)
     }

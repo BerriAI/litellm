@@ -15,6 +15,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 CLAUDE_MODEL: Final = "caller-tools-claude"
 OPENAI_MODEL: Final = "caller-tools-openai"
 GEMINI_MODEL: Final = "caller-tools-gemini"

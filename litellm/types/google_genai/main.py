@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     ToolConfigDict = _genai_types.ToolConfigDict
 
     class GenerateContentRequestDict(GenerateContentRequestParametersDict):
-        generationConfig: Any | None
+        generationConfig: object | None
         tools: ToolConfigDict | None
 
     class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):

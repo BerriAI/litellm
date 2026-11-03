@@ -13,11 +13,12 @@ import copy
 import itertools
 import os
 import re
-from collections.abc import Callable, Container, Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, cast
 from urllib.parse import urlparse
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -31,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     tool_call_ids_answered_by_client,
     tool_call_ids_answered_in,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import string_field
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
@@ -71,7 +73,9 @@ MAX_CACHE_CONTROL_BLOCKS: Final = 4
 
 CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
-_GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
+_GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+)|-(0|[1-9]\d?)(?![\da-z]))?")
+_FINE_TUNED_BASE_PATTERN: Final = re.compile(r"^ft:([^:]+)")
+_O_SERIES_PATTERN: Final = re.compile(r"^o\d+(?:-|$)")
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
     {"text", "image", "image_url", "file", "input_audio", "input_text", "input_image", "input_file"}
 )
@@ -81,8 +85,40 @@ _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CONTENT_PART_ADAPTER: Final = TypeAdapter(dict[str, object])
 _ATTRIBUTE_VALUE: Final = TypeAdapter(object)
+_MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 AllToolParamValues = ChatCompletionToolParam | AllAnthropicToolsValues
+CostMap: TypeAlias = Mapping[str, Mapping[str, object]]
+
+
+def routed_model_info(value: object) -> Mapping[str, object] | None:
+    try:
+        return _MODEL_INFO_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _live_cost_map_unless(model_cost: CostMap | None) -> CostMap:
+    import litellm
+
+    if model_cost is not None:
+        return model_cost
+    return cast(CostMap, litellm.model_cost)  # cast-ok: the live map holds catalog entries
+
+
+def declared_prompt_cache_breakpoint(model_info: Mapping[str, object] | None) -> bool | None:
+    declared: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
+    return declared if isinstance(declared, bool) else None
+
+
+def routed_cost_map() -> CostMap:
+    from litellm.utils import catalog_with_runtime_registrations
+
+    return catalog_with_runtime_registrations()
+
+
+def _catalog_unless_unrouted(model_info: Mapping[str, object] | None) -> CostMap | None:
+    return None if model_info is None else routed_cost_map()
 
 
 def _validated_object_mapping(value: object) -> dict[object, object] | None:
@@ -99,6 +135,192 @@ def _validated_object_list(value: object) -> list[object] | None:
         return None
 
 
+_MessageT: Final = TypeVar("_MessageT")
+_CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
+_MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
+
+
+def _mark_carrying_blocks(fields: Mapping[str, object]) -> Sequence[object]:
+    lists: Final = tuple(fields.get(key) for key in _MARK_CARRYING_MESSAGE_FIELDS)
+    return tuple(
+        itertools.chain.from_iterable(
+            _OBJECT_LIST_ADAPTER.validate_python(value) for value in lists if isinstance(value, list)
+        )
+    )
+
+
+def _block_carries_cache_control(block: object) -> bool:
+    return isinstance(block, dict) and _CONTENT_PART_ADAPTER.validate_python(block).get("cache_control") is not None
+
+
+_ROLES_SENDING_MESSAGE_MARK_WITH_LIST_CONTENT: Final = frozenset({"tool", "function"})
+
+
+def _message_mark_reaches_provider(fields: Mapping[str, object]) -> bool:
+    if fields.get("cache_control") is None:
+        return False
+    return (
+        not isinstance(fields.get("content"), list)
+        or string_field(fields, "role") in _ROLES_SENDING_MESSAGE_MARK_WITH_LIST_CONTENT
+    )
+
+
+def cache_control_count(message: object) -> int:
+    if not isinstance(message, dict):
+        return 0
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    block_marks: Final = sum(1 for block in _mark_carrying_blocks(fields) if _block_carries_cache_control(block))
+    return int(_message_mark_reaches_provider(fields)) + block_marks
+
+
+def _fields_with_cache_control(fields: Mapping[str, object], rewrite: _CacheControlRewrite) -> Mapping[str, object]:
+    others: Final = {key: value for key, value in fields.items() if key != "cache_control"}
+    if "cache_control" not in fields:
+        return others
+    cache_control: Final = rewrite(fields["cache_control"])
+    return others if cache_control is None else {**others, "cache_control": cache_control}
+
+
+def block_with_cache_control(block: object, rewrite: _CacheControlRewrite) -> object:
+    if not isinstance(block, dict):
+        return block
+    return _fields_with_cache_control(_CONTENT_PART_ADAPTER.validate_python(block), rewrite)
+
+
+def with_cache_control(message: _MessageT, rewrite: _CacheControlRewrite) -> _MessageT:
+    if not isinstance(message, dict):
+        return message
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    blocks_rewritten: Final = {
+        key: (
+            [block_with_cache_control(block, rewrite) for block in _OBJECT_LIST_ADAPTER.validate_python(value)]
+            if key in _MARK_CARRYING_MESSAGE_FIELDS and isinstance(value, list)
+            else value
+        )
+        for key, value in fields.items()
+    }
+    return cast(  # cast-ok: the same message shape with each cache marker rewritten or dropped
+        _MessageT, _fields_with_cache_control(blocks_rewritten, rewrite)
+    )
+
+
+def dropped_cache_control(_: object) -> None:
+    return None
+
+
+def _first_marked_index(value: object) -> int | None:
+    if not isinstance(value, list):
+        return None
+    blocks: Final = _OBJECT_LIST_ADAPTER.validate_python(value)
+    return next((index for index, block in enumerate(blocks) if _block_carries_cache_control(block)), None)
+
+
+_MarkSlot: TypeAlias = tuple[str, int]
+_MESSAGE_MARK_SLOT: Final[_MarkSlot] = ("cache_control", -1)
+
+
+def _block_mark_slots(fields: Mapping[str, object], key: str) -> tuple[_MarkSlot, ...]:
+    value: Final = fields.get(key)
+    if not isinstance(value, list):
+        return ()
+    blocks: Final = _OBJECT_LIST_ADAPTER.validate_python(value)
+    return tuple((key, index) for index, block in enumerate(blocks) if _block_carries_cache_control(block))
+
+
+def _mark_slots_in_wire_order(fields: Mapping[str, object]) -> tuple[_MarkSlot, ...]:
+    content_slots: Final = _block_mark_slots(fields, "content")
+    tool_call_slots: Final = _block_mark_slots(fields, "tool_calls")
+    if not _message_mark_reaches_provider(fields):
+        return content_slots + tool_call_slots
+    if isinstance(fields.get("content"), list):
+        return content_slots + (_MESSAGE_MARK_SLOT,) + tool_call_slots
+    return (_MESSAGE_MARK_SLOT,) + content_slots + tool_call_slots
+
+
+def _blocks_without_marks(key: str, value: object, dropped_slots: frozenset[_MarkSlot]) -> object:
+    if key not in _MARK_CARRYING_MESSAGE_FIELDS or not isinstance(value, list):
+        return value
+    return [
+        block_with_cache_control(block, dropped_cache_control) if (key, index) in dropped_slots else block
+        for index, block in enumerate(_OBJECT_LIST_ADAPTER.validate_python(value))
+    ]
+
+
+def _without_oldest_marks(message: _MessageT, dropped: int) -> _MessageT:
+    if dropped == 0 or not isinstance(message, dict):
+        return message
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    dropped_slots: Final = frozenset(_mark_slots_in_wire_order(fields)[:dropped])
+    blocks_unmarked: Final = {key: _blocks_without_marks(key, value, dropped_slots) for key, value in fields.items()}
+    return cast(  # cast-ok: the same message with its oldest wire-order marks dropped
+        _MessageT,
+        _fields_with_cache_control(blocks_unmarked, dropped_cache_control)
+        if _MESSAGE_MARK_SLOT in dropped_slots
+        else blocks_unmarked,
+    )
+
+
+def tool_message_with_single_cache_mark(message: _MessageT) -> _MessageT:
+    if not isinstance(message, dict):
+        return message
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    content: Final = fields.get("content")
+    if fields.get("role") != "tool" or not isinstance(content, list):
+        return message
+    kept_index: Final = None if fields.get("cache_control") is not None else _first_marked_index(content)
+    return cast(  # cast-ok: the same tool message keeping only the mark its single cache point reads
+        _MessageT,
+        {
+            **fields,
+            "content": [
+                block if index == kept_index else block_with_cache_control(block, dropped_cache_control)
+                for index, block in enumerate(_OBJECT_LIST_ADAPTER.validate_python(content))
+            ],
+        },
+    )
+
+
+_BudgetSpend: TypeAlias = Callable[[tuple[int, int], int], tuple[int, int]]
+
+
+def _newest_marks_kept(state: tuple[int, int], marks: int) -> tuple[int, int]:
+    remaining, _ = state
+    kept: Final = min(marks, remaining)
+    return remaining - kept, marks - kept
+
+
+def _whole_message_kept(state: tuple[int, int], marks: int) -> tuple[int, int]:
+    remaining, _ = state
+    if marks > remaining:
+        return remaining, marks
+    return remaining - marks, 0
+
+
+def _messages_within_budget(
+    messages: Sequence[_MessageT], reserved_marks: int, spend: _BudgetSpend
+) -> Sequence[_MessageT]:
+    budget: Final = max(MAX_CACHE_CONTROL_BLOCKS - reserved_marks, 0)
+    newest_first: Final = tuple(reversed(messages))
+    budget_after_each: Final = itertools.accumulate(
+        (cache_control_count(message) for message in newest_first), spend, initial=(budget, 0)
+    )
+    dropped_counts: Final = tuple(dropped for _, dropped in itertools.islice(budget_after_each, 1, None))
+    kept_newest_first: Final = tuple(
+        _without_oldest_marks(message, dropped) for message, dropped in zip(newest_first, dropped_counts)
+    )
+    return tuple(reversed(kept_newest_first))
+
+
+def newest_marks_within_cache_control_limit(messages: Sequence[_MessageT], reserved_marks: int) -> Sequence[_MessageT]:
+    return _messages_within_budget(messages, reserved_marks, _newest_marks_kept)
+
+
+def whole_messages_within_cache_control_limit(
+    messages: Sequence[_MessageT], reserved_marks: int
+) -> Sequence[_MessageT]:
+    return _messages_within_budget(messages, reserved_marks, _whole_message_kept)
+
+
 def _part_with_cache_control_renamed(part: object) -> object:
     if not _accepts_prompt_cache_breakpoint(part):
         return part
@@ -113,40 +335,90 @@ def configured_injection_points(value: object) -> Sequence[CacheControlInjection
     return tuple(cast(CacheControlInjectionPoint, entry) for entry in value if isinstance(entry, dict))
 
 
-def _served_provider_for_model(model: str) -> str | None:
+def _served_provider_for_model(model: str, api_base: object = None) -> str | None:
     from litellm.exceptions import BadRequestError
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     try:
-        _, provider, _, _ = get_llm_provider(model=model)
+        _, provider, _, _ = get_llm_provider(model=model, api_base=api_base if isinstance(api_base, str) else None)
     except BadRequestError:
         return None
     return provider
 
 
-def supports_openai_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None = None) -> bool:
+def supports_openai_prompt_cache_breakpoint(
+    model: str, custom_llm_provider: str | None = None, model_info: Mapping[str, object] | None = None
+) -> bool:
+    return openai_prompt_cache_breakpoint_support(model, custom_llm_provider, model_info) is True
+
+
+def openai_prompt_cache_breakpoint_support(
+    model: str, custom_llm_provider: str | None = None, model_info: Mapping[str, object] | None = None
+) -> bool | None:
+    declared: Final = declared_prompt_cache_breakpoint(model_info)
+    if declared is not None:
+        return declared
+    model_cost: Final = _catalog_unless_unrouted(model_info)
     hosted_flag: Final = (
         None
         if custom_llm_provider is None
-        else _hosted_openai_dialect_flag(model, custom_llm_provider, _served_provider_for_model)
+        else _hosted_openai_dialect_flag(model, custom_llm_provider, _served_provider_for_model, model_cost)
     )
     if hosted_flag is not None:
         return hosted_flag
-    model_map_flag: Final = _model_map_prompt_cache_breakpoint_flag(model)
+    model_map_flag: Final = _model_map_prompt_cache_breakpoint_flag(model, model_cost)
     if model_map_flag is not None:
         return model_map_flag
-    version_match: Final = _GPT_VERSION_PATTERN.match(model.rsplit("/", 1)[-1].lower())
-    if version_match is None:
+    fine_tuned_base: Final = _FINE_TUNED_BASE_PATTERN.match(model.rsplit("/", 1)[-1])
+    if fine_tuned_base is not None:
+        return False if _named_model_breakpoint_support(fine_tuned_base.group(1)) is False else None
+    return _named_model_breakpoint_support(model)
+
+
+class _DeclaredBaseModels(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    base_model: object = None
+    model_info: object = None
+
+    def names(self) -> tuple[str, ...]:
+        model_info: Final = _validated_object_mapping(self.model_info) or {}
+        candidates: Final = (self.base_model, model_info.get("base_model"))
+        return tuple(name for name in candidates if isinstance(name, str) and name)
+
+
+def deployment_model_info(litellm_params: object) -> Mapping[str, object] | None:
+    return routed_model_info(_DeclaredBaseModels.model_validate(litellm_params).model_info)
+
+
+def deployment_prompt_cache_breakpoint_support(
+    model: str, custom_llm_provider: str, litellm_params: object
+) -> bool | None:
+    """``openai_prompt_cache_breakpoint_support`` for a deployment, read from its declared base model first."""
+    declared: Final = _DeclaredBaseModels.model_validate(litellm_params)
+    model_info: Final = routed_model_info(declared.model_info)
+    supports: Final = (
+        openai_prompt_cache_breakpoint_support(name, custom_llm_provider, model_info)
+        for name in dict.fromkeys((*declared.names(), model))
+    )
+    return next((support for support in supports if support is not None), None)
+
+
+def _named_model_breakpoint_support(model: str) -> bool | None:
+    bare_model: Final = model.rsplit("/", 1)[-1].lower()
+    if _O_SERIES_PATTERN.match(bare_model) is not None:
         return False
-    version: Final = (int(version_match.group(1)), int(version_match.group(2) or 0))
+    version_match: Final = _GPT_VERSION_PATTERN.match(bare_model)
+    if version_match is None:
+        return None
+    version: Final = (int(version_match.group(1)), int(version_match.group(2) or version_match.group(3) or 0))
     return version >= OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION
 
 
-def _model_map_prompt_cache_breakpoint_flag(model: str) -> bool | None:
-    import litellm
-
-    entries: Final = (litellm.model_cost.get(key) for key in (model, model.rsplit("/", 1)[-1]))
-    flags: Final = (entry.get("supports_prompt_cache_breakpoint") for entry in entries if isinstance(entry, dict))
+def _model_map_prompt_cache_breakpoint_flag(model: str, model_cost: CostMap | None = None) -> bool | None:
+    cost_map: Final = _live_cost_map_unless(model_cost)
+    entries: Final = (cost_map.get(key) for key in (model, model.rsplit("/", 1)[-1]))
+    flags: Final = (entry.get("supports_prompt_cache_breakpoint") for entry in entries if isinstance(entry, Mapping))
     return next((flag is True for flag in flags if flag is not None), None)
 
 
@@ -159,7 +431,10 @@ def _hosted_entry_flag(entry: Mapping[str, object], resolve_provider: Callable[[
 
 
 def _hosted_openai_dialect_flag(
-    model: str, custom_llm_provider: str | None, resolve_provider: Callable[[str], str | None]
+    model: str,
+    custom_llm_provider: str | None,
+    resolve_provider: Callable[[str], str | None],
+    model_cost: CostMap | None = None,
 ) -> bool | None:
     """
     Explicit opt-in for an OpenAI-shaped deployment served by another provider.
@@ -176,21 +451,26 @@ def _hosted_openai_dialect_flag(
     row of the same name, so an exact entry only speaks for a deployment when it is
     keyed for that deployment's provider.
     """
-    import litellm
-
-    exact_entry: Final = litellm.model_cost.get(model)
-    exact_provider: Final = exact_entry.get("litellm_provider") if isinstance(exact_entry, dict) else None
+    cost_map: Final = _live_cost_map_unless(model_cost)
+    exact_entry: Final = cost_map.get(model)
+    exact_provider: Final = exact_entry.get("litellm_provider") if isinstance(exact_entry, Mapping) else None
     if custom_llm_provider is None and (exact_provider == "openai" or ("/" not in model and exact_provider is None)):
         return None
     provider: Final = custom_llm_provider or resolve_provider(model)
     if provider is None or provider == "openai":
         return None
-    if isinstance(exact_entry, dict) and exact_provider == provider:
+    if isinstance(exact_entry, Mapping) and exact_provider == provider:
         return _hosted_entry_flag(exact_entry, lambda: provider)
+    entries: Final = (cost_map.get(candidate) for candidate in _provider_cost_map_keys(model, provider))
+    flags: Final = (_hosted_entry_flag(entry, lambda: provider) for entry in entries if isinstance(entry, Mapping))
+    return next((flag for flag in flags if flag is not None), None)
+
+
+def _provider_cost_map_keys(model: str, provider: str) -> tuple[str, ...]:
     from litellm.utils import get_potential_model_names
 
     names: Final = get_potential_model_names(model, provider)
-    candidates: Final = (
+    return (
         names["combined_model_name"],
         names["region_free_combined_model_name"],
         names["split_model"],
@@ -198,9 +478,60 @@ def _hosted_openai_dialect_flag(
         names["stripped_model_name"],
         names["provider_prefixed_model_name"],
     )
-    entries: Final = (litellm.model_cost.get(candidate) for candidate in candidates)
-    flags: Final = (_hosted_entry_flag(entry, lambda: provider) for entry in entries if isinstance(entry, dict))
-    return next((flag for flag in flags if flag is not None), None)
+
+
+def _cost_map_lists_model_for_provider(model: str, provider: str, model_cost: CostMap) -> bool:
+    entries: Final = (model_cost.get(key) for key in (model, *_provider_cost_map_keys(model, provider)))
+    return any(isinstance(entry, Mapping) and entry.get("litellm_provider") == provider for entry in entries)
+
+
+_PROVIDERS_READING_THE_FLAG_AS_CACHE_POINT: Final = frozenset(("bedrock", "bedrock_converse"))
+_PROVIDERS_HOSTING_OPENAIS_API: Final = frozenset(("azure", "azure_ai", "bedrock_mantle"))
+
+
+def _declared_hosted_flag(
+    declared: bool, model: str, provider: str | None, model_cost: CostMap, deployment_provider: object
+) -> bool | None:
+    """
+    A deployment's own ``supports_prompt_cache_breakpoint`` picks OpenAI's breakpoint only where the
+    request goes out OpenAI-shaped. Bedrock reads the same flag on every route as whether Converse takes
+    a ``cachePoint``, and a provider building Anthropic messages takes ``cache_control``, so both keep
+    the Anthropic mark. A gateway or self-hosted server (OpenRouter, a LiteLLM proxy, vLLM) may pass
+    the request on to Anthropic, so there the flag only picks OpenAI's breakpoint for a model the cost
+    map, or the deployment's own ``litellm_provider``, lists under that provider.
+    """
+    if provider is None or provider == "openai":
+        return None
+    return (
+        declared
+        and provider not in _PROVIDERS_READING_THE_FLAG_AS_CACHE_POINT
+        and (
+            provider in _PROVIDERS_HOSTING_OPENAIS_API
+            or deployment_provider == provider
+            or _cost_map_lists_model_for_provider(model, provider, model_cost)
+        )
+        and _sends_openai_shaped_chat(model, provider)
+    )
+
+
+@lru_cache(maxsize=512)
+def _sends_openai_shaped_chat(model: str, custom_llm_provider: str) -> bool:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+    from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+    from litellm.llms.openai.openai import OpenAIConfig
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    try:
+        served_model, provider = resolve_model_and_provider_for_metadata(model, custom_llm_provider)
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=served_model, provider=LlmProviders(provider)
+        )
+    except (BadRequestError, ValueError):
+        return False
+    return isinstance(chat_config, (OpenAIGPTConfig, OpenAIConfig, AzureOpenAIConfig))
 
 
 def targets_openai_api(api_base: object) -> bool:
@@ -234,22 +565,41 @@ def _as_object_list(value: object | None) -> list[object] | None:
     return _validated_object_list(value)
 
 
-def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answered_tool_ids: Container[str]) -> bool:
+def _server_tool_call_id(tool_call: object) -> str | None:
+    tool_call_id: Final = _attribute_or_key(tool_call, "id")
+    if isinstance(tool_call_id, str) and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return tool_call_id
+    return None
+
+
+def _tool_call_carries_cache_breakpoint(tool_call: object, client_tool_call_ids: Container[str]) -> bool:
     if _attribute_or_key(tool_call, "cache_control") is None:
         return False
+    server_tool_call_id: Final = _server_tool_call_id(tool_call)
+    return server_tool_call_id is None or server_tool_call_id in client_tool_call_ids
 
-    return not tool_call_is_rebuilt_as_server_tool_use(
-        _attribute_or_key(tool_call, "id"), _attribute_or_key(message, "provider_specific_fields"), answered_tool_ids
+
+def _server_tool_call_ids_without_a_kept_result(message: object) -> Iterator[str]:
+    provider_specific_fields: Final = _attribute_or_key(message, "provider_specific_fields")
+    tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls")) or ()
+    return (
+        tool_call_id
+        for tool_call in tool_calls
+        if (tool_call_id := _server_tool_call_id(tool_call)) is not None
+        and not tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields)
     )
 
 
-def _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
+def _client_tool_call_ids_when_a_server_tool_call_is_marked(
     messages: Sequence[object], model: str | None = None, custom_llm_provider: str | None = None
 ) -> frozenset[str]:
     if not _marks_a_server_tool_call(messages):
         return frozenset()
     if model is not None and not _builds_anthropic_messages(model, custom_llm_provider):
-        return tool_call_ids_answered_in(messages)
+        server_calls_sent_as_client_calls: Final = itertools.chain.from_iterable(
+            map(_server_tool_call_ids_without_a_kept_result, messages)
+        )
+        return tool_call_ids_answered_in(messages) | frozenset(server_calls_sent_as_client_calls)
     return tool_call_ids_answered_by_client(messages, _keeps_mid_conversation_system(model, custom_llm_provider))
 
 
@@ -306,12 +656,7 @@ def _model_info_flags_mid_conversation_system(model: str, custom_llm_provider: s
 
 
 def _is_marked_server_tool_call(tool_call: object) -> bool:
-    tool_call_id: Final = _attribute_or_key(tool_call, "id")
-    return (
-        isinstance(tool_call_id, str)
-        and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
-        and _attribute_or_key(tool_call, "cache_control") is not None
-    )
+    return _server_tool_call_id(tool_call) is not None and _attribute_or_key(tool_call, "cache_control") is not None
 
 
 def _tool_carries_cache_breakpoint(tool: object) -> bool:
@@ -340,6 +685,20 @@ CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_
 
 EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
+
+
+def _accepts_cache_control(part: object) -> bool:
+    match part:
+        case {"type": "thinking" | "redacted_thinking"}:
+            return False
+        case dict():
+            return True
+        case _:
+            return False
+
+
+def _last_index_accepting_cache_control(parts: Sequence[object]) -> int | None:
+    return next((index for index in reversed(range(len(parts))) if _accepts_cache_control(parts[index])), None)
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -413,7 +772,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         remaining_points: Final = tuple(point for point in injection_points if point.get("location") != "message")
 
-        custom_llm_provider: Final = _custom_llm_provider(non_default_params, injection_points[0])
+        request_params: Final = cast(Mapping[str, object], non_default_params)  # cast-ok: base hook's bare dict
+        custom_llm_provider: Final = _custom_llm_provider(request_params, injection_points[0])
         stamped_dialect: Final = injection_points[0].get("_litellm_openai_dialect")
         openai_dialect: Final = (
             stamped_dialect
@@ -421,8 +781,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             else AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
                 model,
                 custom_llm_provider,
-                non_default_params.get("api_base") or non_default_params.get("base_url"),
-                non_default_params.get("prompt_cache_options"),
+                request_params.get("api_base") or request_params.get("base_url"),
+                request_params.get("prompt_cache_options"),
+                routed_model_info(request_params.get("model_info")),
             )
         )
         # A provisional message list defers every role-targeted point to the pass holding
@@ -443,7 +804,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         reserved_blocks: Final = AnthropicCacheControlHook._blocks_reserved_outside_messages(
             remaining_points, external_breakpoints, openai_dialect
         )
-        answered_tool_ids: Final = _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
+        answered_tool_ids: Final = _client_tool_call_ids_when_a_server_tool_call_is_marked(
             processed_messages, model, custom_llm_provider
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(
@@ -493,23 +854,38 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         custom_llm_provider: str | None,
         api_base: object = None,
         prompt_cache_options: object = None,
+        model_info: Mapping[str, object] | None = None,
     ) -> bool:
         if model is None:
             return False
-        hosted_flag: Final = _hosted_openai_dialect_flag(
-            model, custom_llm_provider, AnthropicCacheControlHook._resolve_provider
+        declared: Final = declared_prompt_cache_breakpoint(model_info)
+        hosted_flag: Final = (
+            _hosted_openai_dialect_flag(
+                model,
+                custom_llm_provider,
+                lambda name: AnthropicCacheControlHook._resolve_provider(name, api_base),
+                _catalog_unless_unrouted(model_info),
+            )
+            if declared is None
+            else _declared_hosted_flag(
+                declared,
+                model,
+                custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model, api_base),
+                routed_cost_map(),
+                None if model_info is None else model_info.get("litellm_provider"),
+            )
         )
         if hosted_flag is not None:
             return hosted_flag
-        if not supports_openai_prompt_cache_breakpoint(model):
+        if not supports_openai_prompt_cache_breakpoint(model, model_info=model_info):
             return False
         if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
             return False
         return prompt_cache_options is not None or targets_openai_api(api_base)
 
     @staticmethod
-    def _resolve_provider(model: str) -> str | None:
-        return _served_provider_for_model(model)
+    def _resolve_provider(model: str, api_base: object = None) -> str | None:
+        return _served_provider_for_model(model, api_base)
 
     @staticmethod
     def count_request_cache_breakpoints(
@@ -520,7 +896,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         message_list: Final = tuple(messages)
         client_answers: Final = (
-            _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(message_list)
+            _client_tool_call_ids_when_a_server_tool_call_is_marked(message_list)
             if answered_tool_ids is None
             else answered_tool_ids
         )
@@ -612,7 +988,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         so earlier points win when slots are scarce.
         """
         client_answers: Final = (
-            _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(messages)
+            _client_tool_call_ids_when_a_server_tool_call_is_marked(messages)
             if answered_tool_ids is None
             else answered_tool_ids
         )
@@ -702,11 +1078,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
         tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls"))
         tool_call_count: Final = (
-            sum(
-                1
-                for tool_call in tool_calls
-                if _tool_call_carries_cache_breakpoint(tool_call, message, answered_tool_ids)
-            )
+            sum(1 for tool_call in tool_calls if _tool_call_carries_cache_breakpoint(tool_call, answered_tool_ids))
             if tool_calls
             else 0
         )
@@ -740,10 +1112,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # 1. if string, insert cache control in the message
         if isinstance(message_content, str):
             message["cache_control"] = control
-        # 2. list of objects - only apply to last item per Anthropic spec
+        # 2. list of objects - only apply to the last item Claude accepts a breakpoint on
         elif isinstance(message_content, list):
-            if len(message_content) > 0 and isinstance(message_content[-1], dict):
-                message_content[-1]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
+            markable_index: Final = _last_index_accepting_cache_control(message_content)
+            if markable_index is not None:
+                message_content[markable_index]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
         return message
 
     @staticmethod
@@ -908,6 +1281,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         custom_llm_provider: str | None,
         api_base: object,
         prompt_cache_options: object,
+        model_info: Mapping[str, object] | None = None,
     ) -> Sequence[Mapping[str, object]]:
         """Carry onto the points what the prompt-management hook never receives.
 
@@ -919,7 +1293,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         across requests.
         """
         with_dialect: Final = AnthropicCacheControlHook._stamped_with_dialect(
-            points, model, custom_llm_provider, api_base, prompt_cache_options
+            points, model, custom_llm_provider, api_base, prompt_cache_options, model_info
         )
         stamped_earlier: Final = any(EXTERNAL_BREAKPOINTS_STAMP in point for point in with_dialect)
         if external_breakpoints == 0 and not stamped_earlier:
@@ -933,14 +1307,17 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         custom_llm_provider: str | None,
         api_base: object,
         prompt_cache_options: object,
+        model_info: Mapping[str, object] | None = None,
     ) -> Sequence[Mapping[str, object]]:
-        if not AnthropicCacheControlHook._may_target_openai_prompt_cache_breakpoint(model, custom_llm_provider):
+        if model_info is None and not AnthropicCacheControlHook._may_target_openai_prompt_cache_breakpoint(
+            model, custom_llm_provider
+        ):
             return points
         return AnthropicCacheControlHook._stamped(
             points,
             "_litellm_openai_dialect",
             AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
-                model, custom_llm_provider, api_base, prompt_cache_options
+                model, custom_llm_provider, api_base, prompt_cache_options, model_info
             ),
         )
 
@@ -999,6 +1376,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         cache_control: object = None,
         request_kwargs: object = None,
         on_messages_route: bool = False,
+        model_info: Mapping[str, object] | None = None,
     ) -> list[CacheControlInjectionPoint]:
         """Default breakpoints when ``litellm.enable_anthropic_prompt_caching`` is on.
 
@@ -1016,7 +1394,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if litellm.enable_anthropic_prompt_caching is not True and enable_prompt_caching is not True:
             return []
 
-        if not supports_anthropic_cache_control(model, custom_llm_provider):
+        if not supports_anthropic_cache_control(model, custom_llm_provider, model_info):
             return []
 
         if AnthropicCacheControlHook._request_has_cache_control(
@@ -1094,6 +1472,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         tools: list | None = None,
         enable_prompt_caching: bool | None = None,
         api_base: object = None,
+        model_info: Mapping[str, object] | None = None,
     ) -> None:
         """For /chat/completions: resolve the injection points the request should carry.
 
@@ -1120,6 +1499,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 custom_llm_provider,
                 api_base,
                 non_default_params.get("prompt_cache_options"),
+                model_info,
             )
             non_default_params["cache_control_injection_points"] = (
                 AnthropicCacheControlHook._stamped(stamped, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
@@ -1136,6 +1516,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             enable_prompt_caching=enable_prompt_caching,
             cache_control=non_default_params.get("cache_control"),
             request_kwargs=non_default_params,
+            model_info=model_info,
         )
         if points:
             non_default_params["cache_control_injection_points"] = points
@@ -1254,6 +1635,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 cache_control=cache_control,
                 request_kwargs=kwargs,
                 on_messages_route=True,
+                model_info=routed_model_info(kwargs.get("model_info")),
             )
             if model is not None
             else ()
@@ -1262,7 +1644,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return messages, system
 
         openai_dialect: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
-            model, custom_llm_provider, api_base, kwargs.get("prompt_cache_options")
+            model,
+            custom_llm_provider,
+            api_base,
+            kwargs.get("prompt_cache_options"),
+            routed_model_info(kwargs.get("model_info")),
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system)
         messages, system, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
@@ -1387,3 +1773,25 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 llm_router=None,
             )
         return None
+
+
+def messages_within_cache_control_cap(
+    messages: Sequence[_MessageT], tools: object, cache_control: object = None, request_kwargs: object = None
+) -> Sequence[_MessageT]:
+    """Under drop_params, drop the oldest message hints the provider's cache_control cap has no room for.
+
+    Tool hints and a top-level ``cache_control`` stay on the wire, so they are reserved first.
+    """
+    reserved_marks: Final = AnthropicCacheControlHook.count_external_cache_breakpoints(
+        _validated_object_list(tools), cache_control, request_kwargs
+    )
+    kept: Final = newest_marks_within_cache_control_limit(messages, reserved_marks)
+    dropped: Final = sum(map(cache_control_count, messages)) - sum(map(cache_control_count, kept))
+    if dropped > 0:
+        verbose_logger.warning(
+            "Dropped %d cache_control hint(s) from the oldest messages because drop_params is on and the "
+            "provider accepts at most %d cache_control blocks per request",
+            dropped,
+            MAX_CACHE_CONTROL_BLOCKS,
+        )
+    return kept
