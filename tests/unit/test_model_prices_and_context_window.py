@@ -935,7 +935,12 @@ class _BedrockWindowRow(BaseModel):
     max_input_tokens: int | None = None
 
 
-_BEDROCK_PROVIDERS: Final = frozenset({"bedrock", "bedrock_converse"})
+_BEDROCK_PROVIDERS: Final = frozenset({"bedrock", "bedrock_converse", "bedrock_mantle"})
+_ROWS_NAMING_A_PREFIXED_MODEL_UNDER_ANOTHER_ID: Final = (
+    ("moonshot.kimi-k2-thinking", "moonshotai.kimi-k2-thinking"),
+    ("bedrock_mantle/moonshotai.kimi-k2-thinking", "moonshotai.kimi-k2-thinking"),
+    ("bedrock_mantle/qwen.qwen3-next-80b-a3b-instruct", "qwen.qwen3-next-80b-a3b"),
+)
 _BEDROCK_PREFIXED_ROW: Final = re.compile(r"bedrock/(?:[a-z0-9-]+/)?(?P<model>[^/]+)")
 
 
@@ -968,3 +973,13 @@ def test_bare_bedrock_rows_admit_every_prompt_their_prefixed_rows_admit(path: Pa
         f"{key}: {windows[key]} < {widest[key]}" for key in bare_with_prefixed_rows if windows[key] < widest[key]
     )
     assert narrower == ()
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+@pytest.mark.parametrize(("row", "model"), _ROWS_NAMING_A_PREFIXED_MODEL_UNDER_ANOTHER_ID)
+def test_bedrock_rows_under_another_model_id_admit_every_prompt_its_prefixed_rows_admit(
+    path: Path, row: str, model: str
+) -> None:
+    windows: Final = _bedrock_input_windows(path)
+    widest: Final = _widest_prefixed_window_per_model(windows)
+    assert windows[row] >= widest[model]

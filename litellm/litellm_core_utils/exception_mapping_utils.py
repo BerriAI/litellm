@@ -952,6 +952,7 @@ def _map_bedrock_exception(
         or "prompt is too long" in error_str
         or "prompt: length: 1.." in error_str
         or "Too many input tokens" in error_str
+        or ExceptionCheckers.is_error_str_context_window_exceeded(error_str)
     ):
         raise ContextWindowExceededError(
             message=f"BedrockException: Context Window Error - {error_str}",

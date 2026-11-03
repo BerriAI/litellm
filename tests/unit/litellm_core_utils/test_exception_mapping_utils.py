@@ -1357,6 +1357,7 @@ PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW = (
     "anthropic",
     "azure",
     "azure_ai",
+    "bedrock",
     "databricks",
     "deepseek",
     "fireworks_ai",
@@ -1726,6 +1727,28 @@ def test_bedrock_500_preserves_provider_response_headers():
         )
 
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-map-500"
+
+
+def test_bedrock_converse_maximum_context_length_error_maps_to_context_window_exceeded():
+    original_exception: Final = BedrockError(
+        status_code=400,
+        message=(
+            '{"message":"The model returned the following errors: ErrorEvent { error: APIError { type: '
+            '\\"BadRequestError\\", code: Some(400), message: \\"This model\'s maximum context length is 262144 '
+            "tokens. However, you requested 16 output tokens and your prompt contains at least 262129 input tokens"
+            '\\" } }"}'
+        ),
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as exc_info:
+        exception_type(
+            model="qwen.qwen3-coder-next",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "maximum context length is 262144 tokens" in exc_info.value.message
 
 
 @pytest.mark.parametrize(
