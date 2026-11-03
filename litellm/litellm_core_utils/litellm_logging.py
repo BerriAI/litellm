@@ -2888,13 +2888,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         self.model_call_details["response_cost"] = own_cost + failed_attempts_cost
         if self.cost_breakdown is not None:
-            self.cost_breakdown = self.cost_breakdown | CostBreakdown(
-                total_cost=own_cost + failed_attempts_cost,
-                additional_costs={
-                    **self.cost_breakdown.get("additional_costs", {}),
-                    "failed_attempts_cost": failed_attempts_cost,
-                },
-            )
+            self.cost_breakdown = _with_failed_attempts_cost(self.cost_breakdown, own_cost, failed_attempts_cost)
 
     def claim_stream_failure_report(self) -> bool:
         if self._stream_failure_claimed:
@@ -7891,6 +7885,23 @@ def _cache_hit_cost_breakdown(served: CostBreakdown | None) -> CostBreakdown:
     )
 
 
+def _with_failed_attempts_cost(breakdown: CostBreakdown, own_cost: float, failed_attempts_cost: float) -> CostBreakdown:
+    return breakdown | CostBreakdown(
+        total_cost=own_cost + failed_attempts_cost,
+        additional_costs={**breakdown.get("additional_costs", {}), "failed_attempts_cost": failed_attempts_cost},
+    )
+
+
+def _cached_cost_breakdown(served: CostBreakdown | None, model_call_details: Mapping[str, object]) -> CostBreakdown:
+    cached: Final = _cache_hit_cost_breakdown(served)
+    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(
+        model_call_details.get("failed_attempts_billed_on_success", ())
+    )
+    if not failed_attempts:
+        return cached
+    return _with_failed_attempts_cost(cached, 0.0, sum(cost for _, cost in failed_attempts))
+
+
 def _finalized_cost_of(logging_obj: object) -> FinalizedCost | None:
     """Duck-typed logging objects (and test doubles) carry no finalized cost."""
     finalized: Final = getattr(logging_obj, "finalized_cost", None)
@@ -8084,7 +8095,7 @@ def get_standard_logging_object_payload(
             if finalized_cost is not None
             else cost_breakdown_with_guardrail(
                 (
-                    _cache_hit_cost_breakdown(uncached_price.cost_breakdown)
+                    _cached_cost_breakdown(uncached_price.cost_breakdown, kwargs)
                     if uncached_price is not None
                     else logging_obj.cost_breakdown
                 ),
