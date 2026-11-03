@@ -1033,6 +1033,10 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "google_maps_grounding_cost_per_query": {"type": "number"},
             "input_cost_per_audio_token": {"type": "number"},
             "input_cost_per_audio_token_flex": {"type": "number"},
+            "input_cost_per_audio_token_above_200k_tokens": {"type": "number"},
+            "input_cost_per_audio_token_above_200k_tokens_flex": {"type": "number"},
+            "input_cost_per_audio_token_above_200k_tokens_priority": {"type": "number"},
+            "input_cost_per_audio_token_above_200k_tokens_batches": {"type": "number"},
             "input_cost_per_image_token": {"type": "number"},
             "input_cost_per_character": {"type": "number"},
             "input_cost_per_character_above_128k_tokens": {"type": "number"},
@@ -1044,6 +1048,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "input_cost_per_token_above_100k_tokens_batches": {"type": "number"},
             "input_cost_per_token_above_200k_tokens": {"type": "number"},
             "input_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+            "input_cost_per_token_above_200k_tokens_flex": {"type": "number"},
             "input_cost_per_token_above_256k_tokens": {"type": "number"},
             "input_cost_per_token_above_272k_tokens": {"type": "number"},
             "input_cost_per_token_above_512k_tokens": {"type": "number"},
@@ -1143,6 +1148,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_image_4K": {"type": "number"},
             "output_cost_per_image_token": {"type": "number"},
             "output_cost_per_image_token_batches": {"type": "number"},
+            "output_cost_per_image_token_priority": {"type": "number"},
             "output_cost_per_video_token": {"type": "number"},
             "output_cost_per_pixel": {"type": "number"},
             "output_cost_per_second": {"type": "number"},
@@ -1159,6 +1165,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_token_above_128k_tokens": {"type": "number"},
             "output_cost_per_token_above_200k_tokens": {"type": "number"},
             "output_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+            "output_cost_per_token_above_200k_tokens_flex": {"type": "number"},
             "output_cost_per_token_above_256k_tokens": {"type": "number"},
             "output_cost_per_token_above_272k_tokens": {"type": "number"},
             "output_cost_per_token_above_512k_tokens": {"type": "number"},
@@ -1445,6 +1452,27 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         error_message = "Cost validation failed:\n" + "\n".join(violations)
         error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
         raise AssertionError(error_message)
+
+
+def test_cost_map_schema_accepts_vertex_modality_and_context_tiers() -> None:
+    row: Final = {
+        "litellm_provider": "vertex_ai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_200k_tokens_flex": 3e-6,
+        "output_cost_per_token_above_200k_tokens_flex": 4e-6,
+        "input_cost_per_token_above_200k_tokens_batches": 3e-6,
+        "output_cost_per_token_above_200k_tokens_batches": 4e-6,
+        "input_cost_per_audio_token_above_200k_tokens": 5e-6,
+        "input_cost_per_audio_token_above_200k_tokens_flex": 6e-6,
+        "input_cost_per_audio_token_above_200k_tokens_priority": 7e-6,
+        "input_cost_per_audio_token_above_200k_tokens_batches": 8e-6,
+        "output_cost_per_image_token_priority": 9e-6,
+        "output_cost_per_image_token_batches": 10e-6,
+    }
+
+    assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-vertex-tier-model": row})
 
 
 def test_cost_map_schema_accepts_12hr_cache_write_rates_for_batch_and_ultrafast_tiers() -> None:
@@ -11099,7 +11127,6 @@ def test_get_provider_audio_transcription_config_resolves_for_every_provider() -
 
     assert unexpected == {}
     assert isinstance(configs[LlmProviders.OPENAI], litellm.OpenAIWhisperAudioTranscriptionConfig)
-
 
 
 @pytest.mark.parametrize(
