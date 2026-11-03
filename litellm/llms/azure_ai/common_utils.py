@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Callable, Mapping
+from functools import partial
 from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import urlparse
@@ -71,15 +72,14 @@ def _resolve_config_secret(value: object) -> str | None:
 
 
 def _agent_entra_token(provider: Callable[[], str], model: str) -> str:
-    from litellm.llms.azure.common_utils import entra_rejection_as_auth_error, entra_rejection_types
+    from litellm.llms.azure.common_utils import EntraRejectionError, entra_token
 
     try:
-        return provider()
-    except entra_rejection_types() as error:
-        rejection: Final = entra_rejection_as_auth_error(error)
-        if rejection is None:
-            raise
-        raise litellm.AuthenticationError(message=rejection.message, llm_provider="azure_ai", model=model) from error
+        return entra_token(provider)
+    except EntraRejectionError as rejection:
+        raise litellm.AuthenticationError(
+            message=rejection.message, llm_provider="azure_ai", model=model
+        ) from rejection
 
 
 def get_azure_ai_agent_entra_token(litellm_params: Mapping[str, object]) -> str:
@@ -117,8 +117,15 @@ def get_azure_ai_agent_entra_token(litellm_params: Mapping[str, object]) -> str:
         )
     federated: Final = azure_ad_token is not None and azure_ad_token.startswith("oidc/")
     if azure_ad_token and federated and tenant_id and client_id:
-        return get_azure_ad_token_from_oidc(
-            azure_ad_token=azure_ad_token, azure_client_id=client_id, azure_tenant_id=tenant_id, scope=scope
+        return _agent_entra_token(
+            partial(
+                get_azure_ad_token_from_oidc,
+                azure_ad_token=azure_ad_token,
+                azure_client_id=client_id,
+                azure_tenant_id=tenant_id,
+                scope=scope,
+            ),
+            model,
         )
     if azure_ad_token and not federated:
         return azure_ad_token

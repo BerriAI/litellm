@@ -2764,6 +2764,11 @@ _REAL_CREDENTIAL_REJECTIONS: Final = {
         "AADSTS700016",
         f"Application with identifier '{_ENTRA_APP_CLIENT_ID}' was not found in the directory.",
     ),
+    "unknown_federated_subject_through_workload_identity": (
+        "workload_identity",
+        "AADSTS700213",
+        "No matching federated identity record found for presented assertion subject 'system:serviceaccount:qa:proxy'.",
+    ),
 }
 
 
@@ -2823,6 +2828,16 @@ _REAL_CREDENTIAL_NON_REJECTIONS: Final = {
         400,
         _entra_error("AADSTS90006", "The service is temporarily unavailable."),
     ),
+    "graph_retryable_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS90090", "The service is temporarily unavailable."),
+    ),
+    "token_issuance_error_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS50000", "There was an error issuing a token or an issue with our sign-in service."),
+    ),
     "throttled_without_a_code_through_a_credential_chain": (
         "default_azure_credential_chain",
         429,
@@ -2854,6 +2869,50 @@ def test_entra_outage_or_throttle_through_a_real_azure_identity_credential_stays
 
     assert not isinstance(excinfo.value, litellm.AuthenticationError)
     assert excinfo.value.status_code != 401
+
+
+def _azure_chat_with_oidc_token(respx_mock, monkeypatch, entra_status_code: int, entra_body: Mapping[str, object]):
+    monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    respx_mock.post(f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/token").mock(
+        return_value=httpx.Response(entra_status_code, json=entra_body)
+    )
+    return litellm.completion(
+        model="azure/gpt-4.1",
+        api_base="https://litellm-qa.openai.azure.com",
+        api_version="2025-04-01-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        azure_ad_token="oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+        tenant_id=_ENTRA_TENANT_ID,
+        client_id=_ENTRA_APP_CLIENT_ID,
+        max_retries=0,
+    )
+
+
+def test_entra_rejecting_an_oidc_token_answers_401_with_only_the_aadsts_reason(no_azure_api_key, respx_mock, monkeypatch):
+    rejection: Final = _entra_error(
+        "AADSTS700213", f"No matching federated identity record found for app '{_ENTRA_APP_CLIENT_ID}'."
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        _azure_chat_with_oidc_token(respx_mock, monkeypatch, 400, rejection)
+
+    assert excinfo.value.status_code == 401
+    assert "AADSTS700213" in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+def test_entra_answering_an_oidc_exchange_with_a_transient_code_keeps_its_status(
+    no_azure_api_key, respx_mock, monkeypatch
+):
+    with pytest.raises(openai.APIError) as excinfo:
+        _azure_chat_with_oidc_token(
+            respx_mock, monkeypatch, 400, _entra_error("AADSTS90024", "A transient error has occurred. Try again.")
+        )
+
+    assert excinfo.value.status_code == 400
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
 
 
 class _EntraServiceUnavailableAnswer:

@@ -1268,13 +1268,28 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
     assert failure_data.get("agent_id") == "test-agent"
 
 
-@pytest.mark.asyncio
-async def test_entra_rejecting_the_agent_credential_returns_401_with_only_the_aadsts_reason():
-    from azure.core.exceptions import ClientAuthenticationError
+_ENTRA_APP_CLIENT_ID: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+_ENTRA_TRACE_ID: Final = "f0c149d3-ef20-4194-8b81-c81a5e002500"
 
-    app_client_id: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+
+class _JsonRpcError(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    code: int
+    message: str
+
+
+class _JsonRpcErrorBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    error: _JsonRpcError
+
+
+async def _send_message_to_entra_agent(
+    litellm_params: Mapping[str, str], *patches: AbstractContextManager[object]
+) -> tuple[int, _JsonRpcError]:
     agent = _make_agent_mock()
-    agent.litellm_params = {"tenant_id": "tenant", "client_id": app_client_id, "client_secret": "wrong-secret"}
+    agent.litellm_params = dict(litellm_params)
     mock_request = _make_request_mock(
         "message/send",
         {"message": {"role": "user", "parts": [{"kind": "text", "text": "Hello"}], "messageId": "msg-1"}},
@@ -1285,23 +1300,12 @@ async def test_entra_rejecting_the_agent_credential_returns_401_with_only_the_aa
     )
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
 
-    def rejected_token() -> str:
-        raise ClientAuthenticationError(
-            message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being "
-            f"sent in the request is the client secret value, for a secret added to app '{app_client_id}'."
-        )
-
     with ExitStack() as stack:
-        for p in _base_patches(agent):
+        for p in (*_base_patches(agent), *patches):
             stack.enter_context(p)
         stack.enter_context(
             patch(  # test-quality-ok: same proxy_logging_obj injection the sibling failure-hook tests use
                 "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
-            )
-        )
-        stack.enter_context(
-            patch(  # test-quality-ok: stands in for the Entra token endpoint answering a wrong secret, the shape azure-identity raises
-                "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=rejected_token
             )
         )
 
@@ -1314,10 +1318,59 @@ async def test_entra_rejecting_the_agent_credential_returns_401_with_only_the_aa
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1"),
         )
 
-    body = json.loads(response.body.decode())
-    assert response.status_code == 401
-    assert "AADSTS7000215" in body["error"]["message"]
-    assert app_client_id not in body["error"]["message"]
+    return response.status_code, _JsonRpcErrorBody.model_validate_json(response.body).error
+
+
+@pytest.mark.asyncio
+async def test_entra_rejecting_the_agent_credential_returns_401_with_only_the_aadsts_reason():
+    from azure.core.exceptions import ClientAuthenticationError
+
+    def rejected_token() -> str:
+        raise ClientAuthenticationError(
+            message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being "
+            f"sent in the request is the client secret value, for a secret added to app '{_ENTRA_APP_CLIENT_ID}'."
+        )
+
+    status_code, error = await _send_message_to_entra_agent(
+        {"tenant_id": "tenant", "client_id": _ENTRA_APP_CLIENT_ID, "client_secret": "wrong-secret"},
+        patch(  # test-quality-ok: stands in for the Entra token endpoint answering a wrong secret, the shape azure-identity raises
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=rejected_token
+        ),
+    )
+
+    assert status_code == 401
+    assert "AADSTS7000215" in error.message
+    assert _ENTRA_APP_CLIENT_ID not in error.message
+
+
+@pytest.mark.asyncio
+async def test_entra_rejecting_the_agent_oidc_token_returns_401_with_only_the_aadsts_reason(monkeypatch, respx_mock):
+    monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    respx_mock.post("https://login.microsoftonline.com/qa-tenant/oauth2/v2.0/token").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "error": "invalid_client",
+                "error_description": "AADSTS700213: No matching federated identity record found for app "
+                f"'{_ENTRA_APP_CLIENT_ID}'. Trace ID: {_ENTRA_TRACE_ID}",
+            },
+        )
+    )
+
+    status_code, error = await _send_message_to_entra_agent(
+        {
+            "tenant_id": "qa-tenant",
+            "client_id": _ENTRA_APP_CLIENT_ID,
+            "azure_ad_token": "oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+        }
+    )
+
+    assert status_code == 401
+    assert error.code == -32000
+    assert "AADSTS700213" in error.message
+    assert _ENTRA_APP_CLIENT_ID not in error.message
+    assert _ENTRA_TRACE_ID not in error.message
 
 
 @pytest.mark.asyncio

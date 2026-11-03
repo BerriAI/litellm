@@ -25467,6 +25467,15 @@ async def test_router_clientside_credential_not_reused_by_other_callers(respx_mo
     used_auth_headers = {call.request.headers["authorization"] for call in route.calls[1:]}
     assert used_auth_headers == {"Bearer configured-key"}
 
+def _caused_by_an_entra_rejection(error: litellm.AuthenticationError) -> litellm.AuthenticationError:
+    from litellm.llms.azure.common_utils import EntraRejectionError
+
+    try:
+        raise error from EntraRejectionError(status_code=401, message=error.message)
+    except litellm.AuthenticationError as raised:
+        return raised
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("caller_credential", ["client_secret", "azure_password", "azure_ad_token"])
 async def test_router_caller_entra_credential_rejection_leaves_the_shared_deployment_routable(caller_credential):
@@ -25491,10 +25500,12 @@ async def test_router_caller_entra_credential_rejection_leaves_the_shared_deploy
         await router.acompletion(
             model="entra-model",
             messages=[{"role": "user", "content": "hi"}],
-            mock_response=litellm.AuthenticationError(
-                message="Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
-                llm_provider="azure",
-                model="gpt-4.1",
+            mock_response=_caused_by_an_entra_rejection(
+                litellm.AuthenticationError(
+                    message="Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
+                    llm_provider="azure",
+                    model="gpt-4.1",
+                )
             ),
             **{caller_credential: "not-the-credential"},
         )
@@ -25578,12 +25589,31 @@ async def test_router_caller_entra_field_keeps_the_shared_deployment():
     assert response._hidden_params["model_id"] == "shared-deployment"
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-async def test_router_non_azure_auth_failure_cools_down_despite_a_caller_entra_field():
+@pytest.mark.parametrize(
+    ("litellm_params", "provider"),
+    [
+        pytest.param({"model": "openai/gpt-4.1-mini", "api_key": "revoked-key"}, "openai", id="openai"),
+        pytest.param(
+            {
+                "model": "azure/gpt-4.1",
+                "api_base": "https://litellm-qa.openai.azure.com",
+                "api_version": "2025-04-01-preview",
+                "api_key": "revoked-key",
+            },
+            "azure",
+            id="azure_api_key",
+        ),
+    ],
+)
+@pytest.mark.parametrize("caller_entra_field", ["client_id", "azure_scope"])
+async def test_router_auth_failure_entra_did_not_cause_cools_down_despite_a_caller_entra_field(
+    litellm_params, provider, caller_entra_field
+):
     router = Router(
         model_list=[
             {
                 "model_name": "shared-model",
-                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "revoked-key"},
+                "litellm_params": litellm_params,
                 "model_info": {"id": "shared-deployment"},
             }
         ]
@@ -25594,9 +25624,9 @@ async def test_router_non_azure_auth_failure_cools_down_despite_a_caller_entra_f
             model="shared-model",
             messages=[{"role": "user", "content": "hi"}],
             mock_response=litellm.AuthenticationError(
-                message="Incorrect API key provided.", llm_provider="openai", model="gpt-4.1-mini"
+                message="Incorrect API key provided.", llm_provider=provider, model=litellm_params["model"]
             ),
-            client_id="caller-client",
+            **{caller_entra_field: "caller-value"},
         )
 
     with pytest.raises(litellm.RouterRateLimitError) as excinfo:

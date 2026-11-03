@@ -84,12 +84,67 @@ class AzureOpenAIError(BaseLLMException):
         )
 
 
+class EntraRejectionError(AzureOpenAIError):
+    pass
+
+
 _GUID: Final = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
-_AADSTS_REASON: Final = re.compile(r"\bAADSTS\d+\b.*?(?:\.(?=[\s'\"]|$)|$)", re.MULTILINE)
-_TRANSIENT_AADSTS_CODE: Final = re.compile(r"\bAADSTS(?:50033|50196|90006|90024|90033|90055)\b")
+_AADSTS_REASON: Final = re.compile(r"\bAADSTS(\d+)\b.*?(?:\.(?=[\s'\"\\]|$)|$)", re.MULTILINE)
+_ENTRA_CREDENTIAL_REJECTION_CODES: Final = frozenset(
+    {
+        50012,
+        50013,
+        50027,
+        50034,
+        50053,
+        50055,
+        50057,
+        50059,
+        50076,
+        50079,
+        50126,
+        50128,
+        53003,
+        65001,
+        70001,
+        70002,
+        70011,
+        70021,
+        70025,
+        70052,
+        90002,
+        90094,
+        500011,
+        500014,
+        700016,
+        700023,
+        700024,
+        700025,
+        700027,
+        700211,
+        700213,
+        700223,
+        700238,
+        7000112,
+        7000215,
+        7000218,
+        7000222,
+    }
+)
 
 
-def entra_rejection_as_auth_error(error: Exception) -> AzureOpenAIError | None:
+def _entra_rejection_reason(message: str) -> str | None:
+    reason: Final = _AADSTS_REASON.search(message)
+    if reason is None or int(reason.group(1)) not in _ENTRA_CREDENTIAL_REJECTION_CODES:
+        return None
+    return _GUID.sub("<redacted>", reason.group(0))
+
+
+def _entra_rejection(reason: str) -> EntraRejectionError:
+    return EntraRejectionError(status_code=401, message=f"Failed to get Azure AD token: {reason}")
+
+
+def entra_rejection_as_auth_error(error: Exception) -> EntraRejectionError | None:
     try:
         from azure.core.exceptions import ClientAuthenticationError
     except ImportError:
@@ -99,14 +154,8 @@ def entra_rejection_as_auth_error(error: Exception) -> AzureOpenAIError | None:
     status_code: Final = error.status_code
     if status_code is not None and (status_code == 429 or status_code >= 500):
         return None
-    message: Final = str(error)
-    reason: Final = _AADSTS_REASON.search(message)
-    if reason is None or _TRANSIENT_AADSTS_CODE.search(message):
-        return None
-    return AzureOpenAIError(
-        status_code=401,
-        message=f"Failed to get Azure AD token: {_GUID.sub('<redacted>', reason.group(0))}",
-    )
+    reason: Final = _entra_rejection_reason(str(error))
+    return None if reason is None else _entra_rejection(reason)
 
 
 def _raise_entra_rejection_as_auth_error(error: Exception) -> NoReturn:
@@ -144,8 +193,7 @@ def _exception_chain(error: BaseException) -> Iterator[BaseException]:
 
 
 def caused_by_entra_rejection(error: BaseException) -> bool:
-    rejection_types: Final = entra_rejection_types()
-    return any(isinstance(link, rejection_types) for link in _exception_chain(error))
+    return any(isinstance(link, EntraRejectionError) for link in _exception_chain(error))
 
 
 async def _awaited_token(token: Awaitable[str]) -> str:
@@ -344,22 +392,30 @@ def _cached_oidc_token(cache_key: str) -> str | None:
     return cached if isinstance(cached, str) else None
 
 
+def _oidc_exchange_error(status_code: int, body: str) -> AzureOpenAIError:
+    reason: Final = _entra_rejection_reason(body) if status_code in (400, 401) else None
+    return AzureOpenAIError(status_code=status_code, message=body) if reason is None else _entra_rejection(reason)
+
+
 def _exchange_oidc_token(cache_key: str, token_url: str, client_id: str, scope: str, oidc_token: str) -> str:
     cached_access_token: Final = _cached_oidc_token(cache_key)
     if cached_access_token is not None:
         return cached_access_token
 
     with closing(HTTPHandler(timeout=litellm.request_timeout)) as client:
-        req_token: Final = client.post(
-            token_url,
-            data={
-                "client_id": client_id,
-                "grant_type": "client_credentials",
-                "scope": scope,
-                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-                "client_assertion": oidc_token,
-            },
-        )
+        try:
+            req_token: Final = client.post(
+                token_url,
+                data={
+                    "client_id": client_id,
+                    "grant_type": "client_credentials",
+                    "scope": scope,
+                    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                    "client_assertion": oidc_token,
+                },
+            )
+        except httpx.HTTPStatusError as error:
+            raise _oidc_exchange_error(error.response.status_code, error.response.text) from error
 
     if req_token.status_code != 200:
         raise AzureOpenAIError(

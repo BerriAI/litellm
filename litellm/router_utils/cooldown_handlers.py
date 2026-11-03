@@ -38,7 +38,6 @@ from litellm.types.utils import (
     BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
     CooldownDeploymentInfo,
     InternalCallOrigin,
-    LlmProviders,
 )
 from litellm.types.videos.utils import VIDEO_ID_CALL_TYPES
 
@@ -848,20 +847,19 @@ def is_stream_stall(exception: BaseException) -> bool:
     return isinstance(exception, litellm.Timeout) and isinstance(exception.__cause__, MidStreamFallbackError)
 
 
-_ENTRA_AUTHENTICATED_PROVIDERS: Final = frozenset(
-    {LlmProviders.AZURE.value, LlmProviders.AZURE_TEXT.value, LlmProviders.AZURE_AI.value}
-)
-
-
 def is_caller_entra_credential_failure(
     deployment: Deployment | None,
     router_defaults: Mapping[str, object],
     model_call_details: Mapping[str, object],
     exception_status: str | int,
+    exception: BaseException,
 ) -> bool:
     if cast_exception_status_to_int(exception_status) != 401 or deployment is None:
         return False
-    if model_call_details.get("custom_llm_provider") not in _ENTRA_AUTHENTICATED_PROVIDERS:
+
+    from litellm.llms.azure.common_utils import caused_by_entra_rejection
+
+    if not caused_by_entra_rejection(exception):
         return False
     raw_call_params: Final = model_call_details.get("litellm_params")
     if not isinstance(raw_call_params, Mapping):

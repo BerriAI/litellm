@@ -10282,6 +10282,7 @@ class PythonCore(DeprecatedRouterMembers):
                 self._active_default_litellm_params(),
                 failure_call_details,
                 exception_status,
+                exception,
             ):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
