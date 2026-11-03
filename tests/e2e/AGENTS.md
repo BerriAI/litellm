@@ -315,6 +315,8 @@ other.<area>.<case>.<assertion>
 ```
 
 ## Hard Rules
+- no comments in code unless they are truly necessary
+
 - no unit tests of a product feature under `tests/e2e`, and no mock tests or monkeypatching of code anywhere in it: a product feature is proven end to end against a live proxy, never with a unit test. if a contributor asks you to write an end to end test, do NOT stage a unit test with it. If you find a product gap, call it out in the PR description. the harness's own plumbing is tested outside the suite, in `tests/e2e_harness/` (mirroring this folder's layout), because the Buildkite e2e run copies `tests/e2e/` into the runner image and runs every test in it, so a harness test in here would count as a product test in the nightly numbers. those tests run without a proxy and take their inputs as arguments or env vars (setting an env var through pytest's `monkeypatch` fixture is fine, patching a function, class, or module is not), and no coverage-registry or compat-matrix cell rests on them. judge a change inside one of them by that standard, not as a misplaced product test
 
 - use model management endpoints to create new models for a test. this could be in a conftest / inline for each test. ask the user what they want.

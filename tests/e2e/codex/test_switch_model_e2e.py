@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
@@ -17,44 +16,34 @@ from codex.setups import (
     GPT_ON_BEDROCK_RUNTIME,
     GPT_ON_OPENAI,
     Deployment,
+    ExtraModel,
     ModelSetup,
     also_driving,
     with_expected_failure,
 )
 from e2e_config import unique_marker
-from e2e_metadata import Provider, Subject
+from e2e_metadata import Provider
 from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
 
-OTHER_GPT_ON_BEDROCK_MANTLE: Final = "bedrock_mantle/openai.gpt-6-luna"
-OTHER_GPT_ON_BEDROCK_RUNTIME: Final = "bedrock/us.openai.gpt-6-luna"
-OTHER_GPT_ON_OPENAI: Final = "openai/gpt-6.1-terra"
-OTHER_CLAUDE_ON_BEDROCK: Final = "bedrock/us.anthropic.claude-haiku-5-5"
-
-
-@dataclass(frozen=True, slots=True)
-class SwitchTo:
-    provider: Provider
-    litellm_params: LiteLLMParamsBody
-
-
-TO_OTHER_GPT_ON_OPENAI: Final = SwitchTo(
-    Provider.OPENAI, LiteLLMParamsBody(model=OTHER_GPT_ON_OPENAI, api_key="os.environ/OPENAI_API_KEY")
+TERRA_ON_OPENAI: Final = ExtraModel(
+    Provider.OPENAI, LiteLLMParamsBody(model="openai/gpt-6.1-terra", api_key="os.environ/OPENAI_API_KEY")
 )
 SWITCH_TO: Final = MappingProxyType(
     {
-        GPT_ON_BEDROCK_MANTLE: SwitchTo(
+        GPT_ON_BEDROCK_MANTLE: ExtraModel(
             Provider.BEDROCK_MANTLE,
-            LiteLLMParamsBody(model=OTHER_GPT_ON_BEDROCK_MANTLE, aws_region_name=BEDROCK_REGION),
+            LiteLLMParamsBody(model="bedrock_mantle/openai.gpt-6-luna", aws_region_name=BEDROCK_REGION),
         ),
-        GPT_ON_BEDROCK_RUNTIME: SwitchTo(
-            Provider.BEDROCK, LiteLLMParamsBody(model=OTHER_GPT_ON_BEDROCK_RUNTIME, aws_region_name=BEDROCK_REGION)
+        GPT_ON_BEDROCK_RUNTIME: ExtraModel(
+            Provider.BEDROCK, LiteLLMParamsBody(model="bedrock/us.openai.gpt-6-luna", aws_region_name=BEDROCK_REGION)
         ),
-        GPT_ON_AZURE_OPENAI: TO_OTHER_GPT_ON_OPENAI,
-        GPT_ON_OPENAI: TO_OTHER_GPT_ON_OPENAI,
-        CLAUDE_ON_BEDROCK: SwitchTo(
-            Provider.BEDROCK, LiteLLMParamsBody(model=OTHER_CLAUDE_ON_BEDROCK, aws_region_name=BEDROCK_REGION)
+        GPT_ON_AZURE_OPENAI: TERRA_ON_OPENAI,
+        GPT_ON_OPENAI: TERRA_ON_OPENAI,
+        CLAUDE_ON_BEDROCK: ExtraModel(
+            Provider.BEDROCK,
+            LiteLLMParamsBody(model="bedrock/us.anthropic.claude-haiku-5-5", aws_region_name=BEDROCK_REGION),
         ),
     }
 )
@@ -78,12 +67,7 @@ def key_models(setup: ModelSetup, second_model: str) -> tuple[str, ...]:
             reason="LiteLLM forwards the reasoning Azure encrypted to OpenAI, which cannot decrypt another account's"
             " reasoning and rejects the turn with invalid_encrypted_content (#41792)",
         ),
-        MappingProxyType(
-            {
-                model: Subject(providers=(to.provider,), models=(to.litellm_params.model,))
-                for model, to in SWITCH_TO.items()
-            }
-        ),
+        SWITCH_TO,
     ),
 )
 class TestCodexSwitchModel:

@@ -4,8 +4,9 @@ from types import MappingProxyType
 from typing import Final
 
 from _pytest.mark.structures import ParameterSet
-from codex.setups import SETUPS, Deployment, also_driving, with_expected_failure
+from codex.setups import SETUPS, Deployment, ExtraModel, also_driving, with_expected_failure
 from e2e_metadata import Provider, Subject
+from models import LiteLLMParamsBody
 
 SECOND_MODEL: Final = "openai/second-model"
 
@@ -28,11 +29,10 @@ def _model(setup: ParameterSet) -> str:
 
 
 def test_also_driving_declares_the_extra_model_on_every_setup_and_keeps_the_xfail() -> None:
+    second: Final = ExtraModel(Provider.OPENAI, LiteLLMParamsBody(model=SECOND_MODEL))
     setups: Final = also_driving(
         with_expected_failure("azure_openai", reason="known bug"),
-        MappingProxyType(
-            {_model(setup): Subject(providers=(Provider.OPENAI,), models=(SECOND_MODEL,)) for setup in SETUPS}
-        ),
+        MappingProxyType({_model(setup): second for setup in SETUPS}),
     )
 
     assert tuple(setup.id for setup in setups) == tuple(setup.id for setup in SETUPS)
