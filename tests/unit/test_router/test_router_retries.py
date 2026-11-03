@@ -990,25 +990,30 @@ timeout_error = litellm.Timeout(
 )
 
 
-@pytest.mark.parametrize(
-    "num_retries, orders",
-    [(2, (1,)), (0, (1, 2))],
-    ids=["retries", "order-fallback"],
-)
-@pytest.mark.parametrize("create", ["batch", "file"])
-async def test_a_create_that_times_out_is_neither_retried_nor_sent_to_a_fallback(
-    create: str,
-    num_retries: int,
-    orders: tuple[int, ...],
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    api_base: Final = f"https://router-{create}-{len(orders)}-create.test"
-    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
-        side_effect=httpx.ReadTimeout("the provider answered after the caller's timeout")
-    )
-    router: Final = Router(
+_CREATED_OBJECTS: Final = {
+    "batch": {
+        "id": "batch_abc123",
+        "object": "batch",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": "file-abc123",
+        "completion_window": "24h",
+        "status": "validating",
+        "created_at": 1,
+    },
+    "file": {
+        "id": "file-abc123",
+        "object": "file",
+        "bytes": 52,
+        "created_at": 1,
+        "filename": "batch.jsonl",
+        "purpose": "batch",
+        "status": "processed",
+    },
+}
+
+
+def _batch_router(api_bases: tuple[str, ...], num_retries: int) -> Router:
+    return Router(
         model_list=[
             {
                 "model_name": "batch-primary",
@@ -1020,27 +1025,126 @@ async def test_a_create_that_times_out_is_neither_retried_nor_sent_to_a_fallback
                     "order": order,
                 },
             }
-            for order in orders
+            for order, api_base in enumerate(api_bases, start=1)
         ],
         num_retries=num_retries,
     )
 
-    pending_create: Final = (
-        router.acreate_batch(
+
+async def _create(router: Router, create: str) -> object:
+    if create == "batch":
+        return await router.acreate_batch(
             model="batch-primary",
             completion_window="24h",
             endpoint="/v1/chat/completions",
             input_file_id="file-abc123",
         )
-        if create == "batch"
-        else router.acreate_file(
-            model="batch-primary",
-            file=("batch.jsonl", b'{"custom_id": "1", "body": {"model": "gpt-batch"}}\n', "application/jsonl"),
-            purpose="batch",
+    return await router.acreate_file(
+        model="batch-primary",
+        file=("batch.jsonl", b'{"custom_id": "1", "body": {"model": "gpt-batch"}}\n', "application/jsonl"),
+        purpose="batch",
+    )
+
+
+@pytest.mark.parametrize(
+    "num_retries, orders",
+    [(2, 1), (0, 2)],
+    ids=["retries", "order-fallback"],
+)
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_that_times_out_is_neither_retried_nor_sent_to_a_fallback(
+    create: str,
+    num_retries: int,
+    orders: int,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = f"https://router-{create}-{orders}-create.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        side_effect=httpx.ReadTimeout("the provider answered after the caller's timeout")
+    )
+
+    with pytest.raises(openai.APITimeoutError):
+        await _create(_batch_router((api_base,) * orders, num_retries), create)
+
+    assert create_route.call_count == 1
+
+
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_that_times_out_on_a_retry_is_not_retried_again(
+    create: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = f"https://router-{create}-retry-timeout.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        side_effect=[
+            httpx.Response(500, json={"error": {"message": "try again"}}, headers={"retry-after": "0"}),
+            httpx.ReadTimeout("the provider answered after the caller's timeout"),
+            httpx.Response(200, json=_CREATED_OBJECTS[create]),
+        ]
+    )
+
+    with pytest.raises(openai.APITimeoutError):
+        await _create(_batch_router((api_base,), num_retries=2), create)
+
+    assert create_route.call_count == 2
+
+
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_that_times_out_on_a_fallback_is_not_sent_to_the_next_fallback(
+    create: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_bases: Final = tuple(f"https://router-{create}-order-{order}.test" for order in (1, 2, 3))
+    routes: Final = tuple(
+        respx_mock.post(url__startswith=api_base).mock(side_effect=side_effect)
+        for api_base, side_effect in zip(
+            api_bases,
+            (
+                httpx.ConnectError("connection refused"),
+                httpx.ReadTimeout("the provider answered after the caller's timeout"),
+                httpx.Response(200, json=_CREATED_OBJECTS[create]),
+            ),
         )
     )
 
     with pytest.raises(openai.APITimeoutError):
-        await pending_create
+        await _create(_batch_router(api_bases, num_retries=0), create)
 
-    assert create_route.call_count == 1
+    assert [route.call_count for route in routes] == [1, 1, 0]
+
+
+@pytest.mark.parametrize("unsent_timeout", [httpx.ConnectTimeout, httpx.PoolTimeout])
+@pytest.mark.parametrize(
+    "num_retries, orders",
+    [(1, 1), (0, 2)],
+    ids=["retries", "order-fallback"],
+)
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_that_timed_out_before_it_was_sent_is_still_retried_and_sent_to_a_fallback(
+    create: str,
+    num_retries: int,
+    orders: int,
+    unsent_timeout: type[httpx.TimeoutException],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = f"https://router-{create}-{orders}-unsent.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        side_effect=[
+            unsent_timeout("no connection to the provider before the caller's timeout"),
+            httpx.Response(200, json=_CREATED_OBJECTS[create]),
+        ]
+    )
+
+    created: Final = await _create(_batch_router((api_base,) * orders, num_retries), create)
+
+    assert getattr(created, "id") == _CREATED_OBJECTS[create]["id"]
+    assert create_route.call_count == 2
+

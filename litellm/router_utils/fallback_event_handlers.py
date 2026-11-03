@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+import openai
 from pydantic import TypeAdapter
 
 import litellm
@@ -687,6 +688,16 @@ PROVIDER_SCOPED_RESOURCE_FUNCTION_NAMES: Final = frozenset(
     }
 )
 PROVIDER_SCOPED_CREATION_FUNCTION_NAMES: Final = frozenset({"_acreate_file"})
+NON_IDEMPOTENT_CREATE_FUNCTION_NAMES: Final = frozenset({"_acreate_file", "_acreate_batch"})
+_TIMEOUTS_BEFORE_THE_REQUEST_WAS_SENT: Final = (httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
+def is_timed_out_create(original_function: object, error: BaseException) -> bool:
+    return (
+        isinstance(error, openai.APITimeoutError)
+        and not isinstance(error.__cause__, _TIMEOUTS_BEFORE_THE_REQUEST_WAS_SENT)
+        and getattr(original_function, "__name__", None) in NON_IDEMPOTENT_CREATE_FUNCTION_NAMES
+    )
 
 
 def _get_fallback_target_model_group(fallback_entry: str | Mapping[str, object]) -> str | None:
@@ -927,6 +938,8 @@ async def run_async_fallback(
                     exception=e,
                     model_call_details=failure_callbacks_blocked_logging_obj.model_call_details,
                 )
+            if is_timed_out_create(_FALLBACK_KWARGS_ADAPTER.validate_python(kwargs).get("original_function"), e):
+                raise
     raise error_from_fallbacks
 
 
