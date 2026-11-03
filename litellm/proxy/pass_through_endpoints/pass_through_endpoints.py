@@ -282,6 +282,10 @@ def _joinable_header_metadata(recorded: Mapping[str, object]) -> Mapping[str, ob
     }
 
 
+def _metadata_entry_identity(entry: object) -> object:
+    return entry if isinstance(entry, str) else (json.dumps(entry, sort_keys=True, default=str),)
+
+
 def _merged_metadata_entry(prior: object, value: object) -> object:
     """``value``, or both combined: lists and tuples without repeats, and mappings with ``value``'s keys winning, as
     ``add_policy_sources_to_metadata`` combines policy sources on one request."""
@@ -292,9 +296,7 @@ def _merged_metadata_entry(prior: object, value: object) -> object:
     if not isinstance(prior, list | tuple) or not isinstance(value, list | tuple):
         return value
     entries: Final = (*_GUARDRAIL_ENTRIES.validate_python(prior), *_GUARDRAIL_ENTRIES.validate_python(value))
-    return tuple(
-        MappingProxyType({json.dumps(entry, sort_keys=True, default=str): entry for entry in entries}).values()
-    )
+    return tuple({_metadata_entry_identity(entry): entry for entry in entries}.values())
 
 
 def _is_sendable_header_value(value: str) -> bool:
