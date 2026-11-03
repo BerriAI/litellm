@@ -37,7 +37,7 @@ from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
-from litellm.utils import _invalidate_model_cost_lowercase_map, supports_prompt_caching
+from litellm.utils import _invalidate_model_cost_lowercase_map, cached_get_model_info_helper, supports_prompt_caching
 import os
 import threading
 from unittest.mock import MagicMock, patch
@@ -1449,6 +1449,47 @@ def test_transcription_usage_cost_returns_zero_for_unknown_type():
 
     assert _transcription_usage_cost({"type": "future_billing_type"}, {}) == 0.0
     assert _transcription_usage_cost({}, {}) == 0.0
+
+
+@pytest.mark.parametrize("malformed_seconds", [-1.0, float("nan"), float("inf"), 10**1000, True])
+def test_transcription_ignores_invalid_provider_duration(malformed_seconds: float | int | bool) -> None:
+    from litellm.cost_calculator import _get_transcription_usage_duration
+
+    response: Final = SimpleNamespace(usage={"type": "duration", "seconds": malformed_seconds})
+
+    assert _get_transcription_usage_duration(response) is None
+
+
+def test_realtime_transcription_prices_each_clip_at_the_transcription_model_set_when_it_ran(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import handle_realtime_transcription_cost_calculation
+
+    realtime_model = "gpt-realtime-2.1-mini"
+    first_asr, second_asr = "gpt-4o-transcribe", "gpt-transcribe"
+    first_rate = litellm.model_cost[first_asr]["input_cost_per_second"]
+    second_rate = litellm.model_cost[second_asr]["input_cost_per_second"]
+    assert first_rate != second_rate and first_rate > 0 and second_rate > 0
+
+    def session_frame(frame_type: str, asr_model: str | None) -> dict[str, object]:
+        transcription = None if asr_model is None else {"model": asr_model}
+        return {"type": frame_type, "session": {"model": realtime_model, "audio": {"input": {"transcription": transcription}}}}
+
+    clip = {"type": "conversation.item.input_audio_transcription.completed", "usage": {"type": "duration", "seconds": 5}}
+    results: OpenAIRealtimeStreamList = [
+        session_frame("session.created", None),
+        session_frame("session.updated", first_asr),
+        clip,
+        session_frame("session.updated", second_asr),
+        clip,
+    ]
+
+    cost = handle_realtime_transcription_cost_calculation(
+        results=results, custom_llm_provider="openai", litellm_model_name=realtime_model
+    )
+
+    assert cost == pytest.approx(5 * first_rate + 5 * second_rate, rel=1e-9)
 
 
 def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
@@ -4598,23 +4639,40 @@ def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate(
     assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
 
 
-def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
+@pytest.mark.parametrize("input_rate", (3e-6, 0.0))
+@pytest.mark.parametrize(
+    ("cache_pricing", "expected_write_rate"),
+    [
+        pytest.param({}, None, id="missing"),
+        pytest.param({"cache_creation_input_token_cost": None}, None, id="null"),
+        pytest.param({"cache_creation_input_token_cost": 0.0}, 0.0, id="free"),
+        pytest.param({"cache_creation_input_token_cost": 3.75e-6}, 3.75e-6, id="paid"),
+    ],
+)
+def test_batch_cost_calculator_preserves_cache_write_prices_and_defaults_only_when_unset(
+    cache_pricing: ModelInfo,
+    expected_write_rate: float | None,
+    input_rate: float,
+) -> None:
     from litellm.cost_calculator import batch_cost_calculator
 
-    model_info: ModelInfo = {
+    model_info: Final[ModelInfo] = {
         "supported_openai_params": [],
-        "input_cost_per_token": 3e-6,
+        "input_cost_per_token": input_rate,
         "output_cost_per_token": 15e-6,
         "cache_read_input_token_cost": 3e-7,
+        **cache_pricing,
     }
-    prompt_cost, _ = batch_cost_calculator(
+    prompt_cost, completion_cost_value = batch_cost_calculator(
         usage=_batch_cache_usage(),
-        model="claude-sonnet-4-5-20250929",
+        model="batch-pricing-fixture",
         custom_llm_provider="anthropic",
         model_info=model_info,
     )
 
-    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+    write_rate: Final = input_rate if expected_write_rate is None else expected_write_rate
+    assert prompt_cost == pytest.approx((1000 * input_rate + 8000 * 3e-7 + 2000 * write_rate) / 2)
+    assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
 
 
 def test_completion_cost_bills_interactions_api_response():
@@ -7425,6 +7483,39 @@ def test_transcription_cost_falls_back_to_provider_billed_seconds(
     assert cost == pytest.approx(0.01 * expected_seconds)
 
 
+@pytest.mark.parametrize(
+    ("provider", "measured_seconds", "expected_seconds"),
+    [("openai", 1.0, 1.0), ("azure", 1.0, 1.0), ("azure", None, 7.0)],
+    ids=["openai_measured_upload_wins", "azure_measured_upload_wins", "unmeasured_upload_bills_provider_seconds"],
+)
+def test_transcription_priced_by_provider_duration_still_bills_the_measured_upload(
+    monkeypatch: pytest.MonkeyPatch, provider: str, measured_seconds: float | None, expected_seconds: float
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gpt-fake-transcribe",
+        {
+            "input_cost_per_second": 0.01,
+            "litellm_provider": provider,
+            "mode": "audio_transcription",
+            "provider_specific_entry": {"transcription_usage_duration": 1},
+        },
+    )
+    measured: Final = {} if measured_seconds is None else {"audio_transcription_duration": measured_seconds}
+    transcription: Final = convert_to_model_response_object(
+        response_object={"text": "What is the weather in Paris?", "usage": {"type": "duration", "seconds": 7}},
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": "gpt-fake-transcribe", "custom_llm_provider": provider, **measured},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription, model=f"{provider}/gpt-fake-transcribe", call_type="atranscription"
+    )
+
+    assert cost == pytest.approx(0.01 * expected_seconds)
+
+
 def test_custom_priced_transcription_deployment_bills_provider_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
@@ -7447,6 +7538,77 @@ def test_custom_priced_transcription_deployment_bills_provider_seconds(monkeypat
     )
 
     assert cost == pytest.approx(0.000075 * 2)
+
+
+@pytest.mark.parametrize(
+    "deployment_id,deployment_rates,expected_cost",
+    [
+        ("per-second-only", {"input_cost_per_second": 0.0001}, 30 * 0.0001),
+        ("zero-token-rate", {"input_cost_per_second": 0.0001, "input_cost_per_token": 0.0}, 0.0),
+        ("token-rate", {"input_cost_per_second": 0.0001, "input_cost_per_token": 1e-6}, 500 * 1e-6),
+    ],
+)
+def test_transcription_deployment_bills_seconds_only_without_a_declared_token_rate(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_id: str,
+    deployment_rates: Mapping[str, float],
+    expected_cost: float,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        deployment_id,
+        {**deployment_rates, "litellm_provider": "openai", "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={
+            "text": "What is the weather in Paris?",
+            "usage": {
+                "type": "tokens",
+                "input_tokens": 500,
+                "output_tokens": 100,
+                "total_tokens": 600,
+                "input_token_details": {"audio_tokens": 500, "text_tokens": 0},
+            },
+        },
+        model_response_object=TranscriptionResponse(),
+        hidden_params={
+            "model": "gpt-4o-transcribe",
+            "custom_llm_provider": "openai",
+            "audio_transcription_duration": 30.0,
+        },
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription,
+        model="openai/gpt-4o-transcribe",
+        call_type="atranscription",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize("model", ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"])
+def test_azure_transcription_without_usage_bills_only_tokens_while_openai_bills_the_measured_audio(
+    _local_model_cost_map: None, model: str
+) -> None:
+    def cost_of_ten_seconds_without_usage(provider: str) -> float:
+        transcript: Final = TranscriptionResponse(text="Good")
+        transcript.set_audio_transcription_duration(10.0)
+        return completion_cost(
+            completion_response=transcript,
+            model=f"{provider}/{model}",
+            custom_llm_provider=provider,
+            call_type="atranscription",
+        )
+
+    assert cost_of_ten_seconds_without_usage("openai") > 0
+    assert cost_of_ten_seconds_without_usage("azure") == 0.0, (
+        "Azure lists only token prices for this model, https://azure.microsoft.com/en-us/pricing/details/azure-openai/ "
+        "(per the 2026-10-28 review)"
+    )
 
 
 def test_gpt_image_2_azure_cost_tracking():
@@ -7817,20 +7979,42 @@ def test_vertex_ai_mistral_predict_cost(usage):
     assert predictive_cost > 0
 
 
+@pytest.mark.usefixtures("_local_model_cost_map")
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+@pytest.mark.parametrize("model", ("speech-fixture", "openai/speech-fixture", "azure/speech-fixture"))
 @pytest.mark.parametrize(
-    "model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"]
+    ("pricing", "expected_cost"),
+    (
+        pytest.param({}, None, id="missing"),
+        pytest.param({"input_cost_per_character": None, "input_cost_per_token": None}, None, id="null"),
+        pytest.param({"input_cost_per_token": 0.0}, 0.0, id="free-tokens"),
+        pytest.param({"input_cost_per_character": 0.0, "input_cost_per_token": 2e-6}, 0.0, id="free-characters"),
+        pytest.param({"input_cost_per_token": 2e-6}, 100 * 2e-6, id="missing-character-rate"),
+        pytest.param({"input_cost_per_character": None, "input_cost_per_token": 2e-6}, 100 * 2e-6, id="null-character-rate"),
+        pytest.param({"input_cost_per_character": 3e-6, "input_cost_per_token": 2e-6}, 1000 * 3e-6, id="paid-characters"),
+    ),
 )
-def test_completion_cost_tts(model):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    cost = completion_cost(
-        model=model,
-        prompt="the quick brown fox jumped over the lazy dogs",
-        call_type="speech",
+def test_registered_speech_prices_distinguish_unset_from_zero(
+    call_type: str, model: str, pricing: ModelInfo, expected_cost: float | None
+) -> None:
+    provider: Final = "azure" if model.startswith("azure/") else "openai"
+    litellm.register_model(
+        {model: {"litellm_provider": provider, "mode": "audio_speech", **pricing}},
+        persist_across_reloads=False,
     )
+    compatibility_info: Final = cached_get_model_info_helper(model, provider)
+    assert compatibility_info["input_cost_per_token"] == (pricing.get("input_cost_per_token") or 0.0)
+    litellm.get_model_info(model)
+    response: Final = ModelResponse(usage=Usage(prompt_tokens=100, completion_tokens=0, total_tokens=100))
 
-    assert cost > 0
+    if expected_cost is None:
+        with pytest.raises(ValueError, match="does not have 'input_cost_per_character' or 'input_cost_per_token'"):
+            completion_cost(completion_response=response, model=model, prompt="a" * 1000, call_type=call_type)
+        litellm.register_model({model: {"input_cost_per_token": 0.0}}, persist_across_reloads=False)
+
+    assert completion_cost(
+        completion_response=response, model=model, prompt="a" * 1000, call_type=call_type
+    ) == pytest.approx(expected_cost or 0.0)
 
 
 def test_completion_cost_anthropic():
@@ -10370,6 +10554,301 @@ def test_responses_ws_logging_object_carries_the_completed_responses_id_tier_and
     assert ResponsesWebSocketTokenUsageProcessor.create_logging_object([{"type": "error", "error": {}}]).id is None
 
 
+@pytest.mark.parametrize("provider", ("openai", "azure"))
+@pytest.mark.parametrize("model", ("gpt-realtime-2.1", "gpt-realtime-2.1-mini"))
+def test_realtime_cached_multimodal_token_cost(_local_model_cost_map, provider: str, model: str):
+    model_name: Final = f"azure/{model}" if provider == "azure" else model
+    rates: Final = litellm.model_cost[model_name]
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.created", "session": {"model": model}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 300,
+                    "total_tokens": 1300,
+                    "input_token_details": {
+                        "text_tokens": 400,
+                        "audio_tokens": 400,
+                        "image_tokens": 200,
+                        "cached_tokens": 300,
+                        "cached_tokens_details": {"text_tokens": 100, "audio_tokens": 150, "image_tokens": 50},
+                    },
+                    "output_token_details": {"text_tokens": 100, "audio_tokens": 100, "reasoning_tokens": 100},
+                }
+            },
+        },
+    ]
+    combined: Final = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(events)
+    actual: Final = handle_realtime_stream_cost_calculation(
+        results=events,
+        combined_usage_object=combined,
+        custom_llm_provider=provider,
+        litellm_model_name=model_name,
+    )
+    expected: Final = (
+        300 * rates["input_cost_per_token"]
+        + 250 * rates["input_cost_per_audio_token"]
+        + 150 * rates["input_cost_per_image_token"]
+        + 100 * rates["cache_read_input_token_cost"]
+        + 150 * rates["cache_read_input_audio_token_cost"]
+        + 50 * rates["cache_read_input_image_token_cost"]
+        + 200 * rates["output_cost_per_token"]
+        + 100 * rates["output_cost_per_audio_token"]
+    )
+
+    assert actual == pytest.approx(expected)
+
+
+def test_realtime_translation_duration_cost(_local_model_cost_map):
+    from litellm.cost_calculator import handle_realtime_translation_cost_calculation
+
+    model: Final = "gpt-realtime-translate"
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": 1.5}}
+    ]
+    actual: Final = handle_realtime_translation_cost_calculation(
+        results=events,
+        custom_llm_provider="openai",
+        litellm_model_name=model,
+    )
+
+    assert actual == pytest.approx(2 * litellm.model_cost[model]["input_cost_per_second"])
+
+
+def test_realtime_translation_bills_session_audio_once_on_openai_and_azure(_local_model_cost_map) -> None:
+    from litellm.cost_calculator import handle_realtime_translation_cost_calculation
+
+    one_minute_session: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 60.0, "output_seconds": 60.0}}
+    ]
+    openai_cost: Final = handle_realtime_translation_cost_calculation(
+        results=one_minute_session, custom_llm_provider="openai", litellm_model_name="gpt-realtime-translate"
+    )
+    azure_cost: Final = handle_realtime_translation_cost_calculation(
+        results=one_minute_session, custom_llm_provider="azure", litellm_model_name="gpt-realtime-translate"
+    )
+
+    assert openai_cost == pytest.approx(60 * litellm.model_cost["gpt-realtime-translate"]["input_cost_per_second"])
+    assert openai_cost == pytest.approx(azure_cost)
+
+
+@pytest.mark.parametrize("malformed_duration", [-1.0, float("nan"), float("inf"), 10**1000, True])
+def test_realtime_translation_duration_cost_ignores_malformed_provider_usage(
+    _local_model_cost_map, malformed_duration: float | int | bool
+) -> None:
+    from litellm.cost_calculator import handle_realtime_translation_cost_calculation
+
+    model: Final = "translation-deployment-priced-both-directions"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "litellm_provider": "openai",
+                "mode": "realtime",
+                "input_cost_per_second": 0.001,
+                "output_cost_per_second": 0.002,
+            }
+        }
+    )
+    input_invalid_events: Final[OpenAIRealtimeStreamList] = [
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": malformed_duration, "output_seconds": 1.5},
+        }
+    ]
+    output_invalid_events: Final[OpenAIRealtimeStreamList] = [
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": malformed_duration},
+        }
+    ]
+
+    input_invalid_cost: Final = handle_realtime_translation_cost_calculation(
+        results=input_invalid_events, custom_llm_provider="openai", litellm_model_name=model
+    )
+    output_invalid_cost: Final = handle_realtime_translation_cost_calculation(
+        results=output_invalid_events, custom_llm_provider="openai", litellm_model_name=model
+    )
+
+    assert input_invalid_cost == pytest.approx(1.5 * litellm.model_cost[model]["output_cost_per_second"])
+    assert output_invalid_cost == pytest.approx(2.0 * litellm.model_cost[model]["input_cost_per_second"])
+
+
+def _translation_session_cost(
+    deployment_id: str,
+    session_model: str | None = "gpt-realtime-translate",
+    model: str = "gpt-realtime-translate",
+    base_model: str | None = None,
+) -> float:
+    session_created: Final[OpenAIRealtimeStreamList] = (
+        [{"type": "session.created", "session": {"model": session_model}}] if session_model is not None else []
+    )
+    one_minute_session: Final = LiteLLMRealtimeStreamLoggingObject(
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        results=[
+            *session_created,
+            {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 60.0, "output_seconds": 60.0}},
+        ],
+    )
+    return completion_cost(
+        completion_response=one_minute_session,
+        model=model,
+        call_type=CallTypes.arealtime.value,
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+        base_model=base_model,
+    )
+
+
+@pytest.mark.parametrize("session_model", ["gpt-realtime-translate", None])
+@pytest.mark.parametrize(
+    "deployment_model,base_model",
+    [("gpt-realtime-translate", None), ("my-translator", "gpt-realtime-translate")],
+)
+@pytest.mark.parametrize(
+    "deployment_id,deployment_rates,bills_public_input_rate",
+    [
+        ("translate-output-priced", {"output_cost_per_second": 0.001}, True),
+        ("translate-free-input", {"input_cost_per_second": 0.0, "output_cost_per_second": 0.001}, False),
+    ],
+)
+def test_realtime_translation_deployment_per_second_rates_fall_back_to_public_rates_per_key(
+    _local_model_cost_map: None,
+    deployment_id: str,
+    deployment_rates: Mapping[str, float],
+    bills_public_input_rate: bool,
+    deployment_model: str,
+    base_model: str | None,
+    session_model: str | None,
+) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "translate",
+                "litellm_params": {
+                    "model": f"openai/{deployment_model}",
+                    "api_key": "sk-test",
+                    **deployment_rates,
+                },
+                "model_info": {"id": deployment_id, **({"base_model": base_model} if base_model else {})},
+            }
+        ]
+    )
+    public_input_rate: Final = litellm.model_cost["gpt-realtime-translate"]["input_cost_per_second"]
+
+    assert public_input_rate > 0
+    assert _translation_session_cost(
+        deployment_id, session_model=session_model, model=deployment_model, base_model=base_model
+    ) == pytest.approx(60 * 0.001 + (60 * public_input_rate if bills_public_input_rate else 0.0))
+
+
+def test_realtime_translation_custom_deployment_with_one_rate_bills_the_session_model_for_the_other(
+    _local_model_cost_map: None,
+) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "translate",
+                "litellm_params": {
+                    "model": "openai/my-translator",
+                    "api_key": "sk-test",
+                    "output_cost_per_second": 0.001,
+                },
+                "model_info": {"id": "custom-translate-output-priced"},
+            }
+        ]
+    )
+    public_input_rate: Final = litellm.model_cost["gpt-realtime-translate"]["input_cost_per_second"]
+
+    assert public_input_rate > 0
+    assert _translation_session_cost(
+        "custom-translate-output-priced", model="my-translator"
+    ) == pytest.approx(60 * 0.001 + 60 * public_input_rate)
+
+
+def test_realtime_translation_rate_ignores_a_session_model_the_deployment_does_not_run(
+    _local_model_cost_map: None,
+) -> None:
+    litellm.register_model(
+        model_cost={
+            "translation-session-echo": {
+                "litellm_provider": "openai",
+                "mode": "realtime",
+                "input_cost_per_second": 0.5,
+            }
+        }
+    )
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "translate",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime-translate",
+                    "api_key": "sk-test",
+                    "output_cost_per_second": 0.001,
+                },
+                "model_info": {"id": "translate-output-priced"},
+            }
+        ]
+    )
+
+    assert _translation_session_cost(
+        "translate-output-priced", session_model="translation-session-echo"
+    ) == pytest.approx(_translation_session_cost("translate-output-priced", session_model=None))
+
+
+def test_realtime_translation_deployment_without_per_second_rates_bills_public_rates(_local_model_cost_map) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "translate",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime-translate",
+                    "api_key": "sk-test",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {"id": "translate-token-priced"},
+            }
+        ]
+    )
+    public_entry: Final = litellm.model_cost["gpt-realtime-translate"]
+    public_cost: Final = 60 * (public_entry.get("input_cost_per_second") or 0.0) + 60 * (
+        public_entry.get("output_cost_per_second") or 0.0
+    )
+
+    assert public_cost > 0
+    assert _translation_session_cost("translate-token-priced") == pytest.approx(public_cost)
+
+
+def test_realtime_translation_spend_usage_carries_the_billed_input_seconds(_local_model_cost_map) -> None:
+    logging_obj: Final = Logging(
+        model="gpt-realtime-translate",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.arealtime.value,
+        start_time=datetime.datetime.now(),
+        litellm_call_id="translation-spend-usage",
+        function_id="translation-spend-usage",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-realtime-translate", user=None, optional_params={}, litellm_params={}, custom_llm_provider="openai"
+    )
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 30.0, "output_seconds": 42.5}}
+    ]
+
+    logging_obj.success_handler(result=events, start_time=datetime.datetime.now(), end_time=datetime.datetime.now())
+
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert payload["metadata"]["usage_object"]["seconds"] == pytest.approx(30.0)
+    assert payload["response_cost"] == pytest.approx(
+        30.0 * litellm.model_cost["gpt-realtime-translate"]["input_cost_per_second"]
+    )
+
+
 @pytest.mark.parametrize("profile_prefix", ("us", "global"))
 @pytest.mark.parametrize(
     "model_name",
@@ -10896,3 +11375,176 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+_REPORTED_TOTAL: Final = 0.037
+
+
+def _reported_cost_breakdown(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    call_type: Literal["completion", "decisions"],
+    cost_map_row: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    if cost_map_row is not None:
+        litellm.register_model(model_cost={model: dict(cost_map_row)})
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "reported cost"}],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.datetime.now(),
+        litellm_call_id="reported-cost-split",
+        function_id="f",
+    )
+    response: Final = ModelResponse(
+        model=model,
+        choices=[Choices(message=Message(content="ok"))],
+        usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120, cost=_REPORTED_TOTAL),
+    )
+    spend: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        call_type=call_type,
+        litellm_logging_obj=logging_obj,
+    )
+    assert spend == _REPORTED_TOTAL
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    return breakdown
+
+
+def test_reported_total_is_split_between_input_and_output_by_the_cost_map_rate_ratio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    breakdown: Final = _reported_cost_breakdown(
+        monkeypatch,
+        model="cc-reported-cost-both-rates",
+        call_type="completion",
+        cost_map_row={
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 3e-06,
+        },
+    )
+
+    input_share: Final = (100 * 1e-06) / (100 * 1e-06 + 20 * 3e-06)
+    assert breakdown["input_cost"] == pytest.approx(_REPORTED_TOTAL * input_share)
+    assert breakdown["output_cost"] == pytest.approx(_REPORTED_TOTAL * (1 - input_share))
+    assert breakdown["input_cost"] + breakdown["output_cost"] == _REPORTED_TOTAL
+    assert breakdown["total_cost"] == _REPORTED_TOTAL
+
+
+def test_reported_total_on_a_decisions_model_priced_per_input_token_lands_on_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    breakdown: Final = _reported_cost_breakdown(
+        monkeypatch,
+        model="cc-reported-cost-decisions",
+        call_type="decisions",
+        cost_map_row={
+            "litellm_provider": "openai",
+            "mode": "decisions",
+            "input_cost_per_token": 4.2e-08,
+            "output_cost_per_token": 0.0,
+        },
+    )
+
+    assert breakdown["input_cost"] == _REPORTED_TOTAL
+    assert breakdown["output_cost"] == 0.0
+
+
+def test_reported_total_without_a_cost_map_row_falls_back_to_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    breakdown: Final = _reported_cost_breakdown(
+        monkeypatch, model="cc-reported-cost-unmapped", call_type="completion", cost_map_row=None
+    )
+
+    assert breakdown["input_cost"] == 0.0
+    assert breakdown["output_cost"] == _REPORTED_TOTAL
+
+
+def test_upstream_cost_header_total_is_split_by_the_cost_map_rate_ratio(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={
+            "cc-header-cost-chat": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            }
+        }
+    )
+    logging_obj: Final = Logging(
+        model="cc-header-cost-chat",
+        messages=[{"role": "user", "content": "reported cost"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="reported-cost-header-split",
+        function_id="f",
+    )
+
+    cost: Final = response_cost_calculator(
+        response_object=_header_cost_chat_response({"llm_provider-x-litellm-response-cost": "0.25"}),
+        model="cc-header-cost-chat",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert cost == 0.25
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    input_share: Final = (10 * 0.001) / (10 * 0.001 + 20 * 0.002)
+    assert breakdown["input_cost"] == pytest.approx(0.25 * input_share)
+    assert breakdown["output_cost"] == pytest.approx(0.25 * (1 - input_share))
+    assert breakdown["total_cost"] == 0.25
+
+
+def test_upstream_cost_header_total_on_an_unmapped_alias_is_split_by_the_served_model_rates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={
+            "cc-header-cost-chat": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            }
+        }
+    )
+    logging_obj: Final = Logging(
+        model="team-alias-for-header-cost",
+        messages=[{"role": "user", "content": "reported cost"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="reported-cost-header-alias-split",
+        function_id="f",
+    )
+
+    cost: Final = response_cost_calculator(
+        response_object=_header_cost_chat_response({"llm_provider-x-litellm-response-cost": "0.25"}),
+        model="team-alias-for-header-cost",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert cost == 0.25
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    input_share: Final = (10 * 0.001) / (10 * 0.001 + 20 * 0.002)
+    assert breakdown["input_cost"] == pytest.approx(0.25 * input_share)
+    assert breakdown["output_cost"] == pytest.approx(0.25 * (1 - input_share))

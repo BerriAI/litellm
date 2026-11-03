@@ -1,3 +1,5 @@
+import datetime
+import time
 from typing import Final
 
 import httpx
@@ -245,3 +247,39 @@ def test_rank_chat_models_flags_a_retired_model_the_provider_lists_without_its_c
         (ranked_model.model, ranked_model.is_past_deprecation_date)
         for ranked_model in rank_chat_models_from_llm_provider("vertex_ai")
     ] == [("fake-retired-vertex-chat", True), ("fake-live-vertex-chat", False)]
+
+
+@pytest.mark.parametrize("host_zone", ["Etc/GMT+12", "Etc/GMT-14"])
+def test_rank_chat_models_flags_retirement_by_the_utc_date_whatever_the_host_zone(
+    monkeypatch: pytest.MonkeyPatch, host_zone: str
+) -> None:
+    utc_today: Final = datetime.datetime.now(datetime.timezone.utc).date()
+    retirement_dates: Final = {
+        "deepseek/fake-retires-today-chat": utc_today,
+        "deepseek/fake-retires-tomorrow-chat": utc_today + datetime.timedelta(days=1),
+    }
+    for name, retirement_date in retirement_dates.items():
+        monkeypatch.setitem(
+            litellm.model_cost,
+            name,
+            {
+                "input_cost_per_token": 1e-12,
+                "output_cost_per_token": 1e-12,
+                "mode": "chat",
+                "litellm_provider": PICKER_PROVIDER,
+                "deprecation_date": retirement_date.isoformat(),
+            },
+        )
+    monkeypatch.setitem(litellm.models_by_provider, PICKER_PROVIDER, tuple(retirement_dates))
+    monkeypatch.setenv("TZ", host_zone)
+    time.tzset()
+    try:
+        flags: Final = {
+            ranked_model.model: ranked_model.is_past_deprecation_date
+            for ranked_model in rank_chat_models_from_llm_provider(PICKER_PROVIDER)
+        }
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+    assert flags == {"deepseek/fake-retires-today-chat": True, "deepseek/fake-retires-tomorrow-chat": False}

@@ -29,7 +29,7 @@ impl RedisClient {
     pub fn new(config: RedisConfig) -> Result<Self, ConnectError> {
         let connection = match &config.endpoint {
             Endpoint::Url(url) => {
-                Connection::standalone(url.as_str().into_connection_info()?, config.timeout)?
+                Connection::standalone(url.expose().into_connection_info()?, config.timeout)?
             }
             Endpoint::Host(host) => {
                 Connection::standalone(host.connection_info()?, config.timeout)?
@@ -204,6 +204,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use litellm_redis_testing::RedisServer;
+    use litellm_secret_value::SecretValue;
     use rstest::rstest;
 
     use litellm_circuit_breaker::{Breaker, Config, State};
@@ -630,8 +631,12 @@ mod tests {
             db: 3,
         }))
         .unwrap();
-        let in_db_0 = connect(Endpoint::Url(server.url().to_owned())).unwrap();
-        let via_url = connect(Endpoint::Url(format!("{}/3", server.url()))).unwrap();
+        let in_db_0 = connect(Endpoint::Url(SecretValue::new(server.url().to_owned()))).unwrap();
+        let via_url = connect(Endpoint::Url(SecretValue::new(format!(
+            "{}/3",
+            server.url()
+        ))))
+        .unwrap();
 
         in_db_3
             .set("k", "3", Duration::from_secs(60))
