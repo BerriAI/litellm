@@ -32,7 +32,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 
 - `migrations/` - isolated Docker startup, concurrent migration, crash recovery, and legacy database compatibility. The CircleCI migration workflow enables `LITELLM_MIGRATION_TESTS=1`. These tests own their proxy containers and databases, so they do not use the shared proxy preflight or shared database cleanup
 
-- `llm_translation/` - LLM endpoint and provider-translation behavior: passthrough, custom pricing, OCR, and the non-chat inference endpoints (`/v1/responses`, `/v1/messages`, `/embeddings`, `/v1/rerank`, `/v1/audio/speech`, `/v1/images/generations`), each against a deployment the test creates via `/model/new` and deletes on teardown
+- `llm_translation/` - Azure realtime translation is explicitly skipped pending investigation of intermittent missing transcripts and remains unqualified. OpenAI translation and other Azure realtime cases remain enabled. LLM endpoint and provider-translation behavior: passthrough, custom pricing, OCR, and the non-chat inference endpoints (`/v1/responses`, `/v1/messages`, `/embeddings`, `/v1/rerank`, `/v1/audio/speech`, `/v1/images/generations`), each against a deployment the test creates via `/model/new` and deletes on teardown
 - `access_control/` - the gateway's authorization and error-shape contract: per-key model allow-lists, route-group permissions (`allowed_routes`), and unknown-model validation
 - `embeddings/` - the `/embeddings` endpoint across providers
 - `batches/` - the `/batches` endpoint. GovCloud batch coverage is explicitly skipped until its infrastructure is provisioned. Other missing credentials and provider errors remain failures
