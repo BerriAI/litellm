@@ -32513,16 +32513,17 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini-omni-flash-preview": {
+        "deprecation_date": "2026-11-06",
         "input_cost_per_audio_token": 1.5e-06,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 57920,
         "mode": "chat",
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
         "output_cost_per_video_token": 1.75e-05,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-flash-preview",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -69882,12 +69883,12 @@
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "vertex_ai",
         "max_output_tokens": 57920,
-        "max_input_tokens": 57920,
+        "max_input_tokens": 131072,
         "mode": "chat",
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
         "output_cost_per_video_token": 1.75e-05,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash",
         "supported_endpoints": [
             "/v1beta/interactions"
         ],
