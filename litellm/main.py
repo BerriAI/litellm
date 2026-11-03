@@ -9095,7 +9095,8 @@ def speech(
         # set API KEY
         api_key = (
             api_key
-            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            or dynamic_api_key  # key resolved by get_llm_provider for openai-compatible providers (e.g. LOKUTOR_API_KEY)
+            or litellm.api_key
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
         )
