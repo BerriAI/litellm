@@ -1034,8 +1034,9 @@ def test_prometheus_services_logger_starts_from_the_breakers_already_built(monke
     monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
     gc.collect()
     ServiceLogging()
-    assert REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"}) == (
-        redis_breaker_state_counts()["closed"]
+    assert (
+        REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"})
+        == (redis_breaker_state_counts()["closed"])
     )
 
 
@@ -1756,6 +1757,34 @@ def test_log_redis_failure_redacts_the_line_it_writes(caplog):
     assert SENSITIVE_CACHE_KEY not in caplog.text
     assert "private customer message" not in caplog.text
     assert "WRONGTYPE" in caplog.text
+
+
+@pytest.mark.parametrize("chained", [False, True])
+def test_log_redis_failure_redacts_traceback_and_exception_chain(
+    caplog: pytest.LogCaptureFixture, chained: bool
+) -> None:
+    import logging
+
+    from redis.exceptions import ResponseError
+
+    from litellm.caching.redis_cache import log_redis_failure
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        try:
+            raise _annotated_pipeline_error()
+        except ResponseError as pipeline_error:
+            if chained:
+                try:
+                    raise RuntimeError("Redis operation failed") from pipeline_error
+                except RuntimeError as wrapper:
+                    log_redis_failure(verbose_logger, logging.ERROR, "Redis failed", wrapper, with_traceback=True)
+            else:
+                log_redis_failure(verbose_logger, logging.ERROR, "Redis failed", pipeline_error, with_traceback=True)
+
+    assert SENSITIVE_CACHE_KEY not in caplog.text
+    assert "private customer message" not in caplog.text
+    assert "Traceback (most recent call last)" in caplog.text
+    assert "Redis failed" in caplog.text
 
 
 @pytest.mark.asyncio
