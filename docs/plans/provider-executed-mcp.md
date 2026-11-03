@@ -1,6 +1,6 @@
 # Provider-executed MCP registration
 
-Status: registration and permission integration are approved and pushed through `f1bb8d8ddd`. Native request authorization is implemented and approved for commit and push
+Status: registration, permission integration, and native request authorization are approved and pushed through `18cd30435c`. The provider registration UI and generated API schema refresh are verified and approved for commit and push
 
 ## Implementation plan
 
@@ -10,9 +10,9 @@ Work through these layers in order on `litellm_provider_mcp_registration`. Updat
 | --- | --- | --- |
 | 1 | Settle registration fields, values, storage, and validation | Approved |
 | 2 | Implement persistence and execution-mode isolation before enabling provider registration | Database, isolation, and admin API committed; YAML registration and provider input model reviewed and approved |
-| 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Scoped retrieval, assignment, and stored tool selectors implemented and approved. Provider registration form remains separate |
-| 4 | Authorize effective OpenAI Responses and Anthropic Messages MCP attachments through existing MCP permissions | Implemented and approved |
-| 5 | Live provider tests, streaming admission tests, UI tests, and gateway regressions | Request admission and gateway regressions verified. Real OpenAI JSON/streaming passed. Real Anthropic calls blocked by invalid QA credential. Earlier browser QA remains incomplete |
+| 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Scoped retrieval, assignment, and stored tool selectors approved and pushed. Provider create/edit/detail UI verified and approved |
+| 4 | Authorize effective OpenAI Responses and Anthropic Messages MCP attachments through existing MCP permissions | Approved and pushed in `18cd30435c` |
+| 5 | Live provider tests, streaming admission tests, UI tests, and gateway regressions | Request admission and gateway regressions verified. Real OpenAI JSON/streaming passed. Real Anthropic legacy/modern JSON and SSE calls, cache revocation, and token accounting passed with the updated QA credential. Registration browser CRUD, empty-tool persistence, and config read-only QA passed without MCP discovery or execution |
 
 Request authorization enforces native attachments before provider dispatch using the completed permission integration. Preserve the current sources of truth and lookup paths. Object permissions remain database-backed and use the existing auth caches. Key assignment keeps its database lookup and gains recognition of provider-only YAML records in its config fallback. Scoped lists keep their existing permission calculation and hydrate authorized provider IDs from the already-loaded registration inventory. Provider tool selectors use stored allowed tools and descriptions. Gateway lookup, discovery, and execution retain their existing paths
 
@@ -23,6 +23,48 @@ V1 supports URL-based OpenAI Responses MCP and both Anthropic Messages connector
 Chat Completions entry routes, response/SSE inspection, per-invocation argument policy inside a provider's tool loop, automatic MCP discovery for provider registrations, local MCP references, provider connector IDs, and additional API bridges are outside v1
 
 The registry design review is deferred by agreement on 2026-11-02. This batch retains the executable registry and separate provider registration inventory. A later revision may publish both modes through one registry and derive executable views at gateway boundaries. No registry consolidation is included in this approval
+
+## Registration UI review
+
+The existing Add New MCP Server flow offers LiteLLM-executed and Provider-executed registration. Provider mode mounts a separate compact form shared by create and edit. It collects name, optional alias/description, HTTPS URL, exact allowed tool names, access groups, and allow-all-keys. The payload contains no transport or credential settings. Create sends execution mode; update omits it because mode is immutable
+
+Provider cards show execution mode and allowed-tool count. Details show stored tools without mounting the gateway tool viewer. Connection tests, stored credentials, and gateway cost settings are hidden for provider registrations. YAML registrations retain their read-only settings. Empty allowed-tools lists retain the enforced deny-all policy
+
+Validation passed 302 focused UI tests, TypeScript, and the production build. Changed-file ESLint has no errors. A live browser against the proxy and a disposable PostgreSQL database verified create, stored-tool detail, edit to an empty list, reload, read-only YAML settings, and deletion. Browser traffic contained no MCP REST discovery/execution requests, and the provider endpoint recorded zero outbound connections. Before/after screenshots and the live harness are saved under the local registration UI review evidence directory
+
+The UI reuses the existing registration endpoints and shared MCP entity. This batch adds no backend routes, permission rules, database changes, or catalog changes. Public docs remain separate
+
+The UI is approved, and the remaining v1 work is final release review. Live Anthropic verification passed with the updated QA credential; see the follow-up below. The earlier OpenAI native MCP JSON and streaming checks passed. Chat Completions, response/SSE inspection, usage/billing changes, and registry consolidation remain outside this batch
+
+## Full-stack verification
+
+The 2026-11-02 admin sequence passed 22 live checks using the public OpenAI documentation MCP and `gpt-6-luna`. Both execution modes were registered through the UI for the same HTTPS endpoint. Scoped MCP protocol and REST calls returned real documentation. Gateway Responses execution sent function tools and returned tool output in a second provider request. Provider-native JSON and streaming calls executed successfully with one provider request each after registration and permission assignment
+
+Before provider registration, native URL requests rejected even for the admin. Missing server grants, narrower tool permissions, unregistered tools, changed URLs, unbounded scopes, and enforced empty lists rejected with zero provider requests. Provider registrations remained excluded from gateway REST execution, and gateway protocol calls still worked after both modes were registered
+
+Messages denial checks passed without provider dispatch. Direct Anthropic happy-path execution remains unverified because the designated API key returns 401. The authorized QA vault service account is deleted. The user's AWS profile is valid, but a standard Bedrock call is not equivalent proof of Anthropic MCP connector execution. The live harness, wire evidence, screenshots, and report are in the local `mcp-gap-matrix/full-stack-review` directory. No application changes were required by this run
+
+## Live risk and adversarial review
+
+The 2026-11-02 review covered the cumulative stack plus uncommitted UI against merge base `a392a39627`. Five independent lenses completed. One unintended issue was confirmed: the lazy OpenAPI snapshot and dashboard API types omitted the new mode/nullable transport contract. Both were regenerated through the documented commands; repeat generation was deterministic, TypeScript passed, and an independent scoped re-review found no unrelated schema changes
+
+The live A/B rig used two proxy processes with two workers each per side, real PostgreSQL with the catalog revision trigger, shared Redis per side, a forwarding recorder, real OpenAI, and the public documentation MCP. Gateway calls, agentic continuation, ordinary JSON/streaming inference, Messages adaptation, fallback, and key lifecycle retained their behavior. Provider-native allowed JSON/streaming calls executed; missing grants, unknown endpoints, registration/tool revocation and deletion rejected with zero provider requests, including after a shared response-cache hit
+
+Supplemental head and merged-current-main checks verified late callback URL mutation is blocked and key-tool revocation overrides the cache across both proxy processes. Identity-free SDK native calls still execute. Native success, cache hits, and denied requests produced the expected nonzero/zero spend records. Current main `a2d27881e8` merged cleanly in an isolated tree; the original branch was not merged or committed
+
+Two compatibility changes remain explicit: native URL attachments require provider registration and bounded grants, and MCP updates must omit `execution_mode`, including a same-value field copied from GET. The latter implements the existing v1 decision; no update-contract relaxation was made. A malformed mixed-config reload concern was classified as optional hardening after the base showed the same non-atomic update behavior
+
+Direct Anthropic native execution remains unverified. AWS CLI with `aws-dev` successfully ran a Claude control, but the tested Bedrock native request rejected `mcp_toolset`; this does not replace direct Anthropic connector proof. More unusual adapter/continuation/retry and long-lived config-reload paths remain individually listed in the local risk report. No blanket release-safety or full-CI claim is made. Evidence: `mcp-gap-matrix/risk-review-20261102/REPORT.md`
+
+## Live Anthropic follow-up, passed
+
+The updated designated QA key enabled a real Claude Haiku 5.5 base-versus-head run. Both legacy connector and modern MCP toolset formats executed the public documentation MCP successfully in JSON and SSE. The rig used real PostgreSQL, the catalog revision trigger, shared Redis, and two proxy processes with two workers each per side
+
+All 47 HTTP checks passed. Registered finite tools with key/team grants executed; unregistered URLs, missing grants, forbidden tools, changed URLs and unbounded scopes rejected before provider dispatch. Registration and key-tool revocation each blocked cached responses across both process ports. The branch recorded 17 native request denials with zero provider calls. Gateway automatic MCP execution also passed on base and head with `require_approval=never`
+
+All eight native JSON/SSE executions had identical final token totals between the recorded upstream response, client response and spend log. Successful calls recorded nonzero cost; the two cache hits and 17 denied calls recorded zero cost. The corresponding outbound request bodies matched base/head exactly. This is ordinary token-accounting proof, not comprehensive provider-specific tool-fee attribution
+
+The earlier sections describing a blocked Anthropic key record the state before this follow-up; that happy-path/cache-revocation gap is now closed. These calls used direct Anthropic, not Bedrock. Advanced retry/adapter paths remain separately bounded, and this was not another full gauntlet-mini run. No product-code fix was needed. Evidence is in `mcp-gap-matrix/risk-review-20261102/anthropic-followup/`
 
 ## Request authorization review
 

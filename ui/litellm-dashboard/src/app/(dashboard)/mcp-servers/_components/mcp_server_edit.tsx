@@ -49,6 +49,7 @@ import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import IdJagFormFields from "./IdJagFormFields";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPLogoSelector from "./MCPLogoSelector";
+import ProviderMCPRegistrationForm from "./ProviderMCPRegistrationForm";
 import EnvVarsSection from "./EnvVarsSection";
 import { validateMCPServerUrl, validateMCPServerName, normalizeToolOverrideMap } from "./utils";
 import { AUTH_TYPES_REQUIRING_AUTH_VALUE } from "./createServerPayload";
@@ -97,7 +98,7 @@ interface MCPServerEditProps {
 
 export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
-const MCPServerEdit: React.FC<MCPServerEditProps> = ({
+const GatewayMCPServerEdit: React.FC<MCPServerEditProps> = ({
   mcpServer,
   accessToken,
   userID,
@@ -1376,6 +1377,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       </div>
     </Tabs>
   );
+};
+
+const MCPServerEdit: React.FC<MCPServerEditProps> = (props) => {
+  if (props.mcpServer.execution_mode === "provider") {
+    return <ProviderMCPRegistrationForm {...props} />;
+  }
+  return <GatewayMCPServerEdit {...props} />;
 };
 
 export default MCPServerEdit;
