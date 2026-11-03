@@ -20,6 +20,7 @@ import copy
 import io
 import json
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import Any, Dict, Final
 
 import pytest
@@ -27,7 +28,7 @@ import soundfile as sf
 from fastapi import HTTPException
 from PIL import Image
 
-from litellm import token_counter
+from litellm import get_model_info, token_counter
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, estimate_image_tokens
 from litellm.proxy._types import UserAPIKeyAuth
@@ -4066,6 +4067,147 @@ async def test_project_token_limit_admits_image_embedding_and_still_rejects_long
         )
     assert error.value.status_code == 429
     assert len(image_uri) > len(long_text)
+
+
+_EMBEDDING_FILE_MIMES: Final = MappingProxyType({"pdf": "application/pdf", "video": "video/mp4"})
+
+
+def _embedding_file_uri(kind: str) -> str:
+    return f"data:{_EMBEDDING_FILE_MIMES[kind]};base64,{base64.b64encode(bytes(range(256)) * 1200).decode()}"
+
+
+def _embedding_uri(kind: str) -> str:
+    return _embedding_file_uri(kind) if kind in _EMBEDDING_FILE_MIMES else _embedding_media_uri(kind, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+@pytest.mark.parametrize("kind", ["pdf", "video"])
+async def test_project_token_limit_admits_document_embedding_up_to_the_model_input_limit(
+    rate_limiter: tuple[RateLimitHandler, DualCache], limit_field: str, kind: str
+) -> None:
+    handler, cache = rate_limiter
+    uri: Final = _embedding_file_uri(kind)
+    model_input_limit: Final = get_model_info(_EMBEDDING_MODEL)["max_input_tokens"]
+    assert isinstance(model_input_limit, int) and len(uri) // 4 > 75_000 > model_input_limit
+
+    def project_auth(limit: int) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key=hash_token(f"sk-embedding-{kind}-{limit_field}-{limit}"),
+            project_id=f"proj-embedding-{kind}-{limit_field}-{limit}",
+            project_metadata={limit_field: {_EMBEDDING_MODEL: limit}},
+        )
+
+    request: Final = {"model": _EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION, uri]}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=project_auth(75_000), cache=cache, data=dict(request), call_type="aembedding"
+    )
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=project_auth(model_input_limit // 2),
+            cache=cache,
+            data=dict(request),
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
+_TEXT_ONLY_EMBEDDING_MODEL: Final = "text-embedding-3-small"
+
+
+@pytest.mark.parametrize("kind", ["image", "audio", "pdf", "video"])
+def test_text_only_embedding_model_counts_data_uri_as_text(
+    rate_limiter: tuple[RateLimitHandler, DualCache], kind: str
+) -> None:
+    handler, _ = rate_limiter
+    uri: Final = _embedding_uri(kind)
+
+    assert handler._estimate_input_and_output_tokens(
+        {"model": _TEXT_ONLY_EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION, uri]}, call_type="aembedding"
+    ) == handler._estimate_input_and_output_tokens(
+        {"model": _TEXT_ONLY_EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION, "x" * len(uri)]},
+        call_type="aembedding",
+    )
+
+
+def _project_limited_embedding_call(
+    limit_field: str, backends: tuple[str, ...]
+) -> tuple[RateLimitHandler, DualCache, UserAPIKeyAuth, dict[str, object]]:
+    cache: Final = DualCache()
+    handler: Final = RateLimitHandler(
+        internal_usage_cache=InternalUsageCache(cache), media_model_resolver=lambda _model, _team_id: backends
+    )
+    scope: Final = f"{limit_field}-{'-'.join(backends)}"
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-embedding-backends-{scope}"),
+        project_id=f"proj-embedding-backends-{scope}",
+        project_metadata={limit_field: {"team-embedder": 75_000}},
+    )
+    return handler, cache, auth, {"model": "team-embedder", "input": _embedding_media_uri("image", False)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+@pytest.mark.parametrize(
+    "backends", [(_TEXT_ONLY_EMBEDDING_MODEL,), (_EMBEDDING_MODEL, _TEXT_ONLY_EMBEDDING_MODEL)], ids=["text", "mixed"]
+)
+async def test_project_token_limit_rejects_image_embedding_a_text_only_backend_reads_as_text(
+    limit_field: str, backends: tuple[str, ...]
+) -> None:
+    handler, cache, auth, request = _project_limited_embedding_call(limit_field, backends)
+
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=request, call_type="aembedding")
+    assert error.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+async def test_project_token_limit_admits_image_embedding_through_an_alias_of_an_image_backend(
+    limit_field: str,
+) -> None:
+    handler, cache, auth, request = _project_limited_embedding_call(limit_field, (_EMBEDDING_MODEL,))
+
+    await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=request, call_type="aembedding")
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={**request, "input": "word " * 100_000},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_project_itpm_limit_reserves_media_tokens_for_an_image_embedding(
+    rate_limiter: tuple[RateLimitHandler, DualCache],
+) -> None:
+    handler, cache = rate_limiter
+    image_uri: Final = _embedding_media_uri("image", False)
+    image_tokens, _ = handler._estimate_input_and_output_tokens(
+        {"model": _EMBEDDING_MODEL, "input": image_uri}, call_type="aembedding"
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-embedding-image-itpm-media"),
+        project_id="proj-embedding-image-itpm-media",
+        project_metadata={"model_itpm_limit": {_EMBEDDING_MODEL: image_tokens // 2}},
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": _EMBEDDING_MODEL, "input": _EMBEDDING_CAPTION},
+        call_type="aembedding",
+    )
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": _EMBEDDING_MODEL, "input": image_uri},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
 
 
 @pytest.mark.asyncio

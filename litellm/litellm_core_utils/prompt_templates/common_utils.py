@@ -391,11 +391,23 @@ def split_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, objec
     return projection.content, projection.media
 
 
+_TPM_EMBEDDING_FILE_MIME_PREFIXES: Final = ("application/pdf", "video/")
+
+
+def _tpm_embedding_file(data_uri: str) -> tuple[Mapping[str, object], ...]:
+    from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
+
+    mime: Final = (parse_mime_type(data_uri[:256]) or "").strip().lower()
+    if not mime.startswith(_TPM_EMBEDDING_FILE_MIME_PREFIXES):
+        return ()
+    return ({"type": "file", "file": {"file_data": data_uri, "format": mime}},)
+
+
 def _tpm_embedding_leaf(value: object) -> _TPMMediaProjection:
     if not isinstance(value, str) or not value.startswith("data:"):
         return _tpm_media_leaf(value)
-    projection: Final = _tpm_file_media({"file_data": value})
-    return _TPMMediaProjection("" if projection.media else value, projection.media)
+    media: Final = _tpm_file_media({"file_data": value}).media or _tpm_embedding_file(value)
+    return _TPMMediaProjection("" if media else value, media)
 
 
 def _is_json_array(value: object) -> bool:
