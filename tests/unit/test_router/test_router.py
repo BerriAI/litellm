@@ -17318,6 +17318,29 @@ class TestAzureBaseModelFallbackLogging:
         # unmappable names resolve to a zeroed stub — unchanged behavior
         assert model_info.get("max_input_tokens") is None
 
+    def test_configured_token_limit_resolves_unknown_deployment_name(self) -> None:
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-group",
+                    "litellm_params": {
+                        "model": "azure/my-custom-deployment-name",
+                        "api_key": "fake-key",
+                        "api_base": "https://fake.openai.azure.com",
+                    },
+                    "model_info": {"id": "azure-base-model-test-id", "max_input_tokens": 4321},
+                }
+            ]
+        )
+
+        with patch("litellm.router.verbose_router_logger.error") as mock_error:
+            model_info = router.get_router_model_info(
+                deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
+            )
+
+        assert not any("Could not identify azure model" in str(call) for call in mock_error.call_args_list)
+        assert model_info["max_input_tokens"] == 4321
+
     def test_explicit_base_model_still_wins(self):
         router = litellm.Router(
             model_list=[

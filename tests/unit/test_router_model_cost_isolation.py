@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
@@ -2095,6 +2096,8 @@ def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
         {
             "mode": "chat",
             "litellm_provider": "openai",
+            "max_input_tokens": 100000,
+            "max_output_tokens": 128000,
             "max_tokens": 128000,
             "supports_vision": True,
             "supported_endpoints": ["/v1/responses"],
@@ -2112,7 +2115,6 @@ def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
     assert filtered == {
         "mode": "chat",
         "litellm_provider": "openai",
-        "max_tokens": 128000,
         "supports_vision": True,
         "supported_endpoints": ["/v1/responses"],
         "use_openai_responses_path": True,
@@ -2162,6 +2164,80 @@ def test_capability_flags_propagate_from_deployment_model_info_to_shared_key():
         assert mantle_base_segment(bare_model, litellm.model_cost) == "openai/v1"
     finally:
         _restore_model_cost_entries(model_keys)
+
+
+def test_token_limits_stay_on_the_deployment_that_set_them() -> None:
+    backend_model: Final = "openai/gpt-4o-mini"
+    shared_keys: Final = ("gpt-4o-mini", backend_model)
+    token_fields: Final = ("max_input_tokens", "max_output_tokens", "max_tokens")
+    catalog_limits: Final = {
+        key: {field: litellm.get_model_info(model=key).get(field) for field in token_fields} for key in shared_keys
+    }
+    catalog_cost_map_limits: Final = {
+        key: {field: (litellm.model_cost.get(key) or {}).get(field) for field in token_fields} for key in shared_keys
+    }
+    override_id: Final = "token-limit-override-deployment"
+    plain_id: Final = "token-limit-plain-deployment"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (*shared_keys, override_id, plain_id)
+    }
+    expected_cost_map_limits: Final = {
+        key: {
+            **catalog_cost_map_limits[key],
+            "max_tokens": catalog_cost_map_limits[key]["max_tokens"]
+            or catalog_cost_map_limits[key]["max_output_tokens"],
+        }
+        for key in shared_keys
+    }
+    try:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "plain-gpt-4o-mini",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {"id": plain_id},
+                },
+                {
+                    "model_name": "overridden-gpt-4o-mini",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {
+                        "id": override_id,
+                        "max_input_tokens": 4321,
+                        "max_output_tokens": 987,
+                        "max_tokens": 987,
+                    },
+                },
+            ]
+        )
+        litellm.get_model_info.cache_clear()
+
+        for key in shared_keys:
+            assert {
+                field: (litellm.model_cost.get(key) or {}).get(field) for field in token_fields
+            } == expected_cost_map_limits[key]
+            assert {
+                field: litellm.get_model_info(model=key).get(field) for field in token_fields
+            } == catalog_limits[key]
+
+        assert {
+            field: litellm.get_model_info(model=override_id).get(field) for field in token_fields
+        } == {"max_input_tokens": 4321, "max_output_tokens": 987, "max_tokens": 987}
+
+        plain_listing: Final = create_model_info_response(
+            model_id="plain-gpt-4o-mini", provider="openai", llm_router=router
+        )
+        override_listing: Final = create_model_info_response(
+            model_id="overridden-gpt-4o-mini", provider="openai", llm_router=router
+        )
+        assert (plain_listing["max_input_tokens"], plain_listing["max_output_tokens"]) == (
+            catalog_limits[backend_model]["max_input_tokens"],
+            catalog_limits[backend_model]["max_output_tokens"],
+        )
+        assert (override_listing["max_input_tokens"], override_listing["max_output_tokens"]) == (4321, 987)
+    finally:
+        _restore_model_cost_entries(model_keys)
+        litellm.get_model_info.cache_clear()
 
 
 def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
@@ -3067,14 +3143,23 @@ def test_register_deployment_in_model_cost_writes_both_key_families():
     try:
         Router._register_deployment_in_model_cost(
             model_id="both-families-id",
-            model_info={"id": "both-families-id", "max_input_tokens": 999, "litellm_provider": "hosted_vllm"},
+            model_info={
+                "id": "both-families-id",
+                "max_input_tokens": 999,
+                "max_output_tokens": 777,
+                "max_tokens": 999,
+                "litellm_provider": "hosted_vllm",
+            },
             model="hosted_vllm/both-families-backend",
             custom_llm_provider=None,
         )
 
         assert litellm.model_cost["both-families-id"]["max_input_tokens"] == 999
+        assert litellm.model_cost["both-families-id"]["max_output_tokens"] == 777
+        assert litellm.model_cost["both-families-id"]["max_tokens"] == 999
         shared = litellm.model_cost["hosted_vllm/both-families-backend"]
-        assert shared["max_input_tokens"] == 999
+        assert shared["litellm_provider"] == "hosted_vllm"
+        assert not {"max_input_tokens", "max_output_tokens", "max_tokens"} & shared.keys()
         assert "id" not in shared
     finally:
         _restore_model_cost_entries(model_keys)

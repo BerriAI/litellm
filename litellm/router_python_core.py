@@ -12939,12 +12939,23 @@ class PythonCore(DeprecatedRouterMembers):
         if deployment is None:
             raise ValueError("Deployment not found")
 
-        ## GET BASE MODEL
-        base_model = (deployment.get("model_info") or {}).get("base_model", None)
-        if base_model is None:
-            base_model = (deployment.get("litellm_params") or {}).get("base_model", None)
+        raw_deployment_model_info: Final[object] = deployment.get("model_info")
+        deployment_model_info: Final[Mapping[str, object]] = _MODEL_INFO_ADAPTER.validate_python(
+            raw_deployment_model_info.model_dump(exclude_none=True)
+            if isinstance(raw_deployment_model_info, BaseModel)
+            else raw_deployment_model_info or {}
+        )
 
-        model = base_model
+        ## GET BASE MODEL
+        raw_base_model: Final[object] = deployment_model_info.get("base_model")
+        base_model: str | None = raw_base_model if isinstance(raw_base_model, str) else None
+        if base_model is None:
+            raw_litellm_params: Final[object] = deployment.get("litellm_params")
+            if isinstance(raw_litellm_params, Mapping):
+                litellm_params_base_model: Final[object] = raw_litellm_params.get("base_model")
+                base_model = litellm_params_base_model if isinstance(litellm_params_base_model, str) else None
+
+        model: str | None = base_model
 
         ## GET PROVIDER - reuse LiteLLM_Params if already constructed
         litellm_params_data: Final = deployment.get("litellm_params")
@@ -12969,11 +12980,24 @@ class PythonCore(DeprecatedRouterMembers):
             # Router init auto-registers every deployment name into
             # litellm.model_cost as a zeroed stub, so membership alone can't
             # tell a resolvable name apart; require usable limits/costs.
+            configured_max_input_tokens: Final = coerce_token_limit(deployment_model_info.get("max_input_tokens"))
             _azure_fallback_key = _model if _model.startswith("azure/") else f"azure/{_model}"
-            _fallback_entry = self._host.dynamic().model_cost.get(_azure_fallback_key)
-            _fallback_resolves = isinstance(_fallback_entry, Mapping) and (
-                (_fallback_entry.get("max_input_tokens") or 0) > 0
-                or (_fallback_entry.get("input_cost_per_token") or 0) > 0
+            _fallback_entry: Final[object] = self._host.dynamic().model_cost.get(_azure_fallback_key)
+            fallback_info: Final[Mapping[str, object]] | None = (
+                _MODEL_INFO_ADAPTER.validate_python(_fallback_entry) if isinstance(_fallback_entry, Mapping) else None
+            )
+            fallback_max_input_tokens: Final = (
+                coerce_token_limit(fallback_info.get("max_input_tokens")) if fallback_info is not None else None
+            )
+            fallback_input_cost: Final = (
+                fallback_info.get("input_cost_per_token") if fallback_info is not None else None
+            )
+            _fallback_resolves = (configured_max_input_tokens or 0) > 0 or (
+                fallback_info is not None
+                and (
+                    (fallback_max_input_tokens or 0) > 0
+                    or (isinstance(fallback_input_cost, (int, float)) and fallback_input_cost > 0)
+                )
             )
             if _fallback_resolves:
                 verbose_router_logger.debug(

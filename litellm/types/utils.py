@@ -4284,6 +4284,10 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
     }
 )
 
+DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"max_input_tokens", "max_output_tokens", "max_tokens"}
+)
+
 DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "token_count_framing",
@@ -4299,6 +4303,7 @@ SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     - frozenset(CustomPricingLiteLLMParams.model_fields)
     - DEPLOYMENT_SCOPED_PRICING_FIELDS
     - DEPLOYMENT_SCOPED_CAPABILITY_FIELDS
+    - DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS
     - DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS
 )
 
