@@ -8933,3 +8933,91 @@ async def test_a_successful_extraction_counts_its_input_tokens_toward_the_key_tp
             call_type="aextraction",
         )
     assert refused.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_success_settle_skips_refund_after_failure_release():
+    """Regression (#49675): a reservation already settled by async_log_failure_event
+    (which sets ``reservation_released``) must not be netted again by the success
+    settle — re-applying (actual - reserved) refunds a second time and can drive
+    the counter below zero."""
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    response = ModelResponse(
+        id="released-settle",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-4o-mini",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs = {
+        "litellm_call_id": "fail-then-success",
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_hash": hash_token("sk-released"),
+            }
+        },
+        "litellm_params": {"metadata": {}},
+        "model": "gpt-4o-mini",
+    }
+
+    stash = get_or_create_request_stash()
+    stash.owner_litellm_call_id = "fail-then-success"
+    stash.reserved_tokens = 5000
+    stash.reserved_scopes = frozenset({("api_key", hash_token("sk-released"))})
+    stash.reservation_released = True
+
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs,
+        response_obj=response,
+        rate_limit_type="total",
+    )
+
+    key_ops = [op for op in ops if op["key"].endswith(":tokens")]
+    assert key_ops, "expected the api_key tokens scope to be charged"
+    # With the reservation already released, the full actual usage is charged
+    # fresh — no (actual - reserved) negative refund is applied again.
+    assert all(op["increment_value"] >= 0 for op in key_ops)
+    api_key_ops = [op for op in key_ops if hash_token("sk-released") in op["key"]]
+    assert api_key_ops and all(op["increment_value"] == 150 for op in api_key_ops)
+
+
+@pytest.mark.asyncio
+async def test_failure_settle_routes_through_ttl_preserving_increment():
+    """Regression (#49675): the failure settle must not run the post-call pipeline
+    (INCRBYFLOAT + EXPIRE per op), which renewed the tokens counter's TTL to a
+    full window on every failure so the counter never expired while failures
+    kept arriving."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    post_call_spy = AsyncMock(wraps=handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call)
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call = post_call_spy
+    ttl_spy = AsyncMock(wraps=handler.async_increment_tokens_with_ttl_preservation)
+    handler.async_increment_tokens_with_ttl_preservation = ttl_spy
+
+    stash = get_or_create_request_stash()
+    stash.owner_litellm_call_id = "ttl-settle"
+    stash.reserved_tokens = 5000
+    stash.reserved_scopes = frozenset({("api_key", hash_token("sk-ttl"))})
+    stash.reserved_model = "gpt-4o-mini"
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "ttl-settle",
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": hash_token("sk-ttl")}
+            },
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert ttl_spy.await_count >= 1, "failure settle must use the TTL-preserving increment"
+    assert post_call_spy.await_count == 0, "post-call pipeline resets TTLs and must not settle token counters"

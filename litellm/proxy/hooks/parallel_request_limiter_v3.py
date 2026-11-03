@@ -5223,9 +5223,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             total_tokens = self._aggregate_only_total_tokens(usage=_usage)
 
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-        reserved_tokens: Final = stash.reserved_tokens if stash is not None else 0
+        # A reservation already settled by async_log_failure_event (which set
+        # ``reservation_released``) must not be netted again here: its refund
+        # already ran, so re-applying (actual - reserved) on success would
+        # refund a second time and can drive the counter below zero (#49675).
+        reservation_released: Final = stash.reservation_released if stash is not None else False
+        reserved_tokens: Final = 0 if (stash is None or reservation_released) else stash.reserved_tokens
         reserved_model: Final = stash.reserved_model if stash is not None else None
-        reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
+        reserved_scopes: Final[frozenset[tuple[str, str]]] = (
+            frozenset() if (stash is None or reservation_released) else stash.reserved_scopes
+        )
         # Reconciliation must target the same model-scoped counter that the
         # pre-call reservation incremented. If a reservation was made,
         # ``reserved_model`` (resolved at admission, so an alias map reload
@@ -5619,12 +5626,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             if pipeline_operations:
-                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
+                # TTL-preserving settle: the post-call pipeline runs INCRBYFLOAT
+                # + EXPIRE per op, so every failure with a reservation renewed
+                # the tokens counter's TTL to a full window and it never
+                # expired while failures kept arriving (#49675).
+                await self.async_increment_tokens_with_ttl_preservation(
                     pipeline_operations, parent_otel_span=litellm_parent_otel_span
                 )
             for project_operations in (itpm_operations, otpm_operations, ptu_operations):
                 if isinstance(project_operations, list):
-                    await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
+                    await self.async_increment_tokens_with_ttl_preservation(
                         project_operations, parent_otel_span=litellm_parent_otel_span
                     )
                 elif project_operations:
