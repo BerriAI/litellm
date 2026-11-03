@@ -5240,10 +5240,11 @@ class DataResidency(Enum):
     """
     OpenAI data-residency / regional-processing regions.
 
-    Inferred from the OpenAI api_base host. EU and US hosts map to their
-    regions, and gov.api.openai.com maps to FedRAMP. Used to apply the
-    regional-processing cost uplift
-    (see ``regional_processing_uplift_multiplier_<region>`` on ModelInfo).
+    Inferred from the OpenAI api_base host (eu.api.openai.com -> EU,
+    us.api.openai.com -> US). Used to apply the regional-processing
+    cost uplift (see ``regional_processing_uplift_multiplier_<region>``
+    on ModelInfo).
+    gov.api.openai.com maps to FEDRAMP.
     """
 
     US = "us"

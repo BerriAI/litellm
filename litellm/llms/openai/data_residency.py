@@ -1,17 +1,20 @@
 """
-Helpers for resolving OpenAI data residency from an api_base URL.
+Helpers for resolving OpenAI data-residency (regional processing) from an
+api_base URL.
 
-OpenAI uses dedicated hosts for regional and FedRAMP requests, so the api_base
-hostname determines which data-residency uplift applies.
+OpenAI enforces hostname-per-region for projects with geography restrictions
+enabled and rejects requests sent to the wrong host, so the api_base hostname
+is the authoritative signal of which region a request was processed in.
 """
 
 from typing import Final
 from urllib.parse import urlparse
 
-# Mapping of OpenAI data-residency hostnames to the cost-calculator values. See
+# Mapping of OpenAI regional hostnames to the corresponding data-residency
+# value used by the cost calculator. See
 # https://developers.openai.com/api/docs/pricing for the regional-processing
 # uplift these hostnames trigger.
-_OPENAI_DATA_RESIDENCY_HOSTS: Final[dict[str, str]] = {
+_OPENAI_REGIONAL_HOSTS: Final[dict[str, str]] = {
     "eu.api.openai.com": "eu",
     "us.api.openai.com": "us",
     "gov.api.openai.com": "fedramp",
@@ -20,7 +23,7 @@ _OPENAI_DATA_RESIDENCY_HOSTS: Final[dict[str, str]] = {
 
 def infer_openai_data_residency(custom_llm_provider: str | None, api_base: str | None) -> str | None:
     """
-    Derive the OpenAI data-residency mode from an api_base URL.
+    Derive the OpenAI data-residency region from an api_base URL.
 
     Returns ``"eu"`` for the EU regional host, ``"us"`` for the US regional
     host, ``"fedramp"`` for ``gov.api.openai.com``, and ``None`` for the
@@ -34,4 +37,4 @@ def infer_openai_data_residency(custom_llm_provider: str | None, api_base: str |
         return None
     if not host:
         return None
-    return _OPENAI_DATA_RESIDENCY_HOSTS.get(host.lower())
+    return _OPENAI_REGIONAL_HOSTS.get(host.lower())
