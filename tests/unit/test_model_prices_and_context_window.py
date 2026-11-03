@@ -936,10 +936,13 @@ class _BedrockWindowRow(BaseModel):
 
 
 _BEDROCK_PROVIDERS: Final = frozenset({"bedrock", "bedrock_converse", "bedrock_mantle"})
-_ROWS_NAMING_A_PREFIXED_MODEL_UNDER_ANOTHER_ID: Final = (
+_ROWS_NAMING_A_MODEL_UNDER_ANOTHER_ID: Final = (
     ("moonshot.kimi-k2-thinking", "moonshotai.kimi-k2-thinking"),
     ("bedrock_mantle/moonshotai.kimi-k2-thinking", "moonshotai.kimi-k2-thinking"),
     ("bedrock_mantle/qwen.qwen3-next-80b-a3b-instruct", "qwen.qwen3-next-80b-a3b"),
+    ("bedrock_mantle/qwen.qwen3-235b-a22b-2507", "qwen.qwen3-235b-a22b-2507-v1:0"),
+    ("bedrock_mantle/qwen.qwen3-coder-30b-a3b-instruct", "qwen.qwen3-coder-30b-a3b-v1:0"),
+    ("bedrock_mantle/qwen.qwen3-32b", "qwen.qwen3-32b-v1:0"),
 )
 _BEDROCK_PREFIXED_ROW: Final = re.compile(r"bedrock/(?:[a-z0-9-]+/)?(?P<model>[^/]+)")
 
@@ -975,11 +978,18 @@ def test_bare_bedrock_rows_admit_every_prompt_their_prefixed_rows_admit(path: Pa
     assert narrower == ()
 
 
+def _widest_window_of_model(windows: Mapping[str, int], model: str) -> int:
+    return max(
+        window
+        for key, window in windows.items()
+        if key == model or ((match := _BEDROCK_PREFIXED_ROW.fullmatch(key)) is not None and match["model"] == model)
+    )
+
+
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-@pytest.mark.parametrize(("row", "model"), _ROWS_NAMING_A_PREFIXED_MODEL_UNDER_ANOTHER_ID)
-def test_bedrock_rows_under_another_model_id_admit_every_prompt_its_prefixed_rows_admit(
+@pytest.mark.parametrize(("row", "model"), _ROWS_NAMING_A_MODEL_UNDER_ANOTHER_ID)
+def test_bedrock_rows_under_another_model_id_admit_every_prompt_that_model_admits(
     path: Path, row: str, model: str
 ) -> None:
     windows: Final = _bedrock_input_windows(path)
-    widest: Final = _widest_prefixed_window_per_model(windows)
-    assert windows[row] >= widest[model]
+    assert windows[row] >= _widest_window_of_model(windows, model)
