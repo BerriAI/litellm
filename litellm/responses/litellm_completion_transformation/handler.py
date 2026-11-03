@@ -98,7 +98,7 @@ class LiteLLMCompletionTransformationHandler:
             drop_params=drops_unsupported_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")),
         )
         previous_response_id: Final = (
-            responses_api_request["previous_response_id"] if "previous_response_id" in responses_api_request else None
+            responses_api_request["previous_response_id"] if "previous_response_id" in responses_api_request else None  # noqa: SIM401  # TypedDict indexing preserves the field type
         )
         if _is_async and previous_response_id and has_client_tool_search(hoisted.tools):
             return self._async_response_api_handler_after_earlier_searches(
@@ -147,7 +147,7 @@ class LiteLLMCompletionTransformationHandler:
                 LiteLLMCompletionResponsesConfig.async_responses_api_session_handler,
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
-                instructions=bridged_request["instructions"] if "instructions" in bridged_request else None,
+                instructions=bridged_request["instructions"] if "instructions" in bridged_request else None,  # noqa: SIM401  # TypedDict indexing preserves the field type
                 request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
                 previous_response_client_ids=previous_response_client_ids,
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(bridged_input)),
