@@ -139,6 +139,7 @@ _INCREMENT_IF_PRESENT_LUA: Final = (
 )
 
 _LUA_COUNT: Final = TypeAdapter(int)
+_INCRBYFLOAT_REPLY: Final = TypeAdapter(float)
 _LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
 
@@ -1474,15 +1475,21 @@ class RedisCache(BaseCache):
         return float(result)
 
     async def _set_if_missing_with_ttl(self, key: str, value: float, ttl: int | None) -> float:
-        """SET NX, its TTL command and a GET in one round trip; the value the key holds afterwards."""
+        """SETNX, a zero INCRBYFLOAT that reads the key back, and its TTL command in one round trip; the value the key
+        holds afterwards. Those last two are the commands a plain add sends, so a user denied only SETNX reads back what
+        the key holds, which is 0 for a key that was missing."""
+        from redis.exceptions import NoPermissionError
+
         async with self._async_commands().pipeline(transaction=False) as pipe:
-            pipe.set(name=key, value=value, nx=True)
+            pipe.setnx(name=key, value=value)
+            pipe.incrbyfloat(name=key, amount=0)
             if ttl is not None:
                 pipe.expire(key, ttl)
-            pipe.get(key)
-            replies: Final[Sequence[object]] = await pipe.execute()  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # redis generics
-        current: Final = _LUA_OPTIONAL_TOTAL.validate_python(replies[-1])
-        return value if current is None else current
+            replies: Final[Sequence[object]] = await pipe.execute(raise_on_error=False)  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # redis generics
+        for index, reply in enumerate(replies):  # pyright: ignore[reportUnknownArgumentType]  # redis generics
+            if isinstance(reply, Exception) and not (index == 0 and isinstance(reply, NoPermissionError)):
+                raise reply
+        return _INCRBYFLOAT_REPLY.validate_python(replies[1])
 
     @_redis_circuit_breaker_guard
     async def async_increment(

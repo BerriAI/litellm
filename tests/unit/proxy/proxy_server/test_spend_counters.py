@@ -2617,6 +2617,81 @@ async def test_a_counter_holding_the_seed_is_left_alone_by_a_request_whose_sourc
 
 
 @pytest.mark.asyncio
+async def test_a_request_that_left_a_peers_counter_alone_does_not_cost_a_later_read_its_add(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:left-alone-then-fresh"
+    redis: Final = _SharedRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+    stale_read: Final = asyncio.Event()
+    seeded: Final = asyncio.Event()
+    fresh_read: Final = asyncio.Event()
+    left_alone: Final = asyncio.Event()
+
+    async def _stale_request() -> None:
+        with spend_counter_batch_scope(cast(RedisCache, redis), frozenset((counter,))):
+            await _read_cold(counter)
+            stale_read.set()
+            await fresh_read.wait()
+            await ps.ensure_spend_counter_initialized(counter_key=counter, source_cache_key=_COLD_SEED_SOURCE)
+            left_alone.set()
+
+    async def _first_request() -> None:
+        await stale_read.wait()
+        await _cold_start(redis, counter)
+        seeded.set()
+
+    async def _fresh_request() -> None:
+        await seeded.wait()
+        with spend_counter_batch_scope(cast(RedisCache, redis), frozenset((counter,))):
+            del redis.values[counter]
+            await _read_cold(counter)
+            redis.values[counter] = 7.0
+            fresh_read.set()
+            await left_alone.wait()
+            await ps.ensure_spend_counter_initialized(counter_key=counter, source_cache_key=_COLD_SEED_SOURCE)
+
+    await asyncio.gather(_stale_request(), _first_request(), _fresh_request())
+
+    assert redis.values[counter] == 13.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("read_back", "expected"),
+    [
+        pytest.param(0.00123, 0.00123, id="rounded-by-incrbyfloat-is-left-alone"),
+        pytest.param(0.0012299, 0.0024599000000000002, id="short-by-more-than-rounding-gets-the-add"),
+    ],
+)
+async def test_a_counter_reading_back_just_under_the_spend_is_only_topped_up_when_really_short(
+    monkeypatch: pytest.MonkeyPatch, read_back: float, expected: float
+) -> None:
+    counter: Final = "spend:end_user:read-back-rounding"
+    redis: Final = _SharedRedis()
+    _process(monkeypatch, redis, cached_spend=0.0012300000000000002)
+    read: Final = asyncio.Event()
+    seeded: Final = asyncio.Event()
+
+    async def _stale_request() -> None:
+        with spend_counter_batch_scope(cast(RedisCache, redis), frozenset((counter,))):
+            await _read_cold(counter)
+            read.set()
+            await seeded.wait()
+            redis.values[counter] = read_back
+            await ps.ensure_spend_counter_initialized(counter_key=counter, source_cache_key=_COLD_SEED_SOURCE)
+
+    async def _first_request() -> None:
+        await read.wait()
+        await _cold_start(redis, counter)
+        seeded.set()
+
+    await asyncio.gather(_stale_request(), _first_request())
+
+    assert redis.values[counter] == pytest.approx(expected, abs=1e-15)
+
+
+@pytest.mark.asyncio
 async def test_a_request_done_waiting_on_a_stalled_seed_adds_when_the_counter_holds_less_than_its_cached_spend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2653,7 +2728,7 @@ async def test_a_counter_without_redis_set_only_if_missing_keeps_the_value_it_ho
 
 
 @pytest.mark.asyncio
-async def test_a_counter_set_by_a_request_done_waiting_counts_as_the_seed_for_a_later_request(
+async def test_a_counter_lost_after_a_request_done_waiting_set_it_gets_the_add_of_a_later_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     counter: Final = "spend:end_user:set-counts-as-seed"
@@ -3085,7 +3160,7 @@ async def test_a_stalled_seed_finishing_does_not_hide_the_newer_seed_still_in_fl
     await asyncio.gather(newer, late)
 
     assert commands_while_the_newer_seed_was_in_flight == 2
-    assert redis.values[counter] == 6.0
+    assert redis.values[counter] == 12.0
 
 
 class _TargetRecordingRedis(_SharedRedis):

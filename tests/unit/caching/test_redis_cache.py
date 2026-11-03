@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
+from redis.exceptions import NoPermissionError, ResponseError
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -1034,8 +1035,9 @@ def test_prometheus_services_logger_starts_from_the_breakers_already_built(monke
     monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
     gc.collect()
     ServiceLogging()
-    assert REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"}) == (
-        redis_breaker_state_counts()["closed"]
+    assert (
+        REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"})
+        == (redis_breaker_state_counts()["closed"])
     )
 
 
@@ -1502,6 +1504,100 @@ async def test_async_increment_only_if_missing_sets_a_missing_key_and_refreshes_
     assert current == expected
     assert after_add == expected + 2.0
     assert await client.ttl("ns:spend:key:k") == 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("value", "stored"), [(6.0, b"6"), (1e-05, b"0.00001")])
+async def test_async_increment_only_if_missing_stores_a_missing_key_the_way_an_add_stores_it(
+    monkeypatch, redis_no_ping, value, stored
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    client = FakeAsyncRedis(server=FakeServer())
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_increment(key="spend:key:k", value=value, ttl=60, only_if_missing=True)
+
+    assert await client.get("ns:spend:key:k") == stored
+
+
+class _RepliesPipeline:
+    """A pipeline whose execute returns the given replies the way ``raise_on_error=False`` does."""
+
+    def __init__(self, replies: list[object]) -> None:
+        self.replies = replies
+        self.commands: list[tuple[object, ...]] = []
+
+    async def __aenter__(self) -> "_RepliesPipeline":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+    def setnx(self, name: str, value: float) -> None:
+        self.commands.append(("SETNX", name, value))
+
+    def incrbyfloat(self, name: str, amount: float) -> None:
+        self.commands.append(("INCRBYFLOAT", name, amount))
+
+    def expire(self, name: str, ttl: int) -> None:
+        self.commands.append(("EXPIRE", name, ttl))
+
+    async def execute(self, raise_on_error: bool = True) -> list[object]:
+        assert raise_on_error is False
+        return self.replies
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_back", [pytest.param(0.0, id="missing"), pytest.param(7.0, id="held")])
+async def test_async_increment_only_if_missing_reads_the_key_back_when_the_user_is_denied_setnx(
+    monkeypatch, redis_no_ping, read_back
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    pipeline = _RepliesPipeline([NoPermissionError("no permissions to run the 'setnx' command"), read_back, True])
+    client = MagicMock()
+    client.pipeline.return_value = pipeline
+    failure_hook = AsyncMock()
+
+    with (
+        patch.object(redis_cache, "init_async_client", return_value=client),
+        patch.object(redis_cache.service_logger_obj, "async_service_failure_hook", failure_hook),
+    ):
+        current = await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True
+        )
+    await asyncio.sleep(0)
+
+    assert current == read_back
+    assert pipeline.commands == [
+        ("SETNX", "ns:spend:key:k", 1.5),
+        ("INCRBYFLOAT", "ns:spend:key:k", 0),
+        ("EXPIRE", "ns:spend:key:k", 60),
+    ]
+    failure_hook.assert_not_awaited()
+    assert redis_cache._circuit_breaker._hard_failure_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("replies", "raised"),
+    [
+        pytest.param([ResponseError("LOADING"), 7.0, True], ResponseError, id="setnx-failed-for-another-reason"),
+        pytest.param([True, NoPermissionError("denied"), True], NoPermissionError, id="incrbyfloat-denied"),
+        pytest.param([True, 7.0, NoPermissionError("denied")], NoPermissionError, id="expire-denied"),
+    ],
+)
+async def test_async_increment_only_if_missing_raises_any_other_error_in_the_replies(
+    monkeypatch, redis_no_ping, replies, raised
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    client = MagicMock()
+    client.pipeline.return_value = _RepliesPipeline(replies)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client), pytest.raises(raised):
+        await redis_cache.async_increment(key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True)
 
 
 @pytest.mark.asyncio

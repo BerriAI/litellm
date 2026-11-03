@@ -24,7 +24,11 @@ from typing import TYPE_CHECKING, ClassVar, Final, Optional
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import SPEND_COUNTER_COLD_SEED_JOIN_SECONDS, SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
+from litellm.constants import (
+    SPEND_COUNTER_COLD_SEED_JOIN_SECONDS,
+    SPEND_COUNTER_INCRBYFLOAT_ROUNDING,
+    SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
@@ -76,7 +80,7 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
 @dataclass(slots=True)
 class _CachedSpendSeed:
     """This process adding its cached spend to one cold counter: the add in flight, the tick it started at, the tick
-    the last one landed at, and the least the counter held when that one landed."""
+    the last plain add landed at, and the spend that add added."""
 
     started_at: int = 0
     landed_at: int = 0
@@ -94,7 +98,6 @@ class _CachedSpendSeed:
         self.in_flight = in_flight
         try:
             added: Final = await add()
-            self.landed_at = spend_counter_tick()
             in_flight.set_result(added)
             return added
         finally:
@@ -183,21 +186,21 @@ class SpendCounterReseed:
         gets its result, and starts or joins another add when that one fails or is cancelled. A request whose read went
         out before an add landed, and one still waiting on an add after ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` across
         its counters, runs ``set_if_missing`` in place of ``add``, then runs ``add`` too if the counter holds less than
-        the spend it should already hold. A request on another event loop than the add in flight, one that finds the
+        the spend it should already hold, beyond what INCRBYFLOAT's 17 decimal places can round away. A request on another event loop than the add in flight, one that finds the
         Redis circuit breaker not closed, and each other process, still run ``add``."""
         seed: Final = _cached_spend_seed(spend_counter_cache, counter_key)
 
         async def add_spend() -> float | None:
             added: Final = await add()
+            seed.landed_at = spend_counter_tick()
             seed.landed_spend = spend
             return added
 
         async def add_if_short() -> float | None:
             least: Final = min(spend, seed.landed_spend) if seed.landed_at >= read.sent_at else spend
             current: Final = await set_if_missing()
-            if current is not None and current < least:
+            if current is not None and least - current > SPEND_COUNTER_INCRBYFLOAT_ROUNDING:
                 return await add_spend()
-            seed.landed_spend = least
             return current
 
         async def add_unless_covered() -> float | None:
