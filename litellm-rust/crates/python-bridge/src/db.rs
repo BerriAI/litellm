@@ -1,19 +1,51 @@
-use litellm_host_python::ready_future;
-use pyo3::{prelude::*, types::PyNone};
+use litellm_db::Endpoint;
+use litellm_secret_value::SecretValue;
+use pyo3::{exceptions::PyValueError, prelude::*};
+use sqlx::PgPool;
 
 #[pyclass(frozen)]
-pub(crate) struct NativeDatabase {}
+pub(crate) struct NativeDatabase {
+    writer_endpoint: Endpoint,
+    writer: PgPool,
+}
 
-// TODO: take typed writer/reader settings and a token provider, then open a sqlx PgPool, once the first
-// repository moves to native. The Prisma DATABASE_URL carries Prisma-only params and rotating IAM tokens
+fn map_error(error: litellm_db::Error) -> PyErr {
+    PyValueError::new_err(litellm_error::Report::new(&error).to_string())
+}
+
 #[pymethods]
 impl NativeDatabase {
     #[staticmethod]
-    fn connect(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-        ready_future(py, Bound::new(py, NativeDatabase {})?.as_any())
+    fn connect(
+        py: Python<'_>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] writer: Endpoint,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        crate::execution::run_async_value(py, async move {
+            let pool = writer.pool().map_err(map_error)?;
+            Ok(NativeDatabase {
+                writer_endpoint: writer,
+                writer: pool,
+            })
+        })
+    }
+
+    fn set_writer_password(&self, password: String) {
+        self.writer.set_connect_options(
+            self.writer_endpoint
+                .with_password(SecretValue::new(password))
+                .connect_options(),
+        );
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ready_future(py, PyNone::get(py).as_any())
+        let writer = self.writer.clone();
+        crate::execution::run_async(
+            py,
+            async move {
+                writer.close().await;
+                Ok(())
+            },
+            |error: PyErr| error,
+        )
     }
 }

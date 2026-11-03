@@ -1280,20 +1280,20 @@ def test_reader_keeps_its_own_pinned_idle_lifetime(monkeypatch):
 @pytest.mark.parametrize(
     "writer_limit, reader_limit, num_workers, expected",
     [
-        ("10", None, "4", "4 worker(s) x writer connection_limit 10 = up to 40 connections"),
+        ("10", None, "4", "4 worker(s) x (writer connection_limit 10 + native writer pool 10) = up to 80 connections"),
         (
             "10",
             "10",
             "4",
-            "4 worker(s) x (writer connection_limit 10 + reader connection_limit 10) = up to 80 connections",
+            "4 worker(s) x (writer connection_limit 10 + native writer pool 10 + reader connection_limit 10) = up to 120 connections",
         ),
         (
             "10",
             "50",
             "4",
-            "4 worker(s) x (writer connection_limit 10 + reader connection_limit 50) = up to 240 connections",
+            "4 worker(s) x (writer connection_limit 10 + native writer pool 10 + reader connection_limit 50) = up to 280 connections",
         ),
-        ("10", None, "0", "1 worker(s) x writer connection_limit 10 = up to 10 connections"),
+        ("10", None, "0", "1 worker(s) x (writer connection_limit 10 + native writer pool 10) = up to 20 connections"),
     ],
     ids=["writer_only", "reader_doubles_engines", "reader_pins_its_own_limit", "worker_floor"],
 )
