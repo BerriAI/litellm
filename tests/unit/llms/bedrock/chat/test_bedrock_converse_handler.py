@@ -22,10 +22,12 @@ from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 
 import litellm
+from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
+from litellm.types.litellm_params import ControlOptions
 from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -191,6 +193,26 @@ def _sync_client_returning_converse_response():
     return client
 
 
+def test_a_caller_fake_stream_calls_converse_and_replays_the_answer_as_chunks():
+    client: Final = MagicMock()
+    client.post.side_effect = lambda *_args, **_kwargs: httpx.Response(
+        200,
+        json=CONVERSE_RESPONSE,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com"),
+    )
+    client.__class__ = HTTPHandler
+
+    response: Final = _run(
+        optional_params={"maxTokens": 16, "stream": True},
+        litellm_params={CONTROL_OPTIONS_KEY: ControlOptions(fake_stream=True)},
+        client=client,
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in response) == "hi"
+    assert client.post.call_args.args[0].endswith("/converse"), client.post.call_args
+    assert client.post.call_args.kwargs["stream"] is False, client.post.call_args
+
+
 def test_the_sync_python_path_logs_pre_call_once():
     logging_obj = MagicMock()
     response = _run(
@@ -327,7 +349,6 @@ async def test_live_stream_with_a_text_stream_timeout_reports_the_stream_timeout
     assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
 
 
-
 _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
     ("model", "request_params"),
     [
@@ -338,7 +359,12 @@ _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
         ),
         (
             "bedrock/converse/meta.llama3-3-70b-instruct-v1:0",
-            {"response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}}},
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer", "schema": {"type": "object"}},
+                }
+            },
         ),
         ("bedrock/invoke/ai21.j2-ultra-v1", {}),
     ],
@@ -491,7 +517,9 @@ async def test_fake_stream_through_a_router_adapter_is_bounded_by_the_request_ti
 
     assert isinstance(response, AsyncIterator)
     contents: Final = [
-        chunk.choices[0].delta.content or "" async for chunk in response if isinstance(chunk, litellm.ModelResponseStream)
+        chunk.choices[0].delta.content or ""
+        async for chunk in response
+        if isinstance(chunk, litellm.ModelResponseStream)
     ]
     assert "".join(contents) == "hi"
 
@@ -517,7 +545,10 @@ def test_sync_live_stream_through_the_router_fails_at_the_stream_timeout() -> No
     )
     with pytest.raises(litellm.Timeout):
         router.completion(
-            model="bedrock", messages=[{"role": "user", "content": "hi"}], stream=True, client=slow_upstream_sync_client()
+            model="bedrock",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=slow_upstream_sync_client(),
         )
 
 
@@ -528,7 +559,10 @@ async def test_async_live_stream_through_the_router_fails_at_the_stream_timeout(
     )
     with pytest.raises(litellm.Timeout) as excinfo:
         await router.acompletion(
-            model="bedrock", messages=[{"role": "user", "content": "hi"}], stream=True, client=slow_upstream_async_client()
+            model="bedrock",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=slow_upstream_async_client(),
         )
     assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
 
@@ -616,7 +650,6 @@ async def test_failed_native_output_retry_reports_the_request_timeout_it_was_bou
     assert _sent_paths(respx_mock) == ["converse-stream", "converse"]
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "stream_text",
@@ -641,11 +674,14 @@ async def test_failed_stream_on_each_router_surface_reports_the_timeout_it_was_b
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(upstream_answer))
-    router: Final = _bedrock_router(model, timeout=UPSTREAM_FIRST_BYTE_SECONDS / 2, stream_timeout=STREAM_TIMEOUT_SECONDS)
+    router: Final = _bedrock_router(
+        model, timeout=UPSTREAM_FIRST_BYTE_SECONDS / 2, stream_timeout=STREAM_TIMEOUT_SECONDS
+    )
 
     with pytest.raises(openai.APIError) as excinfo:
         await stream_text(router)
     assert getattr(excinfo.value, "timeout", None) == bounding_timeout
+
 
 RECORDED_REASONING: Final = "Tokyo proper has about 14 million people."
 RECORDED_THINKING_TOKENS: Final = 309
