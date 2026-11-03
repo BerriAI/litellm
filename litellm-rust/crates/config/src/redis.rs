@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use litellm_core_utils::settings::Lookup;
-use litellm_redis_types::{Auth, ProviderHandle, Resolution, StaticAuth, Target};
+use litellm_redis_types::{Auth, HealthCheck, ProviderHandle, Resolution, StaticAuth, Target};
 use serde::{Deserialize, Deserializer, de::Error as _};
 use veil::Redact;
 
@@ -165,7 +165,7 @@ impl ConfiguredRedis {
         let kwargs = layers::merged(self, secrets);
         let (options, unmodeled) = Options::read(kwargs, secrets)?;
         let auth = auth::redis_auth(&options, self.credential_provider, environment)?;
-        let target = endpoint::target(&options, &auth)?;
+        let (target, url_ignored) = endpoint::target(&options, &auth)?;
         let auth = match (&target, auth) {
             (Target::Url(_), Auth::Static(StaticAuth { username, .. })) => {
                 Auth::Static(StaticAuth {
@@ -181,11 +181,22 @@ impl ConfiguredRedis {
             namespace: options::text(options.namespace.as_ref()),
             timeout: options::seconds(options.socket_timeout.as_ref())?,
             connect_timeout: options::seconds(options.socket_connect_timeout.as_ref())?,
+            health_check: health_check(options.health_check_interval.as_ref())?,
             passthrough: unmodeled.passthrough,
             host_objects: unmodeled.host_objects,
-            ignored: unmodeled.ignored,
+            ignored: unmodeled.ignored.into_iter().chain(url_ignored).collect(),
         })
     }
+}
+
+// redis-py checks health only when the interval is truthy, so zero turns it off and a negative interval checks
+// before every command
+fn health_check(entry: Option<&layers::Entry>) -> Result<HealthCheck, RedisError> {
+    Ok(match options::integer::<i64>(entry)? {
+        None => HealthCheck::Unset,
+        Some(0) => HealthCheck::Disabled,
+        Some(seconds) => HealthCheck::Every(Duration::from_secs(seconds.try_into().unwrap_or(0))),
+    })
 }
 
 pub fn environment_has_target(lookup: &dyn Lookup) -> bool {

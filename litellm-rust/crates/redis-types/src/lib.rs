@@ -16,19 +16,37 @@ pub struct Resolution {
     pub namespace: Option<String>,
     pub timeout: Option<Duration>,
     pub connect_timeout: Option<Duration>,
+    pub health_check: HealthCheck,
     /// Plain settings the resolver does not model, kept verbatim for the redis-py projection.
     pub passthrough: Passthrough,
     /// Settings whose value is a host object, like redis-py's `retry` or `connection_class`, which
     /// only the host can reattach.
     pub host_objects: BTreeSet<String>,
-    /// Where each setting the Rust client accepts without honoring came from: its key, or the
-    /// environment variable that set it.
-    pub ignored: Vec<String>,
+    pub ignored: Vec<Ignored>,
+}
+
+/// redis-py's `health_check_interval`, which `_coerce_redis_kwargs_types` reads as an `int` of
+/// seconds. Unset and zero differ, because a client may give an unset interval its own default.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HealthCheck {
+    Unset,
+    Disabled,
+    Every(Duration),
+}
+
+/// A setting the Rust client accepts without honoring, so the host can log what ignoring it means.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ignored {
+    /// The key, the environment variable or the url query parameter that set it.
+    pub setting: String,
+    pub consequence: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     Standalone(Standalone),
+    /// Like redis-py's `UnixDomainSocketConnection`, which replaces host, port and TLS.
+    Unix(UnixSocket),
     Url(RedisUrl),
     Cluster(Cluster),
     Sentinel(Sentinel),
@@ -43,10 +61,23 @@ pub struct Standalone {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct UnixSocket {
+    pub path: PathBuf,
+    pub db: i64,
+}
+
+/// A url kept verbatim, plus what redis-py's `parse_url` reads from its query that the url's own
+/// grammar does not carry.
+#[derive(Clone, Debug, PartialEq)]
 pub struct RedisUrl {
     pub url: SecretValue,
     /// Set only for a `rediss://` url, from its query parameters.
     pub tls: Option<TlsOptions>,
+    /// `?db=`, which wins over the path.
+    pub db: Option<i64>,
+    /// `?username=` and `?password=`, which the url's userinfo wins over.
+    pub username: Option<SecretValue>,
+    pub password: Option<SecretValue>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -74,6 +105,10 @@ pub struct Sentinel {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsOptions {
     pub ca_certs: Option<PathBuf>,
+    /// PEM text trusted alongside `ca_certs`, redis-py's `ssl_ca_data`
+    pub ca_data: Option<String>,
+    /// A directory whose files are PEM certificates to trust, redis-py's `ssl_ca_path`
+    pub ca_path: Option<PathBuf>,
     pub certfile: Option<PathBuf>,
     pub keyfile: Option<PathBuf>,
     pub verify_certificate: bool,
@@ -84,6 +119,8 @@ impl TlsOptions {
     pub fn verified() -> Self {
         Self {
             ca_certs: None,
+            ca_data: None,
+            ca_path: None,
             certfile: None,
             keyfile: None,
             verify_certificate: true,
