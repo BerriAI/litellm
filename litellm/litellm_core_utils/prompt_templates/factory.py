@@ -1329,7 +1329,7 @@ def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
 _get_thought_signature_from_tool = get_thought_signature_from_tool
 
 
-def _get_dummy_thought_signature() -> str:
+def get_dummy_thought_signature() -> str:
     """Generate a dummy thought signature for models that require it.
 
     This is used when transferring conversation history from older models
@@ -1416,7 +1416,7 @@ def convert_to_gemini_tool_call_invoke(
                         # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures#parallel_function_calling_example
                         is_first_function_call = len(_parts_list) == 0
                         if not thought_signature and is_first_function_call and needs_dummy_signature:
-                            thought_signature = _get_dummy_thought_signature()
+                            thought_signature = get_dummy_thought_signature()
                         if thought_signature:
                             part_dict["thoughtSignature"] = thought_signature
 
@@ -1440,7 +1440,7 @@ def convert_to_gemini_tool_call_invoke(
 
                 # If no signature found and model is gemini-3, use dummy signature
                 if not thought_signature and needs_dummy_signature:
-                    thought_signature = _get_dummy_thought_signature()
+                    thought_signature = get_dummy_thought_signature()
 
                 if thought_signature:
                     part_dict_function["thoughtSignature"] = thought_signature
