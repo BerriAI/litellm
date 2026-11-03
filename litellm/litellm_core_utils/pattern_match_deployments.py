@@ -5,6 +5,7 @@ Class to handle llm wildcard routing and regex pattern matching
 import copy
 import itertools
 import re
+from collections.abc import Mapping
 from re import Match
 from typing import Final
 
@@ -22,6 +23,16 @@ class _RoutedDeployment(BaseModel):
 
 
 _ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
+_PATTERN_WIDE_CACHE_FLAGS: Final = frozenset(("supports_prompt_cache_breakpoint", "supports_prompt_caching"))
+_AZURE_AI_PATTERN_CACHE_FLAGS: Final = frozenset(("supports_prompt_caching",))
+
+
+def _cache_flags_left_to_the_catalog(litellm_params: Mapping[str, object]) -> frozenset[str]:
+    model: Final = litellm_params.get("model")
+    provider: Final = litellm_params.get("custom_llm_provider") or inferred_provider(
+        model if isinstance(model, str) else None
+    )
+    return _AZURE_AI_PATTERN_CACHE_FLAGS if provider == "azure_ai" else _PATTERN_WIDE_CACHE_FLAGS
 
 
 class PatternUtils:
@@ -133,6 +144,11 @@ class PatternMatchRouter:
                 matched_pattern=matched_pattern,
                 litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
             )
+            if "*" in deployment["litellm_params"]["model"] and isinstance(new_deployment.get("model_info"), dict):
+                left_to_the_catalog = _cache_flags_left_to_the_catalog(deployment["litellm_params"])
+                new_deployment["model_info"] = {
+                    key: value for key, value in new_deployment["model_info"].items() if key not in left_to_the_catalog
+                }
             new_deployments.append(new_deployment)
 
         return new_deployments

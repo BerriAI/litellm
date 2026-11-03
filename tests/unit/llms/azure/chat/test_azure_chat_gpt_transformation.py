@@ -917,7 +917,7 @@ def test_azure_sends_part_breakpoints_as_written_without_drop_params(
     [
         ("unit-breakpoint-ignorer", {"drop_params": True}),
         ("unit-breakpoint-reader", {"drop_params": True, "base_model": "azure/unit-breakpoint-ignorer"}),
-        ("my-azure-alias", {"drop_params": True, "model_info": {"base_model": "azure/unit-breakpoint-ignorer"}}),
+        ("my-azure-alias", {"drop_params": True, "model_info": {"base_model": "azure/gpt-4.1"}}),
     ],
     ids=("known-non-reader", "base-model-known-non-reader", "model-info-base-model-known-non-reader"),
 )
