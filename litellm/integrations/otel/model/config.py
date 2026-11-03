@@ -121,6 +121,17 @@ class ExporterSpec(LiteLLMBaseModel):
     )
 
 
+def is_unconfigured_placeholder(spec: ExporterSpec) -> bool:
+    """Whether ``spec`` is the one ``_normalize`` folds in when nothing was configured.
+
+    No field set is what says the operator asked for nothing: an exporter they did
+    configure survives, even ``OTEL_EXPORTER=console`` whose value matches the default,
+    and so does the gated spec ``credential_gated_exporters`` appends, which would
+    otherwise eat itself when one preset layers onto another.
+    """
+    return not spec.model_fields_set
+
+
 class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
     def __init__(self, settings_cls: type[BaseSettings], env_settings: PydanticBaseSettingsSource) -> None:
         super().__init__(settings_cls)

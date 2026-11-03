@@ -3,8 +3,9 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from copy import deepcopy
+from itertools import pairwise
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
@@ -34,7 +35,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 )
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
-from litellm.types.utils import ChoiceLogprobs, ModelInfo, Usage
+from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
@@ -327,7 +328,9 @@ def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(sp
 
 def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
     mapped: Final = VertexGeminiConfig().map_openai_params(
-        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        non_default_params={
+            "audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}
+        },
         optional_params={},
         model="gemini-2.5-flash-preview-tts",
         drop_params=False,
@@ -1690,6 +1693,78 @@ def test_vertex_ai_map_thinking_param_without_budget_tokens_for_gemini_3():
     )
 
     assert result["thinkingConfig"] == {"includeThoughts": True}
+
+
+def _budget_drop_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "thinking.budget_tokens" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("budget", ("high", 1024.5, {"tokens": 1024}))
+def test_gemini_non_integer_thinking_budget_drop_warns_once(budget: object, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget}},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_drop_warnings(caplog)
+    assert "thinkingBudget" not in result["thinkingConfig"]
+    assert len(warnings) == 1
+    assert f"thinking.budget_tokens={budget!r}" in warnings[0]
+    assert "gemini-2.5-flash" in warnings[0]
+
+
+def test_gemini_integer_thinking_budget_is_sent_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    assert result["thinkingConfig"]["thinkingBudget"] == 2048
+    assert _budget_drop_warnings(caplog) == ()
+
+
+def test_gemini_3_thinking_budget_drop_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            optional_params={},
+            model="gemini-3-pro-preview",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_drop_warnings(caplog)
+    assert "thinkingBudget" not in result["thinkingConfig"]
+    assert len(warnings) == 1
+    assert "thinking.budget_tokens=2048" in warnings[0]
+    assert "gemini-3-pro-preview" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "thinking",
+    ({"type": "enabled"}, {"type": "enabled", "budget_tokens": 0}, {"type": "disabled", "budget_tokens": 2048}),
+)
+def test_gemini_3_thinking_without_a_dropped_budget_does_not_warn(
+    thinking: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": thinking},
+            optional_params={},
+            model="gemini-3-pro-preview",
+            drop_params=False,
+        )
+
+    assert _budget_drop_warnings(caplog) == ()
 
 
 def test_vertex_ai_map_tools():
@@ -3395,9 +3470,7 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
-        async def dispatch_attempt_failure_handlers(
-            self, exception: Exception, traceback_exception: str
-        ) -> None:
+        async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
             return None
 
         def attempt_scoped_copy(self) -> "DummyLogging":
@@ -3512,6 +3585,37 @@ def test_vertex_ai_annotation_conversion():
     assert time_annotation["url_citation"]["end_index"] == 85
     assert "google.com" in time_annotation["url_citation"]["url"]
     assert "Current time" in time_annotation["url_citation"]["title"]
+
+
+@pytest.mark.parametrize(
+    "indices, expected_indices",
+    [([2, 0], [2, 0]), ([1, 99, -1, 2, 0], [2, 0]), ([0], [0]), ([], []), ([1, 99], [])],
+    ids=["multiple-sources", "non-web-first", "single-source", "empty", "no-web"],
+)
+def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expected_indices: list[int]) -> None:
+    chunks: Final = [
+        {"web": {"uri": "https://example.com/first", "title": "First"}},
+        {"retrievedContext": {"uri": "gs://documents/source"}},
+        {"web": {"uri": "https://example.com/second", "title": "Second"}},
+    ]
+    metadata: Final = {
+        "groundingChunks": chunks,
+        "groundingSupports": [{"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}],
+    }
+    annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
+    expected: Final = [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 4,
+                "end_index": 11,
+                "url": chunks[index]["web"]["uri"],
+                "title": chunks[index]["web"]["title"],
+            },
+        }
+        for index in expected_indices
+    ]
+    assert json.dumps(annotations) == json.dumps(expected)
 
 
 def test_vertex_ai_annotation_empty_grounding_metadata():
@@ -8289,11 +8393,12 @@ def test_gemini_image_generation_ignores_non_dict_image_config():
 def test_gemini_image_generation_openai_size_maps_to_google_table(
     size: str, expected_aspect_ratio: str, expected_image_size: str
 ):
+    """Flash table as of 2026-10-26, https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size."""
     from litellm.llms.gemini.common_utils import (
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3.1-flash-image") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -8317,7 +8422,7 @@ def test_gemini_image_generation_openai_size_snaps_to_nearest_option(
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3.1-flash-image") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -10091,7 +10196,7 @@ def test_vertex_ai_streaming_response_id():
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.iter_lines = MagicMock(return_value=stream_response())
+        mock_response.iter_text = MagicMock(return_value=stream_response())
         return mock_response
 
     logging_obj = MagicMock()
@@ -10316,6 +10421,106 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
         drop_params=False,
     )
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+def _top_level_format_audio(audio_format: str) -> Mapping[str, object]:
+    return {"voice": "Kore", "format": audio_format}
+
+
+def _format_beside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore"}, "format": audio_format}
+
+
+def _format_inside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore", "format": audio_format}}
+
+
+_FORMAT_PLACEMENTS: Final = (
+    _top_level_format_audio,
+    _format_beside_speech_config_audio,
+    _format_inside_speech_config_audio,
+)
+
+
+@pytest.mark.parametrize("audio_format", ("mp3", "opus", "flac", "PCM16"))
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
+@pytest.mark.parametrize("model", ("gemini/gemini-3.8-flash-tts", "vertex_ai/gemini-3.8-flash-tts"))
+def test_chat_audio_unsupported_format_is_a_400_naming_the_model_and_format(
+    model: str, audio: Callable[[str], Mapping[str, object]], audio_format: str
+) -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError) as raised:
+        completion(
+            model=model,
+            messages=[{"role": "user", "content": "Say hello"}],
+            modalities=["audio"],
+            audio=audio(audio_format),
+            api_key="test-key",
+            vertex_project="test-project",
+            vertex_location="us-central1",
+        )
+
+    assert raised.value.status_code == 400
+    assert f"gemini-3.8-flash-tts does not take the audio format '{audio_format}'" in str(raised.value)
+
+
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
+@pytest.mark.parametrize("request_drop_params, global_drop_params", ((True, False), (False, True)))
+def test_chat_audio_unsupported_format_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    request_drop_params: bool,
+    global_drop_params: bool,
+    audio: Callable[[str], Mapping[str, object]],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    optional_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"modalities": ["audio"], "audio": audio("mp3")},
+        optional_params={},
+        model="gemini-3.8-flash-tts",
+        drop_params=request_drop_params,
+    )
+
+    assert optional_params == {
+        "responseModalities": ["AUDIO"],
+        "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+    }
+
+
+def test_chat_audio_unsupported_format_error_caps_the_echoed_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": "x" * 300}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format '{'x' * 100}'" in str(raised.value)
+    assert "x" * 101 not in str(raised.value)
+
+
+@pytest.mark.parametrize("audio_format", [5, {"codec": "mp3"}, ["x"] * 300])
+def test_chat_audio_non_string_format_error_names_the_value_as_sent(audio_format: object) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": audio_format}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format {repr(audio_format)[:100]}. Set format" in str(raised.value)
+
+
+def test_map_audio_params_rejects_an_unsupported_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="audio format 'mp3'"):
+        VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "mp3"})
+
+
+def test_map_audio_params_maps_a_pcm16_voice() -> None:
+    assert VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "pcm16"}) == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
+    }
 
 
 _CACHED_PROMPT_USAGE_METADATA = {
@@ -10654,3 +10859,175 @@ async def test_gemini_sends_a_boolean_for_a_gateway_default_written_as_text_or_n
     sent: Final = await _sent_thinking_config("gemini-3.8-flash", {"reasoning_effort": "high"})
 
     assert sent["includeThoughts"] is expected
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+_GEMINI_ROUTES: Final = (
+    pytest.param(VertexGeminiConfig, "vertex_ai", id="vertex_ai"),
+    pytest.param(GoogleAIStudioGeminiConfig, "gemini", id="gemini"),
+)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_a_hosted_mcp_tool_answers_400_on_gemini_without_drop_params(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        config_class().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="gemini-3.8-flash",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert f"gemini-3.8-flash on {route} " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+    assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(
+    monkeypatch, caplog, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = config_class().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="gemini-3.8-flash",
+            drop_params=True,
+        )
+    assert "deepwiki" not in json.dumps(mapped)
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert any(
+        "`deepwiki`" in record.getMessage() and f" on {route} (" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "tools" not in mapped
+    assert "tool_choice" not in mapped
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every_hosted_mcp_tool(
+    monkeypatch, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={
+            "tools": [_HOSTED_MCP_TOOL],
+            "functions": [_WEATHER_FUNCTION_TOOL["function"]],
+            "tool_choice": "none",
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "deepwiki" not in json.dumps(mapped)
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+
+class _BodyInChunks(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks: Final = chunks
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield from self._chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _split_at(body: bytes, cuts: tuple[int, ...]) -> tuple[bytes, ...]:
+    return tuple(body[start:end] for start, end in pairwise((0, *sorted(cuts), len(body))))
+
+
+async def _gemini_stream(is_async: bool, chunks: tuple[bytes, ...]) -> list[ModelResponseStream]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_BodyInChunks(chunks), headers={"content-type": "text/event-stream"})
+
+    kwargs: Final = {
+        "model": "gemini/gemini-3.8-flash",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "api_key": "fake-gemini-key",
+    }
+    if is_async:
+        stream: Final = await litellm.acompletion(
+            **kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(handler))
+        )
+        return [chunk async for chunk in stream]
+    return list(
+        litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))))
+    )
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+async def test_gemini_stream_keeps_text_and_usage_when_a_part_contains_a_unicode_line_separator(is_async: bool) -> None:
+    events: Final = (
+        {"candidates": [{"content": {"role": "model", "parts": [{"text": "line one\u2028line two"}]}}]},
+        {
+            "candidates": [{"content": {"role": "model", "parts": [{"text": " and three"}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 8, "totalTokenCount": 18},
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(event, ensure_ascii=False)}\r\n\r\n" for event in events).encode()
+    cut_inside_separator_and_crlf: Final = (body.index(b"\xe2\x80\xa8") + 1, body.index(b"\r") + 1)
+
+    received: Final = await _gemini_stream(is_async, _split_at(body, cut_inside_separator_and_crlf))
+
+    usage: Final = next(chunk.usage for chunk in reversed(received) if getattr(chunk, "usage", None))
+    text: Final = "".join(c.choices[0].delta.content or "" for c in received if c.choices)
+    assert text == "line one\u2028line two and three"
+    assert (usage.prompt_tokens, usage.completion_tokens) == (10, 8)
+
+
+@pytest.mark.parametrize("chunk_indices", [[0, 1], [2, 1, 0]])
+def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) -> None:
+    metadata: Final = {
+        "groundingChunks": [
+            {"web": {"uri": "https://example.com/a", "title": "A"}},
+            {"web": {"uri": "https://example.com/b", "title": "B"}},
+            {"retrievedContext": {"uri": "gs://document"}},
+        ],
+        "groundingSupports": [
+            {"segment": {"startIndex": 0, "endIndex": 5}, "groundingChunkIndices": chunk_indices},
+            {"segment": {"startIndex": 6, "endIndex": 11}, "groundingChunkIndices": [1]},
+        ],
+    }
+
+    annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "First claim")
+
+    expected_sources: Final = [(index, 0, 5) for index in chunk_indices if index in (0, 1)] + [(1, 6, 11)]
+    assert annotations == [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": start,
+                "end_index": end,
+                "url": metadata["groundingChunks"][index]["web"]["uri"],
+                "title": metadata["groundingChunks"][index]["web"]["title"],
+            },
+        }
+        for index, start, end in expected_sources
+    ]

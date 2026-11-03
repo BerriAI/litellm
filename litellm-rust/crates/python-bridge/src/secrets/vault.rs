@@ -2,8 +2,11 @@ mod operation;
 
 pub(super) use operation::{Failure, FailureKind, FailureStage, delete, rotate, write};
 
-use litellm_core_utils::exception_mapping_utils::{TimeoutPhase, timeout_message};
-use litellm_secrets::hashicorp::{Error, RawOperationError};
+use litellm_core_utils::exception_mapping_utils::{
+    TimeoutPhase, timeout_message as transport_timeout_message,
+};
+use litellm_error::Report;
+use litellm_secrets::hashicorp::RawOperationError;
 use pyo3::prelude::*;
 
 use super::mutation::{error_value, http_message, json_value};
@@ -16,40 +19,39 @@ pub(super) fn failure_value(
     failure: Failure,
     context: &ErrorContext,
 ) -> PyResult<Py<PyAny>> {
-    let message = match *failure.kind {
-        FailureKind::Native(RawOperationError::Http {
-            method,
-            url,
-            status,
-            body,
-        }) => match failure.stage {
-            FailureStage::Current(name) if status == 404 => {
-                format!("Current secret {name} not found")
+    let message = match (&*failure.kind, failure.stage) {
+        (FailureKind::Native(error), stage) if let Some(response) = error.http_failure() => {
+            match stage {
+                FailureStage::Current(name) if response.status == 404 => {
+                    format!("Current secret {name} not found")
+                }
+                FailureStage::Replacement(name) if response.status == 404 => {
+                    format!("Failed to verify new secret {name}")
+                }
+                FailureStage::Current(_) => format!(
+                    "HTTP error occurred while checking current secret: {}",
+                    response_text(py, &response.body)?
+                ),
+                FailureStage::Replacement(_) => format!(
+                    "HTTP error occurred while verifying new secret: {}",
+                    response_text(py, &response.body)?
+                ),
+                FailureStage::Mutation => {
+                    http_message(py, &response.method, &response.url, response.status)?
+                }
             }
-            FailureStage::Replacement(name) if status == 404 => {
-                format!("Failed to verify new secret {name}")
-            }
-            FailureStage::Current(_) => format!(
-                "HTTP error occurred while checking current secret: {}",
-                response_text(py, &body)?
-            ),
-            FailureStage::Replacement(_) => format!(
-                "HTTP error occurred while verifying new secret: {}",
-                response_text(py, &body)?
-            ),
-            FailureStage::Mutation => http_message(py, &method, &url, status)?,
-        },
-        FailureKind::ValueMismatch { expected, actual } => {
-            let actual = json_value(py, &actual)?;
+        }
+        (FailureKind::ValueMismatch { expected, actual }, _) => {
+            let actual = json_value(py, actual)?;
             format!(
                 "New secret value mismatch. Expected: {}, Got: {}",
                 expected.expose(),
                 actual.bind(py).str()?
             )
         }
-        kind => {
+        (kind, stage) => {
             let message = cause_message(py, kind, context)?;
-            match failure.stage {
+            match stage {
                 FailureStage::Current(_) => {
                     format!("Error checking current secret: {message}")
                 }
@@ -63,86 +65,91 @@ pub(super) fn failure_value(
     error_value(py, message)
 }
 
-fn cause_message(py: Python<'_>, kind: FailureKind, context: &ErrorContext) -> PyResult<String> {
+fn cause_message(py: Python<'_>, kind: &FailureKind, context: &ErrorContext) -> PyResult<String> {
     Ok(match kind {
-        FailureKind::Native(RawOperationError::Local(error)) => error.to_string(),
+        FailureKind::Native(error) => native_message(py, error, context)?,
         FailureKind::UnsafeName(name) => {
             format!("Invalid secret_name {}", name.into_pyobject(py)?.repr()?)
         }
-        FailureKind::Native(RawOperationError::Timeout { method, elapsed }) => {
-            if method == "POST" {
-                let kwargs = pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "message",
-                    timeout_message(
-                        TimeoutPhase::Read,
-                        context.timeout,
-                        Some(elapsed.as_secs_f64()),
-                    ),
-                )?;
-                kwargs.set_item("model", "default-model-name")?;
-                kwargs.set_item("llm_provider", "litellm-httpx-handler")?;
-                py.import("litellm.exceptions")?
-                    .getattr("Timeout")?
-                    .call((), Some(&kwargs))?
-                    .str()?
-                    .extract()?
-            } else if context.aiohttp {
-                "Timeout on reading data from socket".to_owned()
-            } else {
-                String::new()
-            }
-        }
-        FailureKind::Native(RawOperationError::Transport(source)) => {
-            if let Some(error) = request_error(&source) {
-                if error.is_timeout() {
-                    String::new()
-                } else if error.is_connect() {
-                    "All connection attempts failed".to_owned()
-                } else {
-                    "HashiCorp Vault request failed".to_owned()
-                }
-            } else {
-                "HashiCorp Vault request failed".to_owned()
-            }
-        }
         FailureKind::MissingGet(value) => {
-            let value = json_value(py, &value)?;
+            let value = json_value(py, value)?;
             match value.bind(py).getattr("get") {
                 Err(error) => error.value(py).str()?.extract()?,
                 Ok(_) => "HashiCorp Vault response payload is malformed".to_owned(),
             }
         }
-        FailureKind::Json(body) => match json_value(py, &body) {
+        FailureKind::Json(body) => match json_value(py, body) {
             Err(error) => error.value(py).str()?.extract()?,
             Ok(_) => "HashiCorp Vault response payload is malformed".to_owned(),
         },
-        FailureKind::Native(RawOperationError::Authentication {
-            source,
-            url,
-            certificate,
-        }) => {
-            let message = match source {
-                Error::LoginStatus { status } => http_message(py, "POST", &url, status)?,
-                error => error.to_string(),
-            };
-            let mechanism = if certificate { "TLS cert" } else { "AppRole" };
-            format!("Could not authenticate to Vault via {mechanism}: {message}")
-        }
-        FailureKind::Native(RawOperationError::Http {
-            method,
-            url,
-            status,
-            ..
-        }) => http_message(py, &method, &url, status)?,
         FailureKind::ValueMismatch { .. } => "New secret value mismatch".to_owned(),
     })
 }
 
-fn request_error<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a reqwest::Error> {
-    error
-        .downcast_ref::<reqwest::Error>()
-        .or_else(|| error.source().and_then(request_error))
+fn native_message(
+    py: Python<'_>,
+    error: &RawOperationError,
+    context: &ErrorContext,
+) -> PyResult<String> {
+    if let Some(error) = error.local() {
+        return Ok(Report::new(error).to_string());
+    }
+    if let Some((method, elapsed)) = error.timeout() {
+        return timeout_message(py, method, elapsed, context);
+    }
+    if let Some(response) = error.http_failure() {
+        return http_message(py, &response.method, &response.url, response.status);
+    }
+    if let Some(login) = error.authentication() {
+        let message = match login.source.login_status() {
+            Some(status) => http_message(py, "POST", login.url, status)?,
+            None => Report::new(login.source).to_string(),
+        };
+        let mechanism = if login.certificate {
+            "TLS cert"
+        } else {
+            "AppRole"
+        };
+        return Ok(format!(
+            "Could not authenticate to Vault via {mechanism}: {message}"
+        ));
+    }
+    Ok(match error.transport() {
+        Some(error) if error.status() == Some(408) => String::new(),
+        Some(error) if error.is_connect() => "All connection attempts failed".to_owned(),
+        Some(_) | None => "HashiCorp Vault request failed".to_owned(),
+    })
+}
+
+fn timeout_message(
+    py: Python<'_>,
+    method: &str,
+    elapsed: std::time::Duration,
+    context: &ErrorContext,
+) -> PyResult<String> {
+    if method != "POST" {
+        return Ok(if context.aiohttp {
+            "Timeout on reading data from socket".to_owned()
+        } else {
+            String::new()
+        });
+    }
+    let kwargs = pyo3::types::PyDict::new(py);
+    kwargs.set_item(
+        "message",
+        transport_timeout_message(
+            TimeoutPhase::Read,
+            context.timeout,
+            Some(elapsed.as_secs_f64()),
+        ),
+    )?;
+    kwargs.set_item("model", "default-model-name")?;
+    kwargs.set_item("llm_provider", "litellm-httpx-handler")?;
+    py.import("litellm.exceptions")?
+        .getattr("Timeout")?
+        .call((), Some(&kwargs))?
+        .str()?
+        .extract()
 }
 
 fn response_text(py: Python<'_>, body: &[u8]) -> PyResult<String> {

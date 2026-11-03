@@ -4,10 +4,12 @@
 async fn cyberark_handler_reads_values_and_surfaces_errors() {
     use std::time::Duration;
 
+    use litellm_secret_value::SecretValue;
     use litellm_secrets::{
-        Error, KeyManagementSettings, SecretManager, SecretValue, cyberark::CyberArkSecretManager,
+        Error, KeyManagementSettings, SecretManager, cyberark::CyberArkSecretManager,
         get_secret_from_manager,
     };
+
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{body_string, path},
@@ -24,7 +26,7 @@ async fn cyberark_handler_reads_values_and_surfaces_errors() {
         .mount(&server)
         .await;
     let manager = SecretManager::Cyberark(CyberArkSecretManager::with_client(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         server.uri().parse().unwrap(),
         "acct".into(),
         "admin".into(),

@@ -3,8 +3,8 @@
 
 use std::fmt::Write;
 
-use super::Error;
 use super::types::{EnumValue, Schema, SchemaType, ToolDefinition};
+use super::{Error, Unsupported};
 
 pub(super) fn format_function_definitions(tools: &[ToolDefinition]) -> Result<String, Error> {
     ToolFormatter::new(tools.len()).format(tools)
@@ -117,7 +117,7 @@ impl ToolFormatter {
                 None => self.output.push_str("number"),
             },
             "array" => {
-                let items = props.items.as_deref().ok_or(Error::ArrayItems)?;
+                let items = props.items.as_deref().ok_or(Unsupported::ArrayItems)?;
                 self.write_type(items, indent)?;
                 self.output.push_str("[]");
             }
@@ -298,7 +298,7 @@ mod tests {
 
         assert!(matches!(
             format_function_definitions(&tools),
-            Err(Error::ArrayItems)
+            Err(Error::Unsupported(Unsupported::ArrayItems))
         ));
     }
 }

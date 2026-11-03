@@ -37,6 +37,16 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
 
 
+def resolve_realtime_route_model(model: str | None, intent: str | None, is_translation: bool) -> str | None:
+    if model is not None:
+        return model
+    if is_translation:
+        return "gpt-realtime-translate"
+    if intent == "transcription":
+        return "gpt-realtime-whisper"
+    return None
+
+
 def resolve_inference_model(
     body_model: object,
     settings: Mapping[str, object],
@@ -529,8 +539,8 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Final[Deployment | None] = llm_router.get_deployment_by_model_group_name(
-                model_group_name=request_data["model"]
+            deployment: Final[Deployment | None] = llm_router.registry().deployments(
+                request_data["model"], source="first_in_group"
             )
             if (
                 deployment
@@ -572,14 +582,16 @@ async def get_form_data(request: Request) -> dict[str, Any]:
     Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
     """
     form: Final = await request.form()
-    parsed_form_data: Final[dict[str, Any]] = {}
-    for key, value in form.multi_items():  # not dict(form), which keeps only the last repeat
-        if key.endswith("[]"):
-            clean_key = key[:-2]
-            parsed_form_data.setdefault(clean_key, []).append(value)
-        else:
-            parsed_form_data[key] = value
-    return parsed_form_data
+    form_items: Final = tuple(form.multi_items() if hasattr(form, "multi_items") else form.items())
+    array_keys: Final = frozenset(key[:-2] for key, _ in form_items if key.endswith("[]"))
+    normalized_items: Final = tuple((key.removesuffix("[]"), value) for key, value in form_items)
+    normalized_keys: Final = tuple(dict.fromkeys(key for key, _ in normalized_items))
+    return {
+        key: [value for item_key, value in normalized_items if item_key == key]
+        if key in array_keys
+        else next(value for item_key, value in reversed(normalized_items) if item_key == key)
+        for key in normalized_keys
+    }
 
 
 async def convert_upload_files_to_file_data(
@@ -845,5 +857,3 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
             "populate_request_with_path_params: Updated request_data with vector_store_ids=%s",
             request_data.get("vector_store_ids"),
         )
-    else:
-        verbose_proxy_logger.debug("populate_request_with_path_params: No vector_store_id present in path=%s", path)

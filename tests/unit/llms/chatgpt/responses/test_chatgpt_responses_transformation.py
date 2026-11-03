@@ -16,6 +16,7 @@ import pytest
 
 import litellm
 from litellm.llms.chatgpt.authenticator import Authenticator
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.main import responses_api_bridge_check
@@ -584,3 +585,85 @@ class TestChatGPTResponsesMultiAccount:
         assert headers_b["ChatGPT-Account-Id"] == "acct-b"
         assert headers_default["Authorization"] == "Bearer token-default"
         assert headers_default["ChatGPT-Account-Id"] == "acct-default"
+
+
+def test_chatgpt_non_stream_sse_keeps_an_output_item_whose_text_holds_unicode_line_separators() -> None:
+    text: Final = "Hello\u2028from\u2029stream"
+    output_item_done: Final = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]},
+    }
+    completed: Final = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-6.1-sol",
+            "output": [],
+        },
+    }
+    sse_body: Final = "".join(
+        f"data: {json.dumps(event, ensure_ascii=False)}\n" for event in (output_item_done, completed)
+    )
+
+    parsed: Final = ChatGPTResponsesAPIConfig().transform_response_api_response(
+        model="chatgpt/gpt-6.1-sol",
+        raw_response=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body),
+        logging_obj=MagicMock(),
+    )
+
+    assert parsed.output_text == text
+
+
+@pytest.mark.parametrize("call", ["responses", "completion"])
+def test_prompt_cache_key_keeps_one_session_header_across_requests(
+    call: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": "token", "account_id": "acct", "expires_at": 4102444800})
+    )
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    completed: Final = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.5",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "OK", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    }
+    upstream: Final = MagicMock(
+        side_effect=lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=f"event: response.completed\ndata: {json.dumps(completed)}\n\n".encode(),
+        )
+    )
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream)))
+    for _ in range(2):
+        if call == "responses":
+            litellm.responses(model="chatgpt/gpt-5.5", input="hi", prompt_cache_key="conv-123", client=client)
+        else:
+            litellm.completion(
+                model="chatgpt/gpt-5.5",
+                messages=[{"role": "user", "content": "hi"}],
+                prompt_cache_key="conv-123",
+                client=client,
+            )
+
+    assert [call.args[0].headers["session_id"] for call in upstream.call_args_list] == ["conv-123", "conv-123"]
