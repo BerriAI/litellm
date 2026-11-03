@@ -15,6 +15,7 @@ fetch at a mirror of the openai/codex raw tree.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import time
@@ -30,6 +31,7 @@ from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
+from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_BUNDLED_VERSION,
     CodexStock,
@@ -78,6 +80,13 @@ def _default_client() -> _AsyncGetClient:
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
     return get_async_httpx_client(llm_provider=httpxSpecialProvider.CodexModelCatalog)
+
+
+def _cache_slot(tag: str, openai_api_key: str | None) -> str:
+    """Catalogs fetched with different OpenAI keys are kept apart, since OpenAI may answer per account."""
+    if openai_api_key is None:
+        return tag
+    return f"{tag}#{hashlib.sha256(openai_api_key.encode()).hexdigest()[:16]}"
 
 
 def vendored_codex_stock() -> CodexStock:
@@ -139,11 +148,12 @@ class CodexCatalogSource:
         tag: Final = codex_release_tag(client_version)
         if tag is None or client_version is None or uses_vendored_codex_catalog():
             return vendored_codex_stock()
-        cached: Final = self._cache.get(tag)
+        slot: Final = _cache_slot(tag, openai_api_key)
+        cached: Final = self._cache.get(slot)
         if cached is not None and (cached.retry_at is None or cached.retry_at > self._clock()):
-            self._cache.move_to_end(tag)
+            self._cache.move_to_end(slot)
             return cached.stock
-        pending: Final = self._pending.get(tag)
+        pending: Final = self._pending.get(slot)
         if pending is not None:
             return await asyncio.shield(pending)
         if len(self._pending) >= self._cached_versions:
@@ -154,12 +164,12 @@ class CodexCatalogSource:
                 vendored_codex_stock().source,
             )
             return vendored_codex_stock()
-        task: Final = asyncio.ensure_future(self._resolve(tag, client_version, openai_api_key))
-        self._pending[tag] = task
-        task.add_done_callback(lambda _: self._pending.pop(tag, None))
+        task: Final = asyncio.ensure_future(self._resolve(slot, tag, client_version, openai_api_key))
+        self._pending[slot] = task
+        task.add_done_callback(lambda _: self._pending.pop(slot, None))
         return await asyncio.shield(task)
 
-    async def _resolve(self, tag: str, version: str, openai_api_key: str | None) -> CodexStock:
+    async def _resolve(self, slot: str, tag: str, version: str, openai_api_key: str | None) -> CodexStock:
         fetched: Final = await self._fetch(tag, version, openai_api_key)
         if isinstance(fetched, _FetchFailed):
             verbose_proxy_logger.warning(
@@ -178,8 +188,8 @@ class CodexCatalogSource:
             if isinstance(fetched, _FetchFailed)
             else _Cached(stock=fetched, retry_at=None)
         )
-        self._cache[tag] = entry
-        self._cache.move_to_end(tag)
+        self._cache[slot] = entry
+        self._cache.move_to_end(slot)
         while len(self._cache) > self._cached_versions:
             self._cache.popitem(last=False)
         return entry.stock
@@ -243,7 +253,7 @@ class CodexCatalogSource:
             response: Final = await client.get(
                 url, headers=headers, timeout=self._timeout, max_response_bytes=CODEX_CATALOG_MAX_BYTES
             )
-        except httpx.HTTPError as error:
+        except (httpx.HTTPError, HTTPResponseLimitError) as error:
             return _FetchFailed(reason=f"{type(error).__name__} fetching {url}")
         if response.status_code != 200:
             return _FetchFailed(reason=f"HTTP {response.status_code} from {url}")

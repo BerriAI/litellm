@@ -7,6 +7,7 @@ import httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
 from litellm.proxy.common_utils.codex_catalog_source import (
     CODEX_CATALOG_BASE_URL,
     CODEX_CATALOG_MAX_BYTES,
@@ -300,3 +301,39 @@ def test_a_release_asked_for_while_the_in_flight_fetches_are_at_the_cap_gets_the
 
     source_label, calls = asyncio.run(scenario())
     assert source_label == vendored_codex_stock().source and not any("0.152.0" in url for url in calls), calls
+
+
+def test_a_download_the_client_cuts_at_the_byte_limit_falls_through_to_the_next_source() -> None:
+    class _CuttingTree(_RawTree):
+        async def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            timeout: float | None = None,
+            max_response_bytes: int | None = None,
+        ) -> httpx.Response:
+            if url == _openai_url(RELEASE):
+                self.calls.append(url)
+                raise HTTPResponseLimitError(f"{url} exceeded {max_response_bytes} bytes")
+            return await super().get(url, headers=headers, timeout=timeout, max_response_bytes=max_response_bytes)
+
+    tree = _CuttingTree(_tree(RELEASE))
+    stock = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
+    assert stock.source == f"github rust-v{RELEASE}" and tree.calls[0] == _openai_url(RELEASE), tree.calls
+
+
+def test_catalogs_fetched_with_different_openai_keys_are_cached_apart() -> None:
+    tree = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (200, OPENAI_CATALOG)})
+
+    async def scenario() -> None:
+        source = _source(tree)
+        await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
+        await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
+        await source.stock(RELEASE, openai_api_key="sk-unit-other-key")
+
+    asyncio.run(scenario())
+    assert tree.headers == [
+        {"Authorization": f"Bearer {OPENAI_KEY}"},
+        {"Authorization": "Bearer sk-unit-other-key"},
+    ], tree.headers

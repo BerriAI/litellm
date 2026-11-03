@@ -978,3 +978,21 @@ def test_the_catalog_key_is_absent_without_an_openai_deployment_or_environment_k
     router: Final = _router_with({"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-not-openai"})
     assert codex_catalog_openai_key(router, [("catalog-model-0", "catalog-model-0")]) is None
     assert codex_catalog_openai_key(None, [("catalog-model-0", "catalog-model-0")]) is None
+
+
+def test_a_key_for_an_openai_compatible_server_or_a_redirected_environment_never_goes_to_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://llm-gateway.internal.example/v1")
+    router: Final = _router_with(
+        {
+            "model": "openai/local-llama",
+            "api_key": "sk-internal-server",
+            "api_base": "https://inference.internal.example/v1",
+        },
+        {"model": "openai/gpt-5.5", "api_key": "sk-real-openai", "api_base": "https://api.openai.com/v1"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(2)]
+    assert codex_catalog_openai_key(router, entries[:1]) is None
+    assert codex_catalog_openai_key(router, entries) == "sk-real-openai"

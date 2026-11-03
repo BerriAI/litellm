@@ -31,6 +31,7 @@ from itertools import accumulate, pairwise
 from pathlib import Path
 from types import MappingProxyType, NoneType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+from urllib.parse import urlparse
 
 from packaging.version import Version
 from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
@@ -569,14 +570,35 @@ def _catalog_row(
     )
 
 
+OPENAI_API_HOST: Final = "api.openai.com"
+
+
+def _is_openai_origin(api_base: object) -> bool:
+    """Whether a deployment's api_base is OpenAI itself, so its key may go to OpenAI's catalog endpoint."""
+    if not api_base:
+        return True
+    return isinstance(api_base, str) and urlparse(api_base).hostname == OPENAI_API_HOST
+
+
 def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
     params: Final = MappingProxyType[str, object](deployment["litellm_params"])
     model: Final = params.get("model")
     provider: Final = params.get("custom_llm_provider") or (model.partition("/")[0] if isinstance(model, str) else "")
     api_key: Final = params.get("api_key")
-    if provider != "openai" or not isinstance(api_key, str) or not api_key:
+    if (
+        provider != "openai"
+        or not _is_openai_origin(params.get("api_base"))
+        or not isinstance(api_key, str)
+        or not api_key
+    ):
         return None
     return (get_secret_str(api_key) if api_key.startswith("os.environ/") else api_key) or None
+
+
+def _environment_openai_key() -> str | None:
+    if not _is_openai_origin(os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")):
+        return None
+    return os.getenv("OPENAI_API_KEY") or None
 
 
 def codex_catalog_openai_key(
@@ -584,8 +606,10 @@ def codex_catalog_openai_key(
     entries: Sequence[tuple[str, str]],
     team_id: str | None = None,
 ) -> str | None:
-    """The OpenAI API key the catalog fetch authenticates with: the first one among the
-    listed entries' OpenAI deployments, else ``OPENAI_API_KEY`` from the environment."""
+    """The OpenAI API key the catalog fetch authenticates with: the first one among the listed entries'
+    deployments that is `openai/` with no api_base or OpenAI's own, else ``OPENAI_API_KEY`` from the
+    environment unless ``OPENAI_BASE_URL`` points elsewhere. A key for an OpenAI-compatible server never
+    leaves for OpenAI."""
     registry: Final = llm_router.registry() if llm_router is not None else None
     deployments: Final = (
         tuple(
@@ -598,7 +622,7 @@ def codex_catalog_openai_key(
         if registry is not None
         else ()
     )
-    return next(filter(None, map(_deployment_openai_key, deployments)), None) or os.getenv("OPENAI_API_KEY") or None
+    return next(filter(None, map(_deployment_openai_key, deployments)), None) or _environment_openai_key()
 
 
 def codex_catalog_rows(
