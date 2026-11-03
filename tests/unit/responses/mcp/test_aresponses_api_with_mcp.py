@@ -4,9 +4,10 @@ import json
 import logging
 import sys
 import warnings
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
+from operator import itemgetter
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Final, List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -4155,3 +4156,179 @@ async def test_a_route_that_runs_hosted_mcp_natively_still_gets_the_tool_with_th
 
     assert [entry.get(url_key) for entry in _sent_body(provider, 0)[field]] == [_DEEPWIKI_URL]
     assert server.opened == ()
+
+
+def _loads_no_db_object(object_type: str) -> bool:
+    return False
+
+
+def _proxy_database(monkeypatch: pytest.MonkeyPatch, database: object) -> None:
+    proxy_server: Final = sys.modules["litellm.proxy.proxy_server"]
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "should_load_db_object", _loads_no_db_object, raising=False)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False, raising=False)
+
+
+def _research_toolset(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset
+
+    manager: Final = mcp_server_manager.global_mcp_server_manager
+    toolset: Final = MCPToolset(
+        toolset_id="ts-research",
+        toolset_name="research",
+        tools=[{"server_id": "srv-deepwiki", "tool_name": "ask_question"}],
+    )
+    _proxy_database(monkeypatch, SimpleNamespace())
+    monkeypatch.setattr(manager, "get_toolset_by_name_cached", AsyncMock(return_value=toolset))
+    monkeypatch.setattr(
+        manager, "resolve_toolset_tool_permissions", AsyncMock(return_value={"srv-deepwiki": ["ask_question"]})
+    )
+
+
+def _key_holding_research() -> object:
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
+
+    return UserAPIKeyAuth(
+        api_key="sk-caller",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-key", mcp_servers=["srv-deepwiki"], mcp_toolsets=["ts-research"]
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_toolset_reference_that_needs_approval_beside_a_claimed_url_hands_its_servers_call_back_unrun(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ())
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    _research_toolset(monkeypatch)
+    provider: Final = _serve_responses(
+        respx.mock, monkeypatch, (_tool_call_round(_BEDROCK_MODEL, "deepwiki-ask_question"),), _BEDROCK_URL
+    )
+    toolset_reference: Final = {"type": "mcp", "server_label": "research", "server_url": "litellm_proxy/mcp/research"}
+
+    response: Final = await _gateway_hosted_mcp_request(
+        _BEDROCK_MODEL, _ScriptedMCPServer(), beside=(toolset_reference,), caller=_key_holding_research()
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert ("function_call", None, "deepwiki-ask_question") in _output_summary(response.output)
+    assert "mcp_call" not in _output_types(response.output)
+    assert (mcp_client.call_tool.await_count, provider.call_count) == (0, 1)
+
+
+_HANDED_BACK_OUTPUT: Final = "DeepWiki answered on the caller's side."
+
+
+def _round_calling_both_servers(stream: bool) -> httpx.Response:
+    calls: Final = tuple(
+        {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(_ASK_ARGUMENTS)}}
+        for call_id, name in (("call_git", "gitmcp-ask_question"), ("call_wiki", "deepwiki-ask_question"))
+    )
+    if not stream:
+        return _chat_round(
+            {"role": "assistant", "content": None, "reasoning_content": "Ask both servers.", "tool_calls": list(calls)}
+        )
+    return _chat_stream(
+        _chat_chunk({"role": "assistant", "reasoning_content": "Ask both servers."}, None),
+        _chat_chunk({"tool_calls": [{"index": index, **call} for index, call in enumerate(calls)]}, None),
+        _chat_chunk({}, "tool_calls"),
+    )
+
+
+async def _client_response(
+    response: ResponsesAPIResponse | AsyncIterator[ResponsesAPIStreamingResponse],
+) -> tuple[ResponsesAPIResponse, tuple[ResponsesAPIStreamingResponse, ...]]:
+    if isinstance(response, ResponsesAPIResponse):
+        return response, ()
+    events: Final = tuple([event async for event in response])
+    assert _event_type(events[-1]) == "response.completed"
+    return events[-1].response, events
+
+
+def _added_items(events: Sequence[object]) -> tuple[tuple[object, object], ...]:
+    return tuple(
+        (_item(event.item)["type"], event.output_index)
+        for event in events
+        if _event_type(event) == "response.output_item.added"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+async def test_a_round_calling_a_claimed_and_a_held_tool_runs_the_claimed_one_and_its_follow_up_pairs_every_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    provider: Final = _serve_responses(
+        respx_mock, monkeypatch, (_round_calling_both_servers(stream), _answer_round(_DEEPSEEK_MODEL)), _DEEPSEEK_URL
+    )
+    server: Final = _ScriptedMCPServer()
+    recorder: Final = _RoundRecorder()
+    tools: Final = [dict(_GITMCP_TOOL), dict(_deepwiki_reference())]
+
+    response, events = await _client_response(
+        await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input="Ask both servers",
+            tools=tools,
+            direct_client_factory=server.client_for,
+            stream=stream,
+            litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+            litellm_logging_obj=_rounds_logging_obj(recorder, f"mixed-round-{stream}"),
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
+    )
+
+    items: Final = tuple(_item(item) for item in response.output)
+    assert tuple(item["type"] for item in items) == (
+        "mcp_list_tools",
+        "mcp_list_tools",
+        "reasoning",
+        "mcp_call",
+        "function_call",
+    )
+    assert (items[3]["server_label"], items[3]["name"], items[3]["output"]) == ("gitmcp", "ask_question", _ASK_OUTPUT)
+    assert (items[4]["call_id"], items[4]["name"]) == ("call_wiki", "deepwiki-ask_question")
+    assert [call.name for call in server.calls] == ["ask_question"]
+    assert mcp_client.call_tool.await_count == 0
+    if stream:
+        assert sorted(_added_items(events), key=itemgetter(1)) == [
+            (item["type"], index) for index, item in enumerate(items)
+        ]
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    spend_logs: Final = _SpendLogs(
+        (
+            {
+                "request_id": response.id,
+                "session_id": "mixed-round-session",
+                "proxy_server_request": {"input": "Ask both servers"},
+                "response": recorder.logged[0]["response"],
+            },
+        )
+    )
+    _proxy_database(monkeypatch, SimpleNamespace(db=spend_logs))
+    follow_up: Final = await litellm.aresponses(
+        model=_DEEPSEEK_MODEL,
+        input=[{"type": "function_call_output", "call_id": "call_wiki", "output": _HANDED_BACK_OUTPUT}],
+        previous_response_id=response.id,
+        tools=tools,
+        direct_client_factory=server.client_for,
+        litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+    )
+
+    assert isinstance(follow_up, ResponsesAPIResponse)
+    replayed: Final = _sent_body(provider, 1)["messages"]
+    assert [message["role"] for message in replayed] == ["user", "assistant", "tool", "tool"]
+    assistant: Final = replayed[1]
+    assert assistant["reasoning_content"] == "Ask both servers."
+    call_ids: Final = [call["id"] for call in assistant["tool_calls"]]
+    assert call_ids[1] == "call_wiki"
+    assert [message["tool_call_id"] for message in replayed[2:]] == call_ids
+    assert [message["content"] for message in replayed[2:]] == [_ASK_OUTPUT, _HANDED_BACK_OUTPUT]

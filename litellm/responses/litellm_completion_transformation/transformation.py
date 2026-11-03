@@ -563,6 +563,50 @@ def _without_paused_turn_thinking(input_items: Sequence[Mapping[str, object]]) -
     )
 
 
+def _is_call_item(item: Mapping[str, object]) -> bool:
+    return item.get("type") in ("function_call", "mcp_call")
+
+
+def _ran_call_as_function_call(item: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "type": "function_call",
+        "call_id": str(item.get("id") or ""),
+        "name": str(item.get("name") or ""),
+        "arguments": str(item.get("arguments") or "{}"),
+    }
+
+
+def _ran_call_output(item: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "type": "function_call_output",
+        "call_id": str(item.get("id") or ""),
+        "output": str(item.get("output") or item.get("error") or ""),
+    }
+
+
+def _call_run_items(run: tuple[Mapping[str, object], ...]) -> tuple[Mapping[str, object], ...]:
+    if frozenset(item.get("type") for item in run) != frozenset(("function_call", "mcp_call")):
+        return run
+    return (
+        *(_ran_call_as_function_call(item) if item.get("type") == "mcp_call" else item for item in run),
+        *(_ran_call_output(item) for item in run if item.get("type") == "mcp_call"),
+    )
+
+
+def _with_ran_calls_beside_handed_back_calls(
+    input_items: Sequence[Mapping[str, object]],
+) -> tuple[Mapping[str, object], ...]:
+    """An mcp_call the gateway ran in the same turn as a function_call it handed back to the caller goes to the model
+    as one of that turn's tool calls with its result, so the turn's tool calls and results still pair up once the
+    caller answers its function_call. Other mcp_call items stay out of the conversation, as before."""
+    return tuple(
+        chain.from_iterable(
+            _call_run_items(tuple(run)) if is_call else tuple(run)
+            for is_call, run in groupby(input_items, key=_is_call_item)
+        )
+    )
+
+
 SessionMessage: TypeAlias = (
     AllMessageValues
     | GenericChatCompletionMessage
@@ -682,6 +726,29 @@ def with_stored_calls_the_input_answers(
         index for index, message in enumerate(new_messages) if _tool_output_call_id(message) in answered
     )
     return (*new_messages[:first_output], *stored_calls, *new_messages[first_output:])
+
+
+def _restates_held_calls(message: object, held_call_ids: frozenset[str]) -> bool:
+    calls: Final = _assistant_tool_calls(message)
+    return (
+        bool(calls)
+        and not any(_message_field(message, key) for key in ("content", "reasoning_content", "thinking_blocks"))
+        and all(_str_field(call, "id") in held_call_ids for call in calls)
+    )
+
+
+def without_calls_the_history_holds(
+    new_messages: Sequence[_MessageT], history: Sequence[object]
+) -> tuple[_MessageT, ...]:
+    """The new input's messages without an assistant message that only repeats tool calls the history already holds,
+    such as one rebuilt from the tool call cache for a function_call_output, so each call is made once before its
+    results."""
+    held_call_ids: Final = frozenset(
+        call_id
+        for call_id in (_str_field(call, "id") for call in chain.from_iterable(map(_assistant_tool_calls, history)))
+        if call_id
+    )
+    return tuple(message for message in new_messages if not _restates_held_calls(message, held_call_ids))
 
 
 def _stored_compaction_summary(message: SessionMessage) -> str | None:
@@ -1510,10 +1577,13 @@ class LiteLLMCompletionResponsesConfig:
         # Store original _messages before combining for safety check
         original_new_messages: Final = _messages.copy() if _messages else []
 
-        new_messages: Final = (
-            with_stored_calls_the_input_answers(_messages[instructions_end:], session_history)
-            if input_replaces_history
-            else _messages[instructions_end:]
+        new_messages: Final = without_calls_the_history_holds(
+            (
+                with_stored_calls_the_input_answers(_messages[instructions_end:], session_history)
+                if input_replaces_history
+                else _messages[instructions_end:]
+            ),
+            session_messages,
         )
         combined_messages = [*leading_system_messages, *session_messages, *new_messages]
 
@@ -1589,7 +1659,7 @@ class LiteLLMCompletionResponsesConfig:
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
             existing_tool_call_ids: Final[set[str]] = set()
-            for _input in _without_paused_turn_thinking(input):
+            for _input in _with_ran_calls_beside_handed_back_calls(_without_paused_turn_thinking(input)):
                 chat_completion_messages = (
                     LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                         input_item=_input,

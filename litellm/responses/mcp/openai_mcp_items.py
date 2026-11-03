@@ -61,7 +61,8 @@ class OpenAIMCPItems:
 class HeldReferences:
     """The caller's `litellm_proxy` references without `require_approval: "never"`. While any is present, a registered
     tool runs on the gateway only when the gateway claimed its server and no such reference names it, so the model's
-    other calls go back to the caller the way they do without a claim."""
+    other calls go back to the caller the way they do without a claim. A reference whose name is no registered server,
+    such as a toolset or an access group, can stand for any registered server, so it holds them all."""
 
     present: bool
     whole_gateway: bool
@@ -74,14 +75,19 @@ class HeldReferences:
         return not names_server and any(key in server_labels for key in server_keys)
 
 
-def held_references(gateway_tools: Sequence[Mapping[str, object]]) -> HeldReferences:
+def held_references(
+    gateway_tools: Sequence[Mapping[str, object]], server_for: Callable[[str], MCPServer | None]
+) -> HeldReferences:
     held_urls: Final = tuple(
         str(tool.get("server_url") or "") for tool in gateway_tools if tool.get("require_approval") != "never"
     )
+    held_names: Final = tuple(
+        url.split("/")[-1] for url in held_urls if url.startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX)
+    )
     return HeldReferences(
         present=bool(held_urls),
-        whole_gateway=any(not url.startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX) for url in held_urls),
-        server_names=frozenset(url.split("/")[-1].lower() for url in held_urls),
+        whole_gateway=len(held_names) < len(held_urls) or any(server_for(name) is None for name in held_names),
+        server_names=frozenset(name.lower() for name in held_names),
     )
 
 
@@ -229,6 +235,12 @@ def openai_output(items: OpenAIMCPItems, output: Sequence[object]) -> tuple[obje
     )
 
 
+def _is_mcp_call_event(event_type: object, item: object) -> bool:
+    return (isinstance(event_type, str) and event_type.startswith("response.mcp_call")) or _field(
+        item, "type"
+    ) == "mcp_call"
+
+
 def _response_item(item: Mapping[str, object]) -> BaseLiteLLMOpenAIResponseObject:
     return BaseLiteLLMOpenAIResponseObject(**item)
 
@@ -279,8 +291,8 @@ def _failed(held: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingRespons
 @dataclass(frozen=True, slots=True)
 class OpenAIStreamShaper:
     """Rewrites the gateway's MCP stream into OpenAI's event order. The mcp_list_tools items open the output, the
-    function_call events of a gateway-run tool are dropped since its mcp_call events stand for it, output indexes are
-    renumbered densely, and every event gets the next sequence number."""
+    function_call events of a gateway-run tool are dropped since its mcp_call events stand for it at the same output
+    index, output indexes are renumbered densely, and every event gets the next sequence number."""
 
     items: OpenAIMCPItems
     listed: bool = False
@@ -302,6 +314,14 @@ class OpenAIStreamShaper:
         )
         return replace(shaped_state, sequence=shaped_state.sequence + len(numbered)), numbered
 
+    def round_output(
+        self, output: Sequence[object], ran_calls: Mapping[str, Mapping[str, object]]
+    ) -> tuple[object, ...]:
+        return ran_round_output(output, ran_calls)
+
+    def client_output(self, output: Sequence[object]) -> tuple[object, ...]:
+        return openai_output(self.items, output)
+
     def _list_events(self) -> tuple[ResponsesAPIStreamingResponse, ...]:
         return tuple(chain.from_iterable(_list_events(index, item) for index, item in enumerate(self.items.list_items)))
 
@@ -321,12 +341,13 @@ class OpenAIStreamShaper:
             return self, (self._terminal(event),)
         if not isinstance(index, int):
             return self, (event,)
-        if index in self.dropped:
+        if index in self.dropped and not _is_mcp_call_event(event_type, item):
             return self, ()
         if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _is_gateway_function_call(
             self.items.names, item
         ):
-            return replace(self, dropped=self.dropped | {index}), ()
+            reserved_state, _ = self._public_index(index)
+            return replace(reserved_state, dropped=reserved_state.dropped | {index}), ()
         indexed_state, public = self._public_index(index)
         moved: Final = _copied(event, {"output_index": public})
         if event_type == ResponsesAPIStreamEvents.MCP_CALL_COMPLETED:
@@ -358,12 +379,6 @@ class OpenAIStreamShaper:
         )
 
 
-def _is_answered_call(item: object, answered_call_ids: frozenset[str]) -> bool:
-    return (
-        _field(item, "type") == "function_call" and (_text(item, "call_id") or _text(item, "id")) in answered_call_ids
-    )
-
-
 def _is_empty_message(item: object) -> bool:
     if _field(item, "type") != "message":
         return False
@@ -374,7 +389,13 @@ def _is_empty_message(item: object) -> bool:
     return all(_field(part, "type") == "output_text" and not _text(part, "text") for part in parts)
 
 
-def answered_round_output(output: Sequence[object], answered_call_ids: frozenset[str]) -> tuple[object, ...]:
-    """A tool round's output without the calls the gateway answered and without the empty assistant message a
-    bridged provider adds beside its tool calls, so the composed output reads as OpenAI's."""
-    return tuple(item for item in output if not (_is_answered_call(item, answered_call_ids) or _is_empty_message(item)))
+def _ran_in_place(item: object, ran_calls: Mapping[str, Mapping[str, object]]) -> object:
+    if _field(item, "type") != "function_call":
+        return item
+    return ran_calls.get(_text(item, "call_id") or _text(item, "id") or "", item)
+
+
+def ran_round_output(output: Sequence[object], ran_calls: Mapping[str, Mapping[str, object]]) -> tuple[object, ...]:
+    """A tool round's output with each call the gateway ran, keyed by call id, replaced in place by its mcp_call, and
+    without the empty assistant message a bridged provider adds beside its tool calls, so it reads as OpenAI's."""
+    return tuple(_ran_in_place(item, ran_calls) for item in output if not _is_empty_message(item))

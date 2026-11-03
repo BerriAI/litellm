@@ -7417,3 +7417,43 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
         )
 
     assert f"'{field_path}'" in raised.value.message
+
+
+def test_a_follow_up_tool_output_for_a_call_the_stored_turn_holds_sends_that_call_once():
+    stored_call: Final = ChatCompletionMessageToolCall(
+        id="call_stored_weather", type="function", function=Function(name="get_weather", arguments="{}")
+    )
+
+    async def stored_turn(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[
+                {"role": "user", "content": "Weather?"},
+                {"role": "assistant", "content": None, "tool_calls": [stored_call.model_dump()]},
+            ],
+            litellm_session_id=None,
+        )
+
+    TOOL_CALLS_CACHE.set_cache(key=stored_call.id, value=stored_call)
+    try:
+        chat_request: Final = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model="deepseek/deepseek-v4-flash",
+                input=cast(
+                    ResponseInputParam,
+                    [{"type": "function_call_output", "call_id": stored_call.id, "output": "Sunny."}],
+                ),
+                responses_api_request=ResponsesAPIOptionalRequestParams(),
+            )
+        )
+    finally:
+        TOOL_CALLS_CACHE.delete_cache(key=stored_call.id)
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_stored_weather",
+            litellm_completion_request=chat_request,
+            instructions=None,
+            session_lookup=stored_turn,
+        )
+    )
+
+    assert [message.get("role") for message in request["messages"]] == ["user", "assistant", "tool"]

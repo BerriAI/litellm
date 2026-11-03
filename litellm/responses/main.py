@@ -756,7 +756,7 @@ def _claimed_mcp_items(
         claims.server_labels,
         _registered_mcp_server,
         direct_listing,
-        held_references(gateway_tools),
+        held_references(gateway_tools, _registered_mcp_server),
     )
 
 

@@ -1,11 +1,12 @@
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.mcp.mcp_streaming_iterator import output_items
-from litellm.responses.mcp.openai_mcp_items import OpenAIMCPItems, answered_round_output, openai_output
+from litellm.responses.mcp.openai_mcp_items import OpenAIMCPItems, openai_output, ran_round_output
 from litellm.responses.mcp.round_billing import (
     billed_for_every_round,
     first_round_billed_on_failure,
@@ -61,11 +62,24 @@ def _round_items(
     response: ResponsesAPIResponse, tool_calls: Sequence[object], results: Sequence["MCPToolResult"]
 ) -> tuple[object, ...]:
     arguments_by_call: Final = {call_id: arguments for _, arguments, call_id in map(_call_details, tool_calls)}
-    answered: Final = frozenset(result["tool_call_id"] for result in results if result["tool_call_id"])
-    return (
-        *answered_round_output(output_items(response), answered),
-        *(_mcp_call(result, arguments_by_call) for result in results),
+    ran_calls: Final = MappingProxyType(
+        {result["tool_call_id"]: _mcp_call(result, arguments_by_call) for result in results if result["tool_call_id"]}
     )
+    return ran_round_output(output_items(response), ran_calls)
+
+
+def _answer(
+    rounds: ClaimedRounds, response: ResponsesAPIResponse, composed: tuple[object, ...], round_output: Sequence[object]
+) -> ResponsesAPIResponse:
+    return response.model_copy(update={"output": list(openai_output(rounds.items, (*composed, *round_output)))})
+
+
+async def _held_round_output(
+    rounds: ClaimedRounds, response: ResponsesAPIResponse, claimed_calls: Sequence[object]
+) -> tuple[object, ...]:
+    with first_round_billed_on_failure(rounds.logging_obj, response):
+        results: Final = await rounds.execute(claimed_calls)
+    return _round_items(response, claimed_calls, results)
 
 
 def _breakdown(logging_obj: object) -> CostBreakdown | None:
@@ -83,10 +97,11 @@ async def _next_round(
     from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 
     tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response)
-    if not tool_calls or not rounds.items.runs_every_call(name for name, _, _ in map(_call_details, tool_calls)):
-        return response.model_copy(
-            update={"output": list(openai_output(rounds.items, (*composed, *output_items(response))))}
-        )
+    claimed_calls: Final = tuple(call for call in tool_calls if _call_details(call)[0] in rounds.items.names)
+    if not claimed_calls:
+        return _answer(rounds, response, composed, output_items(response))
+    if len(claimed_calls) < len(tool_calls):
+        return _answer(rounds, response, composed, await _held_round_output(rounds, response, claimed_calls))
     with first_round_billed_on_failure(rounds.logging_obj, response):
         results: Final = await rounds.execute(tool_calls)
         follow_up_input: Final = (
@@ -130,6 +145,7 @@ async def run_claimed_rounds(
     original_input: str | ResponseInputParam | None,
 ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     """Run every tool call the model makes on the gateway's MCP tools, round after round up to `max_rounds`, and
-    answer with OpenAI's items: mcp_list_tools first, each executed call as an mcp_call, and one bill for all rounds.
-    A round that calls any tool the gateway does not run goes back to the caller unexecuted."""
+    answer with OpenAI's items: mcp_list_tools first, each executed call as an mcp_call where the model made it, and
+    one bill for all rounds. A round that also calls a tool the gateway does not run ends the loop: the gateway runs its
+    own calls and hands the others back to the caller as function_call items, in the model's order."""
     return await _next_round(rounds, first, first_breakdown, _initial_history(original_input), (), 1)
