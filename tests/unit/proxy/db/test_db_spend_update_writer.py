@@ -1,10 +1,11 @@
 import asyncio
 import copy
+import functools
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -4786,16 +4787,16 @@ async def test_update_database_charges_a_video_once_from_the_poll_that_sees_it_c
     }
 
 
-async def _update_database_for_video_poll(
-    db_writer: DBSpendUpdateWriter,
-    prisma: MagicMock,
+def _job_poll(
     litellm_call_id: str,
     response_cost: float,
     status: str = "completed",
     polled_video_id: str = "video_abc",
     guardrail_cost: float = 0.0,
     call_type: str = "avideo_status",
-) -> bool:
+) -> tuple[dict[str, object], object]:
+    """The logging kwargs a job poll reaches the spend writer with: litellm logs the provider's own cost as
+    response_cost and the guardrails' on top of it only in the standard logging payload."""
     from litellm.types.utils import LiteLLMBatch
     from litellm.types.videos.main import VideoObject
 
@@ -4812,6 +4813,47 @@ async def _update_database_for_video_poll(
             status=status,
         )
     )
+    kwargs: Final[dict[str, object]] = {
+        "model": "sora-2",
+        "call_type": call_type,
+        "litellm_call_id": litellm_call_id,
+        "response_cost": response_cost - guardrail_cost,
+        "polled_video_status": status,
+        "litellm_params": {"metadata": {"user_api_key": "test-key"}, "video_id": polled_video_id},
+        **(
+            {
+                "standard_logging_object": {
+                    "response_cost": response_cost,
+                    "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": guardrail_cost}],
+                    "metadata": {},
+                    "hidden_params": {},
+                    "request_tags": [],
+                    "model_map_information": None,
+                }
+            }
+            if guardrail_cost
+            else {}
+        ),
+    }
+    return kwargs, polled_job
+
+
+def _spend_writer_call(db_writer: DBSpendUpdateWriter, polled_job: object) -> Callable[..., Awaitable[bool]]:
+    return functools.partial(
+        db_writer.update_database,
+        token="test-token",
+        user_id="test-user",
+        end_user_id=None,
+        team_id=None,
+        org_id=None,
+        completion_response=polled_job,
+        start_time=datetime.now(timezone.utc),
+        end_time=datetime.now(timezone.utc),
+    )
+
+
+@contextmanager
+def _proxy_globals(prisma: MagicMock) -> Iterator[None]:
     with (
         patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
             "litellm.proxy.proxy_server.prisma_client", prisma
@@ -4820,39 +4862,22 @@ async def _update_database_for_video_poll(
             "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
         ),
     ):
-        charged = await db_writer.update_database(
-            token="test-token",
-            user_id="test-user",
-            end_user_id=None,
-            team_id=None,
-            org_id=None,
-            kwargs={
-                "model": "sora-2",
-                "call_type": call_type,
-                "litellm_call_id": litellm_call_id,
-                "response_cost": response_cost,
-                "polled_video_status": status,
-                "litellm_params": {"metadata": {"user_api_key": "test-key"}, "video_id": polled_video_id},
-                **(
-                    {
-                        "standard_logging_object": {
-                            "response_cost": response_cost,
-                            "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": guardrail_cost}],
-                            "metadata": {},
-                            "hidden_params": {},
-                            "request_tags": [],
-                            "model_map_information": None,
-                        }
-                    }
-                    if guardrail_cost
-                    else {}
-                ),
-            },
-            completion_response=polled_job,
-            start_time=datetime.now(timezone.utc),
-            end_time=datetime.now(timezone.utc),
-            response_cost=response_cost,
-        )
+        yield
+
+
+async def _update_database_for_video_poll(
+    db_writer: DBSpendUpdateWriter,
+    prisma: MagicMock,
+    litellm_call_id: str,
+    response_cost: float,
+    status: str = "completed",
+    polled_video_id: str = "video_abc",
+    guardrail_cost: float = 0.0,
+    call_type: str = "avideo_status",
+) -> bool:
+    kwargs, polled_job = _job_poll(litellm_call_id, response_cost, status, polled_video_id, guardrail_cost, call_type)
+    with _proxy_globals(prisma):
+        charged = await _spend_writer_call(db_writer, polled_job)(kwargs=kwargs, response_cost=response_cost)
         await asyncio.sleep(0)
         return charged
 
@@ -4901,6 +4926,59 @@ async def test_a_poll_paying_only_its_guardrail_cannot_take_the_jobs_charge_what
 
     assert charged == [True, True, True]
     assert prisma.db.litellm_spendlogs.rows[charge_row_id]["spend"] == 0.43
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "charge_row_id"),
+    [("avideo_status", "video_abc_video_cost"), ("aretrieve_batch", "batch_abc_batch_cost")],
+)
+async def test_a_finished_job_cheaper_than_its_polls_guardrail_is_still_charged_once(call_type, charge_row_id):
+    """A batch of a few cheap requests costs less than a priced guardrail on its retrieve, and the finished job's
+    cost must still settle under its charge row once instead of being billed again on every poll."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+
+    charged = [
+        await _update_database_for_video_poll(
+            db_writer, prisma, call_id, 0.01002775, guardrail_cost=0.01, call_type=call_type
+        )
+        for call_id in ("poll-1", "poll-2")
+    ]
+    await _flush_queued_spend_logs(prisma)
+
+    assert charged == [True, False]
+    assert {request_id: row["spend"] for request_id, row in prisma.db.litellm_spendlogs.rows.items()} == {
+        charge_row_id: 0.01002775
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_poll_of_a_finished_video_charges_its_guardrail_on_a_row_of_its_own():
+    from litellm.proxy.hooks.proxy_track_cost_callback import _charge_request_cost
+
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+    await _update_database_for_video_poll(db_writer, prisma, "poll-1", 0.43, guardrail_cost=0.01)
+    kwargs, polled_job = _job_poll("poll-2", 0.43, guardrail_cost=0.01)
+
+    async def charge_spend(
+        *, kwargs: dict[str, object], response_cost: float, budget_reservation: dict[str, object] | None
+    ) -> bool:
+        return await _spend_writer_call(db_writer, polled_job)(kwargs=kwargs, response_cost=response_cost)
+
+    with _proxy_globals(prisma):
+        repeat_charge = await _charge_request_cost(charge_spend, kwargs, 0.43, None)
+        await asyncio.sleep(0)
+    await _flush_queued_spend_logs(prisma)
+
+    assert repeat_charge == 0.01
+    assert {request_id: row["spend"] for request_id, row in prisma.db.litellm_spendlogs.rows.items()} == {
+        "video_abc_video_cost": 0.43,
+        "poll-2_guardrail_cost": 0.01,
+    }
 
 
 @pytest.mark.asyncio

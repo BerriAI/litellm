@@ -40,6 +40,7 @@ from litellm.integrations.otel.model.metadata import caller_session_id
 from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.litellm_core_utils.batch_utils import (
     BATCH_COST_REQUEST_ID_SUFFIX,
+    charged_poll_cost,
     charged_video_id,
     pays_only_its_guardrail,
 )
@@ -377,7 +378,7 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
-    response_cost: Final = kwargs.get("response_cost")
+    response_cost: Final = charged_poll_cost(kwargs)
     charged_video: Final = charged_video_id(call_type, kwargs, resolved_id, response_cost)
     if charged_video is not None:
         return f"{charged_video}{VIDEO_COST_REQUEST_ID_SUFFIX}"

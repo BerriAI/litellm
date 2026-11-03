@@ -1332,13 +1332,27 @@ async def _charge_request_cost(
     """What the request charged, since a poll of a job an earlier poll charged still pays for its own guardrails."""
     if await charge_spend(kwargs=kwargs, response_cost=response_cost, budget_reservation=budget_reservation):
         return response_cost
-    cost_after_job: Final = repeat_poll_cost(
-        kwargs.get("call_type"), response_cost, kwargs.get("standard_logging_object")
-    )
+    standard_logging_payload: Final = kwargs.get("standard_logging_object")
+    cost_after_job: Final = repeat_poll_cost(kwargs.get("call_type"), response_cost, standard_logging_payload)
     if cost_after_job <= 0:
         return None
     charged: Final = await charge_spend(
-        kwargs={**kwargs, "response_cost": cost_after_job}, response_cost=cost_after_job, budget_reservation=None
+        kwargs={
+            **kwargs,
+            "response_cost": cost_after_job,
+            **(
+                {
+                    "standard_logging_object": {
+                        **_OBJECT_MAPPING.validate_python(standard_logging_payload),
+                        "response_cost": cost_after_job,
+                    }
+                }
+                if isinstance(standard_logging_payload, Mapping)
+                else {}
+            ),
+        },
+        response_cost=cost_after_job,
+        budget_reservation=None,
     )
     return cost_after_job if charged else None
 

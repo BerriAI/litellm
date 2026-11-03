@@ -316,6 +316,18 @@ def _guardrail_cost_of_poll(standard_logging_payload: object) -> float:
     return guardrail_information_cost(guardrail_information)
 
 
+def charged_poll_cost(kwargs: Mapping[str, object]) -> object:
+    """The poll's whole cost as the cost callback charges it, guardrails included, which the logging kwargs' own
+    response_cost leaves out."""
+    standard_logging_payload: Final = kwargs.get("standard_logging_object")
+    logged_cost: Final = (
+        _PAYLOAD_FIELDS.validate_python(standard_logging_payload).get("response_cost")
+        if isinstance(standard_logging_payload, Mapping)
+        else None
+    )
+    return kwargs.get("response_cost") if logged_cost is None else logged_cost
+
+
 def job_cost_of_poll(response_cost: object, standard_logging_payload: object) -> float:
     """What the polled job itself cost, since a guardrail on the poll charges every poll, running or finished."""
     return (finite_cost(response_cost) or 0.0) - _guardrail_cost_of_poll(standard_logging_payload)
