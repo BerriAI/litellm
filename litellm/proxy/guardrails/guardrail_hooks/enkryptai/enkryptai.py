@@ -126,7 +126,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            response_json: Final = response.json()
+            response_json: Final[EnkryptAIResponse] = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()

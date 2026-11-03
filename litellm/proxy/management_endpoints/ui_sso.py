@@ -65,7 +65,7 @@ from litellm.constants import (
     MICROSOFT_USER_ID_ATTRIBUTE,
     MICROSOFT_USER_LAST_NAME_ATTRIBUTE,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -4858,7 +4858,7 @@ class MicrosoftSSOHandler:
 
             # Decode the JWT without signature verification
             # (signature is already verified by fastapi_sso)
-            decoded_token: Final = jwt.decode(id_token, options={"verify_signature": False})
+            decoded_token: Final = decoded_json_object(jwt.decode(id_token, options={"verify_signature": False}))
 
             # Extract app_roles claim from the token
             ## check for both 'roles' and 'app_roles' claims

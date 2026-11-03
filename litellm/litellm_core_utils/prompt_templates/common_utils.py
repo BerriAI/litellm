@@ -2380,7 +2380,7 @@ def strip_prefill_prefix_field(message: AllMessageValues) -> AllMessageValues:
     return _message_without_fields(message, frozenset({"prefix"}))
 
 
-def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
+def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Mapping[object, object]:
     """
     Filters a value from a dictionary
 

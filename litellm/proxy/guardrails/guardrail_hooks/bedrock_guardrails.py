@@ -2212,7 +2212,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             # Check if the guardrail would block content
             try:
-                _json_response: Final = response.json()
+                _json_response: Final[BedrockGuardrailResponse] = response.json()
                 bedrock_guardrail_response: Final = BedrockGuardrailResponse(**_json_response)
                 if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
                     return "guardrail_intervened"

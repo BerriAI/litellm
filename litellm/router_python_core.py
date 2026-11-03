@@ -12832,7 +12832,7 @@ class PythonCore(DeprecatedRouterMembers):
 
     def _core_get_deployment_credentials_with_provider(
         self, model_id: str, team_id: str | None = None
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """
         Get API credentials and provider info from a model name in model_list.
         Useful for passthrough endpoints (files, batches, etc.) that need credentials.

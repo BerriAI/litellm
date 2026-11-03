@@ -9,13 +9,14 @@ import os
 from collections.abc import Mapping, MutableMapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes, iter_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.proxy._types import *
@@ -81,6 +82,18 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedObjectTable
 
 router: Final = APIRouter()
+
+
+class _UserBatchLister(Protocol):
+    async def list_user_batches(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        limit: int | None = None,
+        after: str | None = None,
+        provider: str | None = None,
+        target_model_names: str | None = None,
+        llm_router: Router | None = None,
+    ) -> Mapping[str, object]: ...
 
 
 def _hidden_param_string(hidden_params: Mapping[str, object], key: str) -> str:
@@ -925,9 +938,9 @@ async def list_batches(
 
         # Try to use managed objects table for listing batches (returns encoded IDs).
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-        if managed_files_obj is not None and hasattr(managed_files_obj, "list_user_batches"):
+        if managed_files_obj is not None and has_attributes(managed_files_obj, _UserBatchLister, "list_user_batches"):
             verbose_proxy_logger.debug("Using managed objects table for batch listing")
-            response = await cast(Any, managed_files_obj).list_user_batches(
+            response = await managed_files_obj.list_user_batches(
                 user_api_key_dict=user_api_key_dict,
                 limit=limit,
                 after=after,
@@ -957,9 +970,9 @@ async def list_batches(
 
             # Encode batch IDs in the list response so clients can use
             # them for retrieve/cancel/file downloads through the proxy.
-            response_data: Final = getattr(response, "data", None)
+            response_data: Final = attribute_or_none(response, "data")
             if response_data:
-                for batch in response_data:
+                for batch in iter_items(response_data):
                     encode_batch_response_ids(batch, model=model_param)
 
             verbose_proxy_logger.debug("Listed batches using model: %s", model_param)

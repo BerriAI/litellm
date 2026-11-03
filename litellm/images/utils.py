@@ -6,10 +6,23 @@ from pathlib import Path
 from typing import Any, Final, Protocol, cast, get_type_hints, runtime_checkable
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.litellm_core_utils.token_counter import get_image_type
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.types.files import FILE_MIME_TYPES, FileType
 from litellm.types.images.main import ImageEditOptionalRequestParams
+
+
+class _ReadsBytes(Protocol):
+    def read(self, size: int, /) -> bytes: ...
+
+
+class _Tells(Protocol):
+    def tell(self) -> int: ...
+
+
+class _Seeks(Protocol):
+    def seek(self, offset: int, /) -> object: ...
 
 
 class ImageEditRequestUtils:
@@ -114,12 +127,12 @@ class ImageEditRequestUtils:
                 bytes_data = image_data[:100]
             else:
                 # For other types, try to read if possible
-                if hasattr(image_data, "read"):
-                    current_pos = getattr(image_data, "tell", lambda: 0)()
-                    if hasattr(image_data, "seek"):
+                if has_attributes(image_data, _ReadsBytes, "read"):
+                    current_pos = image_data.tell() if has_attributes(image_data, _Tells, "tell") else 0
+                    if has_attributes(image_data, _Seeks, "seek"):
                         image_data.seek(0)
                     bytes_data = image_data.read(100)
-                    if hasattr(image_data, "seek"):
+                    if has_attributes(image_data, _Seeks, "seek"):
                         image_data.seek(current_pos)
                 else:
                     return FILE_MIME_TYPES[FileType.PNG]  # Default fallback

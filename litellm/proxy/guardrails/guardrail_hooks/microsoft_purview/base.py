@@ -1,14 +1,16 @@
+import sys
 import threading
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import httpx
 from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -33,6 +35,38 @@ SCOPE_CACHE_TTL_SECONDS: Final = 3600.0
 class GraphTokenResponse(TypedDict):
     access_token: str
     expires_in: NotRequired[int]
+
+
+_NOT_A_CONTAINER_SUFFIX: Final = "is not a container or iterable" if sys.version_info >= (3, 14) else "is not iterable"
+
+
+@runtime_checkable
+class _SupportsContains(Protocol):
+    def __contains__(self, key: object, /) -> bool: ...
+
+
+@runtime_checkable
+class _SupportsIter(Protocol):
+    def __iter__(self) -> Iterator[object]: ...
+
+
+def _json_contains(value: object, key: str) -> bool:
+    if isinstance(value, _SupportsContains):
+        return key in value
+    if isinstance(value, _SupportsIter):
+        return key in value
+    raise TypeError(f"argument of type '{type(value).__name__}' {_NOT_A_CONTAINER_SUFFIX}")
+
+
+def _policy_action_blocks(action: object) -> bool:
+    policy_action: Final = decoded_json_object(action)
+    odata_type: Final = policy_action.get("@odata.type", "")
+    action_field: Final = policy_action.get("action", "")
+
+    if _json_contains(odata_type, "restrictAccessAction") or action_field == "restrictAccess":
+        restriction: Final = policy_action.get("restrictionAction", "")
+        return restriction == "block"
+    return False
 
 
 class PurviewGuardrailBase:
@@ -363,16 +397,11 @@ class PurviewGuardrailBase:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _should_block(response: dict[str, Any]) -> bool:
+    def _should_block(response: Mapping[str, object]) -> bool:
         """Return True if any policyAction requires blocking."""
-        for action in response.get("policyActions", []):
-            odata_type = action.get("@odata.type", "")
-            action_field = action.get("action", "")
-
-            if "restrictAccessAction" in odata_type or action_field == "restrictAccess":
-                restriction = action.get("restrictionAction", "")
-                if restriction == "block":
-                    return True
+        for action in iter_items(response.get("policyActions", [])):
+            if _policy_action_blocks(action):
+                return True
         return False
 
     # ------------------------------------------------------------------

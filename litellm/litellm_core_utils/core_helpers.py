@@ -122,7 +122,7 @@ class _SupportsIter(Protocol):
 
 @runtime_checkable
 class _SupportsGetItem(Protocol):
-    def __getitem__(self, index: int, /) -> object: ...
+    def __getitem__(self, key: str | int, /) -> object: ...
 
 
 def attribute_or_none(source: object, name: str) -> object:
@@ -153,6 +153,12 @@ def iter_items(value: object) -> Iterable[object]:
     if isinstance(value, _SupportsGetItem):
         return iter(value)
     raise TypeError(f"'{type(value).__name__}' object is not iterable")
+
+
+def subscript(value: object, key: str | int) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
 
 
 def attribute_items(source: object, name: str) -> Iterable[object]:

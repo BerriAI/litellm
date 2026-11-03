@@ -1067,7 +1067,7 @@ class ModelResponseIterator:
                     if "caller" in content_block_start["content_block"]:
                         caller_data: Final = content_block_start["content_block"]["caller"]
                         if caller_data:
-                            tool_use["caller"] = cast(dict[str, Any], caller_data)
+                            tool_use["caller"] = caller_data
                 elif content_block_start["content_block"]["type"] == "redacted_thinking":
                     (
                         thinking_blocks,

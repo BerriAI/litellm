@@ -7270,9 +7270,11 @@ class ProxyConfig:
 
             custom_ui_sso_sign_in_handler: Final = general_settings.get("custom_ui_sso_sign_in_handler", None)
             if custom_ui_sso_sign_in_handler is not None:
-                user_custom_ui_sso_sign_in_handler = get_instance_fn(
-                    value=custom_ui_sso_sign_in_handler,
-                    config_file_path=config_file_path,
+                user_custom_ui_sso_sign_in_handler = _UNTYPED_VALUE.validate_python(
+                    get_instance_fn(
+                        value=custom_ui_sso_sign_in_handler,
+                        config_file_path=config_file_path,
+                    )
                 )
 
             if enterprise_proxy_config is not None:

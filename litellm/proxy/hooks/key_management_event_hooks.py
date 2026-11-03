@@ -2,13 +2,14 @@ import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes
 from litellm.proxy._types import (
     GenerateKeyRequest,
     GenerateKeyResponse,
@@ -32,6 +33,10 @@ if TYPE_CHECKING:
 
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS: Final = "litellm/"
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
 
 
 class KeyManagementEventHooks:
@@ -476,12 +481,13 @@ class KeyManagementEventHooks:
             verbose_proxy_logger.debug("Unable to load team metadata for team_id=%s: %s", team_id, exc)
             return None
 
-        metadata = getattr(team_obj, "metadata", None)
-        if metadata is None:
+        raw_metadata: Final = attribute_or_none(team_obj, "metadata")
+        if raw_metadata is None:
             return None
 
-        if hasattr(metadata, "model_dump"):
-            metadata = metadata.model_dump()
+        metadata: Final = (
+            raw_metadata.model_dump() if has_attributes(raw_metadata, _ModelDumpable, "model_dump") else raw_metadata
+        )
 
         if not isinstance(metadata, dict):
             return None
