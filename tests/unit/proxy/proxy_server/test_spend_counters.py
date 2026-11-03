@@ -3331,6 +3331,94 @@ async def test_a_request_cancelled_with_its_set_on_the_wire_still_adds_to_a_shor
     assert redis.values[counter] == 6.25
 
 
+class _AddLandsAfterSetRedis(_HeldSetRedis):
+    """Also holds a plain add on the wire while ``set_landed`` is clear, so a set still in flight lands first."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.set_landed: Final = asyncio.Event()
+        self.set_landed.set()
+
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
+        if not kwargs.get("only_if_missing"):
+            await self.set_landed.wait()
+        added: Final = await super().async_increment(key, value, **kwargs)
+        if kwargs.get("only_if_missing"):
+            self.set_landed.set()
+        return added
+
+
+@pytest.mark.asyncio
+async def test_a_set_still_on_the_wire_after_its_request_was_cancelled_is_joined_by_a_newer_cold_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:cancelled-set-joined"
+    monkeypatch.setattr(spend_counter_reseed, "SPEND_COUNTER_COLD_SEED_JOIN_SECONDS", 60.0)
+    redis: Final = _AddLandsAfterSetRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+    read_before_seed: Final = asyncio.Event()
+    go: Final = asyncio.Event()
+    stale: Final = asyncio.ensure_future(
+        _a_request_read_cold_before_this_process_seeded(redis, counter, read_before_seed, go)
+    )
+    await read_before_seed.wait()
+    await _cold_start(redis, counter)
+    del redis.values[counter]
+    redis.set_landed.clear()
+    go.set()
+    await redis.set_sent.wait()
+    stale.cancel()
+    await asyncio.wait((stale,))
+
+    newer: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    for _ in range(20):
+        await asyncio.sleep(0)
+    redis.release_set.set()
+    await asyncio.wait_for(newer, timeout=5)
+
+    assert stale.cancelled()
+    assert redis.values[counter] == 6.0
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_read_released_with_a_stale_read_joins_the_set_the_stale_read_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:released-together"
+    monkeypatch.setattr(spend_counter_reseed, "SPEND_COUNTER_COLD_SEED_JOIN_SECONDS", 60.0)
+    redis: Final = _AddLandsAfterSetRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+    stale_read: Final = asyncio.Event()
+    fresh_read: Final = asyncio.Event()
+    go: Final = asyncio.Event()
+    stale: Final = asyncio.ensure_future(
+        _a_request_read_cold_before_this_process_seeded(redis, counter, stale_read, go)
+    )
+    await stale_read.wait()
+    await _cold_start(redis, counter)
+    del redis.values[counter]
+    redis.set_landed.clear()
+    fresh: Final = asyncio.ensure_future(
+        _a_request_read_cold_before_this_process_seeded(redis, counter, fresh_read, go)
+    )
+    await fresh_read.wait()
+    owner: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    for _ in range(20):
+        await asyncio.sleep(0)
+    go.set()
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    owner.cancel()
+    await redis.set_sent.wait()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    redis.release_set.set()
+    await asyncio.wait_for(asyncio.gather(stale, fresh), timeout=5)
+
+    assert redis.values[counter] == 6.0
+
+
 @pytest.mark.asyncio
 async def test_a_set_failing_after_its_request_was_cancelled_deletes_the_counter_and_logs_no_stray_task_error(
     monkeypatch: pytest.MonkeyPatch,

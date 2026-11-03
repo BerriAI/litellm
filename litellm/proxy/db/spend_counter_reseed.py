@@ -90,20 +90,24 @@ class _CachedSpendSeed:
     def on_this_loop(self) -> bool:
         return self.in_flight is None or self.in_flight.get_loop() is asyncio.get_running_loop()
 
-    async def run(self, add: Callable[[], Awaitable[float | None]]) -> float | None:
-        """Run ``add`` in the calling task, so cancelling that task stops it, and publish its result to the requests
-        waiting on ``in_flight``, which ends cancelled when ``add`` fails or is cancelled."""
+    def run(self, add: Callable[[], Awaitable[float | None]]) -> Coroutine[object, object, float | None]:
+        """Make ``add`` the add in flight from this call on, and return the coroutine that runs it and publishes its
+        result to the requests waiting on ``in_flight``, which ends cancelled when ``add`` fails or is cancelled."""
         in_flight: Final[asyncio.Future[float | None]] = asyncio.get_running_loop().create_future()
         self.started_at = spend_counter_tick()
         self.in_flight = in_flight
-        try:
-            added: Final = await add()
-            in_flight.set_result(added)
-            return added
-        finally:
-            if self.in_flight is in_flight:
-                self.in_flight = None
-            in_flight.cancel()
+
+        async def add_and_publish() -> float | None:
+            try:
+                added: Final = await add()
+                in_flight.set_result(added)
+                return added
+            finally:
+                if self.in_flight is in_flight:
+                    self.in_flight = None
+                in_flight.cancel()
+
+        return add_and_publish()
 
 
 @functools.lru_cache(maxsize=SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE)
@@ -205,8 +209,9 @@ class SpendCounterReseed:
         ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` across its counters, runs ``set_if_missing``, which calls its argument
         if it added the spend, in place of ``add``, then runs ``add`` too if it did not and the counter holds less than
         the spend it should already hold, beyond what INCRBYFLOAT's 17 decimal places can round away.
-        Those two steps finish even if the request is cancelled. A request on another event loop than the add in flight,
-        one that finds the Redis circuit breaker not closed, and each other process, still run ``add``."""
+        Those two steps finish even if the request is cancelled, and stay the add in flight until they do. A request on
+        another event loop than the add in flight, one that finds the Redis circuit breaker not closed, and each other
+        process, still run ``add``."""
         seed: Final = _cached_spend_seed(spend_counter_cache, counter_key)
 
         def spend_landed() -> None:
@@ -232,18 +237,18 @@ class SpendCounterReseed:
             return await add_spend() if least - current > SPEND_COUNTER_INCRBYFLOAT_ROUNDING else current
 
         async def add_if_short() -> float | None:
-            return await _landing_even_if_cancelled(write_if_short())
+            return await _landing_even_if_cancelled(seed.run(write_if_short))
 
         async def add_unless_covered() -> float | None:
             in_flight: Final = seed.in_flight
             if not seed.on_this_loop() or not _redis_breaker_closed(spend_counter_cache):
                 return await add()
             if in_flight is None:
-                return await seed.run(add_spend if seed.landed_at < read.sent_at else add_if_short)
+                return await (seed.run(add_spend) if seed.landed_at < read.sent_at else add_if_short())
             covers: Final = seed.started_at > read.returned_at
             await _wait_for_cold_seed(in_flight)
             if not in_flight.done():
-                return await seed.run(add_if_short)
+                return await add_if_short()
             if covers and not in_flight.cancelled() and seed.landed_at >= read.sent_at:
                 return in_flight.result()
             return await add_unless_covered()
