@@ -92,7 +92,7 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.utils import CallTypes
-from litellm.types.videos.utils import VIDEO_STATUS_CALL_TYPES
+from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX, VIDEO_STATUS_CALL_TYPES
 
 if TYPE_CHECKING:
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
@@ -164,14 +164,15 @@ def _is_settle_once_cost_row(payload: SpendLogsPayload) -> bool:
 
     A batch's cost is known only when a retrieve sees it finished (LIT-7048). A video's cost is
     charged at create by the built-in providers, but a custom provider may report it on the
-    status poll that sees the video completed, and a poll that reports no cost charges nothing.
+    status poll that sees the video completed. Only such a poll's row carries the video cost
+    suffix, so a poll that reports no cost keeps its own id and charges nothing.
     """
     if payload.get("status") != "success":
         return False
     call_type: Final = payload.get("call_type")
     if call_type == CallTypes.aretrieve_batch.value:
         return True
-    return call_type in VIDEO_STATUS_CALL_TYPES and payload["spend"] > 0
+    return call_type in VIDEO_STATUS_CALL_TYPES and payload["request_id"].endswith(VIDEO_COST_REQUEST_ID_SUFFIX)
 
 
 _COST_CLAIM_FIELDS: Final = frozenset({"request_id", "call_type", "spend", "startTime", "endTime", "status"})

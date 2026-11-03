@@ -18,6 +18,7 @@ VIDEO_ID_SERVED_MODEL_PREFIX: Final = "served_model:"
 VIDEO_ID_DEPLOYMENT_PREFIX: Final = "deployment_id:"
 VIDEO_ID_REQUESTED_MODEL_PREFIX: Final = "requested_model:"
 VIDEO_STATUS_CALL_TYPES: Final = frozenset({"avideo_status", "video_status"})
+VIDEO_COST_REQUEST_ID_SUFFIX: Final = "_video_cost"
 VIDEO_ID_CALL_TYPES: Final = VIDEO_STATUS_CALL_TYPES | frozenset(
     {
         "avideo_content",
@@ -30,6 +31,12 @@ VIDEO_ID_CALL_TYPES: Final = VIDEO_STATUS_CALL_TYPES | frozenset(
         "video_extension",
     }
 )
+
+
+def is_video_status_call_type(call_type: object) -> bool:
+    return isinstance(call_type, str) and call_type in VIDEO_STATUS_CALL_TYPES
+
+
 CHARACTER_ID_PREFIX: Final = "character_"
 CHARACTER_ID_TEMPLATE: Final = "litellm:custom_llm_provider:{};model_id:{};character_id:{}"
 

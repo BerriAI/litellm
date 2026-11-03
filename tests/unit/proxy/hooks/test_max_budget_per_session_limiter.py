@@ -146,6 +146,65 @@ async def test_budget_per_session_independent_sessions():
 
 
 @pytest.mark.asyncio
+async def test_repeated_polls_of_a_finished_job_charge_the_session_once():
+    from openai.types import Batch
+
+    from litellm.types.videos.main import VideoObject
+
+    handler = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    video = VideoObject(id="job-1", object="video", status="completed")
+    batch = Batch(
+        id="job-1", completion_window="24h", created_at=1, endpoint="/v1/chat/completions",
+        input_file_id="file-1", object="batch", status="completed",
+    )
+    polls = (("avideo_status", video, 0.4), ("aretrieve_batch", batch, 0.1), ("acompletion", None, 0.01))
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
+        for call_type, response_obj, cost in polls * 3:
+            await handler.async_log_success_event(
+                {
+                    "call_type": call_type,
+                    "response_cost": cost,
+                    "litellm_params": {"metadata": {"session_id": "session-jobs", "agent_id": "agent-budget-123"}},
+                },
+                response_obj,
+                None,
+                None,
+            )
+
+    spend = await handler._get_current_spend(handler._make_cache_key("session-jobs"))
+    assert spend == pytest.approx(0.4 + 0.1 + 3 * 0.01)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_cost", [float("nan"), float("inf"), True])
+async def test_a_cost_that_is_not_a_finite_number_leaves_the_session_spend_alone(response_cost):
+    handler = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    cache_key = handler._make_cache_key("session-unpriced")
+    await handler._increment_spend(cache_key, 0.25)
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
+        await handler.async_log_success_event(
+            {
+                "call_type": "acompletion",
+                "response_cost": response_cost,
+                "litellm_params": {"metadata": {"session_id": "session-unpriced", "agent_id": "agent-budget-123"}},
+            },
+            None,
+            None,
+            None,
+        )
+
+    assert await handler._get_current_spend(cache_key) == 0.25
+
+
+@pytest.mark.asyncio
 async def test_no_agent_id_passes():
     """
     When no agent_id is set on the key, all requests pass through.

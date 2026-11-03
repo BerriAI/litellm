@@ -4707,10 +4707,10 @@ async def test_update_database_queues_every_other_spend_row_for_the_next_flush(p
     assert db_writer._batch_database_updates.await_count == 1
 
 
-def _video_status_payload() -> dict:
+def _video_status_payload(request_id: str = "video_abc_video_cost") -> dict:
     return {
         **_minimal_spend_payload(),
-        "request_id": "video_abc_video_cost",
+        "request_id": request_id,
         "call_type": "avideo_status",
         "status": "success",
     }
@@ -4763,14 +4763,14 @@ async def test_update_database_charges_a_video_once_from_the_poll_that_sees_it_c
     """
     A custom video provider reports the video's cost on the status poll that sees it completed,
     and clients poll a finished video again before they download it, so only that first completed
-    poll may charge, and its spend row has to carry the charge (LIT-10404). Every poll of one video
-    shares that row, the $0 one written while the video was still rendering included.
+    poll may charge, and its spend row has to carry the charge (LIT-10404). The $0 poll written
+    while the video was still rendering keeps the bare video id, so it lands on the create row.
     """
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
     prisma = _spend_logs_table_prisma()
 
-    rendering = await _update_database_with(db_writer, prisma, _video_status_payload(), response_cost=0.0)
+    rendering = await _update_database_with(db_writer, prisma, _video_status_payload("video_abc"), response_cost=0.0)
     for _ in range(flushes_before_completion):
         await _flush_queued_spend_logs(prisma)
     completed = await _update_database_with(db_writer, prisma, _video_status_payload(), response_cost=0.42)
@@ -4781,26 +4781,70 @@ async def test_update_database_charges_a_video_once_from_the_poll_that_sees_it_c
     assert db_writer._batch_database_updates.await_count == 2
     rows = prisma.db.litellm_spendlogs.rows
     assert {request_id: (row["call_type"], row["spend"]) for request_id, row in rows.items()} == {
-        "video_abc_video_cost": ("avideo_status", 0.42)
+        "video_abc": ("avideo_status", 0.0),
+        "video_abc_video_cost": ("avideo_status", 0.42),
     }
 
 
+async def _update_database_for_video_poll(
+    db_writer: DBSpendUpdateWriter, prisma: MagicMock, litellm_call_id: str, response_cost: float
+) -> bool:
+    from litellm.types.videos.main import VideoObject
+
+    with (
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+        ),
+    ):
+        charged = await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={
+                "model": "sora-2",
+                "call_type": "avideo_status",
+                "litellm_call_id": litellm_call_id,
+                "response_cost": response_cost,
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+            completion_response=VideoObject(id="video_abc", object="video", status="completed"),
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=response_cost,
+        )
+        await asyncio.sleep(0)
+        return charged
+
+
 @pytest.mark.asyncio
-async def test_update_database_queues_a_video_poll_that_reports_no_cost():
+async def test_update_database_writes_no_row_of_its_own_for_a_video_poll_that_reports_no_cost():
     """
     Built-in video providers charge at create and report nothing on the status poll, so those
-    polls keep the ordinary queued write and still count as requests in the daily rollups.
+    polls keep the ordinary queued write under the create row's id and still count as requests
+    in the daily rollups, leaving the video with its one create row.
     """
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
-    prisma = _spend_logs_prisma(1, None)
+    prisma = _spend_logs_table_prisma()
+    await prisma.db.litellm_spendlogs.create_many(
+        data=[{**_minimal_spend_payload(), "request_id": "video_abc", "call_type": "avideo_generation", "spend": 0.3}],
+        skip_duplicates=True,
+    )
 
-    assert await _update_database_with(db_writer, prisma, _video_status_payload(), response_cost=0.0) is True
-    assert await _update_database_with(db_writer, prisma, _video_status_payload(), response_cost=0.0) is True
+    assert await _update_database_for_video_poll(db_writer, prisma, "poll-1", response_cost=0.0) is True
+    assert await _update_database_for_video_poll(db_writer, prisma, "poll-2", response_cost=0.0) is True
+    await _flush_queued_spend_logs(prisma)
 
-    prisma.db.litellm_spendlogs.create_many.assert_not_called()
-    assert [row["request_id"] for row in prisma.spend_log_transactions] == ["video_abc_video_cost"] * 2
     assert db_writer._batch_database_updates.await_count == 2
+    rows = prisma.db.litellm_spendlogs.rows
+    assert {request_id: (row["call_type"], row["spend"]) for request_id, row in rows.items()} == {
+        "video_abc": ("avideo_generation", 0.3)
+    }
 
 
 @pytest.mark.asyncio

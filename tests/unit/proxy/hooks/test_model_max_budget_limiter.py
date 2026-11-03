@@ -27,6 +27,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import LiteLLMBatch, Usage
+from litellm.types.videos.main import VideoObject
 
 KEY_HASH: Final = "key-hash-batch"
 USER_ID: Final = "user-batch"
@@ -325,6 +326,30 @@ async def test_a_batch_polled_within_every_budget_window_is_never_charged_again(
 
     assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
 
+
+
+async def _poll_video(
+    limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, video_id: str, status: str, response_cost: float
+) -> None:
+    await _log_success(
+        limiter,
+        _event("avideo_status", response_cost),
+        response_obj=VideoObject(id=video_id, object="video", status=status),
+    )
+
+
+@pytest.mark.asyncio
+async def test_polls_of_a_finished_video_charge_each_per_model_budget_once():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _poll_video(limiter, "video_first", "in_progress", response_cost=0)
+    for _ in range(3):
+        await _poll_video(limiter, "video_first", "completed", response_cost=BATCH_COST)
+    await _poll_video(limiter, "video_second", "completed", response_cost=BATCH_COST)
+    await _poll(limiter, _batch("video_first", "completed"), response_cost=BATCH_COST)
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(3 * BATCH_COST)
+    assert await _spend(limiter, USER_SPEND_KEY) == pytest.approx(3 * BATCH_COST)
 
 OPUS_GROUP: Final = "claude-opus"
 OPUS_GROUP_MEMBERS: Final = MappingProxyType(

@@ -26,6 +26,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_charged_once_marker_key, job_to_charge_once
+from litellm.litellm_core_utils.core_helpers import finite_cost
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
@@ -44,6 +46,7 @@ _CACHE_AMOUNT_ADAPTER: Final[TypeAdapter[str | bytes | int | float]] = TypeAdapt
 _OPTIONAL_CACHE_AMOUNT_ADAPTER: Final[TypeAdapter[str | bytes | int | float | None]] = TypeAdapter(
     str | bytes | int | float | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+_CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 # Redis Lua script for atomic float increment with TTL.
@@ -140,7 +143,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         return None
 
     @with_service_target("session_budgets")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
         """
         After a successful LLM call, increment the session spend by the response cost.
         """
@@ -168,12 +171,16 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             if max_budget is None:
                 return
 
-            response_cost: Final = kwargs.get("response_cost") or 0.0
+            callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
+            response_cost: Final = finite_cost(callback_fields.get("response_cost")) or 0.0
             if response_cost <= 0:
                 return
 
             cache_key: Final = self._make_cache_key(str(session_id))
-            await self._increment_spend(cache_key, float(response_cost))
+            job: Final = job_to_charge_once(callback_fields.get("call_type"), response_obj, response_cost)
+            if job is not None and not await self._claim_job_charge(cache_key, job):
+                return
+            await self._increment_spend(cache_key, response_cost)
 
             verbose_proxy_logger.debug(
                 "MaxBudgetPerSessionHandler: incremented session %s spend by %.6f",
@@ -220,6 +227,12 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
     def _make_cache_key(self, session_id: str) -> str:
         return f"{{session_budget:{session_id}}}:spend"
+
+    async def _claim_job_charge(self, cache_key: str, job: ChargeOnceJob) -> bool:
+        polls: Final = await self.internal_usage_cache.dual_cache.async_increment_cache(
+            key=job_charged_once_marker_key(spend_key=cache_key, job=job), value=1, ttl=self.ttl
+        )
+        return polls == 1
 
     @with_service_target("session_budgets")
     async def _get_current_spend(self, cache_key: str) -> float:

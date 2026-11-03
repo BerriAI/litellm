@@ -19,7 +19,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
-from litellm.litellm_core_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
+from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_charged_once_marker_key, job_to_charge_once
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
@@ -1208,7 +1208,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
             return
 
-        batch_id: Final = batch_id_to_charge_once(
+        job: Final = job_to_charge_once(
             call_type=kwargs.get("call_type"),
             response_obj=response_obj,
             response_cost=response_cost,
@@ -1219,7 +1219,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 entity_id=entity_id,
                 resolved=resolved,
                 response_cost=response_cost,
-                batch_id=batch_id,
+                job=job,
             )
 
         if self.dual_cache.redis_cache is not None:
@@ -1236,7 +1236,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         entity_id: str | None,
         resolved: ResolvedModelBudget,
         response_cost: float,
-        batch_id: str | None,
+        job: ChargeOnceJob | None,
     ) -> None:
         budget_duration: Final = resolved.budget_config.budget_duration
         if budget_duration is None:
@@ -1247,9 +1247,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             budget_model=resolved.budget_model,
             budget_duration=budget_duration,
         )
-        if batch_id is not None and not await self._claim_batch_charge(
+        if job is not None and not await self._claim_job_charge(
             spend_key=spend_key,
-            batch_id=batch_id,
+            job=job,
             ttl_seconds=duration_in_seconds(budget_duration),
         ):
             return
@@ -1362,8 +1362,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             spend=response_cost,
         )
 
-    async def _claim_batch_charge(self, spend_key: str, batch_id: str, ttl_seconds: int) -> bool:
-        marker_key: Final = batch_charged_once_marker_key(spend_key=spend_key, batch_id=batch_id)
+    async def _claim_job_charge(self, spend_key: str, job: ChargeOnceJob, ttl_seconds: int) -> bool:
+        marker_key: Final = job_charged_once_marker_key(spend_key=spend_key, job=job)
         polls: Final = await self.dual_cache.async_increment_cache(
             key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
         )

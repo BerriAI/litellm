@@ -498,6 +498,36 @@ async def test_batch_polls_charge_each_router_budget_once(monkeypatch, call_type
     assert tuple([await cache.async_get_cache(key) for key in keys]) == (1.0, 1.0, 1.0)
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ("avideo_status", "video_status"))
+async def test_video_polls_charge_each_router_budget_once(call_type):
+    from litellm.types.videos.main import VideoObject
+
+    cache: Final = DualCache()
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=cache,
+        provider_budget_config={"openai": {"budget_limit": 100, "time_period": "1d"}},
+        model_list=[
+            {
+                "model_name": "video-budget",
+                "litellm_params": {"model": "openai/sora-2", "max_budget": 100, "budget_duration": "1d"},
+                "model_info": {"id": "deployment-1"},
+            }
+        ],
+    )
+    kwargs: Final = _success_kwargs(provider_in_litellm_params=None, provider_in_payload="openai", call_type=call_type)
+    video: Final = VideoObject(id="video-first", object="video", status="completed")
+    keys: Final = ("provider_spend:openai:1d", "deployment_spend:deployment-1:1d")
+
+    await asyncio.gather(*(limiter.async_log_success_event(kwargs, video, None, None) for _ in range(10)))
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == (0.25, 0.25)
+
+    await limiter.async_log_success_event(
+        kwargs, VideoObject(id="video-second", object="video", status="completed"), None, None
+    )
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == (0.5, 0.5)
+
 @pytest.mark.asyncio
 async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirmation():
     from fakeredis import FakeServer, FakeRedis as FakeSyncRedis

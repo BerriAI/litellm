@@ -5056,15 +5056,41 @@ def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call
 
 
 @pytest.mark.parametrize("status_call_type", ["avideo_status", "video_status"])
-def test_get_spend_logs_id_keeps_a_video_status_row_apart_from_the_create_row(status_call_type):
-    """A video's create and its status polls answer with the same video id, and a custom
-    provider charges the video on the poll that sees it completed, so that charge needs a
-    row of its own: sharing the create row's id drops it on the skip_duplicates insert."""
-    create_id = get_spend_logs_id("avideo_generation", {"id": "video_abc"}, {"litellm_call_id": "call-1"})
-    status_id = get_spend_logs_id(status_call_type, {"id": "video_abc"}, {"litellm_call_id": "call-2"})
+@pytest.mark.parametrize(
+    ("response_cost", "status_id"),
+    [
+        (0.42, "video_abc_video_cost"),
+        (0.0, "video_abc"),
+        (None, "video_abc"),
+        (float("nan"), "video_abc"),
+    ],
+    ids=["charged", "free", "unpriced", "non_finite"],
+)
+def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(status_call_type, response_cost, status_id):
+    """A custom provider charges the video on the poll that sees it completed, so that poll needs
+    a row apart from the create row, which answers with the same video id and would drop it on the
+    skip_duplicates insert. A poll that charges nothing keeps the bare id, so it still lands on the
+    create row and adds no row of its own."""
+    from litellm.types.videos.main import VideoObject
 
-    assert create_id == "video_abc"
-    assert status_id == "video_abc_video_cost"
+    video = VideoObject(id="video_abc", object="video", status="completed")
+    create, status = (
+        get_logging_payload(
+            kwargs={
+                "call_type": call_type,
+                "litellm_call_id": call_id,
+                "response_cost": cost,
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+            response_obj=video,
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        )
+        for call_type, call_id, cost in (("avideo_generation", "call-1", 0.42), (status_call_type, "call-2", response_cost))
+    )
+
+    assert create["request_id"] == "video_abc"
+    assert status["request_id"] == status_id
 
 
 def test_get_logging_payload_gives_redacted_batch_and_file_rows_distinct_request_ids():
