@@ -769,9 +769,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return True, None
 
     def _get_permission_for_tool_call(
-        self, tool_call: ChatCompletionMessageToolCall
+        self, tool_call: ChatCompletionMessageToolCall, judged_name: str | None = None
     ) -> tuple[bool, str | None, str | None]:
-        tool_name: Final = tool_call.function.name if tool_call.function else None
+        tool_name: Final = judged_name or (tool_call.function.name if tool_call.function else None)
         tool_type: Final = getattr(tool_call, "type", None)
         if not tool_name and not tool_type:
             return self.default_action == "allow", None, None
@@ -914,10 +914,39 @@ class ToolPermissionGuardrail(CustomGuardrail):
             tool_call for block in content if (tool_call := self._anthropic_tool_use_to_tool_call(block)) is not None
         )
 
+    def _returned_call_names(self, data: Mapping[str, object]) -> Mapping[str, tuple[str, ...]]:
+        member_names: Final = tuple(
+            chain.from_iterable(map(self._bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data))))
+        )
+        if not member_names:
+            return MappingProxyType({})
+        listed: Final = frozenset(name for name, _ in self._collect_request_tools(data) if name is not None)
+        return MappingProxyType(
+            {bare: self._judged_names_of_returned_call(bare, member_names, listed) for _, bare in member_names}
+        )
+
+    def _judged_names_of_returned_call(
+        self, bare: str, member_names: tuple[tuple[str, str], ...], listed: frozenset[str]
+    ) -> tuple[str, ...]:
+        qualified: Final = (
+            self._deciding_member_name(name, bare, "function") for name, key in member_names if key == bare
+        )
+        return tuple(dict.fromkeys((*qualified, *((bare,) if bare in listed else ()))))
+
+    def _judge_tool_call(
+        self, tool_call: ChatCompletionMessageToolCall, judged_names: Mapping[str, tuple[str, ...]]
+    ) -> tuple[bool, str | None, str | None]:
+        returned_name: Final = tool_call.function.name if tool_call.function else None
+        names: Final = judged_names.get(returned_name, ()) if returned_name is not None else ()
+        if not names:
+            return self._get_permission_for_tool_call(tool_call)
+        results: Final = tuple(self._get_permission_for_tool_call(tool_call, name) for name in names)
+        return next((result for result in results if not result[0]), results[0])
+
     def _evaluate_tool_calls(
-        self, tool_calls: Sequence[ChatCompletionMessageToolCall]
+        self, tool_calls: Sequence[ChatCompletionMessageToolCall], judged_names: Mapping[str, tuple[str, ...]]
     ) -> tuple[tuple[ChatCompletionMessageToolCall, PermissionError], ...]:
-        checked: Final = tuple((tool_call, *self._get_permission_for_tool_call(tool_call)) for tool_call in tool_calls)
+        checked: Final = tuple((tool_call, *self._judge_tool_call(tool_call, judged_names)) for tool_call in tool_calls)
 
         for _tool_call, is_allowed, _rule_id, message in checked:
             if not is_allowed and message is not None:
@@ -1052,7 +1081,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         nested_name: Final = _non_empty_string(nested.get("name")) if nested is not None else None
         return nested_name or _non_empty_string(choice.get("name"))
 
-    def _get_named_function_call(self, data: dict) -> str | None:
+    def _get_named_function_call(self, data: Mapping[str, object]) -> str | None:
         function_call: Final = data.get("function_call")
         if not function_call or function_call in ("auto", "none"):
             return None
@@ -1060,7 +1089,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return function_call
         return self._get_mapping_value(function_call, "name")
 
-    def _collect_request_tools(self, data: dict) -> list[_ToolTarget]:
+    def _collect_request_tools(self, data: Mapping[str, object]) -> list[_ToolTarget]:
         request_tools: Final[list[_ToolTarget]] = []
         request: Final = _REQUEST_DATA.validate_python(data)
 
@@ -1476,7 +1505,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.debug("Tool Permission Guardrail: Found %s tool calls", len(tool_calls))
 
-        denied_tools: Final = self._evaluate_tool_calls(tool_calls)
+        denied_tools: Final = self._evaluate_tool_calls(tool_calls, self._returned_call_names(data))
 
         if not denied_tools:
             verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: All tools allowed")
@@ -1500,7 +1529,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         Args:
             user_api_key_dict: User API key information (unused but required by interface)
             response: The model response to check
-            request_data: The model request (unused but required by interface)
+            request_data: The model request
         """
 
         # Import here to avoid circular imports
@@ -1517,7 +1546,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             stream_chunk_builder(chunks=all_chunks) if not is_raw_sse_stream(all_chunks) else None
         )
         if isinstance(assembled_model_response, ModelResponse):
-            denied_tools = self._check_assembled_stream(assembled_model_response)
+            denied_tools = self._check_assembled_stream(
+                assembled_model_response, self._returned_call_names(request_data)
+            )
             if denied_tools:
                 self._modify_response_with_permission_errors(assembled_model_response, denied_tools)
 
@@ -1541,7 +1572,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 yield chunk
             return
 
-        anthropic_denials: Final = self._check_assembled_stream(anthropic_response)
+        anthropic_denials: Final = self._check_assembled_stream(
+            anthropic_response, self._returned_call_names(request_data)
+        )
         if not anthropic_denials:
             for chunk in all_chunks:
                 yield chunk
@@ -1552,7 +1585,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             yield sse_chunk
 
     def _check_assembled_stream(
-        self, assembled: ModelResponse
+        self, assembled: ModelResponse, judged_names: Mapping[str, tuple[str, ...]]
     ) -> tuple[tuple[ChatCompletionMessageToolCall, PermissionError], ...]:
         verbose_proxy_logger.debug("Tool Permission Guardrail: Checking response")
         tool_calls: Final = self._extract_tool_calls_from_response(assembled)
@@ -1560,7 +1593,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Tool Permission Guardrail: No tool uses found")
             return ()
         verbose_proxy_logger.debug("Tool Permission Guardrail: Found %s tool calls", len(tool_calls))
-        denied_tools: Final = self._evaluate_tool_calls(tool_calls)
+        denied_tools: Final = self._evaluate_tool_calls(tool_calls, judged_names)
         if not denied_tools:
             verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: All tools allowed")
         return denied_tools

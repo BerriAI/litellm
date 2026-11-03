@@ -328,7 +328,9 @@ def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(sp
 
 def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
     mapped: Final = VertexGeminiConfig().map_openai_params(
-        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        non_default_params={
+            "audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}
+        },
         optional_params={},
         model="gemini-2.5-flash-preview-tts",
         drop_params=False,
@@ -1852,6 +1854,35 @@ def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent
     )
 
     assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == ["get_weather", "get_weather"]
+
+
+@pytest.mark.parametrize(
+    ("forced_name", "allowed_function_names"),
+    [("github", ["create_issue", "close_issue"]), ("close_issue", ["close_issue"])],
+    ids=["names_the_namespace", "names_a_member"],
+)
+def test_vertex_ai_tool_choice_forces_only_functions_gemini_is_sent(
+    forced_name: str, allowed_function_names: list[str]
+) -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "github",
+        "tools": [{"type": "function", "name": "create_issue"}, {"type": "function", "name": "close_issue"}],
+    }
+
+    mapped = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "tools": [namespace],
+            "tool_choice": {"type": "function", "function": {"name": forced_name}},
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    declared = [declaration["name"] for declaration in mapped["tools"][0]["function_declarations"]]
+    assert mapped["tool_choice"]["functionCallingConfig"]["allowed_function_names"] == allowed_function_names
+    assert set(allowed_function_names) <= set(declared)
 
 
 def test_vertex_ai_map_tool_with_anyof():
@@ -3539,9 +3570,7 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
-        async def dispatch_attempt_failure_handlers(
-            self, exception: Exception, traceback_exception: str
-        ) -> None:
+        async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
             return None
 
         def attempt_scoped_copy(self) -> "DummyLogging":
@@ -3671,9 +3700,7 @@ def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expe
     ]
     metadata: Final = {
         "groundingChunks": chunks,
-        "groundingSupports": [
-            {"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}
-        ],
+        "groundingSupports": [{"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}],
     }
     annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
     expected: Final = [
