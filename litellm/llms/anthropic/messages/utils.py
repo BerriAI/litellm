@@ -92,6 +92,7 @@ _OBJECT_LIST: Final = TypeAdapter(list[object])
 
 
 _NO_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
+_NO_OPERATOR_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def proxy_general_settings() -> Mapping[str, object]:
@@ -242,18 +243,28 @@ def _mapped_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo
 
 
 def model_reasoning_efforts(model: str, custom_llm_provider: str | None) -> tuple[str, ...] | None:
-    from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+    from litellm.litellm_core_utils.reasoning_effort_capability import (
+        deployment_is_catalog_mapped,
+        resolve_supported_reasoning_efforts,
+    )
 
     model_info: Final = _mapped_model_info(model, custom_llm_provider)
     if model_info is None:
         return None
-    return resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
+    return resolve_supported_reasoning_efforts(
+        model_info, deployment_is_mapped=deployment_is_catalog_mapped(model_info, _NO_OPERATOR_MODEL_INFO)
+    )
 
 
 def _lowest_tier_instead_of_off(levels: tuple[str, ...] | None) -> str | None:
     if not levels or REASONING_EFFORT_OFF in levels:
         return None
     return next((tier for tier in _LOWEST_REASONING_TIERS if tier in levels), None)
+
+
+def cost_map_row_lacks_reasoning(model: str, custom_llm_provider: str | None) -> bool:
+    model_info: Final = _mapped_model_info(model, custom_llm_provider)
+    return model_info is not None and not model_info.get("supports_reasoning")
 
 
 def reasoning_off_level(model: str, custom_llm_provider: str | None, *, drop_params: bool) -> str | None:

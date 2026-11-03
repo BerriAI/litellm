@@ -737,3 +737,47 @@ class TestAnOpenAIChatRouteRequestGetsTheResponsesBridgeThinkingControls:
         )
 
         assert "reasoning_effort" not in sent
+
+
+_OFF_MAP_OPENAI_DEPLOYMENT: Final = {
+    "model": "openai/off-map-hybrid-reasoner",
+    "api_base": "https://compatible.example.test/v1",
+    "api_key": "fake-key",
+}
+
+
+class TestDisabledOnAnOffMapOpenAIDeployment:
+    @pytest.fixture(autouse=True)
+    def _httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @pytest.mark.asyncio
+    async def test_the_chat_route_sends_reasoning_effort_none(
+        self, respx_mock: respx.MockRouter, local_model_cost_map: None
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            _OFF_MAP_OPENAI_DEPLOYMENT,
+            {},
+            r"https://compatible\.example\.test/v1/chat/completions",
+            _CHAT_COMPLETION,
+            thinking={"type": "disabled"},
+            stop_sequences=["STOP"],
+        )
+
+        assert sent["reasoning_effort"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_the_responses_bridge_sends_no_reasoning_its_transformation_would_refuse(
+        self, respx_mock: respx.MockRouter, local_model_cost_map: None
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            _OFF_MAP_OPENAI_DEPLOYMENT,
+            {},
+            r"https://compatible\.example\.test/v1/responses",
+            _RESPONSE,
+            thinking={"type": "disabled"},
+        )
+
+        assert "reasoning" not in sent

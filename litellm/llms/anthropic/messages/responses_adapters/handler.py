@@ -52,6 +52,7 @@ from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import (
     REASONING_EFFORT_OFF,
+    cost_map_row_lacks_reasoning,
     litellm_logging_obj_from_kwargs,
     local_model_name,
     maps_bare_output_effort,
@@ -276,7 +277,9 @@ def _reasoning_for_target(
         return reasoning
     if effort == REASONING_EFFORT_OFF:
         off_level: Final = reasoning_off_level(model, custom_llm_provider, drop_params=drop_params)
-        return None if off_level is None else {**reasoning_params, "effort": off_level}
+        if off_level is None or cost_map_row_lacks_reasoning(model, custom_llm_provider):
+            return None
+        return {**reasoning_params, "effort": off_level}
     if drop_params and effort not in _KNOWN_REASONING_EFFORTS:
         verbose_logger.warning(
             "Dropping reasoning.effort=%r for %s, no reasoning API defines it, because drop_params is set",
