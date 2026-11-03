@@ -31329,6 +31329,7 @@
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supports_embedding_image_input": true,
         "uses_embed_content": true
     },
     "gemini-embedding-2": {
@@ -31346,6 +31347,7 @@
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supports_embedding_image_input": true,
         "supports_multimodal": true,
         "uses_embed_content": true
     },
@@ -31364,6 +31366,7 @@
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supports_embedding_image_input": true,
         "supports_multimodal": true,
         "uses_embed_content": true
     },
@@ -31382,6 +31385,7 @@
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supports_embedding_image_input": true,
         "supports_multimodal": true,
         "uses_embed_content": true
     },
@@ -31428,6 +31432,7 @@
         "rpm": 10000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supports_audio_input": true,
+        "supports_embedding_image_input": true,
         "supports_multimodal": true,
         "supports_vision": true,
         "tpm": 10000000
@@ -31606,6 +31611,7 @@
         "rpm": 10000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supports_audio_input": true,
+        "supports_embedding_image_input": true,
         "supports_multimodal": true,
         "supports_vision": true,
         "tpm": 10000000
@@ -44433,7 +44439,8 @@
             "text",
             "image",
             "video"
-        ]
+        ],
+        "supports_embedding_image_input": true
     },
     "multimodalembedding@001": {
         "deprecation_date": "2027-04-01",
@@ -44456,7 +44463,8 @@
             "text",
             "image",
             "video"
-        ]
+        ],
+        "supports_embedding_image_input": true
     },
     "nscale/Qwen/QwQ-32B": {
         "input_cost_per_token": 1.8e-07,
@@ -46172,6 +46180,7 @@
         "mode": "embedding",
         "output_vector_size": 1024,
         "source": "https://www.oracle.com/artificial-intelligence/enterprise-ai/cost-estimator/",
+        "supports_embedding_image_input": true,
         "supports_vision": true
     },
     "oci/cohere.command-a-reasoning-08-2025": {
@@ -54620,7 +54629,8 @@
         "litellm_provider": "voyage",
         "max_input_tokens": 32000,
         "mode": "embedding",
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "supports_embedding_image_input": true
     },
     "wandb/openai/gpt-oss-120b": {
         "supports_reasoning": true,
