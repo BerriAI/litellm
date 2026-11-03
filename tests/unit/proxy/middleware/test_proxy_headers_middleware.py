@@ -1,13 +1,16 @@
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
+from queue import SimpleQueue
 from typing import Final
 
 import pytest
 from fastapi import Request
 from starlette.applications import Starlette
+from starlette.datastructures import URL
 from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.testclient import TestClient
+from starlette.types import Message, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
 from litellm.proxy.auth.auth_utils import _check_valid_ip, get_request_ip_address
@@ -16,6 +19,25 @@ from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.network import get_direct_client_ip, resolve_network_context
 from litellm.proxy.auth.trusted_proxy_utils import require_trusted_proxy_request
 from litellm.proxy.middleware.proxy_headers_middleware import TrustedProxyMiddleware
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope_type,expected", [("http", "http://testserver/"), ("websocket", "ws://testserver/")])
+async def test_omitted_scheme_reaches_application_with_protocol_default(scope_type: str, expected: str) -> None:
+    urls: Final[SimpleQueue[str]] = SimpleQueue()
+
+    async def endpoint(scope: Scope, receive: Receive, send: Send) -> None:
+        urls.put(str(URL(scope=scope)))
+
+    async def receive() -> Message:
+        raise AssertionError("Application does not read messages")
+
+    async def send(message: Message) -> None:
+        raise AssertionError("Application does not send messages")
+
+    middleware: Final = TrustedProxyMiddleware(endpoint, settings=lambda: {})
+    await middleware({"type": scope_type, "path": "/", "headers": [(b"host", b"testserver")]}, receive, send)
+    assert urls.get_nowait() == expected
 
 
 def client_for(settings: Callable[[], Mapping[str, object]], peer: str = "10.0.0.1") -> TestClient:

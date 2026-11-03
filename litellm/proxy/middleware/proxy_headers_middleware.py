@@ -59,10 +59,10 @@ class TrustedProxyMiddleware:
         peer: Final = client[0] if client else None
         context: Final = ProxyHeaderContext(
             direct_client=client,
-            direct_scheme=_SCHEME.validate_python(scope["scheme"]),
+            direct_scheme=_SCHEME.validate_python(scope.get("scheme", "http" if scope["type"] == "http" else "ws")),
             configured=configured,
             via_trusted_proxy=peer in self._middleware.trusted_hosts,
         )
-        resolved_scope: Final = {**scope, PROXY_HEADER_CONTEXT: context}
+        resolved_scope: Final = {**scope, "scheme": context.direct_scheme, PROXY_HEADER_CONTEXT: context}
         handler: Final = cast(ASGIApp, self._middleware)  # cast-ok: equivalent ASGI protocol stubs
         await handler(resolved_scope, receive, send)
