@@ -22,8 +22,8 @@ if TYPE_CHECKING:
 class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     model: str
     messages: list
-    optional_params: dict
-    litellm_params: dict
+    optional_params: dict[str, object]
+    litellm_params: dict[str, object]
     headers: dict
     model_response: "ModelResponse"
     logging_obj: "LiteLLMLoggingObj"
@@ -184,6 +184,7 @@ class ResponsesToCompletionBridgeHandler:
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
+        logging_obj.record_bridged_chat_request(optional_params, litellm_params)
 
         request_data: Final = self.transformation_handler.transform_request(
             model=model,
@@ -285,6 +286,7 @@ class ResponsesToCompletionBridgeHandler:
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
+        logging_obj.record_bridged_chat_request(optional_params, litellm_params)
 
         try:
             request_data: Final = self.transformation_handler.transform_request(

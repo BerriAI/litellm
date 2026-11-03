@@ -5,7 +5,7 @@ import json
 import os
 import queue
 import unittest
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
@@ -263,6 +263,15 @@ _BRIDGED_PROVIDERS: Final = pytest.mark.parametrize(
 )
 
 
+_PONG_MESSAGE: Final[Mapping[str, object]] = {
+    "type": "message",
+    "id": "msg_logged_call_type",
+    "status": "completed",
+    "role": "assistant",
+    "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+}
+
+
 def _searched_responses_body(model: str) -> Mapping[str, object]:
     return {
         "id": "resp_logged_call_type",
@@ -277,13 +286,7 @@ def _searched_responses_body(model: str) -> Mapping[str, object]:
                 "status": "completed",
                 "action": {"type": "search", "query": "weather"},
             },
-            {
-                "type": "message",
-                "id": "msg_logged_call_type",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "pong", "annotations": []}],
-            },
+            _PONG_MESSAGE,
         ],
         "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
     }
@@ -387,6 +390,122 @@ async def test_bridged_chat_stream_is_logged_as_the_chat_completion_it_streamed(
     assert logged.payload["response_cost"] == litellm.completion_cost(
         completion_response=ResponsesAPIResponse.model_validate(response_body), model=model
     )
+
+
+def _json_message(item_id: str, document: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "id": item_id,
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": json.dumps(document), "annotations": []}],
+    }
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_bridged_structured_output_call_is_logged_with_the_json_document_the_client_got(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = {
+        **_searched_responses_body("openai/gpt-5.3-codex"),
+        "output": [_json_message("msg_first", {"answer": "pong"}), _json_message("msg_second", {"answer": "again"})],
+    }
+    request: Final = {
+        **_bridged_request("openai/gpt-5.3-codex", {}, stream=False),
+        "response_format": {"type": "json_object"},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        served: Final = await litellm.acompletion(**request) if caller == "acompletion" else litellm.completion(**request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert isinstance(served, ModelResponse)
+    assert isinstance(logged.response_obj, ModelResponse)
+    served_message: Final = served.choices[0].message
+    logged_message: Final = logged.response_obj.choices[0].message
+    assert json.loads(served_message.content) == {"answer": "pong"}
+    assert logged_message.content == served_message.content
+    assert logged_message.provider_specific_fields == served_message.provider_specific_fields
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == served_message.content
+
+
+@pytest.mark.parametrize(("caller", "call_type"), [("completion", "text_completion"), ("acompletion", "atext_completion")])
+@pytest.mark.asyncio
+async def test_bridged_text_completion_is_logged_as_the_chat_completion_it_was_served_from(
+    monkeypatch: pytest.MonkeyPatch, caller: str, call_type: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = _searched_responses_body("openai/gpt-5.3-codex")
+    request: Final = {"model": "openai/gpt-5.3-codex", "prompt": "ping", "api_key": "test-key"}
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        served: Final = (
+            await litellm.atext_completion(**request) if caller == "acompletion" else litellm.text_completion(**request)
+        )
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert (logged.call_type, logged.payload["call_type"]) == (call_type, call_type)
+    assert isinstance(logged.response_obj, ModelResponse)
+    assert logged.response_obj.id == served.id == response_body["id"]
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == served.choices[0].text == "pong"
+
+
+def _served_message_start_id(events: Sequence[bytes]) -> object:
+    lines: Final = b"".join(events).decode().splitlines()
+    starts: Final = tuple(
+        json.loads(line.removeprefix("data:")) for line in lines if line.startswith("data:") and '"message_start"' in line
+    )
+    assert len(starts) == 1
+    return starts[0]["message"]["id"]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+@pytest.mark.asyncio
+async def test_bridged_messages_call_is_logged_as_anthropic_messages_under_the_id_the_client_got(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = {**_searched_responses_body("openai/gpt-5.3-codex"), "output": [_PONG_MESSAGE]}
+    upstream: Final = (
+        httpx.Response(200, text=_responses_sse(response_body), headers={"content-type": "text/event-stream"})
+        if stream
+        else httpx.Response(200, json=response_body)
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(return_value=upstream)
+        served: Final = await litellm.anthropic.messages.acreate(
+            model="openai/gpt-5.3-codex",
+            max_tokens=64,
+            messages=[{"role": "user", "content": "ping"}],
+            api_key="test-key",
+            stream=stream,
+        )
+        served_id: Final = (
+            _served_message_start_id([event async for event in cast(AsyncIterator[bytes], served)])
+            if stream
+            else cast(Mapping[str, object], served)["id"]
+        )
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller["acompletion"].get, timeout=10)
+
+    assert (logged.call_type, logged.payload["call_type"]) == ("anthropic_messages", "anthropic_messages")
+    assert logged.payload["id"] == served_id
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == "pong"
 
 
 @pytest.mark.parametrize("caller", ["completion", "acompletion"])

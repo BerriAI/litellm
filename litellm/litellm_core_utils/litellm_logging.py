@@ -301,6 +301,11 @@ class _EnterpriseAlertingLoggers(NamedTuple):
     smtp_email: type[CustomLogger]
 
 
+class BridgedChatRequest(NamedTuple):
+    optional_params: Mapping[str, object]
+    litellm_params: Mapping[str, object]
+
+
 @functools.cache
 def _enterprise_alerting_loggers() -> _EnterpriseAlertingLoggers:
     try:
@@ -581,7 +586,6 @@ _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
-_CHAT_CALL_TYPES: Final = frozenset({CallTypes.completion.value, CallTypes.acompletion.value})
 _LoggedResponse: Final = TypeVar("_LoggedResponse")
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
@@ -876,6 +880,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # once that response is priced, the same way a non-streamed response is logged
         self.client_facing_stream_model: str | None = None
         self.client_facing_response_id: str | None = None
+        self.bridged_chat_request: BridgedChatRequest | None = None
         self.zero_cost_warned: bool = False
         self.llm_caching_handler: LLMCachingHandler | None = None
 
@@ -3234,10 +3239,13 @@ class Logging(LiteLLMLoggingBaseClass):
         return response.model_copy(update={"model": model})
 
     def _as_served_chat_response(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse:
-        call_type: Final[object] = getattr(self, "call_type", None)
-        if call_type not in _CHAT_CALL_TYPES or not isinstance(response, ResponsesAPIResponse):
+        request: Final = self.bridged_chat_request
+        if request is None or not isinstance(response, ResponsesAPIResponse):
             return response
-        translated: Final = self._translate_responses_api_response_to_model_response(response)
+        return self._bridged_chat_response(response, request)
+
+    def _bridged_chat_response(self, response: ResponsesAPIResponse, request: BridgedChatRequest) -> ModelResponse:
+        translated: Final = self._translate_responses_api_response_to_model_response(response, request)
         served: Final = translated.model_copy(
             update={
                 "id": ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response.id)
@@ -5228,6 +5236,13 @@ class Logging(LiteLLMLoggingBaseClass):
         row is built from this response rather than re-parsed from the served body."""
         self.bridged_model_response = response
 
+    def record_bridged_chat_request(
+        self, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> None:
+        self.bridged_chat_request = BridgedChatRequest(
+            MappingProxyType(dict(optional_params)), MappingProxyType(dict(litellm_params))
+        )
+
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
         self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))
 
@@ -5299,6 +5314,9 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             result = result.response
         if isinstance(result, ResponsesAPIResponse):
+            bridged_request: Final = self.bridged_chat_request
+            if bridged_request is not None:
+                return self._bridged_chat_response(result, bridged_request)
             return self._translate_responses_api_response_to_model_response(result)
 
         raw_body: Final[object] = result
@@ -5350,7 +5368,9 @@ class Logging(LiteLLMLoggingBaseClass):
         set_response_cost_in_hidden_params(result, reported_cost)
         return result
 
-    def _translate_responses_api_response_to_model_response(self, result: ResponsesAPIResponse) -> ModelResponse:
+    def _translate_responses_api_response_to_model_response(
+        self, result: ResponsesAPIResponse, request: BridgedChatRequest | None = None
+    ) -> ModelResponse:
         """
         Convert a Responses API response into a ModelResponse for spend_logs.
 
@@ -5373,8 +5393,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 logging_obj=self,
                 request_data={},
                 messages=[],
-                optional_params={},
-                litellm_params={},
+                optional_params={} if request is None else dict(request.optional_params),
+                litellm_params={} if request is None else dict(request.litellm_params),
                 encoding=litellm.encoding,
             )
             translated.id = served_id or translated.id
