@@ -28,6 +28,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.realtime_errors import close_after_upstream_handshake_refusal
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import VertexChirpRealtimeConfig
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.litellm_params import RoutingStrategyName
@@ -582,18 +584,19 @@ async def _relay_upstream(
     litellm_logging_obj: LiteLLMLogging,
     *upstream_frames: bytes | Exception,
     client_ws: MagicMock | None = None,
-    backend_send_error: Exception | None = None,
+    provider_config: BaseRealtimeConfig | None = None,
     upstream_stays_open: bool = False,
 ) -> None:
     backend_ws: Final = MagicMock()
     backend_ws.recv = AsyncMock(
         side_effect=_frames_then_silence(*upstream_frames) if upstream_stays_open else list(upstream_frames)
     )
-    backend_ws.send = AsyncMock(side_effect=backend_send_error)
+    backend_ws.send = AsyncMock()
     relay: Final = RealTimeStreaming(
         client_ws or _realtime_client_ws(),
         backend_ws,
         litellm_logging_obj,
+        provider_config=provider_config,
         model="gpt-realtime-2.1",
         logging_worker=_DiscardingLoggingWorker(),
     )
@@ -640,20 +643,25 @@ def _client_ws_sending(*client_frames: str) -> MagicMock:
     return client_ws
 
 
-_CLIENT_TEXT_ITEM: Final = json.dumps(
-    {
-        "type": "conversation.item.create",
-        "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
-    }
-)
+async def _vertex_access_token() -> str:
+    return "token"
 
 
-async def _relay_write_to_upstream_fails(litellm_logging_obj: LiteLLMLogging) -> None:
+async def _client_frame_the_provider_rejects(litellm_logging_obj: LiteLLMLogging) -> None:
+    deferred_setup_provider: Final = VertexChirpRealtimeConfig(
+        resolve_access_token=_vertex_access_token, project="proj-1", location="us"
+    )
     await _relay_upstream(
         litellm_logging_obj,
-        _REALTIME_SESSION_CREATED,
-        client_ws=_client_ws_sending(_CLIENT_TEXT_ITEM),
-        backend_send_error=OSError("broken pipe"),
+        client_ws=_client_ws_sending(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "transcription", "audio": {"input": {"format": {"type": "audio/pcmu"}}}},
+                }
+            )
+        ),
+        provider_config=deferred_setup_provider,
         upstream_stays_open=True,
     )
 
@@ -677,7 +685,7 @@ async def _refused_handshake(litellm_logging_obj: LiteLLMLogging) -> None:
         (_refused_handshake, 0),
         (_upstream_internal_error_after_a_frame, 0),
         (_upstream_drop_without_close_frame_after_a_frame, 0),
-        (_relay_write_to_upstream_fails, 0),
+        (_client_frame_the_provider_rejects, 0),
         (_client_hangs_up_after_a_frame, 1),
     ],
     ids=[
@@ -686,7 +694,7 @@ async def _refused_handshake(litellm_logging_obj: LiteLLMLogging) -> None:
         "refused-handshake",
         "upstream-1011-after-a-frame",
         "upstream-1006-after-a-frame",
-        "relay-write-to-upstream-fails",
+        "client-frame-the-provider-rejects",
         "client-hangs-up-after-a-frame",
     ],
 )
