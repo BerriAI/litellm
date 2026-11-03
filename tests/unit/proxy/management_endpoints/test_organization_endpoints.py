@@ -1,7 +1,8 @@
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from types import MappingProxyType, SimpleNamespace
-from typing import Final, Mapping, Optional, cast
+from typing import TYPE_CHECKING, AsyncIterator, Final, Mapping, Optional, Sequence, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,6 +14,9 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import LiteLLM_VerificationToken
 
 
 @pytest.mark.asyncio
@@ -1711,3 +1715,197 @@ def test_organization_info_response_keeps_budget_reset_at():
     )
 
     assert response.model_dump()["litellm_budget_table"]["budget_reset_at"] == reset_at
+
+
+class _Row(SimpleNamespace):
+    def model_dump(self) -> dict[str, object]:
+        return dict(vars(self))
+
+
+class _TeamRows:
+    def __init__(self, rows: Sequence[Mapping[str, object]]) -> None:
+        self.rows: dict[str, dict[str, object]] = {str(row["team_id"]): dict(row) for row in rows}
+
+    async def find_many(self, where: Mapping[str, object]) -> list[_Row]:
+        return [_Row(**row) for row in self.rows.values() if row["organization_id"] == where["organization_id"]]
+
+    async def find_unique(self, where: Mapping[str, str]) -> _Row | None:
+        row = self.rows.get(where["team_id"])
+        return None if row is None else _Row(**row)
+
+    async def update(self, where: Mapping[str, str], data: Mapping[str, str]) -> _Row:
+        self.rows[where["team_id"]]["members_with_roles"] = json.loads(data["members_with_roles"])
+        return _Row(**self.rows[where["team_id"]])
+
+
+class _UserRows:
+    def __init__(self, rows: Sequence[Mapping[str, object]]) -> None:
+        self.rows: dict[str, dict[str, object]] = {str(row["user_id"]): dict(row) for row in rows}
+
+    async def find_many(self, where: Mapping[str, Mapping[str, Sequence[str]]]) -> list[_Row]:
+        return [_Row(**row) for user_id, row in self.rows.items() if user_id in where["user_id"]["in"]]
+
+    async def update(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, Sequence[str]]]) -> _Row:
+        self.rows[where["user_id"]]["teams"] = list(data["teams"]["set"])
+        return _Row(**self.rows[where["user_id"]])
+
+
+class _TeamMembershipRows:
+    def __init__(self, rows: Sequence[tuple[str, str]]) -> None:
+        self.rows: set[tuple[str, str]] = set(rows)
+
+    async def delete_many(self, where: Mapping[str, str]) -> int:
+        doomed = {(where["team_id"], where["user_id"])} & self.rows
+        self.rows -= doomed
+        return len(doomed)
+
+
+class _KeyRows:
+    def __init__(self, rows: Sequence["LiteLLM_VerificationToken"]) -> None:
+        self.rows: dict[str, "LiteLLM_VerificationToken"] = {key.token: key for key in rows}
+
+    def _matching(self, where: Mapping[str, object]) -> list["LiteLLM_VerificationToken"]:
+        user_filter = cast(Mapping[str, Sequence[str]], where["user_id"])
+        return [
+            key for key in self.rows.values() if key.user_id in user_filter["in"] and key.team_id == where["team_id"]
+        ]
+
+    async def find_many(self, where: Mapping[str, object]) -> list["LiteLLM_VerificationToken"]:
+        return self._matching(where)
+
+    async def delete_many(self, where: Mapping[str, object]) -> int:
+        doomed = self._matching(where)
+        for key in doomed:
+            del self.rows[key.token]
+        return len(doomed)
+
+
+class _AppendOnlyRows:
+    def __init__(self) -> None:
+        self.records: list[Mapping[str, object]] = []
+
+    async def create_many(self, data: Sequence[Mapping[str, object]]) -> int:
+        self.records.extend(data)
+        return len(data)
+
+
+class _NoRows:
+    async def find_many(self, where: Mapping[str, object] | None = None) -> list[object]:
+        return []
+
+
+class _OrgMembershipRows:
+    def __init__(self, rows: Sequence[tuple[str, str]]) -> None:
+        self.rows: set[tuple[str, str]] = set(rows)
+
+    async def delete(self, where: Mapping[str, Mapping[str, str]]) -> _Row:
+        member = (where["user_id_organization_id"]["user_id"], where["user_id_organization_id"]["organization_id"])
+        self.rows.remove(member)
+        return _Row(user_id=member[0], organization_id=member[1])
+
+
+class _OrgMemberDeleteTx:
+    def __init__(self, db: SimpleNamespace) -> None:
+        self._db = db
+
+    def __getattr__(self, table_name: str) -> object:
+        return getattr(self._db, table_name)
+
+    async def query_raw(self, sql: str, team_id: str) -> list[Mapping[str, object]]:
+        from litellm.proxy.management_endpoints.team_endpoints import TEAM_ADVISORY_LOCK_SQL
+
+        if sql == TEAM_ADVISORY_LOCK_SQL:
+            return []
+        team = self._db.litellm_teamtable.rows.get(team_id)
+        return [] if team is None else [{"members_with_roles": team["members_with_roles"]}]
+
+
+class _OrgMemberDeletePrisma:
+    """In-memory stand-in for every table /organization/member_delete and the per-team cleanup it
+    cascades into read or write, so the test asserts the rows left behind rather than the calls made."""
+
+    def __init__(
+        self,
+        *,
+        teams: Sequence[Mapping[str, object]],
+        users: Sequence[Mapping[str, object]],
+        team_memberships: Sequence[tuple[str, str]],
+        keys: Sequence["LiteLLM_VerificationToken"],
+        org_memberships: Sequence[tuple[str, str]],
+    ) -> None:
+        self.db = SimpleNamespace(
+            litellm_teamtable=_TeamRows(teams),
+            litellm_usertable=_UserRows(users),
+            litellm_teammembership=_TeamMembershipRows(team_memberships),
+            litellm_verificationtoken=_KeyRows(keys),
+            litellm_deletedverificationtoken=_AppendOnlyRows(),
+            litellm_auditlog=_AppendOnlyRows(),
+            litellm_jwtkeymapping=_NoRows(),
+            litellm_organizationmembership=_OrgMembershipRows(org_memberships),
+        )
+
+    @asynccontextmanager
+    async def tx(self, timeout: object = None) -> AsyncIterator[_OrgMemberDeleteTx]:
+        yield _OrgMemberDeleteTx(self.db)
+
+
+@pytest.mark.asyncio
+async def test_organization_member_delete_removes_the_user_from_every_team_of_that_organization(monkeypatch):
+    """Team membership inside an organization is granted through the organization, so removing the
+    user from the organization has to take them off its teams the way /team/member_delete would, or
+    they keep their team admin role, their team keys and the ability to mint new ones (LIT-9248).
+    Teams in other organizations and the user's personal key are not the organization's to touch."""
+    from litellm.proxy._types import (
+        LiteLLM_VerificationToken,
+        LitellmUserRoles,
+        OrganizationMemberDeleteRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.organization_endpoints import organization_member_delete
+
+    lead: Final = {"user_id": "lead", "user_email": None, "role": "admin"}
+    dev: Final = {"user_id": "dev", "user_email": None, "role": "admin"}
+    org_team_key: Final = LiteLLM_VerificationToken(token="hash-org-team-key", user_id="dev", team_id="team-eng")
+    other_org_team_key: Final = LiteLLM_VerificationToken(token="hash-other-team-key", user_id="dev", team_id="team-ext")
+    personal_key: Final = LiteLLM_VerificationToken(token="hash-personal-key", user_id="dev", team_id=None)
+    prisma: Final = _OrgMemberDeletePrisma(
+        teams=(
+            {"team_id": "team-eng", "organization_id": "org-eng", "members_with_roles": [lead, dev]},
+            {"team_id": "team-eng-2", "organization_id": "org-eng", "members_with_roles": [lead]},
+            {"team_id": "team-ext", "organization_id": "org-ext", "members_with_roles": [dev]},
+        ),
+        users=(
+            {"user_id": "dev", "teams": ["team-eng", "team-ext"]},
+            {"user_id": "lead", "teams": ["team-eng", "team-eng-2"]},
+        ),
+        team_memberships=(("team-eng", "dev"), ("team-eng", "lead"), ("team-eng-2", "lead"), ("team-ext", "dev")),
+        keys=(org_team_key, other_org_team_key, personal_key),
+        org_memberships=(("dev", "org-eng"), ("lead", "org-eng"), ("dev", "org-ext")),
+    )
+    cache: Final = UserApiKeyCache()
+    for cache_key in ("team_id:team-eng", "team_id:team-ext", org_team_key.token, personal_key.token):
+        cache.set_cache(key=cache_key, value={"cached": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+
+    removed: Final = await organization_member_delete(
+        data=OrganizationMemberDeleteRequest(organization_id="org-eng", user_id="dev"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert (removed.user_id, removed.organization_id) == ("dev", "org-eng")
+    assert prisma.db.litellm_organizationmembership.rows == {("lead", "org-eng"), ("dev", "org-ext")}
+    assert prisma.db.litellm_teamtable.rows["team-eng"]["members_with_roles"] == [lead]
+    assert prisma.db.litellm_teamtable.rows["team-eng-2"]["members_with_roles"] == [lead]
+    assert prisma.db.litellm_teamtable.rows["team-ext"]["members_with_roles"] == [dev]
+    assert prisma.db.litellm_usertable.rows["dev"]["teams"] == ["team-ext"]
+    assert prisma.db.litellm_usertable.rows["lead"]["teams"] == ["team-eng", "team-eng-2"]
+    assert prisma.db.litellm_teammembership.rows == {("team-eng", "lead"), ("team-eng-2", "lead"), ("team-ext", "dev")}
+    assert set(prisma.db.litellm_verificationtoken.rows) == {other_org_team_key.token, personal_key.token}
+    assert [record["token"] for record in prisma.db.litellm_deletedverificationtoken.records] == [org_team_key.token]
+    assert cache.get_cache(key="team_id:team-eng") is None
+    assert cache.get_cache(key=org_team_key.token) is None
+    assert cache.get_cache(key="team_id:team-ext") == {"cached": True}
+    assert cache.get_cache(key=personal_key.token) == {"cached": True}

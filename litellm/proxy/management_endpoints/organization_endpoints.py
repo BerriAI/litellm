@@ -1611,6 +1611,19 @@ async def organization_member_delete(
             existing_user_email_row: Final = await find_member_if_email(data.user_email, prisma_client)
             data.user_id = existing_user_email_row.user_id
 
+        if data.user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Either user_id or user_email needs to be passed in"},
+            )
+
+        await _remove_user_from_organization_teams(
+            user_id=data.user_id,
+            organization_id=data.organization_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+
         member_to_delete: Final = await _table(OrganizationMembershipRepository(prisma_client)).delete(
             where={
                 "user_id_organization_id": {
@@ -1624,6 +1637,31 @@ async def organization_member_delete(
     except Exception as e:
         verbose_proxy_logger.exception("Error deleting member from organization: %s", e)
         raise e
+
+
+async def _remove_user_from_organization_teams(
+    user_id: str,
+    organization_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> None:
+    """Membership in an organization's teams is granted through the organization, so leaving the
+    organization has to take the user off every one of its teams, through the same per-team path as
+    /team/member_delete (advisory lock, roster rewrite, LiteLLM_TeamMembership and team-key cleanup,
+    cache eviction). Teams outside the organization and the user's personal keys are left alone."""
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    organization_teams: Final = await TeamRepository(prisma_client).find_by_organization_id(organization_id)
+    member_team_ids: Final = tuple(
+        team.team_id
+        for team in organization_teams
+        if any(member.user_id == user_id for member in team.members_with_roles)
+    )
+    for team_id in member_team_ids:
+        await team_member_delete(
+            data=TeamMemberDeleteRequest(team_id=team_id, user_id=user_id),
+            user_api_key_dict=user_api_key_dict,
+        )
 
 
 async def add_member_to_organization(
