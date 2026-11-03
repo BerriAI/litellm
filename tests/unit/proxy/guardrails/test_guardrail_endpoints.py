@@ -2517,6 +2517,22 @@ def test_no_request_route_reaches_the_guardrail() -> None:
     assert metadata == {"topic": "tax"}
 
 
+def test_an_unbound_agent_is_not_taken_from_the_request() -> None:
+    """Pre-call processing keeps the request's own agent_id when the key has none, so the proxy's
+    metadata already carries a caller-chosen value and reserving the field is not enough."""
+    metadata: Final = _guardrail_request_metadata(
+        {"agent_id": "someone-elses-agent"}, {"agent_id": "someone-elses-agent"}
+    )
+    assert metadata == {}
+
+
+def test_a_bound_agent_comes_from_the_authenticated_key() -> None:
+    metadata: Final = _guardrail_request_metadata(
+        {"agent_id": "someone-elses-agent"}, {"agent_id": "someone-elses-agent"}, agent_id="billing-agent"
+    )
+    assert metadata == {"agent_id": "billing-agent"}
+
+
 def test_identity_fields_outside_the_key_namespace_are_reserved_too() -> None:
     metadata: Final = _guardrail_request_metadata(
         {
@@ -2525,11 +2541,8 @@ def test_identity_fields_outside_the_key_namespace_are_reserved_too() -> None:
             "agent_id": "someone-elses-agent",
             "topic": "tax",
         },
-        {
-            "requester_ip_address": "198.51.100.4",
-            "user_agent": "litellm-cli/2.3",
-            "agent_id": "billing-agent",
-        },
+        {"requester_ip_address": "198.51.100.4", "user_agent": "litellm-cli/2.3"},
+        agent_id="billing-agent",
     )
     assert metadata == {
         "topic": "tax",

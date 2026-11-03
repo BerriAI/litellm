@@ -2349,7 +2349,7 @@ def _metadata_fields(value: object) -> Mapping[str, object]:
 
 _CALLER_OWNED_KEY_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_end_user_id"})
 
-_WITHHELD_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_request_route"})
+_WITHHELD_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_request_route", "agent_id"})
 
 _RESERVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
     {"requester_ip_address", "user_agent", "agent_id", "actor_agent_id"}
@@ -2371,7 +2371,7 @@ def _is_key_identity_field(key: str) -> bool:
 
 
 def _guardrail_request_metadata(
-    caller: object, proxy: object
+    caller: object, proxy: object, agent_id: str | None = None
 ) -> dict[str, object]:  # mutable-ok: guardrails annotate the metadata they are handed
     """Caller metadata with the identity fields taken from the authenticated key.
 
@@ -2382,6 +2382,10 @@ def _guardrail_request_metadata(
     itself when a route is present, instead of the tools replayed to it, so a route here turns
     its checks off: the caller must not be able to set one, and this endpoint's own route
     describes the evaluation rather than the call being evaluated.
+
+    The agent is taken from ``agent_id``, the one the key authenticated with, and omitted when the
+    key is bound to none. Pre-call processing keeps the request's own agent when the key has none,
+    so the processed metadata is not a trustworthy source for it either.
     """
     caller_fields: Final = tuple(
         (key, value) for key, value in _metadata_fields(caller).items() if not _is_key_identity_field(key)
@@ -2391,7 +2395,8 @@ def _guardrail_request_metadata(
         for key, value in _metadata_fields(proxy).items()
         if _is_key_identity_field(key) and key not in _WITHHELD_FIELDS
     )
-    return dict((*caller_fields, *key_identity))
+    bound_agent: Final = (("agent_id", agent_id),) if agent_id is not None else ()
+    return dict((*caller_fields, *key_identity, *bound_agent))
 
 
 def _execution_timeout_response(timeout: float) -> TestCustomCodeGuardrailResponse:
@@ -2562,7 +2567,9 @@ async def apply_guardrail(
         request_data: Final = dict(response_handler.prepare_request_data(request))
         caller_metadata: Final = request_data.get("metadata")
         metadata: Final = _guardrail_request_metadata(
-            caller_metadata, _GUARDRAIL_METADATA_ADAPTER.validate_python(data).get("metadata")
+            caller_metadata,
+            _GUARDRAIL_METADATA_ADAPTER.validate_python(data).get("metadata"),
+            agent_id=user_api_key_dict.invoked_agent_id or user_api_key_dict.agent_id,
         )
         if caller_metadata is not None or metadata:
             request_data["metadata"] = metadata
