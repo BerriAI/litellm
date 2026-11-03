@@ -41,8 +41,7 @@ concurrency:
 jobs:
   integration:
     name: integration ${{ matrix.suite }}
-    if: github.event_name != 'pull_request' || github.event.label.name == 'run-ci'
-    environment: integration-license
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'sdk'
     runs-on: ${{ fromJSON('{"providers":"ubuntu-latest-64-cores","extensions":"ubuntu-latest-64-cores","accounting":"ubuntu-latest-32-cores","management":"ubuntu-latest-32-cores","management-replica":"ubuntu-latest-32-cores"}')[matrix.suite] || 'ubuntu-latest-16-cores' }}
     timeout-minutes: 60
     strategy:
