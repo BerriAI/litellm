@@ -1322,6 +1322,7 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
 from litellm.responses.bridge_check import (
+    RESPONSES_WEB_SEARCH_PROVIDERS,
     bridge_check_request_params,
     bridge_reasoning_effort,
     keep_registered_mode,
@@ -6079,9 +6080,10 @@ def completion(
         )
         bridge_allowed_params: Final[tuple[str, ...]] = (
             ("reasoning_effort", "web_search_options")
-            if bridges_to_responses_api
+            if bridges_to_responses_api and custom_llm_provider in RESPONSES_WEB_SEARCH_PROVIDERS
             else ("reasoning_effort",)
-            if reasoning_effort_needs_allowing(
+            if bridges_to_responses_api
+            or reasoning_effort_needs_allowing(
                 chat_reasoning.effort,
                 model=model,
                 custom_llm_provider=custom_llm_provider,

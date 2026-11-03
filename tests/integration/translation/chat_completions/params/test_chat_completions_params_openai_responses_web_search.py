@@ -41,8 +41,6 @@ GPT_5_6_SOL_WEB_SEARCH_USER_LOCATION_TEST_CASE: Final = replace(
     },
 )
 
-# No `responses/` prefix: a gpt-5.6 chat request with function tools and a reasoning effort is bridged by the
-# tools-plus-reasoning rule rather than the deployment's mode, and web_search_options must survive that too
 GPT_5_6_SOL_LATE_BRIDGE_WEB_SEARCH_TEST_CASE: Final = replace(
     GPT_5_6_SOL_TEST_CASE,
     scenario="late_bridge_web_search_options",
@@ -79,9 +77,6 @@ GPT_5_6_SOL_LATE_BRIDGE_WEB_SEARCH_TEST_CASE: Final = replace(
     expected_litellm_response={**GPT_5_6_SOL_TEST_CASE.expected_litellm_response, "model": "openai/gpt-5.6-sol"},
 )
 
-# The rig's deployment has a custom api_base, which the bridge treats as a chat-only endpoint unless the
-# request names an effort. An effort the caller drops through additional_drop_params must not pick the
-# Responses route, so this request stays on /chat/completions exactly as before the early route decision
 GPT_5_6_SOL_DROPPED_EFFORT_STAYS_ON_CHAT_TEST_CASE: Final = replace(
     GPT_5_6_SOL_CHAT_TEST_CASE,
     scenario="dropped_extra_body_effort_stays_on_chat",
@@ -115,11 +110,21 @@ GPT_5_6_SOL_DROPPED_EFFORT_STAYS_ON_CHAT_TEST_CASE: Final = replace(
     },
 )
 
+GPT_5_6_SOL_DOTTED_DROPPED_EFFORT_STAYS_ON_CHAT_TEST_CASE: Final = replace(
+    GPT_5_6_SOL_DROPPED_EFFORT_STAYS_ON_CHAT_TEST_CASE,
+    scenario="dotted_dropped_extra_body_effort_stays_on_chat",
+    litellm_request={
+        **GPT_5_6_SOL_DROPPED_EFFORT_STAYS_ON_CHAT_TEST_CASE.litellm_request,
+        "additional_drop_params": ["extra_body.reasoning_effort"],
+    },
+)
+
 CASES: Final = (
     GPT_5_6_SOL_WEB_SEARCH_TEST_CASE,
     GPT_5_6_SOL_WEB_SEARCH_USER_LOCATION_TEST_CASE,
     GPT_5_6_SOL_LATE_BRIDGE_WEB_SEARCH_TEST_CASE,
     GPT_5_6_SOL_DROPPED_EFFORT_STAYS_ON_CHAT_TEST_CASE,
+    GPT_5_6_SOL_DOTTED_DROPPED_EFFORT_STAYS_ON_CHAT_TEST_CASE,
 )
 
 

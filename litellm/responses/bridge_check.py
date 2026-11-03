@@ -1,9 +1,11 @@
 from collections.abc import Mapping, Sequence
+from functools import reduce
 from typing import Final, cast  # noqa: TID251  # moved unchanged from litellm/main.py
 from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
@@ -19,6 +21,7 @@ from litellm.utils import ProviderConfigManager, get_model_info_helper, model_co
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
+RESPONSES_WEB_SEARCH_PROVIDERS: Final = frozenset({"openai", "azure"})
 ROUTABLE_MODES: Final = frozenset({"chat", "responses"})
 
 
@@ -104,8 +107,9 @@ def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
 
 def bridge_check_request_params(request_params: Mapping[str, object]) -> Mapping[str, object]:
     """The request as ``get_optional_params`` will hand it to the provider: every key named in
-    ``additional_drop_params`` removed at the top level and inside ``extra_body``, so the Responses route
-    decision taken before that call reads the same effort and summary alias the parsed params will carry."""
+    ``additional_drop_params`` removed at the top level and inside ``extra_body``, dotted paths included, so
+    the Responses route decision taken before that call reads the same effort and summary alias the parsed
+    params will carry."""
     raw_dropped: Final = request_params.get("additional_drop_params")
     dropped_params: Final = (
         cast(Sequence[object], raw_dropped)  # cast-ok: isinstance only narrows to Sequence[Unknown]
@@ -117,7 +121,9 @@ def bridge_check_request_params(request_params: Mapping[str, object]) -> Mapping
     extra_body: Final = str_keyed_mapping(kept.get("extra_body"))
     if extra_body is None:
         return kept
-    return {**kept, "extra_body": {key: value for key, value in extra_body.items() if key not in dropped}}
+    kept_extra_body: Final = {key: value for key, value in extra_body.items() if key not in dropped}
+    nested_paths: Final = tuple(path for path in dropped if is_nested_path(path))
+    return {**kept, **reduce(delete_nested_value, nested_paths, {"extra_body": kept_extra_body})}
 
 
 def bridge_reasoning_effort(

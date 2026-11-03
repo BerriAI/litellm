@@ -1902,13 +1902,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             tools = []
             responses_api_request["tools"] = tools
 
-        web_search_tool: Final[dict[str, object]] = {"type": "web_search"}
-        if isinstance(web_search_options, dict):
-            web_search_tool.update(web_search_options)
-            typed_options: Final = cast(Mapping[str, object], web_search_options)  # cast-ok: caller-supplied dict
-            user_location: Final = self._responses_web_search_user_location(typed_options.get("user_location"))
-            if user_location is not None:
-                web_search_tool["user_location"] = user_location
+        typed_options: Final = (
+            cast(Mapping[str, object], web_search_options)  # cast-ok: caller-supplied dict
+            if isinstance(web_search_options, dict)
+            else {}
+        )
+        user_location: Final = self._responses_web_search_user_location(typed_options.get("user_location"))
+        web_search_tool: Final[Mapping[str, object]] = {
+            "type": "web_search",
+            **typed_options,
+            **({} if user_location is None else {"user_location": user_location}),
+        }
 
         # Cast to Any to match the expected union type for tools list items
         tools.append(cast(Any, web_search_tool))

@@ -1102,20 +1102,19 @@ def _cost_map_model_name(model: str, custom_llm_provider: str | None, region_nam
     return _strip_unregistered_leading_segments(f"{provider_prefix}/{model}", region_name)
 
 
-def _rule_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
-    rule_info: Final = unmapped_model_generalization(model, custom_llm_provider)
-    return rule_info is not None and _cost_map_entry_prices_anything(rule_info)
+def declared_cost_map_pricing(key: str, model: str, custom_llm_provider: str | None) -> Mapping[str, object]:
+    entry: Final = _raw_cost_map_entry(key)
+    if entry is None:
+        return unmapped_model_generalization(model, custom_llm_provider) or MappingProxyType({})
+    fill_missing: Final = mapped_model_fill_missing(key, entry)
+    return entry if fill_missing is None else MappingProxyType({**fill_missing, **entry})
 
 
 def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
     key: Final = cached_cost_map_key(model, custom_llm_provider)
-    if key is None:
-        return False
-    entry: Final = _raw_cost_map_entry(key)
-    if entry is None:
-        return _rule_declares_rates(model, custom_llm_provider)
-    fill_missing: Final = mapped_model_fill_missing(key, entry)
-    return _cost_map_entry_prices_anything(entry if fill_missing is None else {**fill_missing, **entry})
+    return key is not None and _cost_map_entry_prices_anything(
+        declared_cost_map_pricing(key, model, custom_llm_provider)
+    )
 
 
 def _served_or_priced_requested_model(
@@ -2420,18 +2419,20 @@ def completion_cost(
         raise e
 
 
-def get_response_cost_from_hidden_params(
-    hidden_params: dict | BaseModel,
-) -> float | None:
-    if isinstance(hidden_params, BaseModel):
-        _hidden_params_dict = hidden_params.model_dump()
-    else:
-        _hidden_params_dict = hidden_params
+_ADDITIONAL_HEADERS: Final = TypeAdapter(Mapping[str, object])
 
-    additional_headers: Final = _hidden_params_dict.get("additional_headers", {})
-    if additional_headers and "llm_provider-x-litellm-response-cost" in additional_headers:
-        return _billable_header_cost(additional_headers["llm_provider-x-litellm-response-cost"])
-    return None
+
+def get_response_cost_from_hidden_params(
+    hidden_params: Mapping[str, object] | BaseModel,
+) -> float | None:
+    params: Final[Mapping[str, object]] = (
+        hidden_params.model_dump() if isinstance(hidden_params, BaseModel) else hidden_params
+    )
+    additional_headers: Final = params.get("additional_headers")
+    if not isinstance(additional_headers, Mapping):
+        return None
+    headers: Final = _ADDITIONAL_HEADERS.validate_python(additional_headers)
+    return _billable_header_cost(headers.get("llm_provider-x-litellm-response-cost"))
 
 
 def _billable_header_cost(value: object) -> float | None:

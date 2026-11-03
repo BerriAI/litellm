@@ -2734,6 +2734,61 @@ def test_responses_bridge_rejects_reasoning_fields_the_backend_ignores_without_d
     assert route.called is False
 
 
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_azure_responses_bridge_sends_web_search_options_as_the_web_search_tool(
+    drop_params: bool,
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge("azure")
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        web_search_options={"search_context_size": "low"},
+        drop_params=drop_params,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["tools"] == [{"type": "web_search", "search_context_size": "low"}]
+
+
+@pytest.mark.parametrize("backend", ["chatgpt", "github_copilot", "databricks", "azure_ai"])
+def test_responses_bridge_drops_web_search_options_under_drop_params_where_web_search_is_unverified(
+    backend: str,
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge(backend)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        web_search_options={"search_context_size": "low"},
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert "tools" not in json.loads(route.calls[0].request.content)
+
+
+@pytest.mark.parametrize("backend", ["chatgpt", "github_copilot", "databricks", "azure_ai"])
+def test_responses_bridge_rejects_web_search_options_without_drop_params_where_web_search_is_unverified(
+    backend: str,
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge(backend)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="web_search_options") as raised:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            web_search_options={"search_context_size": "low"},
+            **kwargs,
+        )
+
+    assert raised.value.status_code == 400
+    assert route.called is False
+
+
 @pytest.mark.parametrize("backend", ["perplexity", "xai", "fireworks_ai"])
 def test_responses_bridge_sends_the_rest_when_additional_drop_params_removes_the_refused_fields(
     backend: str,
