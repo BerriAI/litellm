@@ -251,7 +251,7 @@ def _redact_agent_params_tree(value: object, _depth: int) -> object:
     return {
         key: (
             REDACTED_BY_LITELM_STRING
-            if _AGENT_PARAMS_MASKER.is_sensitive_key(key)
+            if nested_value and _AGENT_PARAMS_MASKER.is_sensitive_key(key)
             else _redact_agent_params_tree(nested_value, _depth + 1)
         )
         for key, nested_value in typed_params.items()
