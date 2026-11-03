@@ -1,8 +1,9 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final, LiteralString
+from typing import Final
 
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import LiteralString
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 

@@ -3802,6 +3802,7 @@ class TestSpendLogsPayload:
             expected_payload = SpendLogsPayload(
                 **{
                     "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
+                    "accounting_path": "legacy",
                     "session_id": "1234567890",
                     "call_type": "acompletion",
                     "api_key": "",

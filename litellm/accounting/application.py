@@ -4,6 +4,7 @@ from litellm.accounting.delivery_projection import entity_transactions, project_
 from litellm.accounting.projection import Contribution
 from litellm.proxy.db.budget_window_spend_writer import commit_window_spend_updates
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_bulk_upsert, merge_by_conflict_key
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.db.model_usage_rollup import queue_model_usage_upsert
 from litellm.repositories.accounting_delivery_repository import DeliveryProjection, LedgerTransaction
@@ -35,7 +36,8 @@ async def apply_deliveries(
         )
         if rows:
             sql, params = build_bulk_upsert(table, merge_by_conflict_key(table, rows))
-            await transaction.execute_raw(sql, *params)
+            async with db_span("upsert_daily_spend", table.name):
+                await transaction.execute_raw(sql, *params)
     async with transaction.batch_() as batcher:
         for item in contributions:
             if item.table == "LiteLLM_DailyModelUsage":

@@ -14197,9 +14197,12 @@ def test_copy_for_new_call_logs_a_turn_under_its_own_call_id_against_the_connect
         "metadata": {"user_api_key": "hashed-key", "user_api_key_budget_reservation": reservation},
     }
     connection.model_call_details["litellm_params"] = connection.litellm_params
+    connection.model_call_details["accounting_model_windows"] = object()
     turn_start: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
 
     turn: Final = connection.copy_for_new_call(litellm_call_id="turn-1", start_time=turn_start)
+
+    assert "accounting_model_windows" not in turn.model_call_details
 
     assert (turn.litellm_call_id, turn.start_time) == ("turn-1", turn_start)
     assert (turn.model_call_details["litellm_call_id"], turn.model_call_details["start_time"]) == ("turn-1", turn_start)

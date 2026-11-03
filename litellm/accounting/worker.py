@@ -1,3 +1,4 @@
+import os
 import time
 from typing import (
     TYPE_CHECKING,
@@ -53,7 +54,9 @@ async def flush_accounting_deliveries(
         )
         repository: Final = AccountingDeliveryRepository(database)
         started: Final = time.monotonic()
-        result: Final = await repository.apply_pending(apply)
+        result: Final = await repository.apply_pending(
+            apply, batch_size=int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "10000"))
+        )
         if result.applied:
             await writer.invalidate_accounting_entities(applied, proxy_logging_obj)
         if result.parked:

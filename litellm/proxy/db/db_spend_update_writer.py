@@ -638,6 +638,7 @@ class DBSpendUpdateWriter:
         False only for a batch retrieve whose cost row another retrieve already wrote,
         so the caller leaves the key, team, and user counters alone (LIT-7048).
         """
+        from litellm.proxy.hooks.model_budget_shared_windows import captured_model_windows
         from litellm.proxy.proxy_server import (
             accounting_window_keys,
             disable_spend_logs,
@@ -651,6 +652,10 @@ class DBSpendUpdateWriter:
             Mapping[str, object], general_settings
         )
         accounting_path: Final = "ledger" if error_log_settings.get("use_spend_logs_ledger") is True else "legacy"
+        request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
+        model_windows: Final = captured_model_windows(request_fields)
+        payload_for_recovery: SpendLogsPayload | None = None  # rebind-ok: retain the stored path after a later failure
+        windows_queued = False  # rebind-ok: recovery must not enqueue a legacy window twice
         if kwargs is not None:
             kwargs["accounting_path"] = accounting_path  # rebind-ok: stamp shared callbacks
         try:
@@ -681,6 +686,7 @@ class DBSpendUpdateWriter:
                 end_time=end_time,
                 llm_router=llm_router,
             )
+            payload_for_recovery = payload  # rebind-ok: observe stamp changes made by batch takeover
             billable_cost: Final = finite_cost(response_cost)
             if response_cost is not None and billable_cost is None:
                 verbose_proxy_logger.warning(
@@ -701,10 +707,7 @@ class DBSpendUpdateWriter:
                 payload["team_id"] = team_id
 
             from litellm.accounting.snapshot import accounting_metadata
-            from litellm.proxy.hooks.model_budget_shared_windows import captured_model_windows
 
-            request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
-            model_windows: Final = captured_model_windows(request_fields)
             payload["accounting_path"] = accounting_path
 
             async def prepare_ledger() -> None:
@@ -768,6 +771,7 @@ class DBSpendUpdateWriter:
             if kwargs is not None:
                 kwargs["accounting_path"] = payload["accounting_path"]  # rebind-ok: forward persisted stamp
             if payload["accounting_path"] != "ledger":
+                windows_queued = True  # rebind-ok: an attempted queue write must not be repeated after a later failure
                 await asyncio.gather(*(self.window_spend_update_queue.add_update(window) for window in model_windows))
                 spawn_logging_task(
                     asyncio.get_running_loop(),
@@ -798,6 +802,9 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug("Runs spend update on all tables")
             return True
         except Exception:
+            await self._restore_legacy_model_windows(
+                model_windows, accounting_path=accounting_path, payload=payload_for_recovery, queued=windows_queued
+            )
             spend_log_error(
                 "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
                 "may not have completed for this request. "
@@ -810,6 +817,21 @@ class DBSpendUpdateWriter:
                 end_user_id,
             )
             return True
+
+    async def _restore_legacy_model_windows(
+        self,
+        windows: tuple[WindowSpendTransaction, ...],
+        *,
+        accounting_path: str,
+        payload: SpendLogsPayload | None,
+        queued: bool,
+    ) -> None:
+        if (
+            accounting_path == "legacy"
+            and not queued
+            and (payload is None or payload.get("accounting_path") != "ledger")
+        ):
+            await asyncio.gather(*(self.window_spend_update_queue.add_update(window) for window in windows))
 
     async def _record_spend_log(
         self,
