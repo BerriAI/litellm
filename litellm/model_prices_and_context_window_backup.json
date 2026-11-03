@@ -31501,8 +31501,7 @@
         "output_cost_per_token_flex": 1.25e-06,
         "output_cost_per_token_priority": 4.5e-06,
         "supports_audio_input": true,
-        "supports_image_size": false,
-        "deprecation_date": "2026-12-01"
+        "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -32033,8 +32032,7 @@
         "cache_read_input_token_cost_above_200k_tokens_batches": 2.5e-07,
         "deprecation_date": "2026-12-01",
         "input_cost_per_token_above_200k_tokens_batches": 1.25e-06,
-        "output_cost_per_token_above_200k_tokens_batches": 7.5e-06,
-        "deprecation_date": "2026-12-01"
+        "output_cost_per_token_above_200k_tokens_batches": 7.5e-06
     },
     "gemini/gemini-2.5-computer-use-preview-10-2025": {
         "deprecation_date": "2026-07-28",
