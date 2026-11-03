@@ -35,7 +35,7 @@ pytestmark = pytest.mark.e2e
 EXPORT_ROUTE: Final = "/user/daily/activity/export"
 
 
-class UsageExportParams(BaseModel):
+class UsageExportParams(BaseModel, frozen=True):
     start_date: str
     end_date: str
     api_key: str
@@ -44,24 +44,30 @@ class UsageExportParams(BaseModel):
     format: str = "json"
 
 
-class UsageExportKeyMetadata(BaseModel):
+class UsageExportKeyMetadata(BaseModel, frozen=True):
     tag: str | None = None
     webhook_token: str | None = None
 
 
-class UsageExportUserMetadata(BaseModel):
+class UsageExportUserMetadata(BaseModel, frozen=True):
     department: str | None = None
     ldap_password: str | None = None
 
 
-class UsageExportRow(BaseModel):
+class UsageExportRow(BaseModel, frozen=True):
     api_key: str | None = None
     user_id: str | None = None
     key_metadata: UsageExportKeyMetadata
     user_metadata: UsageExportUserMetadata
 
 
+class UsageExportRawMetadataRow(BaseModel, frozen=True):
+    key_metadata: dict[str, object]
+    user_metadata: dict[str, object]
+
+
 _EXPORT_ROWS: Final = TypeAdapter(list[UsageExportRow])
+_RAW_METADATA_ROWS: Final = TypeAdapter(list[UsageExportRawMetadataRow])
 
 
 class TestUsageExportMetadata:
@@ -169,9 +175,9 @@ class TestUsageExportMetadata:
             headers=client.proxy.transport.bearer(record.key),
         )
         assert own_view.status_code == 200, f"{EXPORT_ROUTE} answered {own_view.status_code}: {own_view.body}"
-        own_rows: Final = _EXPORT_ROWS.validate_json(own_view.body)
+        own_rows: Final = _RAW_METADATA_ROWS.validate_json(own_view.body)
         assert own_rows, f"{EXPORT_ROUTE} returned no rows for the key's own user: {own_view.body}"
         for row in own_rows:
-            assert (row.key_metadata, row.user_metadata) == (UsageExportKeyMetadata(), UsageExportUserMetadata()), (
+            assert (row.key_metadata, row.user_metadata) == ({}, {}), (
                 f"a caller without admin view got metadata objects: {row}"
             )

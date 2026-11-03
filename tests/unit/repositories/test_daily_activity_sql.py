@@ -413,7 +413,7 @@ def test_query_builders_reject_nonpositive_limits(builder) -> None:
 def test_export_groups_by_requested_key_and_binds_cursor_after_scope(
     export_type: ExportType, group_key: str, key_filter: str, joins: str
 ) -> None:
-    query = build_export_sql(
+    query: Final = build_export_sql(
         _scope(entity_ids=None),
         export_type=export_type,
         after=ExportCursor(date="2026-01-12", entity_id="user-2", group_key="group-3"),
@@ -444,7 +444,7 @@ def test_export_groups_by_requested_key_and_binds_cursor_after_scope(
 
 @pytest.mark.parametrize("export_type", [ExportType.DAILY_WITH_KEYS, ExportType.DAILY_WITH_USERS])
 def test_export_uses_latest_deleted_key_metadata(export_type: ExportType) -> None:
-    query = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
+    query: Final = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
 
     assert 'FROM "LiteLLM_DeletedVerificationToken"' in query.sql
     assert "ORDER BY deleted_at DESC" in query.sql
@@ -475,7 +475,7 @@ _EMPTY_USER_METADATA: Final = "'{}'::jsonb AS user_metadata"
 def test_export_selects_redacted_key_and_user_metadata_objects_for_admin_view(
     export_type: ExportType, key_metadata: str, user_metadata: str
 ) -> None:
-    query = build_export_sql(
+    query: Final = build_export_sql(
         _scope(entity_ids=None), export_type=export_type, after=None, batch_size=2, include_metadata=True
     )
 
@@ -489,7 +489,7 @@ def test_export_selects_redacted_key_and_user_metadata_objects_for_admin_view(
 def test_export_without_metadata_selects_empty_objects_and_never_reads_metadata_columns(
     export_type: ExportType,
 ) -> None:
-    query = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
+    query: Final = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
 
     assert _EMPTY_KEY_METADATA in query.sql
     assert _EMPTY_USER_METADATA in query.sql
@@ -499,7 +499,7 @@ def test_export_without_metadata_selects_empty_objects_and_never_reads_metadata_
 
 @pytest.mark.parametrize("export_type", tuple(ExportType))
 def test_export_without_cursor_omits_cursor_predicate_and_parameters(export_type: ExportType) -> None:
-    query = build_export_sql(
+    query: Final = build_export_sql(
         _scope(entity_ids=None),
         export_type=export_type,
         after=None,
