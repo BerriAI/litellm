@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.types.llms.anthropic import MESSAGE_THREAD_NOT_FOUND_ERROR_CODE
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -39,7 +40,6 @@ from litellm.types.utils import (
     CooldownDeploymentInfo,
     InternalCallOrigin,
 )
-from litellm.types.llms.anthropic import MESSAGE_THREAD_NOT_FOUND_ERROR_CODE
 from litellm.types.videos.utils import VIDEO_ID_CALL_TYPES
 
 from .router_callbacks.track_deployment_metrics import (
