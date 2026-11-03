@@ -4356,6 +4356,7 @@ bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
 ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
+ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_COMPARISON_RESPONSE_ID_FIELD
 
 anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
 openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
@@ -4579,6 +4580,7 @@ class LlmProviders(str, Enum):
     CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
+    PARALLEL_AI = "parallel_ai"
     NACE = "nace"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"

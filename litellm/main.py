@@ -70,6 +70,9 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    raise_if_allowed_tools_tool_choice_unsupported,
+)
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
@@ -263,7 +266,7 @@ from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from .llms.custom_llm import CustomLLM, custom_chat_llm_router
+from .llms.custom_llm import custom_chat_llm_router
 from .llms.databricks.common_utils import DatabricksBase
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha
@@ -5334,10 +5337,7 @@ def _complete_custom_providers(
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    custom_handler: CustomLLM | None = None
-    for item in litellm.custom_provider_map:
-        if item["provider"] == custom_llm_provider:
-            custom_handler = item["custom_handler"]
+    custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
 
     if custom_handler is None:
         raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -5955,6 +5955,14 @@ def completion(
 
         if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
+
+        raise_if_allowed_tools_tool_choice_unsupported(
+            tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                object, tool_choice
+            ),
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+        )
 
         if provider_specific_header is not None:
             headers.update(
@@ -7900,10 +7908,7 @@ def embedding(
                 litellm_params={},
             )
         elif custom_llm_provider in litellm._custom_providers:
-            custom_handler: CustomLLM | None = None
-            for item in litellm.custom_provider_map:
-                if item["provider"] == custom_llm_provider:
-                    custom_handler = item["custom_handler"]
+            custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
 
             if custom_handler is None:
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)

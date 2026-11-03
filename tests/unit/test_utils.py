@@ -967,21 +967,11 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_creation_input_token_cost": {"type": "number"},
             "cache_creation_input_token_cost_above_1hr": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr": {"type": "number"},
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": {
-                "type": "number"
-            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr_flex": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr_priority": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr_batches": {"type": "number"},
@@ -1669,6 +1659,38 @@ def test_get_provider_rerank_config():
         "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
     )
     assert isinstance(config, HostedVLLMRerankConfig)
+
+
+def test_get_provider_video_config_resolves_a_custom_provider_map_base_video_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `BaseVideoConfig` registered in `custom_provider_map` answers for its provider name, a `CustomLLM`
+    registered there does not, and a built-in name still resolves to its built-in config even when a `CustomLLM`
+    shadows it in the map."""
+    from litellm.llms.custom_llm import CustomLLM
+    from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+
+    class QueueVideoConfig(OpenAIVideoConfig):
+        pass
+
+    video_config: Final = QueueVideoConfig()
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [
+            {"provider": "queue-video", "custom_handler": video_config},
+            {"provider": "image-only", "custom_handler": CustomLLM()},
+            {"provider": "openai", "custom_handler": CustomLLM()},
+        ],
+    )
+    monkeypatch.setattr(litellm, "_custom_providers", ["queue-video", "image-only", "openai"])
+
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="queue-video") is video_config
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="image-only") is None
+    assert isinstance(
+        ProviderConfigManager.get_provider_video_config(model="sora-2", provider="openai"), OpenAIVideoConfig
+    )
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="not-registered") is None
 
 
 def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
@@ -7572,9 +7594,10 @@ async def test_oidc_google_api_key_fails_closed_when_the_metadata_server_fails_a
             side_effect=[metadata_failure(), httpx.Response(200, text=recovered_token)]
         )
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(
-            (litellm.AuthenticationError, litellm.ServiceUnavailableError)
-        ) as excinfo:
+        with (
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+            pytest.raises((litellm.AuthenticationError, litellm.ServiceUnavailableError)) as excinfo,
+        ):
             await _ping_vllm_through(call_path, "vllm-sa")
         sent_while_failing: Final = chat.call_count
         await _ping_vllm_through(call_path, "vllm-sa")
@@ -7823,9 +7846,7 @@ async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
     try:
         with respx.mock(assert_all_called=True) as upstream:
             upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
-            await router.acompletion(
-                model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
-            )
+            await router.acompletion(model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"})
             sent: Final = upstream.calls.last.request.headers["Authorization"]
     finally:
         router.discard()
@@ -7893,7 +7914,9 @@ async def test_an_inline_oidc_api_key_reaches_the_endpoint_its_deployment_config
         with respx.mock(assert_all_called=False) as upstream:
             upstream.route().respond(200, json=_BEDROCK_REPLY)
             await router.acompletion(
-                model="claude", messages=_PING, aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com"
+                model="claude",
+                messages=_PING,
+                aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com",
             )
             sent: Final = tuple(
                 (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
@@ -8102,7 +8125,9 @@ async def test_a_team_row_naming_an_oidc_credential_reaches_only_the_credentials
         (
             lambda reference: LiteLLM_Params(
                 **litellm.Router(
-                    model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}]
+                    model_list=[
+                        {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}
+                    ]
                 ).get_model_list(model_name="openai/*")[0]["litellm_params"]
             ),
             lambda reference: "Bearer listing-token",
@@ -8652,6 +8677,40 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("mode", ["auto", "required"])
+def test_validate_tool_choice_allowed_tools_chat_layout_passes_through(mode: str):
+    tool_choice: Final = {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": mode,
+            "tools": [{"type": "function", "function": {"name": "get_time"}}, {"type": "mcp", "server_label": "docs"}],
+        },
+    }
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]},
+        {"type": "allowed_tools"},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "required"}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": []}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "none", "tools": [{"type": "function"}]}},
+        {"type": "allowed_tools", "allowed_tools": {"tools": [{"type": "function", "function": {"name": "a"}}]}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": "get_time"}},
+    ],
+)
+def test_validate_tool_choice_allowed_tools_malformed_is_a_400(tool_choice: dict[str, object]):
+    with pytest.raises(litellm.BadRequestError, match="allowed_tools") as exc_info:
+        validate_chat_completion_tool_choice(tool_choice, model=MODEL)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.model == MODEL
+    assert '"mode": "auto" | "required"' in str(exc_info.value)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("tool_choice", [123, []])
 def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
     """A non-str, non-dict tool_choice is rejected as a 400 that names the type it got."""
@@ -9074,7 +9133,9 @@ def test_basic_trimming_no_max_tokens_specified():
     trimmed_messages = trim_messages(messages, model="gpt-4")
     print("trimmed messages for gpt-4")
     print(trimmed_messages)
-    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_input_tokens"]
+    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"][
+        "max_input_tokens"
+    ]
 
 
 def test_multiple_messages_trimming():
@@ -9314,6 +9375,23 @@ def test_get_valid_models_does_not_ask_a_timed_out_provider_again_on_the_next_li
     )
 
     assert (listings, catalog.call_count) == (([], []), 1)
+
+
+@respx.mock
+def test_get_valid_models_does_not_ask_a_timed_out_hosted_vllm_server_again_on_the_next_listing(
+    reset_mock_cache: None,
+) -> None:
+    models_route: Final = respx.get("http://vllm-hung.test:8000/v1/models").mock(
+        side_effect=httpx.ReadTimeout("vLLM did not answer")
+    )
+    deployment: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-hung.test:8000/v1")
+
+    listings: Final = tuple(
+        get_valid_models(check_provider_endpoint=True, custom_llm_provider="hosted_vllm", litellm_params=deployment)
+        for _ in range(2)
+    )
+
+    assert (listings, models_route.call_count) == (([], []), 1)
 
 
 @respx.mock
@@ -11376,7 +11454,9 @@ def test_declared_mid_conversation_system_support_prefers_the_deployment_over_th
     )
 
 
-def test_declared_mid_conversation_system_support_is_none_when_the_model_lookup_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_declared_mid_conversation_system_support_is_none_when_the_model_lookup_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setitem(litellm.model_cost, "hosted_vllm/unreadable-probe", "not a model info entry")
     litellm.get_model_info.cache_clear()
     assert litellm.utils.declared_mid_conversation_system_support("unreadable-probe", "hosted_vllm", None) is None
@@ -11395,7 +11475,6 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
-
 
 
 @pytest.mark.parametrize(

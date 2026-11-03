@@ -1,11 +1,22 @@
-from collections.abc import Generator, Mapping
+import datetime
+import ipaddress
+import json
+import ssl
+import threading
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Final
 from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from litellm import Router
 
@@ -430,6 +441,262 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
     }
 
 
+@respx.mock
+def test_hosted_vllm_wildcard_lists_the_server_models_without_an_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    models_route: Final = respx.get("http://vllm-without-key.test:8000/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "meta-llama/Llama-3.1-8B-Instruct"},
+                    {"id": "qwen2.5"},
+                    {"id": "openai/gpt-oss-20b"},
+                ]
+            },
+        )
+    )
+
+    listed: Final = get_known_models_from_wildcard(
+        "hosted_vllm/*",
+        LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-without-key.test:8000/v1"),
+    )
+
+    assert listed == [
+        "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct",
+        "hosted_vllm/qwen2.5",
+        "hosted_vllm/openai/gpt-oss-20b",
+    ]
+    assert "authorization" not in models_route.calls.last.request.headers
+
+
+@respx.mock
+def test_hosted_vllm_wildcard_sends_the_configured_api_key_as_a_bearer_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    models_route: Final = respx.get(
+        "http://vllm-with-key.test:8000/v1/models", headers={"Authorization": "Bearer vllm-test-key"}
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+
+    listed: Final = get_known_models_from_wildcard(
+        "hosted_vllm/*",
+        LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-with-key.test:8000/v1", api_key="vllm-test-key"),
+    )
+
+    assert listed == ["hosted_vllm/qwen2.5"]
+    assert models_route.call_count == 1
+
+
+@respx.mock
+def test_hosted_vllm_wildcard_without_api_base_lists_the_server_chat_would_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://hosted-vllm-env.test:8000/v1")
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "hosted-vllm-env-key")
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm-passthrough-env.test:8000")
+    passthrough_server_route: Final = respx.get("http://vllm-passthrough-env.test:8000/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "model-on-the-passthrough-server"}]})
+    )
+    respx.get(
+        "http://hosted-vllm-env.test:8000/v1/models", headers={"Authorization": "Bearer hosted-vllm-env-key"}
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+
+    listed: Final = get_known_models_from_wildcard(
+        "hosted_vllm/*", LiteLLM_Params(model="hosted_vllm/*", custom_llm_provider="hosted_vllm")
+    )
+
+    assert listed == ["hosted_vllm/qwen2.5"]
+    assert not passthrough_server_route.called
+
+
+@respx.mock
+def test_hosted_vllm_wildcard_listing_does_not_wait_the_completion_timeout_on_a_hung_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    models_route: Final = respx.get("http://vllm-timeout.test:8000/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+    )
+
+    get_known_models_from_wildcard(
+        "hosted_vllm/*", LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-timeout.test:8000/v1")
+    )
+
+    read_timeout: Final = models_route.calls.last.request.extensions["timeout"]["read"]
+    assert read_timeout is not None
+    assert read_timeout <= NON_LLM_CONNECTION_TIMEOUT
+
+
+@respx.mock
+def test_hosted_vllm_wildcard_listing_sends_the_deployment_extra_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    respx.get(
+        "http://vllm-behind-gateway.test:8000/v1/models",
+        headers={"X-Tenant": "team-a", "Authorization": "Bearer vllm-test-key"},
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+
+    listed: Final = get_known_models_from_wildcard(
+        "hosted_vllm/*",
+        LiteLLM_Params(
+            model="hosted_vllm/*",
+            api_base="http://vllm-behind-gateway.test:8000/v1",
+            api_key="vllm-test-key",
+            extra_headers={"X-Tenant": "team-a"},
+        ),
+    )
+
+    assert listed == ["hosted_vllm/qwen2.5"]
+
+
+
+@respx.mock
+def test_vllm_wildcard_never_lists_the_ids_of_a_configured_vllm_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm-library-env.test:8000")
+    monkeypatch.setenv("VLLM_API_KEY", "vllm-library-env-key")
+    server_route: Final = respx.get(url__regex=r"http://vllm-library(-env)?\.test:8000/.*").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "model-only-a-server-serves"}]})
+    )
+
+    listed: Final = get_known_models_from_wildcard(
+        "vllm/*",
+        LiteLLM_Params(model="vllm/*", api_base="http://vllm-library.test:8000", api_key="vllm-library-key"),
+    )
+
+    assert "vllm/model-only-a-server-serves" not in listed
+    assert not server_route.called
+
+_SELF_SIGNED_CERT_NOT_VALID_BEFORE: Final = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
+_SELF_SIGNED_CERT_NOT_VALID_AFTER: Final = datetime.datetime(9999, 12, 31, tzinfo=datetime.UTC)
+
+
+def _self_signed_cert(directory: Path) -> tuple[Path, Path]:
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    cert: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(_SELF_SIGNED_CERT_NOT_VALID_BEFORE)
+        .not_valid_after(_SELF_SIGNED_CERT_NOT_VALID_AFTER)
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))]), critical=False
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_path: Final = directory / "cert.pem"
+    key_path: Final = directory / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
+    return cert_path, key_path
+
+
+@pytest.fixture
+def self_signed_vllm_api_base(tmp_path: Path) -> Iterator[str]:
+    cert_path, key_path = _self_signed_cert(tmp_path)
+
+    class Handler(BaseHTTPRequestHandler):
+        timeout = 5
+
+        def do_GET(self) -> None:
+            body: Final = json.dumps({"data": [{"id": "qwen2.5"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"https://127.0.0.1:{server.server_address[1]}/v1"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_hosted_vllm_wildcard_lists_a_self_signed_server_only_when_the_deployment_turns_off_ssl_verify(
+    monkeypatch: pytest.MonkeyPatch, self_signed_vllm_api_base: str
+) -> None:
+    import litellm
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.custom_httpx import http_handler
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(http_handler, "_ssl_context_cache", {})
+    monkeypatch.delenv("SSL_VERIFY", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+
+    verified: Final = get_known_models_from_wildcard(
+        "hosted_vllm/*", LiteLLM_Params(model="hosted_vllm/*", api_base=self_signed_vllm_api_base)
+    )
+    unverified: Final = get_known_models_from_wildcard(
+        "hosted_vllm/*",
+        LiteLLM_Params(model="hosted_vllm/*", api_base=self_signed_vllm_api_base, ssl_verify=False),
+    )
+
+    assert verified == []
+    assert unverified == ["hosted_vllm/qwen2.5"]
+
+
+@respx.mock
+def test_custom_prefix_over_a_litellm_proxy_wildcard_lists_upstream_models_under_the_prefix_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    respx.get("http://upstream-proxy.test:4000/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "claude-sonnet"}]})
+    )
+
+    listed: Final = get_known_models_from_wildcard(
+        "team-proxy/*",
+        LiteLLM_Params(model="litellm_proxy/*", api_base="http://upstream-proxy.test:4000", api_key="sk-upstream"),
+    )
+
+    assert listed == ["team-proxy/gpt-4o", "team-proxy/claude-sonnet"]
+
+
 def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
     """Regression test for #30358.
 
@@ -833,6 +1100,56 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
     result = expand_wildcard_deployments_for_model_info([deployment])
     assert result == [deployment]
 
+
+
+@pytest.mark.parametrize(
+    ("allowed_model_names", "expected_names", "expected_listings"),
+    [
+        pytest.param(None, ["hosted_vllm/qwen2.5"], 1, id="unscoped"),
+        pytest.param(["hosted_vllm/qwen2.5"], ["hosted_vllm/qwen2.5"], 1, id="granted-a-listed-id"),
+        pytest.param(["qwen-open"], [], 0, id="granted-a-name-the-alias-matches"),
+    ],
+)
+@respx.mock
+def test_expand_wildcard_alias_without_a_slash_lists_and_filters_by_its_provider_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    allowed_model_names: list[str] | None,
+    expected_names: list[str],
+    expected_listings: int,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    api_base: Final = f"http://vllm-alias-{request.node.callspec.id}.test:8000/v1"
+    listing: Final = respx.get(f"{api_base}/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+    )
+    deployment: Final = {"model_name": "qwen-*", "litellm_params": {"model": "hosted_vllm/*", "api_base": api_base}}
+
+    rows: Final = expand_wildcard_deployments_for_model_info([deployment], allowed_model_names=allowed_model_names)
+
+    assert ([row["model_name"] for row in rows], listing.call_count) == (expected_names, expected_listings)
+
+
+@pytest.mark.parametrize(
+    ("allowed_model_names", "keeps_the_alias"),
+    [
+        pytest.param(["gpt-4o-mini"], True, id="granted-a-name-the-alias-matches"),
+        pytest.param(["claude-sonnet"], False, id="granted-only-other-names"),
+    ],
+)
+def test_expand_wildcard_alias_over_one_model_is_kept_only_for_keys_with_a_name_it_matches(
+    allowed_model_names: list[str], keeps_the_alias: bool
+) -> None:
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    deployment: Final = {"model_name": "gpt-4o*", "litellm_params": {"model": "openai/gpt-4o"}}
+
+    rows: Final = expand_wildcard_deployments_for_model_info([deployment], allowed_model_names=allowed_model_names)
+
+    assert rows == ([deployment] if keeps_the_alias else [])
 
 def test_get_complete_model_list_excludes_wildcard_routes_by_default():
     """Regression (LIT-4108): a wildcard with a matching router deployment leaked into /v1/models."""
@@ -1325,6 +1642,40 @@ def test_key_granted_openrouter_wildcard_without_an_openrouter_deployment_lists_
     )
 
     assert (listed, catalog.call_count) == ([], 0)
+
+
+@respx.mock
+def test_key_granted_hosted_vllm_wildcard_without_a_hosted_vllm_deployment_lists_no_environment_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://hosted-vllm-environment-only.test:8000/v1")
+    environment_server: Final = respx.get("http://hosted-vllm-environment-only.test:8000/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vllm-team/*",
+                "litellm_params": {"model": "hosted_vllm/*", "api_base": "http://vllm-team.test:8000/v1"},
+            }
+        ]
+    )
+
+    listed: Final = get_complete_model_list(
+        key_models=["hosted_vllm/*"],
+        team_models=[],
+        proxy_model_list=router.model_names,
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert (listed, environment_server.call_count) == ([], 0)
 
 
 @contextmanager
