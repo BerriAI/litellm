@@ -227,6 +227,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
+    supports_continuation: ReadOnly[bool | None]
     supports_none_reasoning_effort: bool | None
     supports_minimal_reasoning_effort: bool | None
     supports_low_reasoning_effort: bool | None
@@ -246,6 +247,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     bedrock_converse_supports_strict_tools: bool | None
     supports_regex_lookaround: ReadOnly[bool | None]
     token_count_framing: ReadOnly[int | None]
+    token_count_tool_framing: ReadOnly[int | None]
+    token_count_responses_framing: ReadOnly[int | None]
+    token_count_responses_tool_framing: ReadOnly[int | None]
     token_count_model: ReadOnly[TokenCountModelInfo | None]
     token_count_tokenizer: ReadOnly[TokenCountTokenizer | None]
 
@@ -550,6 +554,11 @@ class CallTypes(str, Enum):
     aextraction = "aextraction"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
+    acreate_realtime_client_secret = "acreate_realtime_client_secret"
+    arealtime_calls = "arealtime_calls"
+    acreate_realtime_transcription_session = "acreate_realtime_transcription_session"
+    acreate_realtime_translation_client_secret = "acreate_realtime_translation_client_secret"
+    arealtime_translation_calls = "arealtime_translation_calls"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
@@ -790,6 +799,8 @@ CallTypesLiteral = Literal[
     "acreate_realtime_client_secret",
     "arealtime_calls",
     "acreate_realtime_transcription_session",
+    "acreate_realtime_translation_client_secret",
+    "arealtime_translation_calls",
 ]
 
 MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
@@ -798,6 +809,10 @@ MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
 
 # Mapping of API routes to their corresponding call types
 API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
+    "/v1/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/v1/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
+    "/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
     # Chat Completions
     "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
     "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
@@ -1116,9 +1131,11 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     "/openai/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     # Realtime API
-    "/realtime": [CallTypes.arealtime],
-    "/v1/realtime": [CallTypes.arealtime],
-    "/openai/v1/realtime": [CallTypes.arealtime],
+    "/realtime": (CallTypes.arealtime,),
+    "/v1/realtime": (CallTypes.arealtime,),
+    "/openai/v1/realtime": (CallTypes.arealtime,),
+    "/realtime/translations": (CallTypes.arealtime,),
+    "/v1/realtime/translations": (CallTypes.arealtime,),
     "/live/sessions": (CallTypes.arealtime,),
     "/v1/live/sessions": (CallTypes.arealtime,),
     "/openai/v1/live/sessions": (CallTypes.arealtime,),
@@ -2947,9 +2964,19 @@ class TranscriptionUsageTokensObject(LiteLLMBaseModel):
     input_token_details: TranscriptionUsageInputTokenDetailsObject | None = None
 
 
+class TranscriptionDetectedLanguage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+
+
+_DETECTED_LANGUAGES: Final = TypeAdapter(tuple[TranscriptionDetectedLanguage, ...])
+
+
 class TranscriptionResponse(OpenAIObject):
     text: str | None = None
     usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
+    languages: Sequence[TranscriptionDetectedLanguage] | None = None
 
     _hidden_params: dict = {}
     _response_headers: dict | None = None
@@ -2962,8 +2989,28 @@ class TranscriptionResponse(OpenAIObject):
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, text=None) -> None:
-        super().__init__(text=text)
+    def __init__(
+        self,
+        text: str | None = None,
+        usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | Mapping[str, object] | None = None,
+        languages: Sequence[TranscriptionDetectedLanguage | Mapping[str, object]] | None = None,
+        **kwargs: object,  # kwargs-ok: OpenAI-compatible responses preserve provider extension fields
+    ) -> None:
+        super().__init__(
+            text=text, usage=usage, languages=TranscriptionResponse.detected_languages(languages), **kwargs
+        )
+        if self.languages is None:
+            del self.languages
+
+    @staticmethod
+    def detected_languages(value: object) -> tuple[TranscriptionDetectedLanguage, ...] | None:
+        try:
+            return _DETECTED_LANGUAGES.validate_python(value, from_attributes=True)
+        except ValidationError:
+            return None
+
+    def set_audio_transcription_duration(self, duration: float) -> None:
+        self._hidden_params["audio_transcription_duration"] = duration
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -4231,12 +4278,21 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_assistant_prefill",
         "supports_bedrock_native_structured_output",
         "supports_pdf_input",
+        "supports_continuation",
         "reasoning_modes",
         "reasoning_contexts",
     }
 )
 
-DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})
+DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "token_count_framing",
+        "token_count_tool_framing",
+        "token_count_responses_framing",
+        "token_count_responses_tool_framing",
+        "token_count_model",
+    }
+)
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
@@ -4343,6 +4399,7 @@ bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
 ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
+ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_COMPARISON_RESPONSE_ID_FIELD
 
 anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
 openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
@@ -4566,6 +4623,7 @@ class LlmProviders(str, Enum):
     CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
+    PARALLEL_AI = "parallel_ai"
     NACE = "nace"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"

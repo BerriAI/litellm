@@ -451,6 +451,7 @@ OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES: Final = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
 )
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
+REALTIME_SESSION_ENDED_ABNORMALLY_KEY: Final = "realtime_session_ended_abnormally"
 
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
@@ -699,6 +700,9 @@ STREAM_SSE_DONE_STRING: Final[str] = "[DONE]"
 STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
 STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
 STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
+STREAM_FINISH_CHOICE_FIELDS: Final = ("stop_reason",)
+STREAM_CHUNK_CHOICE_FIELDS: Final = ("token_ids",)
+VLLM_CHOICE_FIELDS: Final = STREAM_FINISH_CHOICE_FIELDS + STREAM_CHUNK_CHOICE_FIELDS
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
     "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400
@@ -968,7 +972,10 @@ OPENAI_CHAT_COMPLETION_PARAMS: Final = [
 
 OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "language",
+    "languages",
+    "keywords",
     "response_format",
+    "stream",
     "timestamp_granularities",
 ]
 

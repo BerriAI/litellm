@@ -34,6 +34,8 @@ _CONNECTION_CAPACITY_PHRASES: Final = (
 _PRISMA_POOL_TIMEOUT_CODE: Final = "P2024"
 _LOCK_TIMEOUT_SQLSTATE: Final = "55P03"
 _LOCK_TIMEOUT_PHRASE: Final = "canceling statement due to lock timeout"
+_STATEMENT_TIMEOUT_SQLSTATE: Final = "57014"
+_STATEMENT_TIMEOUT_PHRASE: Final = "canceling statement due to statement timeout"
 
 
 def exception_chain(e: BaseException) -> Iterator[BaseException]:
@@ -301,6 +303,17 @@ class PrismaDBExceptionHandler:
         if PrismaDBExceptionHandler.postgres_sqlstate(e) == _LOCK_TIMEOUT_SQLSTATE:
             return True
         return _LOCK_TIMEOUT_PHRASE in str(e).lower()
+
+    @staticmethod
+    def is_statement_timeout_error(e: Exception) -> bool:
+        """True iff Postgres cancelled a statement for exceeding ``statement_timeout`` (SQLSTATE 57014)."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        if PrismaDBExceptionHandler.postgres_sqlstate(e) == _STATEMENT_TIMEOUT_SQLSTATE:
+            return True
+        return _STATEMENT_TIMEOUT_PHRASE in str(e).lower()
 
     @staticmethod
     def postgres_sqlstate(e: Exception) -> str | None:

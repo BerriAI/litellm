@@ -61,6 +61,7 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.headers = httpx.Headers()
         mock_response.text = json.dumps(embed_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
@@ -774,6 +775,7 @@ def test_bedrock_embedding_header_forwarding(model, embed_response):
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.headers = httpx.Headers()
         mock_response.text = json.dumps(embed_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
@@ -909,6 +911,7 @@ def test_bedrock_cohere_v4_embedding_response_parsing():
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.headers = httpx.Headers()
         mock_response.text = json.dumps(cohere_v4_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
@@ -1317,6 +1320,7 @@ def test_bedrock_cohere_embedding_types_wrapped_as_list(
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.headers = httpx.Headers()
         mock_response.text = json.dumps(cohere_embedding_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
@@ -1848,6 +1852,7 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
+        mock_response.headers = httpx.Headers()
         mock_response.text = json.dumps(embed_response)
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
