@@ -22,7 +22,7 @@ def assert_chat_bills_rates(
     gateway: Gateway, model: str, service_tier: str | None, input_rate: float, output_rate: float
 ) -> None:
     with httpx.Client(base_url=gateway.upstream_url, trust_env=False) as upstream:
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         response: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -223,7 +223,7 @@ def test_ultrafast_long_context_prompt_bills_ultrafast_long_context_rates(
         )
         request_path, request_body, expected_upstream_path = _surface_request(surface, scenario_id, model, service_tier)
         with httpx.Client(base_url=gateway.upstream_url, trust_env=False) as upstream:
-            upstream.get("/__observations").raise_for_status()
+            upstream.delete("/__observations").raise_for_status()
             response: Final = gateway.request(
                 "POST",
                 request_path,

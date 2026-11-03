@@ -194,8 +194,9 @@ class TestDashScopeVideoInputReference:
             lambda tmp_path: ("first.png", PNG_BYTES, "image/png"),
             lambda tmp_path: ("first.png", io.BytesIO(PNG_BYTES)),
             lambda tmp_path: _write_png(tmp_path),
+            lambda tmp_path: ("first.png", ("inner.png", PNG_BYTES)),
         ],
-        ids=["filename-bytes-content-type", "filename-file", "path"],
+        ids=["filename-bytes-content-type", "filename-file", "path", "nested-tuple"],
     )
     def test_file_tuple_and_path_references_are_encoded(self, make_reference, tmp_path):
         """Regression: tuples and paths are valid FileTypes but raised before reaching DashScope."""
@@ -1117,6 +1118,20 @@ class TestDashScopeVideoEnvironment:
         )
 
         assert url == "https://ws-123.cn-beijing.maas.aliyuncs.com"
+
+    def test_every_protocol_base_normalizes_to_the_host(self):
+        workspace: Final = "https://ws-123.cn-beijing.maas.aliyuncs.com"
+
+        for api_base in (
+            f"{workspace}/compatible-mode/v1",
+            f"{workspace}/apps/anthropic",
+            f"{workspace}/api/v1",
+        ):
+            url: Final = DashScopeVideoConfig().get_complete_url(
+                model="wan3.0-video", api_base=api_base, litellm_params={}
+            )
+
+            assert url == workspace
 
     def test_default_host_is_beijing(self, monkeypatch):
         monkeypatch.delenv("DASHSCOPE_API_BASE_VIDEO", raising=False)

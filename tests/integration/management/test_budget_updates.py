@@ -9,6 +9,8 @@ from tests.integration._support.client import Gateway, string_value
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 def _persisted_reset_at(budget_id: str) -> datetime:
     rows: Final = read_rows(

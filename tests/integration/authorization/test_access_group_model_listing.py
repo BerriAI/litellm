@@ -79,6 +79,10 @@ def _observed(upstream: httpx.Client) -> list[dict[str, JsonValue]]:
     return requests
 
 
+def _reset_observations(upstream: httpx.Client) -> None:
+    upstream.delete("/__observations").raise_for_status()
+
+
 def _chat(proxy: Gateway, model: str, key: str, text: str) -> httpx.Response:
     return proxy.request(
         "POST",
@@ -135,7 +139,7 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
         team_key: Final = scenario.key(team_id=team_id)
         assigned_key: Final = scenario.key(models=["no-default-models"])
         hashed_key: Final = sha256(assigned_key.encode()).hexdigest()
-        _observed(upstream)
+        _reset_observations(upstream)
         _assert_denied(_chat(gateway, model, team_key, "control team"), model, "team_model_access_denied")
         _assert_denied(_chat(gateway, model, assigned_key, "control key"), model, "key_model_access_denied")
         assert _observed(upstream) == []
@@ -173,6 +177,7 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
                 )
                 expected.append(_observation(text))
         assert _observed(upstream) == expected
+        _reset_observations(upstream)
 
         removed_team: Final = gateway.request("PUT", f"{route_prefix}/{access_group_id}", {"assigned_team_ids": []})
         assert removed_team.status_code == 200, removed_team.text
@@ -183,6 +188,7 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
         still_granted: Final = f"still granted {uuid.uuid4().hex}"
         _assert_served(_chat(gateway, model, assigned_key, still_granted))
         assert _observed(upstream) == [_observation(still_granted)]
+        _reset_observations(upstream)
 
         removed_key: Final = gateway.request("PUT", f"{route_prefix}/{access_group_id}", {"assigned_key_ids": []})
         assert removed_key.status_code == 200, removed_key.text
@@ -203,6 +209,7 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
             _assert_served(_chat(gateway, model, key, text))
             regranted.append(_observation(text))
         assert _observed(upstream) == regranted
+        _reset_observations(upstream)
 
         deleted: Final = gateway.request("DELETE", f"{route_prefix}/{access_group_id}")
         assert deleted.status_code == 204, deleted.text
@@ -266,6 +273,7 @@ def test_deleting_an_access_group_revokes_a_still_assigned_team_and_key(gateway:
         )
         _assert_served(key_response)
         assert _observed(upstream) == [_observation(team_text), _observation(key_text)]
+        _reset_observations(upstream)
 
         deleted: Final = gateway.request("DELETE", f"{route_prefix}/{access_group_id}")
         assert deleted.status_code == 204, deleted.text
@@ -310,12 +318,13 @@ def test_access_group_revocation_reaches_a_warmed_peer_before_the_cache_ttl(
         assert created.status_code == 201, created.text
         access_group_id: Final = string_value(created.json()["access_group_id"])
         scenario.cleanups.callback(gateway.request, "DELETE", f"{route_prefix}/{access_group_id}")
-        _observed(upstream)
+        _reset_observations(upstream)
 
         if revocation == "team":
             warmed: Final = _chat(peer, model, team_key, "warm team")
             assert warmed.status_code == 200, warmed.text
             assert _observed(upstream) == [_observation("warm team")]
+            _reset_observations(upstream)
             team_update: Final = gateway.request("PUT", f"{route_prefix}/{access_group_id}", {"assigned_team_ids": []})
             assert team_update.status_code == 200, team_update.text
             _assert_denied(
@@ -331,6 +340,7 @@ def test_access_group_revocation_reaches_a_warmed_peer_before_the_cache_ttl(
             warmed: Final = _chat(peer, model, assigned_key, "warm key")
             assert warmed.status_code == 200, warmed.text
             assert _observed(upstream) == [_observation("warm key")]
+            _reset_observations(upstream)
             key_update: Final = gateway.request("PUT", f"{route_prefix}/{access_group_id}", {"assigned_key_ids": []})
             assert key_update.status_code == 200, key_update.text
             _assert_denied(
@@ -351,6 +361,7 @@ def test_access_group_revocation_reaches_a_warmed_peer_before_the_cache_ttl(
                 _observation("warm delete team"),
                 _observation("warm delete key"),
             ]
+            _reset_observations(upstream)
             deleted: Final = gateway.request("DELETE", f"{route_prefix}/{access_group_id}")
             assert deleted.status_code == 204, deleted.text
             _assert_denied(
@@ -383,7 +394,7 @@ def test_raw_key_in_assigned_key_ids_grants_the_same_access_as_the_hashed_key(ga
         model: Final = scenario.model()
         key: Final = scenario.key(models=["no-default-models"])
         hashed_key: Final = sha256(key.encode()).hexdigest()
-        _observed(upstream)
+        _reset_observations(upstream)
         _assert_denied(_chat(gateway, model, key, "control"), model, "key_model_access_denied")
         assert _observed(upstream) == []
 

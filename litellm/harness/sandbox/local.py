@@ -14,7 +14,7 @@ from typing import Final
 
 from litellm.constants import HARNESS_PROCESS_KILL_GRACE_SECONDS
 from litellm.harness.errors import SandboxError
-from litellm.harness.sandbox.base import CompletedRun
+from litellm.harness.sandbox.base import CompletedRun, Process
 from litellm.harness.sandbox.snapshot import snapshot_local
 
 _SECRET_PREFIXES: Final = (
@@ -103,7 +103,7 @@ class SubprocessHandle:
         await self._proc.wait()
 
 
-async def _read_all(handle: SubprocessHandle) -> tuple[bytes, bytes, int]:
+async def _read_all(handle: Process) -> tuple[bytes, bytes, int]:
     if handle.stdin is not None:
         handle.stdin.close()
     stdout, stderr = await asyncio.gather(handle.stdout.read(), handle.stderr.read())
@@ -111,13 +111,16 @@ async def _read_all(handle: SubprocessHandle) -> tuple[bytes, bytes, int]:
     return stdout, stderr, exit_code
 
 
-async def collect_output(handle: SubprocessHandle, cmd: Sequence[str], timeout: float | None) -> CompletedRun:
-    """Close stdin, read stdout/stderr to EOF; kill and raise SandboxError on timeout."""
+async def collect_output(handle: Process, cmd: Sequence[str], timeout: float | None) -> CompletedRun:
+    """Close stdin, read stdout/stderr to EOF; kill on cancel, and kill and raise SandboxError on timeout."""
     try:
         stdout, stderr, code = await asyncio.wait_for(_read_all(handle), timeout)
     except asyncio.TimeoutError:
         await handle.kill()
         raise SandboxError(f"command timed out after {timeout}s: {cmd[0]}")
+    except asyncio.CancelledError:
+        await handle.kill()
+        raise
     return CompletedRun(
         stdout=stdout.decode("utf-8", errors="replace"),
         stderr=stderr.decode("utf-8", errors="replace"),
@@ -180,14 +183,15 @@ class LocalSandbox:
         self._check_open()
         if not cmd:
             raise SandboxError("exec() needs a non-empty command")
+        work_dir: Final = self._resolve_cwd(cwd)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=self._resolve_cwd(cwd),
-                env=self.child_env(env),
+                cwd=work_dir,
+                env=self.child_env(MappingProxyType({**(env or {}), "PWD": work_dir})),
                 start_new_session=True,
             )
         except (FileNotFoundError, PermissionError) as exc:

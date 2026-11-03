@@ -33,6 +33,7 @@ UTILS_NAMES: Final = (
     "supports_web_search",
     "supports_tool_search",
     "supports_url_context",
+    "supports_continuation",
     "supports_response_schema",
     "supports_parallel_function_calling",
     "supports_vision",
@@ -162,15 +163,22 @@ LLM_CONFIG_NAMES: Final = (
     "HostedVLLMRerankConfig",
     "PerplexityDecisionsConfig",
     "TypeSafeDecisionsConfig",
+    "ParallelAIDecisionsConfig",
+    "NaceDecisionsConfig",
     "OpenRouterDecisionsConfig",
     "FireworksAIDecisionsConfig",
     "CloudflareDecisionsConfig",
+    "CloudflareExtractionConfig",
     "StrandsDeciderDecisionsConfig",
     "DatabricksDecisionsConfig",
     "HostedVLLMDecisionsConfig",
+    "LMStudioDecisionsConfig",
+    "OllamaDecisionsConfig",
     "LayaDecisionsConfig",
     "BespokeDecisionsConfig",
+    "EuJevDecisionsConfig",
     "OpenAIDecisionsConfig",
+    "AzureDecisionsConfig",
     "AzureAIDecisionsConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
@@ -239,6 +247,7 @@ LLM_CONFIG_NAMES: Final = (
     "MistralEmbeddingConfig",
     "OpenAIImageVariationConfig",
     "DeepInfraConfig",
+    "ClfAiGatewayConfig",
     "DeepgramAudioTranscriptionConfig",
     "TopazImageVariationConfig",
     "OpenAITextCompletionConfig",
@@ -481,6 +490,7 @@ _UTILS_IMPORT_MAP: Final = {
     "supports_web_search": (".utils", "supports_web_search"),
     "supports_tool_search": (".utils", "supports_tool_search"),
     "supports_url_context": (".utils", "supports_url_context"),
+    "supports_continuation": (".utils", "supports_continuation"),
     "supports_response_schema": (".utils", "supports_response_schema"),
     "supports_parallel_function_calling": (
         ".utils",
@@ -729,10 +739,13 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "HostedVLLMRerankConfig",
     ),
     "PerplexityDecisionsConfig": (".llms.perplexity.decisions.transformation", "PerplexityDecisionsConfig"),
+    "NaceDecisionsConfig": (".llms.nace.decisions.transformation", "NaceDecisionsConfig"),
     "TypeSafeDecisionsConfig": (".llms.typesafe.decisions.transformation", "TypeSafeDecisionsConfig"),
+    "ParallelAIDecisionsConfig": (".llms.parallel_ai.decisions.transformation", "ParallelAIDecisionsConfig"),
     "OpenRouterDecisionsConfig": (".llms.openrouter.decisions.transformation", "OpenRouterDecisionsConfig"),
     "FireworksAIDecisionsConfig": (".llms.fireworks_ai.decisions.transformation", "FireworksAIDecisionsConfig"),
     "CloudflareDecisionsConfig": (".llms.cloudflare.decisions.transformation", "CloudflareDecisionsConfig"),
+    "CloudflareExtractionConfig": (".llms.cloudflare.extraction.transformation", "CloudflareExtractionConfig"),
     "StrandsDeciderDecisionsConfig": (
         ".llms.strands_decider.decisions.transformation",
         "StrandsDeciderDecisionsConfig",
@@ -742,9 +755,13 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.hosted_vllm.decisions.transformation",
         "HostedVLLMDecisionsConfig",
     ),
+    "LMStudioDecisionsConfig": (".llms.lm_studio.decisions.transformation", "LMStudioDecisionsConfig"),
+    "OllamaDecisionsConfig": (".llms.ollama.decisions.transformation", "OllamaDecisionsConfig"),
     "LayaDecisionsConfig": (".llms.laya.decisions.transformation", "LayaDecisionsConfig"),
     "BespokeDecisionsConfig": (".llms.bespoke.decisions.transformation", "BespokeDecisionsConfig"),
+    "EuJevDecisionsConfig": (".llms.eu_jev.decisions.transformation", "EuJevDecisionsConfig"),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
+    "AzureDecisionsConfig": (".llms.azure.decisions.transformation", "AzureDecisionsConfig"),
     "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),
     "NvidiaNimRerankConfig": (
         ".llms.nvidia_nim.rerank.transformation",
@@ -793,7 +810,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     ),
     "CohereChatConfig": (".llms.cohere.chat.transformation", "CohereChatConfig"),
     "AnthropicMessagesConfig": (
-        ".llms.anthropic.pass_through.messages.transformation",
+        ".llms.anthropic.messages.native.transformation",
         "AnthropicMessagesConfig",
     ),
     "BedrockClaudePlatformMessagesConfig": (
@@ -801,7 +818,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "BedrockClaudePlatformMessagesConfig",
     ),
     "AmazonAnthropicClaudeMessagesConfig": (
-        ".llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation",
+        ".llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation",
         "AmazonAnthropicClaudeMessagesConfig",
     ),
     "AmazonMantleMessagesConfig": (
@@ -831,7 +848,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "VertexAIAnthropicConfig",
     ),
     "VertexAILlama3Config": (
-        ".llms.vertex_ai.vertex_ai_partner_models.llama3.transformation",
+        ".llms.vertex_ai.vertex_ai_partner_models.llama.transformation",
         "VertexAILlama3Config",
     ),
     "VertexAIAi21Config": (
@@ -876,11 +893,11 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "GoogleAIStudioGeminiConfig",
     ),  # Alias
     "AmazonAnthropicConfig": (
-        ".llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation",
+        ".llms.bedrock.chat.invoke_transformations.anthropic_legacy_text_completions_transformation",
         "AmazonAnthropicConfig",
     ),
     "AmazonAnthropicClaudeConfig": (
-        ".llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation",
+        ".llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation",
         "AmazonAnthropicClaudeConfig",
     ),
     "AmazonCohereConfig": (
@@ -963,6 +980,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "OpenAIImageVariationConfig",
     ),
     "DeepInfraConfig": (".llms.deepinfra.chat.transformation", "DeepInfraConfig"),
+    "ClfAiGatewayConfig": (
+        ".llms.clf_ai_gateway.chat.transformation",
+        "ClfAiGatewayConfig",
+    ),
     "DeepgramAudioTranscriptionConfig": (
         ".llms.deepgram.audio_transcription.transformation",
         "DeepgramAudioTranscriptionConfig",
@@ -1097,7 +1118,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "OpenAIOSeriesConfig",
     ),  # Alias
     "OpenAIGPTConfig": (".llms.openai.chat.gpt_transformation", "OpenAIGPTConfig"),
-    "OpenAIGPT5Config": (".llms.openai.chat.gpt_5_transformation", "OpenAIGPT5Config"),
+    "OpenAIGPT5Config": (".llms.openai.chat.gpt_reasoning_transformation", "OpenAIGPT5Config"),
     "OpenAIWhisperAudioTranscriptionConfig": (
         ".llms.openai.transcriptions.whisper_transformation",
         "OpenAIWhisperAudioTranscriptionConfig",
@@ -1171,7 +1192,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "CometAPIConfig": (".llms.cometapi.chat.transformation", "CometAPIConfig"),
     "AzureOpenAIConfig": (".llms.azure.chat.gpt_transformation", "AzureOpenAIConfig"),
     "AzureOpenAIGPT5Config": (
-        ".llms.azure.chat.gpt_5_transformation",
+        ".llms.azure.chat.gpt_reasoning_transformation",
         "AzureOpenAIGPT5Config",
     ),
     "AzureOpenAITextConfig": (
@@ -1452,11 +1473,11 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
     "AsyncHTTPHandler": ("litellm.llms.custom_httpx.http_handler", "AsyncHTTPHandler"),
     "HTTPHandler": ("litellm.llms.custom_httpx.http_handler", "HTTPHandler"),
     "get_num_retries_from_retry_policy": (
-        "litellm.router_utils.get_retry_from_policy",
+        "litellm.litellm_core_utils.get_retry_from_policy",
         "get_num_retries_from_retry_policy",
     ),
     "reset_retry_policy": (
-        "litellm.router_utils.get_retry_from_policy",
+        "litellm.litellm_core_utils.get_retry_from_policy",
         "reset_retry_policy",
     ),
     "get_coroutine_checker": (

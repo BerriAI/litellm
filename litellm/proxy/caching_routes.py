@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -17,6 +18,10 @@ router: Final = APIRouter(
     prefix="/cache",
     tags=["caching"],
 )
+
+
+def _copy_cache_params(cache_params: Mapping[str, object]) -> Mapping[str, object]:
+    return dict(**cache_params)
 
 
 def _extract_cache_params() -> dict[str, object]:
@@ -41,7 +46,7 @@ def _extract_cache_params() -> dict[str, object]:
     try:
         cache_params: Final = vars(litellm.cache.cache)
         cleaned_params: Final = (
-            HealthCheckCacheParams.model_validate(dict(**cache_params)).model_dump() if cache_params else {}
+            HealthCheckCacheParams.model_validate(_copy_cache_params(cache_params)).model_dump() if cache_params else {}
         )
         return masker.mask_dict(cleaned_params)
     except (AttributeError, TypeError) as e:

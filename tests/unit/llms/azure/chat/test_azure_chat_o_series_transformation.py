@@ -1,9 +1,10 @@
 import json
 import traceback
-from typing import Callable, Optional
+from typing import Callable, Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai._legacy_response import LegacyAPIResponse
 
 import litellm
 from litellm import ModelResponse
@@ -130,7 +131,7 @@ def test_azure_o3_streaming():
         api_version="2024-02-15-preview",
     )
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_create:
+    with patch.object(client, "post") as mock_create:
         try:
             completion(
                 model="azure/o3-mini",
@@ -141,7 +142,7 @@ def test_azure_o3_streaming():
         except Exception as e:
             print(e)
         assert mock_create.call_count == 1
-        assert "stream" in mock_create.call_args.kwargs
+        assert "stream" in mock_create.call_args.kwargs["body"]
 
 
 def test_azure_o_series_routing():
@@ -157,7 +158,7 @@ def test_azure_o_series_routing():
         api_version="2024-02-15-preview",
     )
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_create:
+    with patch.object(client, "post") as mock_create:
         try:
             completion(
                 model="azure/o_series/my-random-deployment-name",
@@ -168,17 +169,19 @@ def test_azure_o_series_routing():
         except Exception as e:
             print(e)
         assert mock_create.call_count == 1
-        assert "stream" not in mock_create.call_args.kwargs
+        assert "stream" not in mock_create.call_args.kwargs["body"]
 
 
 @patch("litellm.main.azure_o1_chat_completions._get_openai_client")
 def test_openai_o_series_max_retries_0(mock_get_openai_client):
     import litellm
 
-    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.headers = {}
-    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.parse.return_value = (
-        ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
-    )
+    raw_response: Final = MagicMock(spec=LegacyAPIResponse)
+    raw_response.headers = {}
+    raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
+    client_stub: Final = MagicMock()
+    client_stub.post.return_value = raw_response
+    mock_get_openai_client.return_value = client_stub
     litellm.set_verbose = True
     response = litellm.completion(
         model="azure/o1-preview",
@@ -233,7 +236,7 @@ async def test_azure_o1_series_response_format_extra_params():
     response_format = {"type": "json_object"}
     tool_choice = "auto"
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -251,7 +254,7 @@ async def test_azure_o1_series_response_format_extra_params():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         print("request_body: ", json.dumps(request_body, indent=4))
         assert request_body["tools"] == tools

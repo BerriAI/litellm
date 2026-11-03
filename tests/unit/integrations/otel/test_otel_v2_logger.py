@@ -207,6 +207,11 @@ def test_routing_diagnostics_reach_llm_spans_without_promoting_prompt_text(fail:
         "classifier_cost": 0.001,
         "classifier_failure_reason": "timeout",
         "classifier_error_type": "TimeoutError",
+        "classifier_input_budget_tokens": 24576,
+        "classifier_input_tokens": 23000,
+        "classifier_input_count_method": "estimated_tokens",
+        "classifier_input_truncated": True,
+        "classifier_input_budget_status": "truncated",
         "escalated": False,
     }
     payload: Final = _payload(
@@ -492,6 +497,49 @@ def test_no_span_when_pre_call_never_ran():
     # No log_pre_api_call: the call never started.
     asyncio.run(logger.async_log_failure_event(_kwargs(payload=payload), None, None, None))
     assert exporter.get_finished_spans() == ()  # no phantom LLM span
+
+
+def test_cache_hit_without_pre_call_emits_zero_cost_span():
+    """A response served from the litellm cache never hands off to a provider,
+    so ``pre_call`` never runs and ``api_call_start_time`` is never stamped,
+    but the completed call's payload still warrants a span, carrying the cache
+    attributes rather than being dropped like a gate rejection."""
+    logger, exporter = _logger()
+    payload: Final = _payload(
+        cache_hit=True,
+        response_cost=0.0,
+        saved_cache_cost=0.002,
+        cost_breakdown={"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0},
+    )
+    asyncio.run(
+        logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[LiteLLM.CACHE_HIT] is True
+    assert span.attributes[LiteLLM.SAVED_CACHE_COST] == 0.002
+    assert {
+        name: span.attributes[f"{LiteLLM.COST_PREFIX}{name}"] for name in ("total", "input", "output", "tool_usage")
+    } == {"total": 0.0, "input": 0.0, "output": 0.0, "tool_usage": 0.0}
+    assert "server.address" not in span.attributes
+
+
+def test_cache_miss_span_reports_cache_hit_false():
+    logger, exporter = _logger()
+    _emit_llm(logger, _kwargs(payload=_payload(cache_hit=False, saved_cache_cost=0.0)))
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[LiteLLM.CACHE_HIT] is False
+    assert LiteLLM.SAVED_CACHE_COST not in span.attributes
+
+
+def test_cache_miss_without_pre_call_still_emits_no_span():
+    """The cache-hit relaxation is not a general loosening: a success callback
+    with no ``pre_call`` carrier and no cache hit still emits nothing."""
+    logger, exporter = _logger()
+    payload: Final = _payload(cache_hit=False, response_cost=0.002)
+    asyncio.run(
+        logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
+    )
+    assert exporter.get_finished_spans() == ()
 
 
 def test_real_llm_failure_still_emitted():
@@ -1885,6 +1933,7 @@ def test_service_span_is_named_by_purpose_when_the_producer_declares_a_target():
         ("async_batch_get_cache", "redis.mget auth_objects", "redis.mget"),
         ("async_set_cache_pipeline_with_ttls", "redis.set auth_objects", "redis.set"),
         ("async_increment_pipeline", "redis.incr auth_objects", "redis.incr"),
+        ("async_increment_if_present", "redis.incr auth_objects", "redis.incr"),
         ("async_delete_cache", "redis.delete auth_objects", "redis.delete"),
         ("async_scan_iter", "redis.scan auth_objects", "redis.scan"),
         ("request_redis_batch", "redis.pipeline auth_objects", "redis.pipeline"),

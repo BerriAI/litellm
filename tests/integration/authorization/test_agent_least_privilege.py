@@ -8,7 +8,6 @@ import httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value, string_value
-from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 
@@ -108,7 +107,7 @@ def _create_agent(candidate: Gateway, wire: Wire, agent_name: str, cleanups: Exi
 def _delete_agent(candidate: Gateway, agent_id: str) -> None:
     deleted: Final = candidate.request("DELETE", f"/v1/agents/{agent_id}")
     assert deleted.status_code == 200, deleted.text
-    assert read_rows('SELECT agent_id FROM "LiteLLM_AgentsTable" WHERE agent_id=%s', (agent_id,)) == []
+    assert candidate.rows('SELECT agent_id FROM "LiteLLM_AgentsTable" WHERE agent_id=%s', (agent_id,)) == []
 
 
 def _card(candidate: Gateway, agent_id: str, key: str) -> httpx.Response:
@@ -222,8 +221,13 @@ def test_agent_access_default_deny_denies_ungranted_key_but_keeps_explicit_grant
         denied_sends: Final = tuple(
             _send(candidate, agent_id, key_a, f"denied-{index}-{uuid.uuid4().hex}") for index in range(8)
         )
-        _assert_denial(denied_sends[0], agent_id)
-        assert all(response.json() == denied_sends[0].json() for response in denied_sends), [
+        assert denied_sends[0].status_code == 403, denied_sends[0].text
+        assert denied_sends[0].json()["error"] == {
+            "code": -32000,
+            "message": f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
+            "data": denied_sends[0].json()["error"]["data"],
+        }, denied_sends[0].text
+        assert all(response.json()["error"] == denied_sends[0].json()["error"] for response in denied_sends), [
             response.text for response in denied_sends
         ]
         denied_completion: Final = _chat_completion(candidate, agent_name, key_a)
@@ -314,7 +318,7 @@ def test_agent_access_default_deny_toggles_at_runtime_through_config_api(
             for field in config_fields.json()
             if object_value(field)["field_name"] == "agent_access_default_deny"
         )
-        assert setting["field_type"] == "Boolean" and setting["field_value"] == "true", setting
+        assert setting["field_type"] == "Boolean" and setting["field_value"] is True, setting
         eventually(
             lambda: tuple(_card(candidate, agent_id, ungranted_key) for _ in range(8)),
             lambda responses: all(response.status_code == 403 for response in responses),

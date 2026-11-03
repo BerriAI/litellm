@@ -39,7 +39,7 @@ def test_cli_session_token_without_org_id_charges_and_caps_the_team_organization
         )
         token: Final = _cli_session_token(user_id, team_id)
         prompt: Final = f"org budget {uuid.uuid4().hex}"
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         first: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -51,6 +51,7 @@ def test_cli_session_token_without_org_id_charges_and_caps_the_team_organization
         assert len(reached_upstream) == 1, reached_upstream
         assert reached_upstream[0]["body"]["model"] == "gpt-4o-mini", reached_upstream
         assert reached_upstream[0]["body"]["messages"] == [{"role": "user", "content": prompt}], reached_upstream
+        upstream.delete("/__observations").raise_for_status()
         logged: Final = eventually(
             lambda: read_rows(
                 'SELECT organization_id, team_id, spend FROM "LiteLLM_SpendLogs" WHERE request_id=%s',

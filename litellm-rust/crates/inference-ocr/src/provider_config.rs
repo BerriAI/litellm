@@ -1,5 +1,10 @@
-use litellm_core_utils::get_llm_provider_logic::LlmProviders;
-use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_auth::{InputSource, Sourced};
+use litellm_secret_value::SecretValue;
+
+use litellm_core_utils::get_llm_provider_logic::{
+    CustomLlmProvider, LlmProviders, get_custom_llm_provider,
+};
+use litellm_inference::provider::ResolvedProvider;
 use litellm_llms::{
     aws_textract::ocr::{
         analyze_transformation::TextractAnalyzeDocumentConfig, common_utils::TextractOperation,
@@ -25,6 +30,7 @@ use litellm_llms::{
     },
 };
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_secrets::source::Secrets;
 
 macro_rules! with_config {
     ($kind:expr, $config:ident => $body:expr) => {
@@ -115,7 +121,18 @@ impl OcrConfigKind {
     }
 
     pub(crate) fn secret_names(self) -> Vec<&'static str> {
-        with_config!(self, config => config.secret_names())
+        let names = with_config!(self, config => config.secret_names());
+        let fallback_names: &[&str] = match self.provider() {
+            LlmProviders::Mistral => &["MISTRAL_AZURE_API_KEY", "MISTRAL_AZURE_API_BASE"],
+            LlmProviders::AzureAi => &["AZURE_AI_API_BASE"],
+            _ => &[],
+        };
+        let additional_names = fallback_names
+            .iter()
+            .copied()
+            .filter(|name| !names.contains(name))
+            .collect::<Vec<_>>();
+        names.into_iter().chain(additional_names).collect()
     }
 
     pub(crate) fn get_health_check_document(self) -> OcrDocument {
@@ -127,6 +144,43 @@ impl OcrConfigKind {
         inputs: OcrCredentialInputs,
     ) -> ResolvedOcrCredentials {
         with_config!(self, config => config.resolve_connection_params(inputs))
+    }
+
+    pub(crate) fn resolve_credentials(
+        self,
+        credentials: OcrCredentialInputs,
+        secrets: &Secrets,
+    ) -> ResolvedOcrCredentials {
+        let (preferred_api_key_env, api_base_env) = match self.provider() {
+            LlmProviders::Mistral => (
+                Some("MISTRAL_AZURE_API_KEY"),
+                Some("MISTRAL_AZURE_API_BASE"),
+            ),
+            LlmProviders::AzureAi => (None, Some("AZURE_AI_API_BASE")),
+            _ => (None, None),
+        };
+        let secret = |name: &str| secrets.truthy(name);
+        let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {
+            credentials.api_key.clone().or_else(|| {
+                preferred_api_key_env
+                    .into_iter()
+                    .chain(self.get_api_key_env_var())
+                    .find_map(secret)
+                    .map(|value| Sourced::new(SecretValue::new(value), InputSource::Environment))
+            })
+        });
+        let dynamic_api_base = credentials.dynamic_api_base.or_else(|| {
+            credentials.api_base.clone().or_else(|| {
+                api_base_env
+                    .and_then(secret)
+                    .map(|value| Sourced::new(value, InputSource::Environment))
+            })
+        });
+        self.resolve_connection_params(OcrCredentialInputs {
+            dynamic_api_key,
+            dynamic_api_base,
+            ..credentials
+        })
     }
 
     pub(crate) async fn ocr(
@@ -164,7 +218,7 @@ pub fn passthrough_response(
     endpoint: &str,
     body: &[u8],
 ) -> Result<Option<LiteLLMOcrResponse>, Error> {
-    let (model, config) = resolve_provider_config(model, Some("azure_ai"))?;
+    let (provider, config) = resolve_provider_config(model, Some("azure_ai"))?;
     let segments: Vec<&str> = endpoint
         .split('/')
         .filter(|segment| !segment.is_empty())
@@ -173,7 +227,7 @@ pub fn passthrough_response(
         OcrConfigKind::AzureAi => segments == AZURE_AI_OCR_PATH,
         OcrConfigKind::AzureCohere => segments == AZURE_COHERE_PARSE_PATH,
         OcrConfigKind::AzureDocumentIntelligence => {
-            segments == AzureDocumentIntelligenceOcrConfig::analyze_path(&model)?
+            segments == AzureDocumentIntelligenceOcrConfig::analyze_path(provider.model)?
         }
         other => {
             let provider: &'static str = other.provider().into();
@@ -183,24 +237,30 @@ pub fn passthrough_response(
     if !is_ocr_endpoint {
         return Ok(None);
     }
-    with_config!(config, config => config.transform_ocr_response(&model, body, OcrResponseFormat::Litellm))
+    with_config!(config, config => config.transform_ocr_response(provider.model, body, OcrResponseFormat::Litellm))
         .map(Some)
 }
 
-pub(crate) fn resolve_provider_config(
-    model: &str,
-    custom_llm_provider: Option<&str>,
-) -> Result<(String, OcrConfigKind), Error> {
-    let provider =
-        get_custom_llm_provider(model, custom_llm_provider).unwrap_or(CustomLlmProvider {
+pub(crate) fn resolve_provider_config<'a>(
+    model: &'a str,
+    custom_llm_provider: Option<&'a str>,
+) -> Result<(ResolvedProvider<'a>, OcrConfigKind), Error> {
+    let provider = match get_custom_llm_provider(model, custom_llm_provider) {
+        None => ResolvedProvider {
             model,
-            custom_llm_provider: LlmProviders::Mistral.into(),
-        });
-    let llm_provider = provider
-        .custom_llm_provider
-        .parse::<LlmProviders>()
-        .map_err(|_| Error::InvalidProvider(provider.custom_llm_provider.to_string()))?;
-    let config = match llm_provider {
+            provider: LlmProviders::Mistral,
+        },
+        Some(CustomLlmProvider {
+            model,
+            custom_llm_provider,
+        }) => ResolvedProvider {
+            model,
+            provider: custom_llm_provider
+                .parse()
+                .map_err(|_| Error::InvalidProvider(custom_llm_provider.to_owned()))?,
+        },
+    };
+    let config = match provider.provider {
         LlmProviders::AwsTextract => match TextractOperation::from_model(provider.model)? {
             TextractOperation::DetectDocumentText => OcrConfigKind::AwsTextract,
             TextractOperation::AnalyzeDocument => OcrConfigKind::AwsTextractAnalyze,
@@ -227,11 +287,11 @@ pub(crate) fn resolve_provider_config(
         LlmProviders::VertexAi => OcrConfigKind::VertexAi,
         _ => {
             return Err(Error::InvalidProvider(
-                provider.custom_llm_provider.to_string(),
+                <&'static str>::from(provider.provider).to_string(),
             ));
         }
     };
-    Ok((provider.model.to_string(), config))
+    Ok((provider, config))
 }
 
 fn is_document_intelligence_model(model: &str) -> bool {
@@ -243,7 +303,7 @@ fn is_document_intelligence_model(model: &str) -> bool {
 mod tests {
     use std::collections::HashSet;
 
-    use litellm_auth::{InputSource, Sourced};
+    use litellm_auth::Sourced;
     use litellm_llms::{
         base_llm::ocr::document::InlineDocument, cohere::ocr::transformation::validate_document,
     };
@@ -349,7 +409,7 @@ mod tests {
     fn connection_resolution_preserves_dynamic_precedence_and_input_sources() {
         let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
             api_key: Some(Sourced::new(
-                litellm_auth::SecretValue::new("explicit-key"),
+                litellm_secret_value::SecretValue::new("explicit-key"),
                 InputSource::Deployment,
             )),
             api_base: Some(Sourced::new(
@@ -357,7 +417,7 @@ mod tests {
                 InputSource::Deployment,
             )),
             dynamic_api_key: Some(Sourced::new(
-                litellm_auth::SecretValue::new("dynamic-key"),
+                litellm_secret_value::SecretValue::new("dynamic-key"),
                 InputSource::Environment,
             )),
             dynamic_api_base: Some(Sourced::new(
@@ -397,7 +457,7 @@ mod tests {
     ) {
         let dynamic_key = dynamic_value.map(|value| {
             Sourced::new(
-                litellm_auth::SecretValue::new(value),
+                litellm_secret_value::SecretValue::new(value),
                 InputSource::Environment,
             )
         });
@@ -405,7 +465,7 @@ mod tests {
             dynamic_value.map(|value| Sourced::new(value.into(), InputSource::Environment));
         let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
             api_key: Some(Sourced::new(
-                litellm_auth::SecretValue::new("explicit-key"),
+                litellm_secret_value::SecretValue::new("explicit-key"),
                 InputSource::Deployment,
             )),
             api_base: Some(Sourced::new(
@@ -444,14 +504,14 @@ mod tests {
             OcrCredentialInputs {
                 api_key: explicit_key.map(|value| {
                     Sourced::new(
-                        litellm_auth::SecretValue::new(value),
+                        litellm_secret_value::SecretValue::new(value),
                         InputSource::Deployment,
                     )
                 }),
                 api_base: explicit_base
                     .map(|value| Sourced::new(value.into(), InputSource::Deployment)),
                 dynamic_api_key: Some(Sourced::new(
-                    litellm_auth::SecretValue::new("dynamic-key"),
+                    litellm_secret_value::SecretValue::new("dynamic-key"),
                     InputSource::Environment,
                 )),
                 dynamic_api_base: Some(Sourced::new(
@@ -484,8 +544,8 @@ mod tests {
         #[case] expected_config: OcrConfigKind,
     ) {
         let expected_model = qualified_model.split_once('/').unwrap().1;
-        let (model, config) = resolve_provider_config(qualified_model, None).unwrap();
-        assert_eq!(model, expected_model);
+        let (provider, config) = resolve_provider_config(qualified_model, None).unwrap();
+        assert_eq!(provider.model, expected_model);
         assert_eq!(config, expected_config);
     }
 
@@ -528,7 +588,7 @@ mod tests {
             expected_config
         );
         assert_eq!(
-            resolve_provider_config(model, None).unwrap().0,
+            resolve_provider_config(model, None).unwrap().0.model,
             model.split_once('/').unwrap().1
         );
     }

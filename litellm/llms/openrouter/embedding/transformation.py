@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
@@ -84,15 +85,7 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for OpenRouter Embedding API endpoint.
         """
-        # api_base is already set to https://openrouter.ai/api/v1 in main.py
-        # Remove trailing slashes
-        if api_base:
-            api_base = api_base.rstrip("/")
-        else:
-            api_base = "https://openrouter.ai/api/v1"
-
-        # Return the embeddings endpoint
-        return f"{api_base}/embeddings"
+        return join_api_base(api_base or "https://openrouter.ai/api/v1", "embeddings")
 
     def transform_embedding_request(
         self,

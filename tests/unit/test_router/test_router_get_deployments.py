@@ -5,6 +5,7 @@ import os
 import random
 import traceback
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Final, Literal
 
 import pytest
@@ -110,9 +111,7 @@ def test_get_available_deployment_for_pass_through():
         )
 
         # Test that only pass-through deployment is returned
-        selected_model = router.get_available_deployment_for_pass_through(
-            "gpt-3.5-turbo"
-        )
+        selected_model = router.get_available_deployment_for_pass_through("gpt-3.5-turbo")
         assert selected_model["litellm_params"]["model"] == "gpt-3.5-turbo"
         assert selected_model["litellm_params"]["use_in_pass_through"] is True
 
@@ -259,9 +258,7 @@ def test_filter_pass_through_deployments():
         healthy_deployments = router.get_model_list()
 
         # Filter pass-through deployments
-        pass_through_deployments = router._filter_pass_through_deployments(
-            healthy_deployments
-        )
+        pass_through_deployments = router._filter_pass_through_deployments(healthy_deployments)
 
         # Should only have 2 deployments with use_in_pass_through=True
         assert len(pass_through_deployments) == 2
@@ -280,9 +277,7 @@ async def _weighted_async_deployment_ids(router: Router) -> tuple[str, ...]:
     random.seed(2025)
     deployments: Final = tuple(
         [
-            await router.async_get_available_deployment(
-                model="shared", messages=None, request_kwargs={}
-            )
+            await router.async_get_available_deployment(model="shared", messages=None, request_kwargs={})
             for _ in range(1000)
         ]
     )
@@ -326,10 +321,7 @@ def test_weighted_selection_router(
     selected_ids: Final = (
         asyncio.run(_weighted_async_deployment_ids(router))
         if async_selection
-        else tuple(
-            router.get_available_deployment("shared")["model_info"]["id"]
-            for _ in range(1000)
-        )
+        else tuple(router.get_available_deployment("shared")["model_info"]["id"] for _ in range(1000))
     )
 
     assert selected_ids.count("high") / len(selected_ids) > 0.89
@@ -355,10 +347,7 @@ def test_weighted_selection_router_no_rpm_set() -> None:
             },
         ]
     )
-    selected_ids: Final = tuple(
-        router.get_available_deployment("shared")["model_info"]["id"]
-        for _ in range(100)
-    )
+    selected_ids: Final = tuple(router.get_available_deployment("shared")["model_info"]["id"] for _ in range(100))
 
     assert set(selected_ids) == {"low", "high"}
 
@@ -378,3 +367,61 @@ def test_model_group_aliases_select_the_target_group() -> None:
 
     assert deployment["model_name"] == "target"
     assert deployment["model_info"]["id"] == "target-deployment"
+
+
+_ROUTABLE_MODEL_LIST: Final = [
+    {
+        "model_name": "shared",
+        "litellm_params": {"model": "openai/shared-low", "api_key": "test-key"},
+        "model_info": {"id": "low"},
+    },
+    {
+        "model_name": "shared",
+        "litellm_params": {"model": "openai/shared-high", "api_key": "test-key"},
+        "model_info": {"id": "high"},
+    },
+    {
+        "model_name": "unrelated",
+        "litellm_params": {"model": "openai/unrelated", "api_key": "test-key"},
+        "model_info": {"id": "unrelated"},
+    },
+]
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "make_router", "expected_ids"),
+    (
+        ("shared", lambda: Router(model_list=_ROUTABLE_MODEL_LIST), {"low", "high"}),
+        ("high", lambda: Router(model_list=_ROUTABLE_MODEL_LIST), {"high"}),
+        ("openai/unrelated", lambda: Router(model_list=_ROUTABLE_MODEL_LIST), {"unrelated"}),
+        (
+            "unknown",
+            lambda: Router(model_list=_ROUTABLE_MODEL_LIST, default_fallbacks=["shared"]),
+            {"low", "high"},
+        ),
+        (
+            "alias",
+            lambda: Router(model_list=_ROUTABLE_MODEL_LIST, model_group_alias={"alias": "openai/unrelated"}),
+            {"unrelated"},
+        ),
+        ("unknown", lambda: Router(model_list=_ROUTABLE_MODEL_LIST), set()),
+    ),
+    ids=(
+        "model-group",
+        "deployment-id",
+        "litellm-model-name",
+        "default-fallback",
+        "alias-to-a-litellm-model-name",
+        "unroutable",
+    ),
+)
+def test_get_routable_deployments_returns_every_deployment_routing_can_pick(
+    requested_model: str, make_router: Callable[[], Router], expected_ids: set[str]
+) -> None:
+    router: Final = make_router()
+
+    routable_ids: Final = {
+        deployment["model_info"]["id"] for deployment in router.get_routable_deployments(requested_model)
+    }
+
+    assert routable_ids == expected_ids

@@ -86,8 +86,9 @@ async def test_rename_appends_the_new_name_when_a_sibling_row_keeps_the_old_one(
 
 def _router_serving(db_model_by_deployment_id: dict[str, bool]):
     llm_router = MagicMock()
-    llm_router.get_model_ids.return_value = list(db_model_by_deployment_id)
-    llm_router.get_deployment.side_effect = lambda model_id: SimpleNamespace(
+    registry = llm_router.registry.return_value
+    registry.names.return_value = list(db_model_by_deployment_id)
+    registry.deployment.side_effect = lambda model_id: SimpleNamespace(
         model_info=SimpleNamespace(db_model=db_model_by_deployment_id[model_id])
     )
     return llm_router
@@ -113,7 +114,7 @@ async def test_rename_counts_only_config_deployments_with_another_id_as_backing_
             prisma_client, model_id="m-1", old_name="gpt-5.6", new_name="gpt-5.6-eu", llm_router=llm_router
         )
 
-    llm_router.get_model_ids.assert_called_once_with(model_name="gpt-5.6")
+    llm_router.registry.return_value.names.assert_called_once_with("gpt-5.6", kind="ids")
     (update_call,) = _access_group_updates(writer_inner)
     assert expected_write in update_call.args[0]
 
