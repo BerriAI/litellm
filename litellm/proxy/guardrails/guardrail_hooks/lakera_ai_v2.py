@@ -298,18 +298,16 @@ def _opted_out_of_global_guardrail(guardrail: "LakeraAIGuardrail", user_api_key_
     """True if the key's or team's admin metadata opts out of this ``default_on`` guardrail. A pass-through body has no
     admin metadata for ``should_run_guardrail`` to read, so it is read from the key here."""
     admin_fields: Final = user_api_key_dict.model_dump(include={"metadata", "team_metadata"})
-    return (
-        guardrail.default_on is True
-        and guardrail.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType]  # takes an untyped data dict
-            data={
-                "metadata": {
-                    "user_api_key_metadata": admin_fields.get("metadata"),
-                    "user_api_key_team_metadata": admin_fields.get("team_metadata"),
-                }
-            },
-            event_type=GuardrailEventHooks.pre_call,
-        )
-        is not True
+    admin_data: Final = {
+        "metadata": {
+            "user_api_key_metadata": admin_fields.get("metadata"),
+            "user_api_key_team_metadata": admin_fields.get("team_metadata"),
+        }
+    }
+    return guardrail.default_on is True and (
+        guardrail.get_disable_global_guardrail(admin_data)  # pyright: ignore[reportUnknownMemberType]  # takes an untyped data dict
+        is True
+        or guardrail.guardrail_name in guardrail.get_opted_out_global_guardrails_from_metadata(admin_data)  # pyright: ignore[reportUnknownMemberType]  # takes an untyped data dict
     )
 
 
