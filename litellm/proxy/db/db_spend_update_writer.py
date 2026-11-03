@@ -923,9 +923,7 @@ class DBSpendUpdateWriter:
             row: Final = spend_log_row_with_retained_metadata(
                 _batch_cost_row_to_write(payload, disable_spend_logs), configured_spend_logs_metadata_fields()
             )
-            claimed: Final = await repository.insert_with_deliveries(
-                [prisma_client.jsonify_object(row)], write_spend_logs=os.getenv("SPEND_LOGS_URL") is None
-            )
+            claimed: Final = await repository.insert_with_deliveries([prisma_client.jsonify_object(row)])
             return claimed == 1 or await self._take_over_uncharged_batch_cost_row(payload, prisma_client, row)
         except Exception as error:  # noqa: BLE001  # retry buffered work after database failures
             verbose_proxy_logger.warning("Could not claim batch spend row %s: %s", request_id, error)

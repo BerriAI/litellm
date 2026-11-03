@@ -8553,7 +8553,9 @@ class ProxyUpdateSpend:
             for i in range(n_retry_times + 1):
                 try:
                     base_url = os.getenv("SPEND_LOGS_URL", None)
-                    await _commit_export_accounting(prisma_client, rows_to_write, base_url)
+                    await _commit_export_accounting(
+                        prisma_client, rows_to_write, base_url if db_writer_client is not None else None
+                    )
                     if (
                         base_url is not None
                         and db_writer_client is not None
