@@ -1273,7 +1273,9 @@ _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
 _LATEST_TURN_STORAGE: Final = "latest_turn"
 _STATEFUL_REQUEST_KEYS: Final = frozenset({"previous_response_id", "conversation"})
-_LATEST_TURN_KEPT_KEYS: Final = frozenset({"model"})
+_LATEST_TURN_KEPT_KEYS: Final = frozenset({"model", "classifier_input"})
+_RESPONSES_CALL_TYPES: Final = frozenset({"responses", "aresponses"})
+_REQUEST_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _TURNS_KEYS: Final = ("messages", "input")
 _TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
 _OMITTED_BLOCK_PLACEHOLDERS: Final = MappingProxyType(
@@ -1341,19 +1343,40 @@ def _continues_stored_conversation(request_body: Mapping[str, object]) -> bool:
     return any(request_body.get(key) for key in _STATEFUL_REQUEST_KEYS)
 
 
+def _replayed_by_responses_bridge(standard_payload: Mapping[str, object] | None) -> bool:
+    """A `/v1/responses` turn served through the chat completions bridge logs a chat-shaped response.
+
+    The bridge rebuilds a `previous_response_id` chain from these rows, so they keep their full request.
+    """
+    if standard_payload is None or standard_payload.get("call_type") not in _RESPONSES_CALL_TYPES:
+        return False
+    response: Final = standard_payload.get("response")
+    return isinstance(response, Mapping) and "choices" in response
+
+
 def _latest_turn_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
     if _continues_stored_conversation(request_body):
         return request_body
     kept: Final = {key: value for key, value in request_body.items() if key in _LATEST_TURN_KEPT_KEYS}
+    originating: Final = request_body.get("originating_request_masked")
+    audit: Final = (
+        {**kept, "originating_request_masked": _latest_turn_body(_REQUEST_BODY_ADAPTER.validate_python(originating))}
+        if isinstance(originating, Mapping)
+        else kept
+    )
     turns_key: Final = next((key for key in _TURNS_KEYS if key in request_body), None)
     text: Final = None if turns_key is None else _latest_user_message_text(request_body[turns_key])
     if turns_key is None or text is None:
-        return MappingProxyType(kept)
-    return MappingProxyType({**kept, turns_key: [{"role": "user", "content": text}]})
+        return MappingProxyType(audit)
+    return MappingProxyType({**audit, turns_key: [{"role": "user", "content": text}]})
 
 
-def _stored_request_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
-    return _latest_turn_body(request_body) if stores_latest_turn_only() else request_body
+def _stored_request_body(
+    request_body: Mapping[str, object], standard_payload: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    if not stores_latest_turn_only() or _replayed_by_responses_bridge(standard_payload):
+        return request_body
+    return _latest_turn_body(request_body)
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
@@ -2035,7 +2058,9 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
-            stored_request_body: Final = _sanitize_proxy_server_request_body(_stored_request_body(_request_body))
+            stored_request_body: Final = _sanitize_proxy_server_request_body(
+                _stored_request_body(_request_body, standard_payload if isinstance(standard_payload, Mapping) else None)
+            )
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)
                 if drop_requester_ip_address

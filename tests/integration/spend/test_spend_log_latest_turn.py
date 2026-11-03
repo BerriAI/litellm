@@ -79,6 +79,29 @@ def _anthropic_message(text: str) -> bytes:
     ).encode()
 
 
+def _native_response(text: str) -> bytes:
+    identity: Final = f"resp-latest-{uuid4()}"
+    return json.dumps(
+        {
+            "id": identity,
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-4o-mini",
+            "output": [
+                {
+                    "id": f"msg_{identity}",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text, "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 11, "output_tokens": 3, "total_tokens": 14},
+        }
+    ).encode()
+
+
 def _row(proxy: Gateway, where: str, value: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
         lambda: proxy.rows(f'SELECT {ROW_COLUMNS} FROM "LiteLLM_SpendLogs" WHERE {where}=%s', (value,)),
@@ -105,9 +128,9 @@ def _assert_usage_row(row: dict[str, JsonValue], expected_request: dict[str, Jso
     assert row["total_tokens"] == 14, row
 
 
-def _upstream_messages(wire: Wire) -> list[dict[str, JsonValue]]:
+def _last_upstream_body(wire: Wire) -> dict[str, JsonValue]:
     posted: Final = [request for request in wire.drain() if request.method == "POST"]
-    return MESSAGES.validate_python(JSON_OBJECT.validate_json(posted[-1].body)["messages"])
+    return JSON_OBJECT.validate_json(posted[-1].body)
 
 
 CHAT_HISTORY: Final = [
@@ -231,20 +254,22 @@ def test_messages_row_keeps_only_the_latest_user_prompt_and_the_response(
         ),
     ],
 )
-def test_stateless_responses_row_keeps_only_the_latest_user_prompt_and_the_response(
+def test_native_responses_row_keeps_only_the_latest_user_prompt_and_the_response(
     gateway: Gateway, tmp_path: Path, latest: dict[str, JsonValue], expected_turns: dict[str, JsonValue]
 ) -> None:
     with (
-        wire_server(_answering_model_listing(lambda _: Reply(body=_anthropic_message("responses answer")))) as wire,
+        wire_server(_answering_model_listing(lambda _: Reply(body=_native_response("responses answer")))) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_latest_turn_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
-        model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
+        model: Final = scenario.model(model=OPENAI_MODEL, api_base=wire.url, api_key="synthetic-openai-key")
+        end_user: Final = f"latest-turn-native-{uuid4()}"
         response: Final = isolated.request(
             "POST",
             "/v1/responses",
             {
                 "model": model,
+                "user": end_user,
                 "instructions": "system prompt must not be stored",
                 "input": [
                     {"role": "user", "content": "earlier user turn must not be stored"},
@@ -254,9 +279,29 @@ def test_stateless_responses_row_keeps_only_the_latest_user_prompt_and_the_respo
             },
         )
         assert response.status_code == 200, response.text
+        row: Final = _row(isolated, "end_user", end_user)
+        _assert_usage_row(row, {"model": model, **expected_turns}, "responses answer")
+
+
+def test_bridged_stateless_responses_row_keeps_the_whole_request(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        wire_server(_answering_model_listing(lambda _: Reply(body=_anthropic_message("bridged answer")))) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=_latest_turn_config(tmp_path)) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
+        body: Final = {
+            "model": model,
+            "instructions": "system prompt the bridge replays",
+            "input": [{"role": "user", "content": "earlier user turn"}, {"role": "user", "content": "latest"}],
+        }
+        response: Final = isolated.request("POST", "/v1/responses", body)
+        assert response.status_code == 200, response.text
         response_id: Final = string_value(object_value(response.json())["id"])
         row: Final = _row(isolated, "request_id", _responses_request_id(response_id))
-        _assert_usage_row(row, {"model": model, **expected_turns}, "responses answer")
+        stored: Final = object_value(row["proxy_server_request"])
+        assert {key: stored.get(key) for key in body} == body, row
+        assert "bridged answer" in json.dumps(row["response"]), row
 
 
 def test_bridged_responses_chain_replays_its_history_from_latest_turn_rows(gateway: Gateway, tmp_path: Path) -> None:
@@ -267,10 +312,25 @@ def test_bridged_responses_chain_replays_its_history_from_latest_turn_rows(gatew
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
-        first: Final = isolated.post("/v1/responses", {"model": model, "input": "first question"})
+        first_body: Final = {
+            "model": model,
+            "instructions": "SYS_MARKER answer in one word",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "first question"},
+                        {"type": "input_image", "image_url": f"data:image/png;base64,{PIXEL}"},
+                    ],
+                }
+            ],
+        }
+        first: Final = isolated.post("/v1/responses", first_body)
         first_id: Final = string_value(first["id"])
         first_row: Final = _row(isolated, "request_id", _responses_request_id(first_id))
-        _assert_usage_row(first_row, {"model": model, "input": _user_turn("first question")}, "first answer")
+        first_stored: Final = object_value(first_row["proxy_server_request"])
+        assert {key: first_stored.get(key) for key in first_body} == first_body, first_row
+        assert "first answer" in json.dumps(first_row["response"]), first_row
 
         second_body: Final = {"model": model, "previous_response_id": first_id, "input": "second question"}
         second: Final = isolated.post("/v1/responses", second_body)
@@ -279,10 +339,15 @@ def test_bridged_responses_chain_replays_its_history_from_latest_turn_rows(gatew
         assert {key: second_stored.get(key) for key in second_body} == second_body, second_row
         assert "second answer" in json.dumps(second_row["response"]), second_row
 
-        replayed: Final = [(message["role"], json.dumps(message["content"])) for message in _upstream_messages(wire)]
+        upstream: Final = _last_upstream_body(wire)
+        assert "SYS_MARKER" in json.dumps(upstream.get("system")), upstream
+        replayed: Final = [
+            (message["role"], json.dumps(message["content"]))
+            for message in MESSAGES.validate_python(upstream["messages"])
+        ]
         assert [role for role, _ in replayed] == ["user", "assistant", "user"], replayed
-        assert "first question" in replayed[0][1] and "first answer" in replayed[1][1], replayed
-        assert "second question" in replayed[2][1], replayed
+        assert "first question" in replayed[0][1] and PIXEL in replayed[0][1], replayed
+        assert "first answer" in replayed[1][1] and "second question" in replayed[2][1], replayed
 
 
 def test_failed_chat_row_keeps_only_the_latest_user_prompt(gateway: Gateway, tmp_path: Path) -> None:

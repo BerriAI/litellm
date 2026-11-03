@@ -7141,6 +7141,7 @@ _PRIOR_CHAT_TURNS: Final = (
     {"role": "assistant", "content": "earlier answer"},
 )
 _STORED_JSON: Final = TypeAdapter(object)
+_FULL_CHAT_ROW: Final = TypeAdapter(dict[str, list[dict[str, str]]])
 
 
 def _user_turn(text: str) -> list[dict[str, str]]:
@@ -7284,15 +7285,90 @@ def test_latest_turn_mode_keeps_the_whole_request_when_it_continues_a_stored_con
     assert _stored_request(body) == body
 
 
+_BRIDGED_RESPONSES_BODY: Final = {
+    "model": "claude",
+    "instructions": "system prompt",
+    "input": [{"role": "user", "content": "earlier user turn"}, {"role": "user", "content": "latest"}],
+}
+
+
+def _stored_request_with_payload(body: Mapping[str, object], standard_payload: Mapping[str, object]) -> object:
+    return _STORED_JSON.validate_json(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": body}},
+            kwargs={"standard_logging_object": standard_payload},
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("standard_payload", "expected"),
+    [
+        (
+            {"call_type": "aresponses", "response": {"choices": [{"message": {"content": "bridged answer"}}]}},
+            _BRIDGED_RESPONSES_BODY,
+        ),
+        (
+            {"call_type": "aresponses", "response": {"object": "response", "output": []}},
+            {"model": "claude", "input": _user_turn("latest")},
+        ),
+        (
+            {"call_type": "acompletion", "response": {"choices": [{"message": {"content": "chat answer"}}]}},
+            {"model": "claude", "input": _user_turn("latest")},
+        ),
+        ({"call_type": "aresponses", "response": None}, {"model": "claude", "input": _user_turn("latest")}),
+    ],
+)
+def test_latest_turn_mode_keeps_the_whole_request_of_a_responses_turn_served_by_the_chat_bridge(
+    monkeypatch: pytest.MonkeyPatch, standard_payload: Mapping[str, object], expected: dict[str, object]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    assert _stored_request_with_payload(_BRIDGED_RESPONSES_BODY, standard_payload) == expected
+
+
+def test_latest_turn_mode_keeps_the_classifier_audit_with_its_originating_request_trimmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    originating: Final = {"model": "gpt-4o-mini", "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "route me"}]}
+    classifier_input: Final = {"model": "classifier", "messages": [{"role": "user", "content": "route me"}]}
+    standard_payload: Final = {
+        "call_type": "acompletion",
+        "classifier_input": classifier_input,
+        "originating_request_masked": originating,
+        "response": {"choices": [{"message": {"content": "simple"}}]},
+    }
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    assert _stored_request_with_payload(classifier_input, standard_payload) == {
+        "model": "classifier",
+        "classifier_input": classifier_input,
+        "originating_request_masked": {"model": "gpt-4o-mini", "messages": _user_turn("route me")},
+        "messages": _user_turn("route me"),
+    }
+
+
+@pytest.mark.parametrize("value", ["latest_trun", "Latest_Turn", "full", True])
+def test_spend_logs_prompt_storage_rejects_values_other_than_latest_turn(value: object) -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    assert ConfigGeneralSettings.model_validate({"spend_logs_prompt_storage": "latest_turn"}).spend_logs_prompt_storage
+    with pytest.raises(ValidationError):
+        ConfigGeneralSettings.model_validate({"spend_logs_prompt_storage": value})
+
+
 def test_latest_turn_mode_keeps_the_existing_string_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.delenv("MAX_STRING_LENGTH_PROMPT_IN_DB", raising=False)
     chat_body: Final = {"messages": [{"role": "user", "content": "a" * 1500 + "b" * 1500}]}
     monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
-    capped_today: Final = _stored_request(chat_body)
-    assert isinstance(capped_today, dict)
-    capped_content: Final = capped_today["messages"][0]["content"]
+    capped_content: Final = _FULL_CHAT_ROW.validate_json(_stored_request_json(chat_body))["messages"][0]["content"]
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in capped_content, capped_content
     monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
     assert _stored_request(chat_body) == {"messages": _user_turn(capped_content)}
