@@ -54,6 +54,57 @@
           ],
           "title": "ValidationError",
           "type": "object"
+        },
+        "_A2AJsonRpcResponse": {
+          "additionalProperties": true,
+          "properties": {
+            "error": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id"
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "title": "Jsonrpc",
+              "type": "string"
+            },
+            "result": {
+              "anyOf": [
+                {},
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Result"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id"
+          ],
+          "title": "_A2AJsonRpcResponse",
+          "type": "object"
         }
       }
     },
@@ -242,6 +293,119 @@
           ]
         }
       },
+      "/a2a/{agent_id}/message/stream": {
+        "post": {
+          "description": "Invoke an agent using the A2A protocol (JSON-RPC 2.0).\n\nSupported methods:\n- message/send: Send a message and get a response\n- message/stream: Send a message and stream the response",
+          "operationId": "invoke_agent_a2a_a2a__agent_id__message_stream_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "agent_id",
+              "required": true,
+              "schema": {
+                "title": "Agent Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "id": "stream-1",
+                  "jsonrpc": "2.0",
+                  "method": "message/stream",
+                  "params": {
+                    "message": {
+                      "kind": "message",
+                      "messageId": "message-1",
+                      "parts": [
+                        {
+                          "kind": "text",
+                          "text": "Hello"
+                        }
+                      ],
+                      "role": "user"
+                    }
+                  }
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Id"
+                    },
+                    "jsonrpc": {
+                      "const": "2.0",
+                      "title": "Jsonrpc",
+                      "type": "string"
+                    },
+                    "method": {
+                      "title": "Method",
+                      "type": "string"
+                    },
+                    "params": {
+                      "additionalProperties": true,
+                      "title": "Params",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "method",
+                    "params"
+                  ],
+                  "title": "_A2AJsonRpcRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/_A2AJsonRpcResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Invoke Agent A2A",
+          "tags": [
+            "a2a"
+          ]
+        }
+      },
       "/v1/a2a/{agent_id}/message/send": {
         "post": {
           "description": "Invoke an agent using the A2A protocol (JSON-RPC 2.0).\n\nSupported methods:\n- message/send: Send a message and get a response\n- message/stream: Send a message and stream the response",
@@ -262,6 +426,119 @@
               "content": {
                 "application/json": {
                   "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Invoke Agent A2A",
+          "tags": [
+            "a2a"
+          ]
+        }
+      },
+      "/v1/a2a/{agent_id}/message/stream": {
+        "post": {
+          "description": "Invoke an agent using the A2A protocol (JSON-RPC 2.0).\n\nSupported methods:\n- message/send: Send a message and get a response\n- message/stream: Send a message and stream the response",
+          "operationId": "invoke_agent_a2a_v1_a2a__agent_id__message_stream_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "agent_id",
+              "required": true,
+              "schema": {
+                "title": "Agent Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "id": "stream-1",
+                  "jsonrpc": "2.0",
+                  "method": "message/stream",
+                  "params": {
+                    "message": {
+                      "kind": "message",
+                      "messageId": "message-1",
+                      "parts": [
+                        {
+                          "kind": "text",
+                          "text": "Hello"
+                        }
+                      ],
+                      "role": "user"
+                    }
+                  }
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Id"
+                    },
+                    "jsonrpc": {
+                      "const": "2.0",
+                      "title": "Jsonrpc",
+                      "type": "string"
+                    },
+                    "method": {
+                      "title": "Method",
+                      "type": "string"
+                    },
+                    "params": {
+                      "additionalProperties": true,
+                      "title": "Params",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "method",
+                    "params"
+                  ],
+                  "title": "_A2AJsonRpcRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/_A2AJsonRpcResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -15326,6 +15603,10 @@
               ],
               "title": "Metadata"
             },
+            "response_format": {
+              "$ref": "#/components/schemas/GuardrailResponseFormat",
+              "default": "standard"
+            },
             "text": {
               "title": "Text",
               "type": "string"
@@ -16203,6 +16484,14 @@
           "title": "BedrockChecksSensitiveInformationModel",
           "type": "object"
         },
+        "BedrockGuardrailOutputScope": {
+          "enum": [
+            "INTERVENTIONS",
+            "FULL"
+          ],
+          "title": "BedrockGuardrailOutputScope",
+          "type": "string"
+        },
         "BlockedWord": {
           "description": "Represents a blocked word with its action and optional description",
           "properties": {
@@ -16746,6 +17035,14 @@
           "title": "GuardrailInfoResponse",
           "type": "object"
         },
+        "GuardrailResponseFormat": {
+          "enum": [
+            "standard",
+            "native"
+          ],
+          "title": "GuardrailResponseFormat",
+          "type": "string"
+        },
         "GuardrailSubmissionItem": {
           "properties": {
             "created_at": {
@@ -16998,6 +17295,7 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "JsonValue": {},
         "LakeraCategoryThresholds": {
           "additionalProperties": true,
           "properties": {
@@ -17924,6 +18222,18 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "file_checkpoint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "File-checkpoint ID for the Ovalix Tracker service (falls back to pre/post).",
+              "title": "File Checkpoint Id"
+            },
             "file_guardrail_timeout": {
               "anyOf": [
                 {
@@ -18425,6 +18735,17 @@
                 }
               ],
               "description": "Optional parameters for the guardrail"
+            },
+            "outputScope": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/BedrockGuardrailOutputScope"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ApplyGuardrail response scope. FULL includes detected and non-detected findings. Omit to retain Bedrock's default of returning detected findings only."
             },
             "output_parse_pii": {
               "anyOf": [
@@ -20308,7 +20629,24 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "array"
+                      }
+                    ],
+                    "title": "Response Apply Guardrail Apply Guardrail Post"
                   }
                 }
               },
@@ -20400,7 +20738,24 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "array"
+                      }
+                    ],
+                    "title": "Response Apply Guardrail Guardrails Apply Guardrail Post"
                   }
                 }
               },
@@ -24268,7 +24623,14 @@
           "properties": {
             "content": {
               "items": {
-                "$ref": "#/components/schemas/OutputText"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OutputText"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ResponseOutputRefusal"
+                  }
+                ]
               },
               "title": "Content",
               "type": "array"

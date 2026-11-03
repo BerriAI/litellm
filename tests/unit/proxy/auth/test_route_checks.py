@@ -3925,6 +3925,7 @@ AGENT_INFERENCE_ROUTES = [
     "/a2a/abc-123",
     "/a2a/abc-123/message/send",
     "/a2a/abc-123/message/stream",
+    "/v1/a2a/abc-123/message/stream",
     "/a2a/abc-123/.well-known/agent-card.json",
 ]
 

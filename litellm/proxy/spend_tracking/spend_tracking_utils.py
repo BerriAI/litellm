@@ -3,7 +3,7 @@ import json
 import os
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
 from functools import reduce
@@ -20,7 +20,6 @@ from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     CLI_SESSION_KEY_PREFIX,
     EMPTY_MAPPING,
-    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -30,7 +29,6 @@ from litellm.constants import (
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB,
     MCP_SPEND_LOG_MODEL_PREFIX,
-    NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
@@ -53,8 +51,14 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.hidden_params import served_from_cache
-from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+from litellm.litellm_core_utils.internal_call_metadata import (
+    BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
+    is_unbilled_non_inference_call,
+    settles_background_response,
+)
 from litellm.litellm_core_utils.litellm_logging import (
+    StandardLoggingPayloadSetup,
+    UsageObservation,
     coerce_model_access_groups,
     is_valid_sha256_hash,
     request_model_access_groups_from_litellm_params,
@@ -77,13 +81,8 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     summary_only_compaction_content,
     with_compaction_summary,
 )
-from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    SETTLES_BACKGROUND_RESPONSE_KWARG,
-    BackgroundResponseSettlement,
-)
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag
 from litellm.types.utils import (
-    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     AzureSpillover,
     CallTypes,
@@ -345,24 +344,21 @@ def _get_spend_logs_metadata(
 
 
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
-BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
 
 
-def _cost_row_request_id_suffix(
-    call_type: str, metadata: Mapping[str, object], settles_background_response: bool
-) -> str:
+def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> str:
     if call_type == CallTypes.aretrieve_batch.value:
         return BATCH_COST_REQUEST_ID_SUFFIX
-    if settles_background_response or (
-        call_type in NON_INFERENCE_CALL_TYPES
-        and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
-    ):
+    if settles_background_response(call_type, metadata, kwargs):
         return BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
     return ""
 
 
 def get_spend_logs_id(
-    call_type: str, response_obj: dict, kwargs: Mapping[str, object], metadata: Mapping[str, object] = EMPTY_MAPPING
+    call_type: str,
+    response_obj: Mapping[str, object],
+    kwargs: Mapping[str, object],
+    metadata: Mapping[str, object] = EMPTY_MAPPING,
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     candidate_ids: Final = (
@@ -375,10 +371,7 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
-    settles_background_response: Final = (
-        kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES
-    )
-    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, settles_background_response)}"
+    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
 
 _MISSING_ATTRIBUTE: Final = object()
@@ -599,6 +592,7 @@ def get_logging_payload(
     start_time: datetime,
     end_time: datetime,
     llm_router: "Router | None" = None,
+    capture_usage: Callable[[SpendLogsPayload, str | None], None] | None = None,
 ) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
@@ -622,7 +616,9 @@ def get_logging_payload(
         routing_metadata,
         routing_litellm_params,
     )
-    completion_start_time: Final = kwargs.get("completion_start_time", end_time)
+    completion_start_time: Final = TypeAdapter[datetime | None](datetime | None).validate_python(
+        kwargs.get("completion_start_time", end_time)
+    )
     call_type: Final = kwargs.get("call_type")
     cache_hit: Final = kwargs.get("cache_hit", False)
 
@@ -644,7 +640,7 @@ def get_logging_payload(
         _usage: Final = (
             chat_usage_of_batch.model_dump()
             if chat_usage_of_batch is not None
-            else response_obj_dict.get("usage", None) or {}
+            else StandardLoggingPayloadSetup.get_usage_as_dict(response_obj_dict)
         )
         if isinstance(_usage, litellm.Usage):
             usage = dict(_usage)
@@ -928,7 +924,9 @@ def get_logging_payload(
             cache_hit=str(cache_hit),
             startTime=_ensure_datetime_utc(start_time),
             endTime=_ensure_datetime_utc(end_time),
-            completionStartTime=_ensure_datetime_utc(completion_start_time),
+            completionStartTime=(
+                _ensure_datetime_utc(completion_start_time) if completion_start_time is not None else None
+            ),
             model=model_name,
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
@@ -983,6 +981,14 @@ def get_logging_payload(
             payload.get("model"),
             payload.get("spend"),
         )
+
+        if capture_usage is not None:
+            observed_usage: Final = (
+                StandardLoggingPayloadSetup.get_usage_as_dict({"usage": usage})
+                if usage and kwargs.get("_accounting_usage_observed") is not UsageObservation.UNKNOWN
+                else None
+            )
+            capture_usage(payload, safe_dumps(observed_usage) if observed_usage is not None else None)
 
         # Explicitly clear large intermediate objects to reduce memory pressure
         del response_obj_dict, usage, clean_metadata, additional_usage_values

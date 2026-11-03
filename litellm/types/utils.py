@@ -227,6 +227,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
+    supports_continuation: ReadOnly[bool | None]
     supports_none_reasoning_effort: bool | None
     supports_minimal_reasoning_effort: bool | None
     supports_low_reasoning_effort: bool | None
@@ -246,6 +247,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     bedrock_converse_supports_strict_tools: bool | None
     supports_regex_lookaround: ReadOnly[bool | None]
     token_count_framing: ReadOnly[int | None]
+    token_count_tool_framing: ReadOnly[int | None]
+    token_count_responses_framing: ReadOnly[int | None]
+    token_count_responses_tool_framing: ReadOnly[int | None]
     token_count_model: ReadOnly[TokenCountModelInfo | None]
     token_count_tokenizer: ReadOnly[TokenCountTokenizer | None]
 
@@ -677,6 +681,12 @@ class CallTypes(str, Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    get_responses = "get_responses"
+    aget_responses = "aget_responses"
+    delete_responses = "delete_responses"
+    adelete_responses = "adelete_responses"
+    cancel_responses = "cancel_responses"
+    acancel_responses = "acancel_responses"
     alist_input_items = "alist_input_items"
     llm_passthrough_route = "llm_passthrough_route"
     allm_passthrough_route = "allm_passthrough_route"
@@ -1145,6 +1155,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # A2A (Agent-to-Agent)
     "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
+    "/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
+    "/v1/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
         CallTypes.allm_passthrough_route,
@@ -4223,12 +4235,21 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_assistant_prefill",
         "supports_bedrock_native_structured_output",
         "supports_pdf_input",
+        "supports_continuation",
         "reasoning_modes",
         "reasoning_contexts",
     }
 )
 
-DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})
+DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "token_count_framing",
+        "token_count_tool_framing",
+        "token_count_responses_framing",
+        "token_count_responses_tool_framing",
+        "token_count_model",
+    }
+)
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)

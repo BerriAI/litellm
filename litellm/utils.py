@@ -98,7 +98,11 @@ from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
-from litellm.litellm_core_utils.tool_fields import MalformedField, resolve_deployment_tool_fields
+from litellm.litellm_core_utils.tool_fields import (
+    MalformedField,
+    resolve_deployment_tool_fields,
+    tools_without_hosted_mcp,
+)
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
@@ -1596,6 +1600,7 @@ def dispatch_success_logging(
     is_litellm_internal_call: bool,
 ) -> None:
     if is_litellm_internal_call:
+        logging_obj.capture_usage_before_logging(result, start_time, end_time)
         return
 
     _schedule_async_success_logging(
@@ -1634,9 +1639,14 @@ def _schedule_async_success_logging(
     if not logging_obj.claim_async_success_log():
         return
 
+    if logging_obj.defer_async_logging and not is_completion_with_fallbacks:
+        logging_obj.capture_usage_before_logging(result, start_time, end_time, freeze_only=True)
+
     def _enqueue_async_logging() -> None:
         from litellm.responses.streaming_iterator import spawn_logging_task
 
+        if not is_completion_with_fallbacks:
+            logging_obj.capture_usage_before_logging(result, start_time, end_time)
         if logging_obj.defer_async_logging:
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result, start_time=start_time, end_time=end_time
@@ -2207,6 +2217,7 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
+            logging_obj.capture_usage_before_logging(TypeAdapter(object).validate_python(result), start_time, end_time)
             if not is_internal_call.get():
                 # Copy the current context to propagate it to the background thread
                 # This is essential for OpenTelemetry span context propagation
@@ -3180,6 +3191,14 @@ def supports_url_context(model: str, custom_llm_provider: str | None = None) -> 
         model=model,
         custom_llm_provider=custom_llm_provider,
         key="supports_url_context",
+    )
+
+
+def supports_continuation(model: str, custom_llm_provider: str | None = None) -> bool:
+    return supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_continuation",
     )
 
 
@@ -5186,7 +5205,12 @@ def remove_sensitive_keys_from_dict(d: dict) -> dict:
     return d
 
 
-def pre_process_optional_params(passed_params: dict, non_default_params: dict, custom_llm_provider: str) -> dict:
+_TOOL_LIST: Final = TypeAdapter(list[object])
+
+
+def pre_process_optional_params(
+    passed_params: dict, non_default_params: dict, custom_llm_provider: str, model: str, drop_params: bool | None
+) -> dict:
     """For .completion(), preprocess optional params"""
     optional_params: dict = {}
 
@@ -5243,14 +5267,20 @@ def pre_process_optional_params(passed_params: dict, non_default_params: dict, c
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
+                if "tools" in non_default_params:
+                    sent_tools: Final = _TOOL_LIST.validate_python(non_default_params.pop("tools"))
+                    non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
+                    prompt_tools: Final = tools_without_hosted_mcp(
+                        sent_tools, model=model, route=custom_llm_provider, drop_params=bool(drop_params)
+                    )
+                    if sent_tools and not prompt_tools:
+                        return optional_params
+                    optional_params["functions_unsupported_model"] = prompt_tools
+                elif "functions" in non_default_params:
+                    optional_params["functions_unsupported_model"] = non_default_params.pop("functions")
                 # ollama actually supports json output
                 optional_params["format"] = "json"
                 litellm.add_function_to_prompt = True  # so that main.py adds the function call to the prompt
-                if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = non_default_params.pop("tools")
-                    non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
-                elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = non_default_params.pop("functions")
             elif litellm.add_function_to_prompt:  # if user opts to add it to prompt instead
                 optional_params["functions_unsupported_model"] = non_default_params.pop(
                     "tools", non_default_params.pop("functions", None)
@@ -5385,6 +5415,8 @@ def get_optional_params(
         passed_params=passed_params,
         non_default_params=non_default_params,
         custom_llm_provider=custom_llm_provider,
+        model=model,
+        drop_params=drop_params,
     )
 
     def _check_valid_arg(supported_params: list[str]):
@@ -7360,6 +7392,7 @@ def get_model_info_helper(
                 ),
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),
+                supports_continuation=_model_info.get("supports_continuation", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
                 supports_legacy_thinking=_model_info.get("supports_legacy_thinking", None),
@@ -7398,6 +7431,9 @@ def get_model_info_helper(
                 supports_image_size=_model_info.get("supports_image_size", None),
                 supported_audio_formats=_model_info.get("supported_audio_formats", None),
                 token_count_framing=_model_info.get("token_count_framing", None),
+                token_count_tool_framing=_model_info.get("token_count_tool_framing", None),
+                token_count_responses_framing=_model_info.get("token_count_responses_framing", None),
+                token_count_responses_tool_framing=_model_info.get("token_count_responses_tool_framing", None),
                 token_count_model=_model_info.get("token_count_model", None),
                 token_count_tokenizer=_model_info.get("token_count_tokenizer", None),
                 vertex_ai_audio_api=_model_info.get("vertex_ai_audio_api", None),
@@ -7516,6 +7552,7 @@ def get_model_info(
             supports_pdf_input: Optional[bool]
             supports_web_search: Optional[bool]
             supports_url_context: Optional[bool]
+            supports_continuation: Optional[bool]
             supports_reasoning: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.

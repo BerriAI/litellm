@@ -2001,6 +2001,12 @@ class TestRequestContainsImageContent:
             [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "x"}}]}],
             [{"role": "user", "content": [{"type": "tool_result", "content": [{"type": "text", "text": "ok"}]}]}],
             [{"role": "user", "content": None}],
+            [{"role": "user", "content": [None, "text", {"type": []}]}],
+            ["malformed"],
+            [None, 5],
+            "malformed",
+            5,
+            None,
             [],
         ],
     )
@@ -2337,7 +2343,8 @@ _MALFORMED_PROMPT_CACHE_BREAKPOINTS: Final = (
     "",
     {},
     {"mode": "bogus"},
-    {"mode": "explicit", "ttl": "1h"},
+    {"mode": "bogus", "ttl": "30m"},
+    {1: "explicit"},
 )
 _MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS: Final = (
     "string",
@@ -2346,7 +2353,8 @@ _MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS: Final = (
     "empty-string",
     "empty-object",
     "bogus-mode",
-    "bad-ttl",
+    "bogus-mode-with-ttl",
+    "non-string-key",
 )
 _VALID_PROMPT_CACHE_BREAKPOINTS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
 
@@ -2374,6 +2382,18 @@ def test_prompt_cache_breakpoint_for_wire_keeps_a_valid_marker(marker: dict[str,
 
 def test_prompt_cache_breakpoint_for_wire_strips_an_unknown_key_under_drop_params() -> None:
     assert prompt_cache_breakpoint_for_wire({"mode": "explicit", "note": "kept"}, True) == {"mode": "explicit"}
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ({"mode": "explicit", "ttl": "1h"}, {"mode": "explicit", "ttl": "1h", "note": "kept"}),
+    ids=("bad-ttl", "bad-ttl-and-unknown-key"),
+)
+def test_prompt_cache_breakpoint_for_wire_drops_an_unsupported_ttl_and_keeps_the_mode_under_drop_params(
+    marker: dict[str, str],
+) -> None:
+    assert prompt_cache_breakpoint_for_wire(marker, True) == {"mode": "explicit"}
+    assert prompt_cache_breakpoint_for_wire(marker, False) is marker
 
 
 def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
