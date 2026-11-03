@@ -1138,7 +1138,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
             case {"reasoning_effort": effort} if effort is not None and effort != "none":
                 return True
-            case {"thinking": False | {"type": "disabled"}} | {"reasoning_effort": "none"}:
+            case {"thinking": {"type": "disabled"}} | {"reasoning_effort": "none"}:
                 return False
             case _:
                 return AnthropicModelInfo.thinks_by_default(model, custom_llm_provider)
