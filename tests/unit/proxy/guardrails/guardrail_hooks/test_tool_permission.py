@@ -2161,6 +2161,25 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert result["extra_body"] == {"tools": [weather], "tool_choice": "none", "seed": 7}
 
     @pytest.mark.asyncio
+    async def test_rewrite_relaxes_a_required_tool_choice_when_the_extra_body_tools_sent_lose_every_tool(
+        self,
+    ) -> None:
+        guardrail = self._pre_call([{"id": "deny_delete", "tool_name": r"^delete_db$", "decision": "deny"}], "rewrite")
+        weather = {"type": "function", "function": {"name": "get_weather"}}
+        delete_db = {"type": "function", "function": {"name": "delete_db"}}
+        data = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [weather],
+            "extra_body": {"tools": [delete_db], "tool_choice": "required", "seed": 7},
+        }
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [weather]
+        assert result["extra_body"] == {"tools": [], "tool_choice": "none", "seed": 7}
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("call_type", "tool_choice"),
         [
@@ -2587,6 +2606,30 @@ class TestToolPermissionGuardrailAnthropicMessages:
             with pytest.raises(HTTPException) as excinfo:
                 await self._run_pre_call(guardrail, data, "acompletion")
             assert excinfo.value.detail["detection_message"] == "Tool 'web_search' denied by default action"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [weather]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    async def test_pre_call_judges_a_gemini_hosted_key_by_the_key_whatever_name_it_carries(
+        self, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        weather = {"type": "function", "function": {"name": "get_weather"}}
+        computer_use = {"computerUse": {"name": "get_weather", "environment": "browser"}}
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [weather, computer_use]}
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == "Tool 'computerUse' denied by default action"
             return
 
         result = await self._run_pre_call(guardrail, data, "acompletion")

@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, reduce
 from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypeAlias, TypedDict
@@ -212,7 +212,7 @@ def _part_keys(fields: Mapping[str, object]) -> tuple[str, ...]:
 
 
 def _part_target(fields: Mapping[str, object], key: str) -> _ToolTarget:
-    return (_member_name(fields.get(key)), key)
+    return (None if key in _GEMINI_HOSTED_TOOL_KEYS else _member_name(fields.get(key)), key)
 
 
 def _input_item_tools(item: object) -> Sequence[object] | None:
@@ -265,6 +265,10 @@ def _sent_tools(data: object) -> tuple[object, ...]:
     return tuple(chain.from_iterable(map(_layer_sent_tools, _request_layers(data))))
 
 
+def _sent_fields(data: object) -> Mapping[str, object]:
+    return dict(chain.from_iterable(layer.items() for layer in _request_layers(data)))
+
+
 @dataclass(frozen=True, slots=True)
 class _KeptLayer:
     fields: Mapping[str, object]
@@ -285,6 +289,15 @@ class _KeptLayer:
             ("input", self.input),
         )
         return {key: list(kept) for key, kept in lists if kept is not None}
+
+    def overlaid_by(self, over: "_KeptLayer") -> "_KeptLayer":
+        return _KeptLayer(
+            fields={**self.fields, **over.fields},
+            tools=over.tools if "tools" in over.fields else self.tools,
+            functions=over.functions if "functions" in over.fields else self.functions,
+            mcp_servers=over.mcp_servers if "mcp_servers" in over.fields else self.mcp_servers,
+            input=over.input if "input" in over.fields else self.input,
+        )
 
 
 def _mcp_server_target(server: object) -> _ToolTarget:
@@ -1329,13 +1342,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
             self._kept_layer(layer, denied_targets, denied_names) for layer in _request_layers(request)
         )
 
-        sent_tools: Final = _sent_tools(request)
-        kept_sent_tools: Final = tuple(chain.from_iterable(kept.sent_tools() for kept in kept_layers))
+        sent_tools: Final = _layer_sent_tools(_sent_fields(request))
+        kept_sent: Final = reduce(_KeptLayer.overlaid_by, kept_layers)
+        kept_sent_tools: Final = kept_sent.sent_tools()
         removed_names: Final = denied_names | (self._tool_names_in(sent_tools) - self._tool_names_in(kept_sent_tools))
         kept_types: Final = self._tool_types_in(kept_sent_tools)
         removed_types: Final = self._tool_types_in(sent_tools) - kept_types
 
-        tools_remain: Final = bool(kept_sent_tools) or any(kept.mcp_servers for kept in kept_layers)
+        tools_remain: Final = bool(kept_sent_tools) or bool(kept_sent.mcp_servers)
         rewrite_choice: Final = partial(
             self._rewritten_tool_choice,
             removed_names=removed_names,
