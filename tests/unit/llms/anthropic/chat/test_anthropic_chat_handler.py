@@ -3813,3 +3813,76 @@ def test_anthropic_chat_sends_block_binding_as_is_without_drop_params(monkeypatc
     monkeypatch.setattr(litellm, "drop_params", False)
     body: Final = _anthropic_chat_body_for_bound_thinking(None)
     assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+
+
+class _AnthropicChatUpstream:
+    def __init__(self) -> None:
+        self.anthropic_beta: tuple[str, ...] = ()
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.anthropic_beta = tuple(request.headers.get_list("anthropic-beta"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_beta_row",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+
+_BETAS_FOUNDRY_REJECTS_AND_ACCEPTS: Final = "advisor-tool-2026-03-01,thinking-binding-controls-2026-08-01"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "forwarded_betas"),
+    [
+        pytest.param(
+            "https://res.services.ai.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry",
+        ),
+        pytest.param(
+            "https://res.cognitiveservices.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry-cognitiveservices",
+        ),
+        pytest.param(
+            "https://res.openai.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry-openai",
+        ),
+        pytest.param(
+            "https://api.anthropic.com",
+            frozenset(_BETAS_FOUNDRY_REJECTS_AND_ACCEPTS.split(",")),
+            id="anthropic",
+        ),
+    ],
+)
+def test_anthropic_chat_completion_picks_the_beta_row_by_api_base(
+    monkeypatch: pytest.MonkeyPatch, api_base: str, forwarded_betas: frozenset[str]
+) -> None:
+    from litellm import anthropic_beta_headers_manager
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    upstream: Final = _AnthropicChatUpstream()
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream.respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Say ok"}],
+            api_base=api_base,
+            api_key="test-key",
+            extra_headers={"anthropic-beta": _BETAS_FOUNDRY_REJECTS_AND_ACCEPTS},
+            client=client,
+        )
+    finally:
+        client.close()
+
+    assert frozenset(",".join(upstream.anthropic_beta).split(",")) == forwarded_betas
