@@ -24,6 +24,7 @@ import yaml
 from pydantic import JsonValue
 from redis import Redis
 
+from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from tests.integration._support.client import (
     Gateway,
     Scenario,
@@ -33,7 +34,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows, write_rows
-from tests.integration._support.process import owned_proxy_process
+from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process
 
 LARGE_ROSTER: Final = 250
 POOL_LIMIT: Final = 5
@@ -131,6 +132,13 @@ def _roster_user_ids(roster: JsonValue) -> list[str]:
     return sorted(string_value(object_value(member)["user_id"]) for member in roster)
 
 
+def _deleted_audit_rows(object_id: str, table_name: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT before_value FROM "LiteLLM_AuditLog" WHERE object_id = %s AND table_name = %s AND action = %s',
+        (object_id, table_name, "deleted"),
+    )
+
+
 def _waiters_on_lock_held_by(backend_pid: int) -> int:
     rows: Final = read_rows(WAITERS_ON_HELD_LOCK_SQL, ("%pg_advisory_xact_lock%", str(backend_pid)))
     waiting: Final = rows[0]["waiting"]
@@ -159,19 +167,11 @@ def _remove_team_by_sql(team_id: str) -> None:
     assert _team_rows(team_id) == []
 
 
-def _remove_team_if_present(gateway: Gateway, team_id: str) -> None:
-    """Cleanup for teams the test deletes itself: the API delete first, SQL for anything it leaves."""
-    if not _team_rows(team_id):
-        return
-    gateway.request("POST", "/team/delete", {"team_ids": [team_id]})
-    _remove_team_by_sql(team_id)
-
-
 def _create_team(scenario: Scenario, **fields: JsonValue) -> str:
     """A team the test deletes itself; cleanup only removes it if the test left it behind."""
     created: Final = scenario.gateway.post("/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}", **fields})
     team_id: Final = string_value(created["team_id"])
-    scenario.cleanups.callback(_remove_team_if_present, scenario.gateway, team_id)
+    scenario.cleanups.callback(_remove_team_by_sql, team_id)
     return team_id
 
 
@@ -248,8 +248,8 @@ def _team_not_found_body(team_id: str) -> dict[str, JsonValue]:
     return {
         "error": {
             "message": f"{{'message': 'Team not found, passed team id: {team_id}.'}}",
-            "type": "auth_error",
-            "param": "None",
+            "type": "invalid_request_error",
+            "param": None,
             "code": "404",
         }
     }
@@ -551,6 +551,41 @@ def test_delete_writes_one_audit_row_for_the_team_and_one_per_key(gateway: Gatew
         ]
 
 
+@pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120))
+def test_two_deletes_racing_on_one_team_write_one_tombstone_and_one_audit_row(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": os.environ["DATABASE_URL"], "LITELLM_STORE_AUDIT_LOGS": "true"},
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        user: Final = scenario.user()
+        team: Final = _create_team(scenario)
+        _bulk_member_add(owned.gateway, team, [user])
+
+        with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+            holder.execute(TAKE_TEAM_LOCK_SQL, (team,))
+            deletes: Final = tuple(
+                _post_in_background(pool, owned.gateway, "/team/delete", {"team_ids": [team]}) for _ in range(2)
+            )
+            eventually(
+                lambda: _waiters_on_lock_held_by(holder.info.backend_pid), lambda waiting: waiting == 2, seconds=30
+            )
+
+        assert [delete.result(timeout=60).status_code for delete in deletes] == [200, 200]
+        tombstones: Final = _tombstones(team)
+        assert [row["team_id"] for row in tombstones] == [team]
+        assert _roster_user_ids(tombstones[0]["members_with_roles"]) == sorted([PROXY_ADMIN, user])
+
+    team_audit_rows: Final = _deleted_audit_rows(team, "LiteLLM_TeamTable")
+    assert len(team_audit_rows) == 1, team_audit_rows
+    assert object_value(team_audit_rows[0]["before_value"])["team_id"] == team
+
+
 def test_second_delete_of_the_same_team_is_404_with_one_tombstone(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         user: Final = scenario.user()
@@ -741,7 +776,9 @@ def test_deleting_a_team_with_more_keys_than_the_publish_cap_revokes_every_key_o
         keys: Final = _seeded_team_keys(team, KEYS_WELL_PAST_THE_PUBLISH_CAP)
         assert _statuses(peer, keys) == {200: len(keys)}
 
-        response: Final = _delete_teams(gateway, [team])
+        response: Final = _post_with_timeout(
+            gateway, "/team/delete", {"team_ids": [team]}, timeout=2 * TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
+        )
         assert response.status_code == 200, response.text
         assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,)) == []
 

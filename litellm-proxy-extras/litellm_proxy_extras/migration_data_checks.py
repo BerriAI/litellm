@@ -14,11 +14,9 @@ either, so the migration keeps today's behavior for it.
 """
 
 import os
-import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import reduce
-from itertools import accumulate
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
@@ -43,7 +41,7 @@ MIGRATION_DATA_CHECK_TIMEOUT_ENV_VAR: Final = "LITELLM_MIGRATION_DATA_CHECK_TIME
 DEFAULT_MIGRATION_DATA_CHECK_TIMEOUT_SECONDS: Final = 600.0
 REFUSAL: Final = "Existing rows would make a pending schema change fail:"
 
-Kind = Literal["too_long", "duplicates", "nulls", "any_row", "orphans", "check_violations"]
+Kind = Literal["too_long"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,9 +52,6 @@ class Check:
     statement: str
     source: str
     index: str | None = None
-    referenced_table: str | None = None
-    referenced_columns: tuple[str, ...] = ()
-    expression: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,33 +95,6 @@ class ColumnType:
 
 ColumnTypeLookup = Callable[[str, str], ColumnType | None]
 
-_IDENT: Final = r'"?(\w+)"?'
-_QUALIFIED: Final = r'(?:"?\w+"?\s*\.\s*)?"?(\w+)"?'
-_CREATE_INDEX: Final = re.compile(
-    rf"^\s*CREATE\s+(UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?{_IDENT}\s+ON\s+(?:ONLY\s+)?"
-    rf"{_QUALIFIED}\s*(?:USING\s+(\w+)\s*)?\((.*?)\)",
-    re.IGNORECASE | re.DOTALL,
-)
-_ALTER_TABLE: Final = re.compile(
-    rf"^\s*ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?{_QUALIFIED}\s+(.*)$", re.IGNORECASE | re.DOTALL
-)
-_SET_NOT_NULL: Final = re.compile(rf"^ALTER\s+(?:COLUMN\s+)?{_IDENT}\s+SET\s+NOT\s+NULL$", re.IGNORECASE)
-_ADD_COLUMN: Final = re.compile(
-    rf"^ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?!(?:CONSTRAINT|FOREIGN|UNIQUE|CHECK|PRIMARY|EXCLUDE)\b){_IDENT}\s+(.*)$",
-    re.IGNORECASE | re.DOTALL,
-)
-_CONSTRAINT: Final = rf"^ADD\s+(?:CONSTRAINT\s+{_IDENT}\s+)?"
-_ADD_FOREIGN_KEY: Final = re.compile(
-    rf"{_CONSTRAINT}FOREIGN\s+KEY\s*\(([^)]*)\)\s*REFERENCES\s+{_QUALIFIED}\s*\(([^)]*)\)(.*)$",
-    re.IGNORECASE | re.DOTALL,
-)
-_ADD_UNIQUE: Final = re.compile(rf"{_CONSTRAINT}UNIQUE\s*\(([^)]*)\)", re.IGNORECASE | re.DOTALL)
-_ADD_CHECK: Final = re.compile(rf"{_CONSTRAINT}CHECK\s*\((.*)\)\s*(NOT\s+VALID)?\s*$", re.IGNORECASE | re.DOTALL)
-_PLAIN_COLUMN: Final = re.compile(rf"^{_IDENT}(?:\s+(?:ASC|DESC|NULLS\s+(?:FIRST|LAST)))*$", re.IGNORECASE)
-_COMMENT: Final = re.compile(r"--[^\n]*")
-_NOT_NULL: Final = re.compile(r"\bNOT\s+NULL\b", re.IGNORECASE)
-_HAS_DEFAULT: Final = re.compile(r"\bDEFAULT\b|\bGENERATED\b", re.IGNORECASE)
-
 
 def migration_data_check_timeout_seconds() -> float:
     """Seconds one count query may run before the preflight gives up on verifying it."""
@@ -143,117 +111,6 @@ def migration_data_check_timeout_seconds() -> float:
             DEFAULT_MIGRATION_DATA_CHECK_TIMEOUT_SECONDS,
         )
         return DEFAULT_MIGRATION_DATA_CHECK_TIMEOUT_SECONDS
-
-
-def statements(migration_sql: str) -> tuple[str, ...]:
-    """The statements of one migration file, comments stripped, empty ones dropped."""
-    parts: Final = _COMMENT.sub("", migration_sql).split(";")
-    return tuple(part.strip() for part in parts if part.strip())
-
-
-def _split_top_level(text: str) -> tuple[str, ...]:
-    """Split on the commas outside parentheses."""
-    depth: Final = accumulate((1 if char == "(" else -1 if char == ")" else 0) for char in text)
-    cuts: Final = tuple(
-        position for position, (char, level) in enumerate(zip(text, depth, strict=True)) if char == "," and level == 0
-    )
-    starts: Final = (0, *(cut + 1 for cut in cuts))
-    stops: Final = (*cuts, len(text))
-    pieces: Final = tuple(text[start:stop].strip() for start, stop in zip(starts, stops, strict=True))
-    return tuple(piece for piece in pieces if piece)
-
-
-def _plain_columns(column_list: str) -> tuple[str, ...] | None:
-    """The column names of an index or constraint column list, None when one entry is an
-    expression the derivation cannot turn into a count."""
-    matches: Final = tuple(_PLAIN_COLUMN.match(entry) for entry in _split_top_level(column_list))
-    if any(match is None for match in matches):
-        return None
-    return tuple(match.group(1) for match in matches if match is not None)
-
-
-def _index_checks(match: "re.Match[str]", statement_text: str, source: str) -> Iterator[Check]:
-    unique, name, table, method, column_list = match.groups()
-    columns: Final = _plain_columns(column_list)
-    if columns is None:
-        return
-    label: Final = f'CREATE {"UNIQUE " if unique else ""}INDEX "{name}"'
-    if method is None or method.lower() == "btree":
-        yield Check("too_long", table, columns, label, source, index=name)
-    if unique:
-        yield Check("duplicates", table, columns, label, source, index=name)
-
-
-def _alter_table_checks(table: str, action: str, source: str) -> Iterator[Check]:
-    if (set_not_null := _SET_NOT_NULL.match(action)) is not None:
-        yield Check("nulls", table, (set_not_null.group(1),), f'ALTER TABLE "{table}" {action}', source)
-        return
-    if (add_column := _ADD_COLUMN.match(action)) is not None:
-        column, body = add_column.groups()
-        if _NOT_NULL.search(body) is not None and _HAS_DEFAULT.search(body) is None:
-            yield Check(
-                "any_row", table, (column,), f'ALTER TABLE "{table}" ADD COLUMN "{column}" ... NOT NULL', source
-            )
-        return
-    if (foreign_key := _ADD_FOREIGN_KEY.match(action)) is not None:
-        constraint, columns, referenced_table, referenced_columns, tail = foreign_key.groups()
-        own: Final = _plain_columns(columns)
-        theirs: Final = _plain_columns(referenced_columns)
-        if own is None or theirs is None or len(own) != len(theirs) or "NOT VALID" in tail.upper():
-            return
-        yield Check(
-            "orphans",
-            table,
-            own,
-            _constraint_label(table, constraint, "FOREIGN KEY"),
-            source,
-            referenced_table=referenced_table,
-            referenced_columns=theirs,
-        )
-        return
-    if (unique := _ADD_UNIQUE.match(action)) is not None:
-        constraint, columns = unique.groups()
-        unique_columns: Final = _plain_columns(columns)
-        if unique_columns is not None:
-            yield Check("duplicates", table, unique_columns, _constraint_label(table, constraint, "UNIQUE"), source)
-        return
-    if (check := _ADD_CHECK.match(action)) is not None:
-        constraint, expression, not_valid = check.groups()
-        if not_valid is None:
-            yield Check(
-                "check_violations",
-                table,
-                (),
-                _constraint_label(table, constraint, "CHECK"),
-                source,
-                expression=expression,
-            )
-
-
-def _constraint_label(table: str, constraint: str | None, kind: str) -> str:
-    named: Final = f'CONSTRAINT "{constraint}" ' if constraint else ""
-    return f'ALTER TABLE "{table}" ADD {named}{kind}'
-
-
-def checks_for_statement(statement_text: str, source: str) -> tuple[Check, ...]:
-    """The count queries one SQL statement needs before it can be applied, empty for a
-    statement that cannot fail on existing rows or that the derivation cannot read."""
-    if (index := _CREATE_INDEX.match(statement_text)) is not None:
-        return tuple(_index_checks(index, statement_text, source))
-    if (alter := _ALTER_TABLE.match(statement_text)) is not None:
-        table, actions = alter.groups()
-        return tuple(
-            check for action in _split_top_level(actions) for check in _alter_table_checks(table, action, source)
-        )  # comprehension-ok: flattening the per-action checks of one statement
-    return ()
-
-
-def checks_for_migration(name: str, migration_sql: str) -> tuple[Check, ...]:
-    return tuple(
-        check
-        for statement_text in statements(migration_sql)
-        for check in checks_for_statement(statement_text, f"migration {name}")
-    )  # comprehension-ok: flattening the per-statement checks of one migration
 
 
 def checks_for_index(table: str, name: str, columns: tuple[str, ...]) -> tuple[Check, ...]:
@@ -343,11 +200,16 @@ def btree_max_entry_bytes(block_size: int) -> int:
 
 
 def _value_bytes(column: ColumnType, identifier: "sql.Identifier") -> "sql.Composed":
+    """The bytes a value takes in the index entry: its length, or its stored size when
+    Postgres compressed it, since `index_form_tuple` keeps the compressed bytes."""
     from psycopg import sql
 
-    if column.type_name in _OCTET_LENGTH_TYPES:
-        return sql.SQL("octet_length({})").format(identifier)
-    return sql.SQL("octet_length({}::text)").format(identifier)
+    length: Final = (
+        sql.SQL("octet_length({})").format(identifier)
+        if column.type_name in _OCTET_LENGTH_TYPES
+        else sql.SQL("octet_length({}::text)").format(identifier)
+    )
+    return sql.SQL("least({}, pg_column_size({}))").format(length, identifier)
 
 
 def _aligned(offset: "sql.Composable", align: str) -> "sql.Composed":
@@ -419,42 +281,7 @@ def _entry_size_query(check: Check, schema: str, types: tuple[ColumnType, ...], 
 
 
 def _count_query(check: Check, schema: str, types: tuple[ColumnType, ...], limit_bytes: int) -> "sql.Composed":
-    from psycopg import sql
-
-    table: Final = sql.Identifier(schema, check.table)
-    columns: Final = sql.SQL(", ").join(sql.Identifier(column) for column in check.columns)
-    match check.kind:
-        case "too_long":
-            return _entry_size_query(check, schema, types, limit_bytes)
-        case "duplicates":
-            not_null: Final = sql.SQL(" AND ").join(
-                sql.SQL("{} IS NOT NULL").format(sql.Identifier(column)) for column in check.columns
-            )
-            return sql.SQL(
-                "SELECT count(*) FROM (SELECT 1 FROM {t} WHERE {nn} GROUP BY {cols} HAVING count(*) > 1) AS d"
-            ).format(t=table, nn=not_null, cols=columns)
-        case "nulls":
-            return sql.SQL("SELECT count(*) FROM {t} WHERE {col} IS NULL").format(
-                t=table, col=sql.Identifier(check.columns[0])
-            )
-        case "any_row":
-            return sql.SQL("SELECT count(*) FROM {t}").format(t=table)
-        case "orphans":
-            pairs: Final = sql.SQL(" AND ").join(
-                sql.SQL("parent.{} = child.{}").format(sql.Identifier(theirs), sql.Identifier(own))
-                for own, theirs in zip(check.columns, check.referenced_columns, strict=True)
-            )
-            present: Final = sql.SQL(" AND ").join(
-                sql.SQL("child.{} IS NOT NULL").format(sql.Identifier(column)) for column in check.columns
-            )
-            return sql.SQL(
-                "SELECT count(*) FROM {t} AS child WHERE {present} AND NOT EXISTS (SELECT 1 FROM {ref} AS parent WHERE {pairs})"
-            ).format(t=table, present=present, ref=sql.Identifier(schema, check.referenced_table or ""), pairs=pairs)
-        case "check_violations":
-            return sql.SQL("SELECT count(*) FROM {t} WHERE NOT ({expr})").format(
-                t=table,
-                expr=sql.SQL(check.expression or "true"),  # pyright: ignore[reportArgumentType]  # copied from our own migration file
-            )
+    return _entry_size_query(check, schema, types, limit_bytes)
 
 
 def _applies(
@@ -469,15 +296,7 @@ def _applies(
         return False
     if check.index is not None and _index_is_valid(connection, schema, check.index):
         return False
-    if check.kind == "any_row":
-        return types is None
-    if types is None:
-        return False
-    if check.kind == "too_long":
-        return any(column.can_overflow_btree for column in types)
-    if check.kind == "orphans":
-        return check.referenced_table is not None and _table_exists(connection, schema, check.referenced_table)
-    return True
+    return types is not None and any(column.can_overflow_btree for column in types)
 
 
 def _too_long_detail(check: Check, types: tuple[ColumnType, ...], values: tuple[object, ...], limit_bytes: int) -> str:
@@ -510,21 +329,7 @@ def _run_check(
     rows: Final = _int(values[0], 0) if values else 0
     if rows == 0:
         return None
-    match check.kind:
-        case "too_long":
-            return BlockedChange(check, rows, _too_long_detail(check, types, values, limit_bytes))
-        case "duplicates":
-            return BlockedChange(check, rows, "duplicated value groups")
-        case "nulls":
-            return BlockedChange(check, rows, "NULL")
-        case "any_row":
-            return BlockedChange(
-                check, rows, "rows, and a NOT NULL column with no DEFAULT cannot be added to a table with rows"
-            )
-        case "orphans":
-            return BlockedChange(check, rows, f'with no matching row in "{check.referenced_table}"')
-        case "check_violations":
-            return BlockedChange(check, rows, f"failing CHECK ({check.expression})")
+    return BlockedChange(check, rows, _too_long_detail(check, types, values, limit_bytes))
 
 
 def find_blockers(
@@ -566,19 +371,7 @@ def find_blockers(
 
 def _remedy(check: Check) -> str:
     joined: Final = ", ".join(check.columns)
-    match check.kind:
-        case "too_long":
-            return f'Shorten or hash the long "{check.table}" ({joined}) values so every row\'s index entry fits.'
-        case "duplicates":
-            return f'Remove or merge the duplicate "{check.table}" ({joined}) values.'
-        case "nulls":
-            return f'Fill the NULL "{check.table}"."{joined}" values, or give the column a default first.'
-        case "any_row":
-            return "Give the new column a DEFAULT in the migration, or add it nullable and fill it afterwards."
-        case "orphans":
-            return f'Delete or repoint the "{check.table}" ({joined}) values with no "{check.referenced_table}" row.'
-        case "check_violations":
-            return f'Fix the "{check.table}" rows that fail the expression before adding the constraint.'
+    return f'Shorten or hash the long "{check.table}" ({joined}) values so every row\'s index entry fits.'
 
 
 def _describe(finding: Finding) -> str:
@@ -602,30 +395,4 @@ def _describe(finding: Finding) -> str:
 def report(findings: tuple[Finding, ...]) -> str:
     """The operator-facing refusal: one block per finding, then what to do next."""
     lines: Final = "\n".join(_describe(finding) for finding in findings)
-    return (
-        f"{REFUSAL}\n{lines}\n"
-        "No schema change was made. Fix the rows and start again, or run `litellm --check_migrations_against_existing_data` with the new image to check again."
-    )
-
-
-def pending_change_checks(
-    connection: "psycopg.Connection[tuple[object, ...]]",
-    schema: str,
-    migrations_dir: Path | None,
-    indexes: tuple[tuple[str, str, tuple[str, ...]], ...],
-) -> tuple[Check, ...]:
-    """Every check the pending migrations and the request-log indexes need. `migrations_dir`
-    is None when the schema is pushed rather than migrated, so only the indexes are checked."""
-    migration_checks: Final = (
-        tuple(
-            check
-            for name, migration_sql in pending_migrations(connection, schema, migrations_dir)
-            for check in checks_for_migration(name, migration_sql)
-        )  # comprehension-ok: flattening the per-migration checks
-        if migrations_dir is not None
-        else ()
-    )
-    index_checks: Final = tuple(
-        check for table, name, columns in indexes for check in checks_for_index(table, name, columns)
-    )  # comprehension-ok: flattening the per-index checks
-    return migration_checks + index_checks
+    return f"{REFUSAL}\n{lines}\nNo index was built. Fix the rows and the next index build picks it up."

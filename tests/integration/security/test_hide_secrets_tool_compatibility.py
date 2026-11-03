@@ -140,9 +140,15 @@ def _key(rig: Rig, *, permissions: dict[str, JsonValue] | None = None) -> Iterat
         )
 
 
+def _without_cooldowns(configuration: dict[str, JsonValue]) -> None:
+    settings: Final = configuration["router_settings"]
+    assert isinstance(settings, dict)
+    settings["disable_cooldowns"] = True
+
+
 @pytest.fixture(scope="module")
 def caller(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Caller]:
-    with tool_rig(tmp_path_factory.mktemp("hide-secrets-compat"), _peer) as rig:
+    with tool_rig(tmp_path_factory.mktemp("hide-secrets-compat"), _peer, configure=_without_cooldowns) as rig:
         with _key(rig) as key:
             yield Caller(rig, key)
 
