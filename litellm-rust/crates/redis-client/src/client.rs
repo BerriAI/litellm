@@ -258,12 +258,12 @@ impl RedisClient {
         Pipeline::new(self.0.namespace.clone())
     }
 
-    pub fn same_client(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-
     pub fn is_cluster(&self) -> bool {
         matches!(self.0.connection, Connection::Cluster(_))
+    }
+
+    pub fn same_client(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     pub fn batch(&self) -> RedisBatch {

@@ -19,7 +19,6 @@ class NativeRedisStoreError(Exception): ...
 def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
 def native_redis_breaker_states() -> list[str]: ...
-
 @final
 class NativeClickHouseSpendConfig:
     def __new__(cls, database: str, url: str, retention_days: int) -> NativeClickHouseSpendConfig: ...
@@ -85,12 +84,93 @@ class NativeRouterUsage:
         minute: str,
         tokens: float,
         requests: int,
+        *,
+        request: NativeRequestRedis | None = None,
     ) -> Future[None]: ...
     def get_many(
         self, counters: Sequence[tuple[str, str | None, str, Literal["tpm", "rpm"]]]
     ) -> Future[list[float | None]]: ...
     def flush_local_counters(self) -> None: ...
     def snapshot(self) -> dict[str, float]: ...
+
+_RateLimitScope = tuple[str, str]
+_RateLimitCounter = tuple[str, str, Literal["requests", "tokens"]]
+_RateLimitEntry = tuple[Literal["window", "requests", "tokens", "max_parallel_requests"], str, str]
+_RateLimitLocal = int | float | str | dict[str, float]
+_RateLimitIncrement = tuple[_RateLimitCounter, int | float, int | None]
+_RateLimitAtomicCounter = tuple[_RateLimitCounter, int, int, int, int]
+
+@final
+class NativeRateLimitPending:
+    def resolve(self) -> Future[object]: ...
+
+@final
+class NativeRateLimits:
+    def __new__(
+        cls,
+        client: NativeRedisClient | None,
+        backfill_ttl_seconds: float | None = None,
+        redis_ttl_seconds: int = 60,
+        /,
+    ) -> NativeRateLimits: ...
+    def has_redis(self) -> bool: ...
+    def slot_groups(self, scopes_: Sequence[_RateLimitScope], force: bool) -> list[list[int]]: ...
+    def local(self, entries: Sequence[_RateLimitEntry]) -> list[_RateLimitLocal | None]: ...
+    def set_local(self, entry: _RateLimitEntry, value: _RateLimitLocal, ttl_seconds: float | None) -> None: ...
+    def get(
+        self, entry: _RateLimitEntry, *, backfill_ttl_seconds: float | None = None
+    ) -> Future[_RateLimitLocal | None]: ...
+    def sliding_window(
+        self,
+        counters_: Sequence[_RateLimitCounter],
+        now: int,
+        window_size: int,
+        *,
+        request: NativeRequestRedis | None = None,
+    ) -> NativeRateLimitPending: ...
+    def read_counters(
+        self, counters_: Sequence[_RateLimitCounter], *, request: NativeRequestRedis | None = None
+    ) -> NativeRateLimitPending: ...
+    def check_and_increment(
+        self, counters_: Sequence[_RateLimitAtomicCounter], *, request: NativeRequestRedis | None = None
+    ) -> NativeRateLimitPending: ...
+    def guarded_increment(
+        self,
+        counter: _RateLimitCounter,
+        expected_window_start: str,
+        amount: float,
+        ttl_seconds: int | None,
+        *,
+        request: NativeRequestRedis | None = None,
+    ) -> NativeRateLimitPending: ...
+    def parallel_acquire(
+        self,
+        gauges: Sequence[tuple[_RateLimitScope, int]],
+        slot_ttl_seconds: int,
+        slot_id: str,
+        *,
+        request: NativeRequestRedis | None = None,
+    ) -> NativeRateLimitPending: ...
+    def parallel_release(
+        self, gauges: Sequence[_RateLimitScope], slot_id: str, *, request: NativeRequestRedis | None = None
+    ) -> NativeRateLimitPending: ...
+    def parallel_count(
+        self, gauges: Sequence[_RateLimitScope], slot_ttl_seconds: int, *, request: NativeRequestRedis | None = None
+    ) -> NativeRateLimitPending: ...
+    def token_increment(
+        self, increments_: Sequence[_RateLimitIncrement], *, request: NativeRequestRedis | None = None
+    ) -> NativeRateLimitPending: ...
+    def token_increment_post_call(
+        self, request: NativeRequestRedis, increments_: Sequence[_RateLimitIncrement]
+    ) -> Future[None]: ...
+    def parallel_release_post_call(
+        self, request: NativeRequestRedis, gauges: Sequence[_RateLimitScope], slot_id: str
+    ) -> Future[None]: ...
+    def increment(self, increment: _RateLimitIncrement) -> Future[int | float]: ...
+    def increment_many(self, increments_: Sequence[_RateLimitIncrement]) -> Future[None]: ...
+    def increment_many_post_call(
+        self, request: NativeRequestRedis, increments_: Sequence[_RateLimitIncrement]
+    ) -> Future[None]: ...
 
 @final
 class NativeAuthCache:
@@ -215,7 +295,6 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
-
 @final
 class ResponsesWebSocketConnection:
     def __new__(cls, _uninstantiable: Never, /) -> Never: ...
