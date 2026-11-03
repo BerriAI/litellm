@@ -1,7 +1,7 @@
 import copy
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
@@ -18,7 +18,7 @@ from litellm.llms.mistral.chat.transformation import (
     MistralConfig,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.mistral.transformation import VertexAIMistralConfig
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import ModelResponse
 from litellm.utils import supports_reasoning
 
@@ -1690,7 +1690,9 @@ def test_mistral_request_drops_a_user_name_without_touching_the_callers_message(
 
 def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
     return tuple(
-        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
     )
 
 
@@ -2060,3 +2062,69 @@ def test_prompt_cache_key_stays_unsupported_for_vertex_hosted_mistral(local_mode
         model="mistral-medium-3", custom_llm_provider="vertex_ai", prompt_cache_key="s", drop_params=True
     )
     assert "prompt_cache_key" not in dropped
+
+
+class TestMistralToolChoice:
+    """Mistral takes tool_choice as an enum or as {"type": "function", "function": {"name": ...}}, per
+    https://docs.mistral.ai/api/endpoint/chat (checked 2026-11-03)"""
+
+    TOOLS: Final[Sequence[ChatCompletionToolParam]] = [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        }
+    ]
+
+    def _request_body(self, tool_choice: str | Mapping[str, object]) -> Mapping[str, object]:
+        import litellm
+
+        optional_params: Final = litellm.get_optional_params(
+            model="mistral-large-latest",
+            custom_llm_provider="mistral",
+            tools=list(self.TOOLS),
+            tool_choice=tool_choice,
+        )
+        return MistralConfig().transform_request(
+            model="mistral-large-latest",
+            messages=[{"role": "user", "content": "what is the weather in Madrid"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+    def test_named_function_is_forwarded_to_mistral(self, local_model_cost_map: None) -> None:
+        body: Final = self._request_body({"type": "function", "function": {"name": "get_weather"}})
+
+        assert body["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
+
+    def test_keys_mistral_does_not_define_are_not_replayed(self, local_model_cost_map: None) -> None:
+        body: Final = self._request_body(
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "strict": True},
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+
+        assert body["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
+
+    @pytest.mark.parametrize(
+        "tool_choice, expected",
+        [("auto", "auto"), ("none", "none"), ("required", "any"), ("any", "any")],
+    )
+    def test_enum_tool_choice_is_mapped(self, local_model_cost_map: None, tool_choice: str, expected: str) -> None:
+        assert self._request_body(tool_choice)["tool_choice"] == expected
+
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [
+            {"type": "function", "function": {}},
+            {"type": "function", "function": {"name": ""}},
+            {"type": "function", "function": {"name": 123}},
+            {"type": "function"},
+        ],
+    )
+    def test_function_objects_without_a_usable_name_are_left_out(
+        self, local_model_cost_map: None, tool_choice: Mapping[str, object]
+    ) -> None:
+        assert "tool_choice" not in self._request_body(tool_choice)
