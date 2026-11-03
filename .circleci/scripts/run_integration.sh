@@ -128,6 +128,8 @@ fi
 sudo iptables -L integration_only -n -v -x > "$results/egress-guard.txt"
 awk '$3 == "REJECT" && $1 > 0 { rejected=1 } END { exit !rejected }' "$results/egress-guard.txt"
 
+export UV_OFFLINE=true
+
 if [ "$mode" = parity ]; then
   export INTEGRATION_WORKERS=1
 else

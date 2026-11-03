@@ -540,7 +540,7 @@ def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
     oidc_api_key_credential, deployment_params: dict, override: str
 ):
     from litellm.exceptions import BadRequestError
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     with pytest.raises(BadRequestError, match="api_key is an oidc/ secret reference"):
         get_dynamic_litellm_params(
@@ -550,7 +550,7 @@ def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
 
 @pytest.mark.parametrize("deployment_params", _OIDC_DEPLOYMENT_PARAMS)
 def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_credential, deployment_params: dict):
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     out: Final = get_dynamic_litellm_params(
         litellm_params=dict(deployment_params),
@@ -3009,7 +3009,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
     """
 
     def test_clears_admin_organization_and_extra_body_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3035,7 +3035,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "api_version" not in out
 
     def test_clears_aws_and_vertex_secrets_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3058,7 +3058,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "vertex_project" not in out
 
     def test_clears_nvcf_function_id_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3076,7 +3076,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "nvcf_function_id" not in out
 
     def test_clears_use_ssl_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3094,7 +3094,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "use_ssl" not in out
 
     def test_clears_oauth_token_exchange_fields_for_other_provider_base_overrides(self):
-        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+        from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
         oauth_values: Final = {
             "token_exchange_audience": "https://graph.microsoft.com",
@@ -3116,7 +3116,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert all(field not in out for field in oauth_values)
 
     def test_clears_oauth_token_exchange_fields_for_microsoft_365_copilot_base_overrides(self):
-        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+        from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
         oauth_values: Final = {
             "token_exchange_audience": "https://graph.microsoft.com",
@@ -3146,7 +3146,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # the field name with any value (or empty string) to keep the
         # admin's value forwarded, which is the exfiltration vector this
         # test guards against.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3172,7 +3172,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # deployment, which would flip the call to shared mode and send the
         # admin's Copilot token to the attacker's host. Keeping them is safe
         # because per-user mode ignores the caller api_base anyway.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
         from litellm.types.utils import CredentialItem
@@ -3201,7 +3201,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["api_base"] == "https://attacker.example"
 
     def test_shared_oauth_credential_name_is_cleared_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
         from litellm.types.utils import CredentialItem
@@ -3231,7 +3231,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # Regression: a caller that echoes an admin-config field name with
         # an *empty* value (or any value) must not be able to keep the
         # admin's value in ``litellm_params``.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3253,7 +3253,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "org-admin-secret" not in str(out)
 
     def test_no_clearing_when_only_api_key_overridden(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3272,7 +3272,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["api_base"] == "https://admin.upstream/v1"
 
     def test_client_api_key_used_when_supplied_with_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3971,7 +3971,7 @@ def test_admin_opt_in_proxy_wide_allows_riva_offline() -> None:
 
 
 def test_api_base_override_keeps_the_deployments_riva_offline_mode() -> None:
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     out: Final = get_dynamic_litellm_params(
         litellm_params={"model": "nvidia_riva/nvidia/parakeet-0.6b-tdt", "riva_offline": True},

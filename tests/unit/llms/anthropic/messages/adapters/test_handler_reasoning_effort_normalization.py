@@ -8,6 +8,7 @@ leaves the adapter, in the shape the target expects.
 
 import functools
 import json
+import logging
 from collections.abc import Mapping
 from typing import Final
 
@@ -510,26 +511,33 @@ class TestADeclaredDeploymentRoundsTheMessagesTierOntoItsLevels:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("budget", ["2048", True])
     @pytest.mark.parametrize("litellm_params, model_info, upstream_url, upstream_body", _MALFORMED_BUDGET_TARGETS)
-    async def test_drop_params_drops_a_non_numeric_budget(
+    async def test_drop_params_drops_a_non_numeric_budget_with_one_warning(
         self,
         local_model_cost_map: None,
         respx_mock: respx.MockRouter,
+        caplog: pytest.LogCaptureFixture,
         litellm_params: Mapping[str, object],
         model_info: Mapping[str, object],
         upstream_url: str,
         upstream_body: Mapping[str, object],
         budget: object,
     ) -> None:
-        sent: Final = await _body_sent_upstream(
-            respx_mock,
-            {**litellm_params, "drop_params": True},
-            model_info,
-            upstream_url,
-            upstream_body,
-            thinking={"type": "enabled", "budget_tokens": budget},
-        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            sent: Final = await _body_sent_upstream(
+                respx_mock,
+                {**litellm_params, "drop_params": True},
+                model_info,
+                upstream_url,
+                upstream_body,
+                thinking={"type": "enabled", "budget_tokens": budget},
+            )
 
         assert not {"reasoning_effort", "reasoning", "thinking"} & sent.keys()
+        dropped: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+        assert len(dropped) == 1
+        assert f"thinking.budget_tokens={budget!r}" in dropped[0]
+        assert "(drop_params=True)" in dropped[0]
+        assert str(litellm_params["model"]).split("/", 1)[1] in dropped[0]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

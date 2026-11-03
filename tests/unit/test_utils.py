@@ -476,6 +476,34 @@ def test_supports_video_input_reads_its_own_cost_map_flag(
     assert litellm.get_model_info(model)["supports_video_input"] is video_input
 
 
+@pytest.mark.parametrize("continuation", [True, False])
+def test_supports_continuation_reads_its_own_cost_map_flag(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, continuation: bool
+) -> None:
+    model: Final = "gemini/continuation-flag-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "gemini",
+            "mode": "chat",
+            "supports_continuation": continuation,
+            "supports_url_context": not continuation,
+        },
+    )
+    assert litellm.supports_continuation(model) is continuation
+    assert litellm.get_model_info(model).get("supports_continuation") is continuation
+
+
+def test_supports_continuation_is_unset_when_the_cost_map_omits_it(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = "gemini/no-continuation-flag-model"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "gemini", "mode": "chat"})
+    assert litellm.supports_continuation(model) is False
+    assert litellm.get_model_info(model).get("supports_continuation") is None
+
+
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
@@ -1178,6 +1206,9 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_vision": {"type": "boolean"},
             "supports_web_search": {"type": "boolean"},
             "token_count_framing": {"type": "integer"},
+            "token_count_tool_framing": {"type": "integer"},
+            "token_count_responses_framing": {"type": "integer"},
+            "token_count_responses_tool_framing": {"type": "integer"},
             "token_count_model": {
                 "type": "object",
                 "properties": {"model": {"type": "string"}, "region": {"type": "string"}},
@@ -1189,6 +1220,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
             "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
             "supports_url_context": {"type": "boolean"},
+            "supports_continuation": {"type": "boolean"},
             "supports_multimodal": {"type": "boolean"},
             "uses_embed_content": {"type": "boolean"},
             "supports_reasoning": {"type": "boolean"},
@@ -8620,6 +8652,40 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("mode", ["auto", "required"])
+def test_validate_tool_choice_allowed_tools_chat_layout_passes_through(mode: str):
+    tool_choice: Final = {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": mode,
+            "tools": [{"type": "function", "function": {"name": "get_time"}}, {"type": "mcp", "server_label": "docs"}],
+        },
+    }
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]},
+        {"type": "allowed_tools"},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "required"}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": []}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "none", "tools": [{"type": "function"}]}},
+        {"type": "allowed_tools", "allowed_tools": {"tools": [{"type": "function", "function": {"name": "a"}}]}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": "get_time"}},
+    ],
+)
+def test_validate_tool_choice_allowed_tools_malformed_is_a_400(tool_choice: dict[str, object]):
+    with pytest.raises(litellm.BadRequestError, match="allowed_tools") as exc_info:
+        validate_chat_completion_tool_choice(tool_choice, model=MODEL)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.model == MODEL
+    assert '"mode": "auto" | "required"' in str(exc_info.value)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("tool_choice", [123, []])
 def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
     """A non-str, non-dict tool_choice is rejected as a 400 that names the type it got."""
@@ -9267,6 +9333,77 @@ def reset_mock_cache() -> None:
     from litellm.utils import _model_cache
 
     _model_cache.flush_cache()
+
+
+@respx.mock
+def test_get_valid_models_does_not_ask_a_timed_out_provider_again_on_the_next_listing(reset_mock_cache: None) -> None:
+    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        side_effect=httpx.ReadTimeout("catalog hung")
+    )
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-during-an-outage")
+
+    listings: Final = tuple(
+        get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+        for _ in range(2)
+    )
+
+    assert (listings, catalog.call_count) == (([], []), 1)
+
+
+@respx.mock
+def test_get_valid_models_lists_a_provider_again_right_after_a_fast_failure(reset_mock_cache: None) -> None:
+    respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        side_effect=(httpx.Response(503), httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]}))
+    )
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-recovers")
+
+    listings: Final = tuple(
+        get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+        for _ in range(2)
+    )
+
+    assert listings == ([], ["openrouter/anthropic/claude-haiku-5-5"])
+
+
+@respx.mock
+def test_get_valid_models_keeps_a_good_listing_when_an_overlapping_listing_fails_after_it(
+    reset_mock_cache: None,
+) -> None:
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-overlapping-listings")
+    first_request: Final = iter((True, False))
+
+    def answer_after_an_overlapping_listing(request: httpx.Request) -> httpx.Response:
+        if next(first_request):
+            get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+            raise httpx.ReadTimeout("catalog hung", request=request)
+        return httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
+
+    respx.get("https://openrouter.ai/api/v1/models/user").mock(side_effect=answer_after_an_overlapping_listing)
+    get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+
+    assert get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment
+    ) == ["openrouter/anthropic/claude-haiku-5-5"]
+
+
+@respx.mock
+def test_get_valid_models_asks_a_provider_once_when_many_listings_start_together(reset_mock_cache: None) -> None:
+    def slow_catalog(request: httpx.Request) -> httpx.Response:
+        threading.Event().wait(0.2)
+        return httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
+
+    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(side_effect=slow_catalog)
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-many-listings")
+
+    def list_models(_: int) -> tuple[str, ...]:
+        return tuple(
+            get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        listings: Final = frozenset(pool.map(list_models, range(8)))
+
+    assert (listings, catalog.call_count) == (frozenset({("openrouter/anthropic/claude-haiku-5-5",)}), 1)
 
 
 @pytest.fixture

@@ -553,6 +553,63 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     assert sent_tool["function"]["name"] == "write_file"
 
 
+_ALLOWED_TOOLS_TOOL_CHOICE: Final = {
+    "type": "allowed_tools",
+    "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+}
+_TWO_TOOLS: Final = [
+    {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}},
+]
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.5", "azure/my-gpt-deployment"])
+def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat(
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str
+):
+    mock_route: Final = respx_mock.post(url__regex=r"http://localhost:12346/.*chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=_TWO_TOOLS,
+        tool_choice=_ALLOWED_TOOLS_TOOL_CHOICE,
+        api_base="http://localhost:12346/v1",
+        api_key="fake_api_key",
+        api_version="2025-04-01-preview",
+    )
+
+    assert mock_route.called
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["tool_choice"] == _ALLOWED_TOOLS_TOOL_CHOICE
+    assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_time", "get_weather"]
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "bedrock/converse/x"])
+def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot_enforce_it(
+    respx_mock: respx.MockRouter, model: str, drop_params: bool
+):
+    with pytest.raises(
+        litellm.BadRequestError, match=r"allowed_tools.*only supported for azure, litellm_proxy, openai"
+    ) as exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What time is it?"}],
+            tools=_TWO_TOOLS,
+            tool_choice=_ALLOWED_TOOLS_TOOL_CHOICE,
+            drop_params=drop_params,
+            api_key="fake_api_key",
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+    assert exc.value.status_code == 400
+    assert not respx_mock.calls
+
+
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
     "id": "srvtoolu_01search",
     "type": "function",
@@ -10262,9 +10319,10 @@ def test_a_non_numeric_thinking_budget_on_adaptive_claude_is_rejected_with_a_400
 @pytest.mark.parametrize("drop_globally", [False, True])
 @pytest.mark.parametrize("model_info", [None, _OPUS_DECLARING_LOW_AND_HIGH])
 @pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
-def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude_with_one_warning(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     body_sent: Callable[..., Mapping[str, object]],
     model_info: Mapping[str, object] | None,
     drop_globally: bool,
@@ -10272,13 +10330,40 @@ def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
     monkeypatch.setattr(litellm, "drop_params", drop_globally)
     request_drop: Final = {} if drop_globally else {"drop_params": True}
 
-    dropped: Final = body_sent(
-        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        dropped: Final = body_sent(
+            respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     adaptive_alone: Final = body_sent(respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop)
 
     assert "output_config" not in adaptive_alone
     assert dropped == adaptive_alone
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in ("thinking.budget_tokens='lots'", "claude-opus-5-5", "(drop_params=True)")
+    )
+
+
+@pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
+def test_drop_params_drops_a_non_numeric_thinking_budget_on_hosted_vllm_with_one_warning(
+    respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture, model_info: Mapping[str, object] | None
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = _chat_body_sent(
+            respx_mock,
+            "hosted_vllm/my-kimi",
+            None,
+            model_info,
+            thinking={"type": "enabled", "budget_tokens": "lots"},
+            drop_params=True,
+        )
+
+    assert not {"reasoning_effort", "thinking"} & sent.keys()
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("thinking.budget_tokens='lots'", "my-kimi"))
 
 
 @pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
@@ -11205,6 +11290,67 @@ async def test_converse_fallback_prices_the_current_attempt(
     else:
         client.close()
     configuration.reset_rust_configuration()
+
+
+def _openai_chat_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-5.6",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+async def _openai_completion(use_async: bool, **request_params: object) -> litellm.ModelResponse:
+    request: Final = {
+        "model": "openai/gpt-5.6",
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_key": "fake-key",
+        **request_params,
+    }
+    return await litellm.acompletion(**request) if use_async else litellm.completion(**request)
+
+
+class _PreCallParamsRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.litellm_params: tuple[object, ...] = ()
+
+    def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
+        self.litellm_params = (*self.litellm_params, kwargs.get("litellm_params"))
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_malformed_routing_kwarg_answers_400_before_reaching_the_provider(use_async: bool):
+    with respx.mock(assert_all_called=False) as mock:
+        route: Final = mock.post("https://api.openai.com/v1/chat/completions").mock(return_value=_openai_chat_answer())
+        with pytest.raises(litellm.BadRequestError, match="tpm") as raised:
+            await _openai_completion(use_async, tpm="abc")
+
+    assert raised.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_malformed_routing_kwarg_is_dropped_from_the_whole_request_under_drop_params(
+    use_async: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _PreCallParamsRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    with respx.mock:
+        respx.post("https://api.openai.com/v1/chat/completions").mock(return_value=_openai_chat_answer())
+        response: Final = await _openai_completion(use_async, tpm="abc", drop_params=True)
+
+    assert response.choices[0].message.content == "hi"
+    assert len(recorder.litellm_params) == 1
+    assert isinstance(recorder.litellm_params[0], Mapping)
+    assert recorder.litellm_params[0].get("tpm") is None
 
 
 _LOOKUP_FUNCTION: Final = {
