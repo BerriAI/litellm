@@ -34,8 +34,9 @@ async def apply_deliveries(
             for item in contributions
             if item.table == table.name
         )
-        if rows:
-            sql, params = build_bulk_upsert(table, merge_by_conflict_key(table, rows))
+        merged = merge_by_conflict_key(table, rows)
+        for offset in range(0, len(merged), 100):
+            sql, params = build_bulk_upsert(table, merged[offset : offset + 100])
             async with db_span("upsert_daily_spend", table.name):
                 await transaction.execute_raw(sql, *params)
     async with transaction.batch_() as batcher:

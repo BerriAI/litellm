@@ -3270,6 +3270,7 @@ def cost_tracking():
 
         spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
         model_max_budget_limiter.defer_window_spend = True
+        litellm.logging_callback_manager.add_litellm_async_success_callback(model_max_budget_limiter)
         db_logger: Final = ProxyDBLogger(spend_event_producer)
         litellm.logging_callback_manager.add_litellm_callback(db_logger)
         litellm.logging_callback_manager.add_litellm_async_success_callback(db_logger)

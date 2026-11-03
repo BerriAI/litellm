@@ -772,7 +772,7 @@ class DBSpendUpdateWriter:
                 kwargs["accounting_path"] = payload["accounting_path"]  # rebind-ok: forward persisted stamp
             if payload["accounting_path"] != "ledger":
                 windows_queued = True  # rebind-ok: an attempted queue write must not be repeated after a later failure
-                await asyncio.gather(*(self.window_spend_update_queue.add_update(window) for window in model_windows))
+                await self._queue_model_windows_safely(model_windows)
                 spawn_logging_task(
                     asyncio.get_running_loop(),
                     self._batch_database_updates(
@@ -831,7 +831,13 @@ class DBSpendUpdateWriter:
             and not queued
             and (payload is None or payload.get("accounting_path") != "ledger")
         ):
+            await self._queue_model_windows_safely(windows)
+
+    async def _queue_model_windows_safely(self, windows: tuple[WindowSpendTransaction, ...]) -> None:
+        try:
             await asyncio.gather(*(self.window_spend_update_queue.add_update(window) for window in windows))
+        except Exception:
+            verbose_proxy_logger.debug("Unable to queue shared model budget spend", exc_info=True)
 
     async def _record_spend_log(
         self,
