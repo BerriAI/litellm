@@ -8846,6 +8846,62 @@ async def test_aresponses_enforces_context_window_pre_call_check():
         )
 
 
+def _embedding_router(max_input_tokens: int) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-test",
+                    "mock_response": [0.1, 0.2],
+                },
+                "model_info": {"max_input_tokens": max_input_tokens},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one two three four five six"] * 3, id="texts"),
+        pytest.param([list(range(6))] * 3, id="token-id-lists"),
+    ],
+)
+async def test_aembedding_accepts_a_batch_whose_inputs_each_fit_the_context_window(embedding_input):
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    response: Final = await router.aembedding(model="embed", input=embedding_input)
+
+    assert response.data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one", " ".join(["word"] * 20)], id="texts"),
+        pytest.param(list(range(11)), id="token-ids"),
+        pytest.param([[1], list(range(11))], id="token-id-lists"),
+    ],
+)
+async def test_aembedding_rejects_a_batch_with_one_input_over_the_context_window(embedding_input):
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aembedding(model="embed", input=embedding_input)
+
+
+def test_embedding_rejects_a_batch_with_one_input_over_the_context_window():
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router.embedding(model="embed", input=["one", " ".join(["word"] * 20)])
+
+
 def test_get_deployment_model_info_base_model_flow():
     """Test that get_deployment_model_info correctly handles the base model flow"""
     from unittest.mock import patch

@@ -677,6 +677,7 @@ _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _CALL_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
+_EMBEDDING_TOKEN_ID_BATCH_ADAPTER: Final = TypeAdapter(list[list[int]])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -14879,6 +14880,9 @@ class PythonCore(DeprecatedRouterMembers):
         Prompt content the message list never carries is read from `request_kwargs`:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
+
+        An embedding batch (a list of texts, token IDs or token ID lists) counts as its
+        longest input.
         """
         from litellm.llms.anthropic.messages.native.utils import (
             anthropic_system_to_openai_message,
@@ -14897,6 +14901,11 @@ class PythonCore(DeprecatedRouterMembers):
         if messages is not None:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
             return self._host.invoke("token_counter")(model=tokenizer_model, messages=counted_messages, tools=tools)
+        if (
+            isinstance(input, list)
+            and (embedding_tokens := self._longest_embedding_input_tokens(input, tokenizer_model)) is not None
+        ):
+            return embedding_tokens
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
@@ -14916,6 +14925,19 @@ class PythonCore(DeprecatedRouterMembers):
                 tools=tools,
             )
         raise ValueError("Either messages or input must be provided to count tokens")
+
+    def _longest_embedding_input_tokens(self, items: list[object], tokenizer_model: str) -> int | None:
+        """An embedding model's context window bounds each input on its own, so a batch is never summed."""
+        if all(isinstance(item, str) for item in items):
+            count_tokens: Final = self._host.invoke("token_counter")
+            return max((count_tokens(model=tokenizer_model, text=item) for item in items), default=0)
+        if all(isinstance(item, int) for item in items):
+            return len(items)
+        try:
+            token_id_batch: Final = _EMBEDDING_TOKEN_ID_BATCH_ADAPTER.validate_python(items, strict=True)
+        except ValidationError:
+            return None
+        return max((len(token_ids) for token_ids in token_id_batch), default=0)
 
     def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
         """The deployment's declared context window, or None when it declares none or cannot be resolved."""
