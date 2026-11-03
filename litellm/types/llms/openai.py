@@ -881,6 +881,11 @@ class ChatCompletionFileObject(TypedDict):
     file: ChatCompletionFileObjectFile
 
 
+class ChatCompletionRefusalObject(TypedDict):
+    type: ReadOnly[Literal["refusal"]]
+    refusal: ReadOnly[str]
+
+
 OpenAIMessageContentListBlock = (
     ChatCompletionTextObject
     | ChatCompletionImageObject
@@ -888,6 +893,7 @@ OpenAIMessageContentListBlock = (
     | ChatCompletionDocumentObject
     | ChatCompletionVideoObject
     | ChatCompletionFileObject
+    | ChatCompletionRefusalObject
 )
 
 OpenAIMessageContent = str | Iterable[OpenAIMessageContentListBlock]
