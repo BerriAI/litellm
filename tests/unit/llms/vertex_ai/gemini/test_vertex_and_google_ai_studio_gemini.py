@@ -328,9 +328,7 @@ def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(sp
 
 def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
     mapped: Final = VertexGeminiConfig().map_openai_params(
-        non_default_params={
-            "audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}
-        },
+        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
         optional_params={},
         model="gemini-2.5-flash-preview-tts",
         drop_params=False,
@@ -3570,7 +3568,9 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
-        async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
+        async def dispatch_attempt_failure_handlers(
+            self, exception: Exception, traceback_exception: str
+        ) -> None:
             return None
 
         def attempt_scoped_copy(self) -> "DummyLogging":
@@ -3700,7 +3700,9 @@ def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expe
     ]
     metadata: Final = {
         "groundingChunks": chunks,
-        "groundingSupports": [{"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}],
+        "groundingSupports": [
+            {"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}
+        ],
     }
     annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
     expected: Final = [
