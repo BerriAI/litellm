@@ -5359,3 +5359,82 @@ def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newlin
     assert line["request_model"] == forged_model
     assert "\n" not in message
     assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_opts_out_never_calls_the_provider_counter():
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", total_tokens=447)})
+
+    result: Final = await _ladder(
+        counter, TokenCountSettings(framing=None, count_model=None, use_token_counting_api=False)
+    )
+
+    assert result is None
+    assert counter.calls == []
+
+
+@pytest.mark.asyncio
+async def test_an_opt_out_still_uses_the_provider_when_no_local_estimate_is_allowed():
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", total_tokens=447)})
+
+    result: Final = await _ladder(
+        counter,
+        TokenCountSettings(framing=None, count_model=None, use_token_counting_api=False),
+        local_estimate_allowed=False,
+    )
+
+    assert result is not None
+    assert (result.total_tokens, result.count_source) == (447, "provider")
+
+
+def _nova_router(model_info: dict[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "nova-pro",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-pro-v1:0", "aws_region_name": "us-east-1"},
+                "model_info": model_info,
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_reads_the_opt_out_from_the_routed_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _nova_router({"use_token_counting_api": False}))
+    counter: Final = _ScriptedCounter({"us.amazon.nova-pro-v1:0": _provider_reply("nova", total_tokens=900)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "_get_provider_token_counter",
+        lambda deployment, model_to_use: (counter, model_to_use, "bedrock"),
+    )
+
+    result: Final = await count_request_tokens(
+        request=TokenCountRequest(model="nova-pro", messages=[{"role": "user", "content": "hello"}]),
+        call_endpoint=True,
+        messages_format="anthropic",
+    )
+
+    assert counter.calls == []
+    assert result.count_source == "local_estimate"
+    assert result.total_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_still_calls_the_provider_without_the_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _nova_router({}))
+    counter: Final = _ScriptedCounter({"us.amazon.nova-pro-v1:0": _provider_reply("nova", total_tokens=900)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "_get_provider_token_counter",
+        lambda deployment, model_to_use: (counter, model_to_use, "bedrock"),
+    )
+
+    result: Final = await count_request_tokens(
+        request=TokenCountRequest(model="nova-pro", messages=[{"role": "user", "content": "hello"}]),
+        call_endpoint=True,
+        messages_format="anthropic",
+    )
+
+    assert len(counter.calls) == 1
+    assert (result.total_tokens, result.count_source) == (900, "provider")
