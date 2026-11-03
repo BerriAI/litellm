@@ -57,7 +57,7 @@ PHONE_POST_CALL: Final = "passthrough-auth-phone-post-call"
 PIPELINE_BLOCKS: Final = "passthrough-pipeline-blocks-the-response"
 PIPELINE_ALLOWS: Final = "passthrough-pipeline-allows-the-response"
 PIPELINE_BEFORE_THE_CALL: Final = "passthrough-pipeline-before-the-call"
-PIPELINE_REPLACES: Final = "passthrough-pipeline-replaces-the-response"
+PIPELINE_MODIFIES: Final = "passthrough-pipeline-modifies-the-response"
 _CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _JSON: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_LIST: Final = TypeAdapter(list[JsonValue])
@@ -240,11 +240,11 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                         PIPELINE_BLOCKS: _pipeline_policy("post_call", KEY_POST_CALL, "block"),
                         PIPELINE_ALLOWS: _pipeline_policy("post_call", KEY_POST_CALL, "allow"),
                         PIPELINE_BEFORE_THE_CALL: _pipeline_policy("pre_call", GUARDRAIL, "block"),
-                        PIPELINE_REPLACES: _pipeline_policy("post_call", KEY_POST_CALL, "modify_response"),
+                        PIPELINE_MODIFIES: _pipeline_policy("post_call", KEY_POST_CALL, "modify_response"),
                     },
                     "policy_attachments": [
                         {"policy": policy, "tags": [policy]}
-                        for policy in (PIPELINE_BLOCKS, PIPELINE_ALLOWS, PIPELINE_BEFORE_THE_CALL, PIPELINE_REPLACES)
+                        for policy in (PIPELINE_BLOCKS, PIPELINE_ALLOWS, PIPELINE_BEFORE_THE_CALL, PIPELINE_MODIFIES)
                     ],
                     "model_list": [
                         *_JSON_LIST.validate_python(config.get("model_list") or []),
@@ -817,7 +817,7 @@ def test_a_response_a_pipeline_replaces_keeps_the_spend_logs_metadata_on_its_row
         key: Final = scenario.key(metadata={"spend_logs_metadata": {"key_field": "key"}})
         _drain(rig)
 
-        response: Final = _send(gateway, OPENAI_ROUTE, _tagged_body(OPENAI_ROUTE, PIPELINE_REPLACES), key)
+        response: Final = _send(gateway, OPENAI_ROUTE, _tagged_body(OPENAI_ROUTE, PIPELINE_MODIFIES), key)
 
         assert response.status_code == 200, response.text
         assert b"content_filter" in response.content, response.text
