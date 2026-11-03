@@ -4728,3 +4728,33 @@ def test_tools_without_strict_drops_only_the_strict_key_and_counts_the_strict_to
     assert tools_without_strict(tools) == ToolsWithoutStrict(
         tools=({"name": "a"}, {"name": "b"}, {"name": "c"}), dropped_count=1
     )
+
+
+@pytest.mark.parametrize("registration_order", [("caching-off", "unflagged"), ("unflagged", "caching-off")])
+def test_auto_injection_reads_a_deployments_own_prompt_caching_flag_not_a_siblings(
+    registration_order: tuple[str, ...],
+) -> None:
+    from litellm import Router
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+
+    model: Final = "anthropic.claude-qa-cache-model"
+    litellm.register_model({model: {"litellm_provider": "bedrock", "mode": "chat", "supports_prompt_caching": True}})
+    model_infos: Final = {
+        "caching-off": {"id": "caching-off-id", "supports_prompt_caching": False},
+        "unflagged": {"id": "unflagged-id"},
+    }
+    Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": f"bedrock/{model}", "aws_region_name": "us-east-1"},
+                "model_info": model_infos[name],
+            }
+            for name in registration_order
+        ]
+    )
+
+    assert {name: supports_anthropic_cache_control(model, "bedrock", model_infos[name]) for name in registration_order} == {
+        "caching-off": False,
+        "unflagged": True,
+    }

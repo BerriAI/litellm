@@ -307,9 +307,10 @@ def count_tokens_feature_betas(
     )
 
 
-def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None) -> bool:
+def supports_anthropic_cache_control(
+    model: str, custom_llm_provider: str | None, model_info: Mapping[str, object] | None = None
+) -> bool:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-    from litellm.utils import supports_prompt_caching
 
     try:
         provider: Final = custom_llm_provider if custom_llm_provider is not None else get_llm_provider(model=model)[1]
@@ -318,8 +319,25 @@ def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None
     return (
         provider in ("anthropic", "bedrock", "vertex_ai", "azure_ai")
         and "claude" in model.lower()
-        and supports_prompt_caching(model=model, custom_llm_provider=provider)
+        and _deployment_supports_prompt_caching(model, provider, model_info)
     )
+
+
+def _deployment_supports_prompt_caching(model: str, provider: str, model_info: Mapping[str, object] | None) -> bool:
+    from litellm.utils import catalog_with_runtime_registrations, get_model_info, supports_prompt_caching
+
+    declared: Final = None if model_info is None else model_info.get("supports_prompt_caching")
+    if isinstance(declared, bool):
+        return declared
+    live: Final = supports_prompt_caching(model=model, custom_llm_provider=provider)
+    if model_info is None:
+        return live
+    try:
+        key: Final = get_model_info(model=model, custom_llm_provider=provider).get("key")
+    except Exception:  # noqa: BLE001  # an unmapped model keeps the live answer
+        return live
+    catalog_entry: Final = catalog_with_runtime_registrations().get(key)
+    return live if catalog_entry is None else catalog_entry.get("supports_prompt_caching") is True
 
 
 def _tool_config_point_control(points: object) -> Mapping[object, object] | None:

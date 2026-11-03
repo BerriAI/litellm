@@ -884,6 +884,7 @@ def _stamp_injection_points_for_the_hook(
         kwargs.get("api_base") or kwargs.get("base_url"),
         kwargs.get("prompt_cache_options"),
         routed_model_info(kwargs.get("model_info")),
+        kwargs.get("base_model"),
     )
 
 

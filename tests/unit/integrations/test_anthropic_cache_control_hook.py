@@ -5350,6 +5350,83 @@ async def test_openai_messages_bridge_sends_a_breakpoint_by_the_deployments_own_
     }
 
 
+_OPENAI_ROUTES: Final = MappingProxyType(
+    {
+        "acompletion": ("https://api.openai.com/v1/chat/completions", _FOUNDRY_CHAT_ROUTE[1]),
+        "aresponses": ("https://api.openai.com/v1/responses", _FOUNDRY_RESPONSES_ROUTE[1]),
+        "aanthropic_messages": ("https://api.openai.com/v1/responses", _FOUNDRY_RESPONSES_ROUTE[1]),
+    }
+)
+
+
+def _openai_route(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str) -> respx.Route:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    url, reply = _OPENAI_ROUTES[entrypoint]
+    return respx_mock.post(url).mock(return_value=Response(200, json=dict(reply)))
+
+
+@pytest.mark.parametrize("declared", [True, False])
+async def test_a_wildcard_deployments_prompt_cache_flag_leaves_each_matched_model_to_the_catalog(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, declared: bool
+) -> None:
+    chat: Final = _openai_route(respx_mock, monkeypatch, "acompletion")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "openai-test-key",
+                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                },
+                "model_info": {"id": "wildcard-id", "supports_prompt_cache_breakpoint": declared},
+            }
+        ],
+        num_retries=0,
+    )
+
+    async def sends_prompt_cache_options(model: str) -> bool:
+        await _send_unmarked_system_prompt(router, model, "acompletion")
+        return b"prompt_cache_options" in chat.calls.last.request.content
+
+    assert {model: await sends_prompt_cache_options(model) for model in ("openai/gpt-4.1-qa", "openai/gpt-99.0-qa")} == {
+        "openai/gpt-4.1-qa": False,
+        "openai/gpt-99.0-qa": True,
+    }
+
+
+@pytest.mark.parametrize("entrypoint", ["acompletion", "aresponses", "aanthropic_messages"])
+@pytest.mark.parametrize("declared_in", ["litellm_params", "model_info"])
+async def test_an_openai_alias_whose_base_model_takes_breakpoints_also_gets_prompt_cache_options(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str, declared_in: str
+) -> None:
+    upstream: Final = _openai_route(respx_mock, monkeypatch, entrypoint)
+    base_model: Final = {"base_model": "gpt-99.0-qa"}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "ft-alias",
+                "litellm_params": {
+                    "model": "openai/qa-ft-alias",
+                    "api_key": "openai-test-key",
+                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                    **(base_model if declared_in == "litellm_params" else {}),
+                },
+                "model_info": {"id": "ft-alias-id", **(base_model if declared_in == "model_info" else {})},
+            }
+        ],
+        num_retries=0,
+    )
+
+    await _send_unmarked_system_prompt(router, "ft-alias", entrypoint)
+
+    body: Final = upstream.calls.last.request.content
+    assert (json.loads(body).get("prompt_cache_options"), b"prompt_cache_breakpoint" in body) == (
+        {"mode": "implicit"},
+        True,
+    )
+
+
 _APPLICATION_INFERENCE_PROFILE: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/qa"
 
 

@@ -791,7 +791,7 @@ def _bedrock_target_keeps_item_marks(model: str, drop_params: bool, model_info: 
 def _target_keeps_item_marks(
     model: str, custom_llm_provider: str | None, drop_params: bool, model_info: Mapping[str, object] | None
 ) -> bool:
-    if supports_anthropic_cache_control(model, custom_llm_provider):
+    if supports_anthropic_cache_control(model, custom_llm_provider, model_info):
         return True
     if custom_llm_provider in _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL:
         return True

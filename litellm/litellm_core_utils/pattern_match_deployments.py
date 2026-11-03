@@ -22,6 +22,7 @@ class _RoutedDeployment(BaseModel):
 
 
 _ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
+_PATTERN_WIDE_CACHE_FLAGS: Final = frozenset(("supports_prompt_cache_breakpoint", "supports_prompt_caching"))
 
 
 class PatternUtils:
@@ -133,6 +134,12 @@ class PatternMatchRouter:
                 matched_pattern=matched_pattern,
                 litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
             )
+            if "*" in deployment["litellm_params"]["model"] and isinstance(new_deployment.get("model_info"), dict):
+                new_deployment["model_info"] = {
+                    key: value
+                    for key, value in new_deployment["model_info"].items()
+                    if key not in _PATTERN_WIDE_CACHE_FLAGS
+                }
             new_deployments.append(new_deployment)
 
         return new_deployments
