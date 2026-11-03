@@ -986,6 +986,10 @@ class Logging(LiteLLMLoggingBaseClass):
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
         self.response_timing_metrics = dict(timing_metrics)
 
+    def add_streaming_overhead(self, seconds: float) -> None:
+        """Sum the proxy's own per-chunk work on a stream; the logging payload adds it to the stamped overhead."""
+        self.streaming_overhead_ms += seconds * 1000
+
     def add_dynamic_callback(self, callback: CustomLogger) -> None:
         self.dynamic_input_callbacks = self._with_dynamic_callback(self.dynamic_input_callbacks, callback)
         self.dynamic_success_callbacks = self._with_dynamic_callback(self.dynamic_success_callbacks, callback)
