@@ -2062,12 +2062,6 @@ model LiteLLM_TelemetryReport {
   @@index([created_at])
 }
 
-enum AccountingEventKind {
-  inbound_usage
-  outbound_usage
-  cost
-}
-
 enum AccountingDeliveryState {
   pending
   applied
@@ -2097,23 +2091,6 @@ enum AccountingDeliveryTarget {
   LiteLLM_DailyModelUsage
   LiteLLM_DailyToolSpend
   LiteLLM_AutoRouterDailySpend
-}
-
-// Durable accounting ledger. One row per usage or cost event; payload holds the
-// private event envelope versioned by schema_version. Usage rows retain request-scoped
-// pricing context; cost rows include resolved rates and the finalized pricing snapshot.
-model LiteLLM_AccountingEvent {
-  event_id        String              @id
-  kind            AccountingEventKind
-  source_event_id String?
-  schema_version  Int
-  payload_hash    String
-  occurred_at     DateTime
-  recorded_at     DateTime            @default(now())
-  payload         Json
-
-  @@index([recorded_at])
-  @@index([kind, source_event_id])
 }
 
 // One row per (event, target table, version): pending work for the projector and,

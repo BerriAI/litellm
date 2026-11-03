@@ -3735,42 +3735,6 @@ def test_an_earlier_timed_out_responses_attempt_counts_its_input_from_the_newest
     assert sent == earlier_attempt_prompt_tokens([COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
 
 
-@pytest.mark.asyncio
-async def test_a_billed_responses_route_failure_captures_usage_from_the_newest_compaction_item() -> None:
-    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-    from litellm.litellm_core_utils.litellm_logging import UsageCaptureObservation
-    from litellm.proxy.db.accounting_ledger import UsageWrite
-    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
-    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
-    from litellm.proxy.utils import _failure_fields_to_lift
-
-    async def persist(_: tuple[UsageWrite, ...]) -> None:
-        return None
-
-    def captured_prompt_tokens(request_input: list[dict[str, str]]) -> int:
-        logging_obj: Final = _dispatched_failure_logging_obj(FAILURE_USAGE_MODEL, get_litellm_params())
-        logging_obj.model_call_details["call_type"] = "aresponses"
-        logging_obj.model_call_details["messages"] = request_input
-        lifted: Final = _failure_fields_to_lift(
-            {"litellm_logging_obj": logging_obj}, provider_billed=True, route_call_type="aresponses"
-        )
-        snapshot: Final = lifted["_accounting_usage_snapshot"]
-        assert isinstance(snapshot, UsageCaptureObservation) and snapshot.usage_json is not None
-        return json.loads(snapshot.usage_json)["prompt_tokens"]
-
-    runtime: Final = UsageCaptureRuntime()
-    runtime.start(persist, UsageCaptureSettings())
-    try:
-        sent: Final = captured_prompt_tokens(
-            [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
-        )
-        since_compaction: Final = captured_prompt_tokens(
-            [COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
-        )
-    finally:
-        await runtime.stop(1)
-
-    assert sent == since_compaction
 
 
 @pytest.mark.parametrize(
@@ -4355,57 +4319,3 @@ def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
         ProxyException(message="x", type="x", param=None, code="429")
     ) is True
     assert _is_client_error_exception(ValueError("x")) is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tokens", [None, 0, 3])
-async def test_failure_capture_preserves_prepared_usage_observation(tokens: int | None) -> None:
-    from litellm.proxy.db.accounting_ledger import UsageWrite
-    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_callback
-    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
-
-    timestamp: Final = real_datetime.datetime(2026, 1, 1)
-    committed: Final[asyncio.Queue[UsageWrite]] = asyncio.Queue()
-
-    async def persist(writes: tuple[UsageWrite, ...]) -> None:
-        for write in writes:
-            committed.put_nowait(write)
-
-    logger: Final = Logging(
-        model=FAILURE_USAGE_MODEL,
-        messages=[],
-        stream=False,
-        call_type="acompletion",
-        start_time=timestamp,
-        litellm_call_id="post-response-failure",
-        function_id="post-response-failure",
-    )
-    logger.update_environment_variables(
-        model=FAILURE_USAGE_MODEL, custom_llm_provider="openai", litellm_params={}, optional_params={}
-    )
-    logger.model_call_details["response_cost"] = 0.2
-    runtime: Final = UsageCaptureRuntime()
-    runtime.start(persist, UsageCaptureSettings())
-    try:
-        prepared: Final = logger.prepare_response_cost(
-            {"id": "provider", "usage": None if tokens is None else {"prompt_tokens": tokens, "total_tokens": tokens}},
-            timestamp,
-        )
-        assert prepared is not None
-        lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logger}, provider_billed=True)
-        assert lifted["combined_usage_object"] is logger.model_call_details["combined_usage_object"]
-        assert lifted["response_cost"] == 0.2
-        assert runtime.meter is not None
-        capture_callback(
-            runtime.meter,
-            {**logger.model_call_details, **lifted, "log_event_type": "failed_api_call"},
-            None,
-            timestamp,
-            timestamp,
-        )
-    finally:
-        await runtime.stop(1)
-    committed.get_nowait()
-    envelope: Final = json.loads(committed.get_nowait().envelope)
-    assert (None if envelope["usage"] is None else envelope["usage"]["total_tokens"]) == tokens
-    assert envelope["usage_source"] == ("unknown" if tokens is None else "measured")
