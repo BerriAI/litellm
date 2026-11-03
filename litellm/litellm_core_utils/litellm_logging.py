@@ -3235,8 +3235,8 @@ class Logging(LiteLLMLoggingBaseClass):
             return response
         return response.model_copy(update={"model": model})
 
-    @staticmethod
     def _with_response_id(
+        self,
         response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
         response_id: str | None,
     ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
