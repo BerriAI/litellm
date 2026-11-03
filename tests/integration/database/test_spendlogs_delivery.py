@@ -23,8 +23,11 @@ _MIGRATIONS: Final = Path(__file__).resolve().parents[3] / "litellm-proxy-extras
 
 
 @pytest.fixture
-def delivery_database() -> Iterator[psycopg.Connection[tuple[object, ...]]]:
+def delivery_database(request: pytest.FixtureRequest) -> Iterator[psycopg.Connection[tuple[object, ...]]]:
     with scratch_database("spendlogs_delivery") as url, psycopg.connect(url, autocommit=True) as connection:
+        if getattr(request, "param", "public") == "ledger_tenant":
+            connection.execute("CREATE SCHEMA ledger_tenant")
+            connection.execute("SET search_path TO ledger_tenant")
         connection.execute((_MIGRATIONS / "20261027000000_add_accounting_ledger_tables/migration.sql").read_text())
         connection.execute((_MIGRATIONS / "20261103000000_remove_accounting_events/migration.sql").read_text())
         connection.execute("""CREATE TABLE "LiteLLM_SpendLogs" (
@@ -421,3 +424,39 @@ def test_downgrade_requires_drained_buffers_disabled_writers_and_no_unsettled_ro
     delivery_database.execute("UPDATE \"LiteLLM_AccountingDelivery\" SET state='applied'")
     passed = subprocess.run(confirmed, env=environment, capture_output=True, text=True)
     assert passed.returncode == 0 and "no pending or parked" in passed.stdout, passed.stderr
+
+
+@pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
+@pytest.mark.parametrize("state", [None, "pending", "parked", "applied"])
+def test_delivery_migration_replay_preserves_ledger_receipts(delivery_database, state):
+    if state is not None:
+        _insert(delivery_database, (_row("replay"),))
+        delivery_database.execute(
+            'UPDATE "LiteLLM_AccountingDelivery" SET state=%s, attempts=3, last_error=%s, previous_row=%s',
+            (state, "retained failure", '{"spend": 0}'),
+        )
+    before = delivery_database.execute('SELECT * FROM "LiteLLM_AccountingDelivery"').fetchall()
+    migration = (_MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql").read_text()
+    delivery_database.execute(migration)
+    delivery_database.execute(migration)
+    assert delivery_database.execute('SELECT * FROM "LiteLLM_AccountingDelivery"').fetchall() == before
+    assert delivery_database.execute('SELECT count(*) FROM "LiteLLM_SpendLogs"').fetchone() == (int(state is not None),)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        _insert(delivery_database, (_row("invalid", "invalid"),))
+
+
+@pytest.mark.parametrize("state", ["pending", "parked"])
+def test_delivery_migration_rejects_unsettled_old_receipts(state):
+    with scratch_database("spendlogs_old_delivery") as url, psycopg.connect(url, autocommit=True) as connection:
+        connection.execute((_MIGRATIONS / "20261027000000_add_accounting_ledger_tables/migration.sql").read_text())
+        connection.execute((_MIGRATIONS / "20261103000000_remove_accounting_events/migration.sql").read_text())
+        connection.execute('CREATE TABLE "LiteLLM_SpendLogs" (request_id text PRIMARY KEY)')
+        connection.execute(
+            'INSERT INTO "LiteLLM_AccountingDelivery" (event_id, target, version, state) VALUES (%s, %s, 1, %s)',
+            ("old-event", "LiteLLM_UserTable", state),
+        )
+        with pytest.raises(psycopg.errors.RaiseException, match="Drain pending and parked"):
+            connection.execute((_MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql").read_text())
+        connection.execute("ROLLBACK")
+        assert connection.execute('SELECT event_id, state::text FROM "LiteLLM_AccountingDelivery"').fetchall() == [("old-event", state)]
+        assert connection.execute("SELECT count(*) FROM information_schema.columns WHERE table_name='LiteLLM_SpendLogs' AND column_name='accounting_path'").fetchone() == (0,)
