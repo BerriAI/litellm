@@ -2,6 +2,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,7 +14,8 @@ from openai.types.chat import ChatCompletionChunk
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
@@ -253,6 +255,7 @@ def test_anthropic_tool_call_error_is_mapped_from_the_provider_response():
 async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop(async_only_image_fetch):
     http_image_url = f"http://img.example/{uuid.uuid4()}.png"
     https_image_url = f"https://img.example/{uuid.uuid4()}.png"
+    https_pdf_link = f"https://img.example/{uuid.uuid4()}/page.pdf?w=600"
     captured = {}
 
     def handle(request):
@@ -282,6 +285,7 @@ async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop
                     {"type": "text", "text": "What colour is this?"},
                     {"type": "image_url", "image_url": {"url": http_image_url}},
                     {"type": "image_url", "image_url": {"url": https_image_url}},
+                    {"type": "image_url", "image_url": {"url": https_pdf_link}},
                 ],
             }
         ],
@@ -290,11 +294,193 @@ async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop
     )
 
     assert response.choices[0].message.content == "Green"
-    assert async_only_image_fetch.fetched == [http_image_url]
+    assert async_only_image_fetch.fetched == [http_image_url, https_pdf_link]
     sources = [part["source"] for part in captured["body"]["messages"][0]["content"] if part["type"] == "image"]
     assert sources == [
         {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
         {"type": "url", "url": https_image_url},
+        {"type": "url", "url": https_pdf_link},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("download_limit_mb", (0, 50), ids=("downloads-disabled", "link-unreachable"))
+async def test_anthropic_async_completion_sends_a_pdf_path_link_it_cannot_download_as_a_link(
+    monkeypatch: pytest.MonkeyPatch, download_limit_mb: int
+) -> None:
+    pdf_link: Final = f"https://img.example/{uuid.uuid4()}/page.pdf?fm=png"
+    captured: Final[dict[str, object]] = {}
+
+    async def unreachable(client: object, url: str, **kwargs: object) -> httpx.Response:
+        return httpx.Response(404, request=httpx.Request("GET", url))
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "A chart"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(image_handling, "async_safe_get", unreachable)
+    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", download_limit_mb)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response: Final = await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link}}]}],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert response.choices[0].message.content == "A chart"
+    assert captured["body"]["messages"][0]["content"] == [{"type": "image", "source": {"type": "url", "url": pdf_link}}]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_async_completion_gives_up_on_a_pdf_link_within_the_non_llm_connection_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_link: Final = f"https://unreachable.example/{uuid.uuid4()}/report.pdf"
+    fetch_timeouts: Final[list[object]] = []
+    captured: Final[dict[str, object]] = {}
+
+    async def unreachable(client: object, url: str, **kwargs: object) -> httpx.Response:
+        fetch_timeouts.append(kwargs.get("timeout"))
+        raise httpx.ConnectTimeout("no route to host")
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "A chart"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(image_handling, "async_safe_get", unreachable)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link}}]}],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert captured["body"]["messages"][0]["content"] == [{"type": "image", "source": {"type": "url", "url": pdf_link}}]
+    assert fetch_timeouts == [NON_LLM_CONNECTION_TIMEOUT]
+
+
+def _anthropic_reply(captured: dict[str, object]) -> Callable[[httpx.Request], httpx.Response]:
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "A report"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    return handle
+
+
+def _served_pdf_slice(url: str) -> httpx.Response:
+    return httpx.Response(
+        206, content=b"%PDF-1.7\n", headers={"content-type": "binary/octet-stream"}, request=httpx.Request("GET", url)
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_async_completion_sends_a_link_that_serves_a_pdf_as_a_url_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_link: Final = f"https://files.example/{uuid.uuid4()}/download?file=report.pdf"
+    probes: Final[list[object]] = []
+    captured: Final[dict[str, object]] = {}
+
+    async def serve_pdf_slice(client: object, url: str, **kwargs: object) -> httpx.Response:
+        probes.append(kwargs.get("headers"))
+        return _served_pdf_slice(url)
+
+    monkeypatch.setattr(image_handling, "async_safe_get", serve_pdf_slice)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_anthropic_reply(captured)))
+
+    await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": pdf_link}, "cache_control": {"type": "ephemeral"}}
+                ],
+            }
+        ],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert captured["body"]["messages"][0]["content"] == [
+        {"type": "document", "source": {"type": "url", "url": pdf_link}, "cache_control": {"type": "ephemeral"}}
+    ]
+    assert probes == [{"Range": "bytes=0-1023"}]
+
+
+def test_anthropic_sync_completion_sends_a_link_that_serves_a_pdf_as_a_url_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_link: Final = f"https://files.example/{uuid.uuid4()}/report.pdf"
+    png_at_pdf_link: Final = f"https://files.example/{uuid.uuid4()}/page.pdf?fm=png"
+    captured: Final[dict[str, object]] = {}
+
+    def serve(client: object, url: str, **kwargs: object) -> httpx.Response:
+        if url == pdf_link:
+            return _served_pdf_slice(url)
+        return httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(image_handling, "safe_get", serve)
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_anthropic_reply(captured))))
+
+    litellm.completion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": pdf_link}},
+                    {"type": "image_url", "image_url": {"url": png_at_pdf_link}},
+                ],
+            }
+        ],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert captured["body"]["messages"][0]["content"] == [
+        {"type": "document", "source": {"type": "url", "url": pdf_link}},
+        {"type": "image", "source": {"type": "url", "url": png_at_pdf_link}},
     ]
 
 
