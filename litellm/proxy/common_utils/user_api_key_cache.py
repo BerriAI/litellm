@@ -360,23 +360,8 @@ def model_access_group_registry_cache_key() -> str:
     return "model_access_group_registry"
 
 
-def model_access_group_spend_counter_key(access_group_name: str) -> str:
-    """Spend counter key for one model access group; shared so its four owners cannot drift.
-
-    The reservation path writes it up front, the cost callback writes it after the call, auth
-    reads it to enforce ``max_budget``, and the reset job clears it on rollover. A copy that
-    drifts in any one of them silently resets or reads a counter nobody else touches, which shows
-    up as a budget that never trips or never resets.
-    """
-    return f"spend:model_access_group:{access_group_name}"
-
-
 def project_cache_key(project_id: str) -> str:
     return f"project_id:{project_id}"
-
-
-def project_spend_counter_key(project_id: str) -> str:
-    return f"spend:project:{project_id}"
 
 
 #: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds

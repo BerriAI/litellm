@@ -13,6 +13,8 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 import pytest
 
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
 import litellm
 from litellm.caching.caching import Cache
 from litellm.caching.dual_cache import DualCache
@@ -444,76 +446,23 @@ async def test_the_success_handler_closes_the_post_call_batch_after_the_last_cal
 
 
 @pytest.mark.asyncio
-async def test_spend_counter_increments_ride_the_pipeline_and_settle_into_memory(monkeypatch):
+async def test_spend_counter_increments_ride_the_native_post_call_batch(monkeypatch):
     from litellm.proxy import proxy_server
 
-    client = FakeClient(_ok_replies)
-    spend_cache = DualCache()
-    spend_cache.attach_redis_cache(PostCallFakeRedisCache(client))
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", spend_cache)
+    natives = FakeNatives()
+    spend = FakeSpendCounters(redis={"spend:key:k1": 7.0})
+    monkeypatch.setattr(proxy_server, "spend_counter_store", spend.store())
     pending = [PendingSpendIncrement("spend:key:k1", 0.5), PendingSpendIncrement("spend:team:t1", 0.5)]
 
-    with request_redis_batch_scope():
+    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
         await proxy_server._apply_spend_counter_increments(pending)
-        assert client.pipelines == []
+        declared = list(spend.post_call)
+        assert natives.built[0].events == []
         await flush_post_call_redis_batches()
 
-    assert [c for c in client.pipelines[0].commands if c[0] == "INCRBYFLOAT"] == [
-        ("INCRBYFLOAT", "spend:key:k1", 0.5),
-        ("INCRBYFLOAT", "spend:team:t1", 0.5),
-    ]
-    assert spend_cache.in_memory_cache.get_cache("spend:key:k1") == 7.5
-
-
-@pytest.mark.asyncio
-async def test_a_spend_counter_whose_increment_failed_is_invalidated_not_trusted(monkeypatch):
-    from litellm.proxy import proxy_server
-
-    def replies(command: tuple[object, ...]) -> object:
-        if command[0] == "INCRBYFLOAT" and command[1] == "spend:key:k1":
-            return Exception("OOM")
-        return _ok_replies(command)
-
-    redis_cache = PostCallFakeRedisCache(FakeClient(replies))
-    spend_cache = DualCache()
-    spend_cache.attach_redis_cache(redis_cache)
-    spend_cache.in_memory_cache.set_cache("spend:key:k1", 3.0)
-    spend_cache.in_memory_cache.set_cache("spend:team:t1", 3.0)
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", spend_cache)
-
-    with request_redis_batch_scope():
-        await proxy_server._apply_spend_counter_increments(
-            [PendingSpendIncrement("spend:key:k1", 0.5), PendingSpendIncrement("spend:team:t1", 0.5)]
-        )
-        await flush_post_call_redis_batches()
-
-    assert spend_cache.in_memory_cache.get_cache("spend:key:k1") is None
-    assert redis_cache.alone == [("DEL", "spend:key:k1")]
-    assert spend_cache.in_memory_cache.get_cache("spend:team:t1") == 7.5
-
-
-@pytest.mark.asyncio
-async def test_a_cancelled_post_call_flush_keeps_the_shared_spend_counter_and_counts_the_spend_locally(monkeypatch):
-    from litellm.proxy import proxy_server
-
-    redis_cache = PostCallFakeRedisCache(
-        FakeClient(_ok_replies, fail=asyncio.CancelledError())  # pyright: ignore[reportArgumentType]  # a cancel raised mid-pipeline
-    )
-    spend_cache = DualCache()
-    spend_cache.attach_redis_cache(redis_cache)
-    spend_cache.in_memory_cache.set_cache("spend:key:k1", 3.0)
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", spend_cache)
-
-    with request_redis_batch_scope():
-        await proxy_server._apply_spend_counter_increments(
-            [PendingSpendIncrement("spend:key:k1", 0.5), PendingSpendIncrement("spend:team:t1", 0.5)]
-        )
-        with pytest.raises(asyncio.CancelledError):
-            await flush_post_call_redis_batches()
-
-    assert redis_cache.alone == [], "a cancel says nothing about the shared counter, so Redis keeps it"
-    assert spend_cache.in_memory_cache.get_cache("spend:key:k1") == 3.5, "the local copy counts the cancelled spend"
-    assert spend_cache.in_memory_cache.get_cache("spend:team:t1") is None, "an absent local copy is not seeded"
+    assert declared == [(natives.built[0], (("spend:key:k1", 0.5), ("spend:team:t1", 0.5)))]
+    assert natives.built[0].events == ["flush_post"]
+    assert spend.commands == []
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from pydantic import TypeAdapter
 
 import litellm
@@ -754,10 +756,10 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
     )
     monkeypatch.setattr(litellm, "apply_search_free_tier", True)
     monkeypatch.setattr(proxy_server, "general_settings", {})
-    counters: Final = DualCache()
+    counters: Final = SpendCounterStore(None)
     for key in ("spend:key:pass-through-key", "spend:team:pass-through-team"):
-        counters.set_cache(key=key, value=1.9)
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", counters)
+        counters.set_local(key, 1.9)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters)
     reservation: Final = {
         "reserved_cost": 0.4,
         "callback_bound": False,
@@ -856,4 +858,4 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
     assert (payload["prompt_tokens"], payload["completion_tokens"]) == (10, 5)
     assert reservation["finalized"] is True
     for key in ("spend:key:pass-through-key", "spend:team:pass-through-team"):
-        assert await counters.async_get_cache(key=key) == pytest.approx(1.98)
+        assert counters.get_local(key) == pytest.approx(1.98)

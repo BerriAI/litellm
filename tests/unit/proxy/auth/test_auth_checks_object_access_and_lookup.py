@@ -105,6 +105,8 @@ from litellm.utils import get_utc_datetime
 from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, generate_unified_id_string
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from tests._master_key import MASTER_KEY
+from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
 def _rendered_log_message(call):
@@ -9749,18 +9751,17 @@ def _project_with_budget(spend: float, max_budget: float | None):
 async def test_project_max_budget_check_blocks_when_live_spend_reaches_the_budget(
     counter_spend, db_spend, max_budget, blocks
 ):
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.auth.auth_checks import _project_max_budget_check
 
-    real_spend_counter_cache = DualCache()
+    real_spend_counter_store = SpendCounterStore(None)
     if counter_spend is not None:
-        real_spend_counter_cache.in_memory_cache.set_cache(key="spend:project:p-budget", value=counter_spend)
+        real_spend_counter_store.set_local("spend:project:p-budget", counter_spend)
     valid_token = UserAPIKeyAuth(api_key="hashed-key", project_id="p-budget", team_id="t-1", user_id="u-1")
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.budget_alerts = AsyncMock()
 
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    with patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_store", real_spend_counter_store
     ):
         if not blocks:
             await _project_max_budget_check(
@@ -10596,13 +10597,19 @@ async def test_invalidate_team_member_spend_state_sets_the_spend_counter_and_cle
     await real_cache.async_set_cache(key="team_membership:user-1:team-1", value="stale-membership")
 
     real_spend_counter_cache = DualCache()
-    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:team_member:user-1:team-1", value=999.0)
     real_spend_counter_cache.in_memory_cache.set_cache(
         key="spend_db_floor:spend:team_member:user-1:team-1", value=999.0
     )
+    real_spend_counter_store = SpendCounterStore(None)
+    real_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
 
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    with (
+        patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+        ),
+        patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_store", real_spend_counter_store
+        ),
     ):
         await invalidate_team_member_spend_state(
             user_id="user-1",
@@ -10613,7 +10620,7 @@ async def test_invalidate_team_member_spend_state_sets_the_spend_counter_and_cle
 
     assert await real_cache.async_get_cache(key="team-1_user-1") is None
     assert await real_cache.async_get_cache(key="team_membership:user-1:team-1") is None
-    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 0.0
+    assert real_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0
     assert (
         real_spend_counter_cache.in_memory_cache.get_cache(key="spend_db_floor:spend:team_member:user-1:team-1") == 0.0
     ), "the DB-floor marker kept the pre-reset value; a stale-floor read can raise the counter right back up"
@@ -10626,17 +10633,16 @@ async def test_invalidate_team_member_spend_state_leaves_the_live_spend_counter_
     case would force the next read to reseed from the DB's own spend column, which lags the live
     counter via periodic batch writes, briefly UNDER-enforcing the raised cap against a spend
     value lower than what was actually tracked (regression: PR #37971 Bugbot finding)."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     real_cache = UserApiKeyCache()
     await real_cache.async_set_cache(key="team-1_user-1", value="stale-membership")
 
-    real_spend_counter_cache = DualCache()
-    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:team_member:user-1:team-1", value=999.0)
+    real_spend_counter_store = SpendCounterStore(None)
+    real_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
 
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    with patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_store", real_spend_counter_store
     ):
         await invalidate_team_member_spend_state(
             user_id="user-1",
@@ -10645,7 +10651,7 @@ async def test_invalidate_team_member_spend_state_leaves_the_live_spend_counter_
         )
 
     assert await real_cache.async_get_cache(key="team-1_user-1") is None
-    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 999.0
+    assert real_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 999.0
 
 
 @pytest.mark.asyncio
@@ -10653,17 +10659,13 @@ async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_dele
     """/key/{key}/reset_spend SETs its counter to the reset value rather than deleting it, so a
     worker's next read reflects it directly instead of falling back through a DB reseed. A reset
     caller passing new_spend must match that precedent, not merely delete the counter."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     real_cache = UserApiKeyCache()
-    real_spend_counter_cache = DualCache()
-    fake_redis_cache = MagicMock()
-    fake_redis_cache.async_set_cache = AsyncMock()
-    real_spend_counter_cache.redis_cache = fake_redis_cache
+    spend = FakeSpendCounters()
 
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    with patch(  # test-quality-ok: injects a store over a fake handle for the module global
+        "litellm.proxy.proxy_server.spend_counter_store", spend.store()
     ):
         await invalidate_team_member_spend_state(
             user_id="user-1",
@@ -10672,8 +10674,8 @@ async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_dele
             new_spend=2.5,
         )
 
-    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 2.5
-    fake_redis_cache.async_set_cache.assert_awaited_once_with(key="spend:team_member:user-1:team-1", value=2.5, ttl=60)
+    assert spend.memory == {"spend:team_member:user-1:team-1": 2.5}
+    assert spend.commands == ["SET spend:team_member:user-1:team-1 2.5 60"]
 
 
 @pytest.mark.asyncio
@@ -10682,18 +10684,13 @@ async def test_invalidate_team_member_spend_state_deletes_redis_counter_when_set
     first), so a failed Redis SET would otherwise leave the OLD pre-reset value authoritative
     for every worker even though the reset reported success. On a failed SET, the stale Redis
     entry must be deleted instead, so the next read clean-misses and reseeds from the DB."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     real_cache = UserApiKeyCache()
-    real_spend_counter_cache = DualCache()
-    fake_redis_cache = MagicMock()
-    fake_redis_cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis down"))
-    fake_redis_cache.async_delete_cache = AsyncMock()
-    real_spend_counter_cache.redis_cache = fake_redis_cache
+    spend = FakeSpendCounters(redis={"spend:team_member:user-1:team-1": 9.0}, failing=frozenset({"set"}))
 
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    with patch(  # test-quality-ok: injects a store over a fake handle for the module global
+        "litellm.proxy.proxy_server.spend_counter_store", spend.store()
     ):
         await invalidate_team_member_spend_state(
             user_id="user-1",
@@ -10702,7 +10699,9 @@ async def test_invalidate_team_member_spend_state_deletes_redis_counter_when_set
             new_spend=2.5,
         )
 
-    fake_redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:team_member:user-1:team-1")
+    assert spend.commands == ["DEL spend:team_member:user-1:team-1"]
+    assert spend.redis == {}
+    assert spend.memory == {"spend:team_member:user-1:team-1": 2.5}
 
 
 @pytest.mark.asyncio
@@ -10712,19 +10711,14 @@ async def test_invalidate_team_member_spend_state_raises_503_when_both_redis_wri
     member, so the reset must surface a 503 instead (regression: PR #37971 Greptile finding)."""
     from fastapi import HTTPException
 
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     real_cache = UserApiKeyCache()
-    real_spend_counter_cache = DualCache()
-    fake_redis_cache = MagicMock()
-    fake_redis_cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis down"))
-    fake_redis_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis still down"))
-    real_spend_counter_cache.redis_cache = fake_redis_cache
+    spend = FakeSpendCounters(failing=frozenset({"set", "delete"}))
 
     with (
-        patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-            "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+        patch(  # test-quality-ok: injects a store over a fake handle for the module global
+            "litellm.proxy.proxy_server.spend_counter_store", spend.store()
         ),
         pytest.raises(HTTPException) as exc_info,
     ):
@@ -10776,12 +10770,16 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
 
     remote_user_api_key_cache = UserApiKeyCache()
     remote_spend_counter_in_memory_cache = InMemoryCache()
-    remote_spend_counter_in_memory_cache.set_cache("spend:team_member:user-1:team-1", 999.0)
     remote_spend_counter_in_memory_cache.set_cache("spend_db_floor:spend:team_member:user-1:team-1", 999.0)
+    remote_spend_counter_store = SpendCounterStore(None)
+    remote_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
 
     with (
         patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
             "litellm.proxy.proxy_server.spend_counter_cache", local_spend_counter_cache
+        ),
+        patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_store", SpendCounterStore(None)
         ),
         patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
             "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -10804,13 +10802,14 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
         redis_cache=_FakeRedisCache(),
         user_api_key_cache=remote_user_api_key_cache,
         additional_in_memory_caches=(remote_spend_counter_in_memory_cache,),
+        spend_counters=remote_spend_counter_store,
     )
     for cache_key in ("spend:team_member:user-1:team-1", "spend_db_floor:spend:team_member:user-1:team-1"):
         remote_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
             {"type": "message", "data": _published_message_for(cache_key)}
         )
 
-    assert remote_spend_counter_in_memory_cache.get_cache("spend:team_member:user-1:team-1") == 0.0
+    assert remote_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0
     assert remote_spend_counter_in_memory_cache.get_cache("spend_db_floor:spend:team_member:user-1:team-1") == 0.0, (
         "the DB-floor marker was not broadcast; a remote worker can re-raise the counter off its stale floor"
     )
@@ -10847,11 +10846,15 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()
+    local_spend_counter_store = SpendCounterStore(None)
     local_user_api_key_cache = UserApiKeyCache()
 
     with (
         patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
             "litellm.proxy.proxy_server.spend_counter_cache", local_spend_counter_cache
+        ),
+        patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_store", local_spend_counter_store
         ),
         patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
             "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -10869,13 +10872,14 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
         redis_cache=_FakeRedisCache(),
         user_api_key_cache=local_user_api_key_cache,
         additional_in_memory_caches=(local_spend_counter_cache.in_memory_cache,),
+        spend_counters=local_spend_counter_store,
     )
     for _, message in published:
         own_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
             {"type": "message", "data": message}
         )
 
-    assert local_spend_counter_cache.in_memory_cache.get_cache("spend:team_member:user-1:team-1") == 0.0, (
+    assert local_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0, (
         "the handler's self-delivered broadcast erased the post-reset spend counter"
     )
     assert (

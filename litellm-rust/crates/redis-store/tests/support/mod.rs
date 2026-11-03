@@ -189,3 +189,29 @@ pub fn within(ttl: Duration, whole_seconds: u64) -> bool {
     ttl <= Duration::from_secs(whole_seconds)
         && ttl > Duration::from_secs(whole_seconds.saturating_sub(5))
 }
+
+/// How many times each command reached the servers since the last `CONFIG RESETSTAT`, so a test
+/// can pin the commands a store sends against the ones main's Python sends.
+pub async fn calls(deployment: &RedisDeployment, command: &str) -> u64 {
+    let stats = match deployment {
+        RedisDeployment::Standalone(server) => server.cli(&["INFO", "commandstats"]).await.unwrap(),
+        RedisDeployment::Cluster(cluster) => {
+            let mut stats = String::new();
+            for (_, port) in cluster.nodes() {
+                stats.push_str(
+                    &cluster
+                        .cli_on_node(port, &["INFO", "commandstats"])
+                        .await
+                        .unwrap(),
+                );
+            }
+            stats
+        }
+    };
+    let prefix = format!("cmdstat_{command}:calls=");
+    stats
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(&prefix))
+        .filter_map(|rest| rest.split(',').next()?.parse::<u64>().ok())
+        .sum()
+}

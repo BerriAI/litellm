@@ -30,7 +30,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm._internal_context import service_target, with_service_target
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
@@ -157,7 +157,6 @@ from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
 )
 from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
-from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
     _is_master_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_master_key,
@@ -170,6 +169,11 @@ from litellm.proxy.utils import (
     hash_token_if_needed,
     is_valid_api_key,
     require_enterprise_license,
+)
+from litellm.redis.stores.spend_counters import (
+    SPEND_COUNTERS_TARGET,
+    key_counter,
+    key_window_counter,
 )
 from litellm.repositories.base_repository import BaseRepository, record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
@@ -4263,21 +4267,18 @@ async def update_key_fn(
         )
 
         if data.spend is not None:
-            from litellm.proxy.proxy_server import spend_counter_cache
+            from litellm.proxy.proxy_server import spend_counter_store
 
-            counter_key: Final = f"spend:key:{hash_token_if_needed(key)}"
-            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=data.spend, ttl=60)
-            if spend_counter_cache.redis_cache is not None:
-                try:
-                    with service_target(SPEND_COUNTERS_TARGET):
-                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=data.spend, ttl=60)
-                except Exception as redis_err:
-                    verbose_proxy_logger.warning(
-                        "Failed to update spend counter %s in Redis after key spend update: %s. "
-                        "Budget checks may use stale value until counter expires.",
-                        counter_key,
-                        redis_err,
-                    )
+            counter_key: Final = key_counter(hash_token_if_needed(key))
+            try:
+                await spend_counter_store.set(counter_key, data.spend, ttl=60)
+            except Exception as redis_err:
+                verbose_proxy_logger.warning(
+                    "Failed to update spend counter %s in Redis after key spend update: %s. "
+                    "Budget checks may use stale value until counter expires.",
+                    counter_key,
+                    redis_err,
+                )
 
         asyncio.create_task(
             KeyManagementEventHooks.async_key_updated_hook(
@@ -4901,7 +4902,7 @@ async def _budget_window_usage(
     if not isinstance(duration, str) or not duration:
         return None
     spend: Final = await get_current_spend(
-        counter_key=f"spend:key:{api_key_hash}:window:{duration}",
+        counter_key=key_window_counter(api_key_hash, duration),
         fallback_spend=0.0,
         max_budget=_window_max_budget(window),
         window_entity_type="Key",
@@ -6820,19 +6821,16 @@ async def _set_spend_counter_with_floor_and_broadcast(counter_key: str, value: f
     Without the broadcast, a worker that already cached the pre-reset key object
     or floor marker keeps enforcing against it until its own TTL expires.
     """
-    from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
+    from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache, spend_counter_store
 
-    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value, ttl=60)
-    if spend_counter_cache.redis_cache is not None:
-        try:
-            await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=value, ttl=60)
-        except Exception as redis_err:
-            verbose_proxy_logger.warning(
-                "Failed to update spend counter %s in Redis: %s. "
-                "Budget checks may use stale value until counter expires.",
-                counter_key,
-                redis_err,
-            )
+    try:
+        await spend_counter_store.set(counter_key, value, ttl=60)
+    except Exception as redis_err:
+        verbose_proxy_logger.warning(
+            "Failed to update spend counter %s in Redis: %s. Budget checks may use stale value until counter expires.",
+            counter_key,
+            redis_err,
+        )
 
     floor_key: Final = f"spend_db_floor:{counter_key}"
     spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
@@ -6942,7 +6940,7 @@ async def _reset_key_budget_windows(
     for window in reset_windows:
         duration = window.get("budget_duration")
         if isinstance(duration, str) and duration:
-            counter_key = f"spend:key:{hashed_api_key}:window:{duration}"
+            counter_key = key_window_counter(hashed_api_key, duration)
             await _set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
 
 
@@ -7016,7 +7014,7 @@ async def reset_key_spend_fn(
         # budget_limits windows, so get_current_spend() returns the correct
         # amount for every enforcement check immediately instead of the stale
         # pre-reset value.
-        _counter_key: Final = f"spend:key:{hashed_api_key}"
+        _counter_key: Final = key_counter(hashed_api_key)
         await _set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
         await _reset_key_budget_windows(
             prisma_client=prisma_client,

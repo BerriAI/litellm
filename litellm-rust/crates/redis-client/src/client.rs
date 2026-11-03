@@ -233,6 +233,27 @@ impl RedisClient {
         self.0.subscriber.clone().messages(channel.to_owned())
     }
 
+    /// A script sent with its source as `EVAL` every time, like redis-py's `Redis.eval`, for the
+    /// scripts `RedisCache` runs that way rather than through `register_script`.
+    pub async fn eval_source<T: FromRedisValue>(
+        &self,
+        source: &str,
+        keys: &[&str],
+        args: impl ToRedisArgs,
+    ) -> Result<T, Error> {
+        let keys = self.keys(keys);
+        let command = redis::cmd("EVAL")
+            .arg(source)
+            .arg(keys.len())
+            .arg(keys)
+            .arg(args)
+            .to_owned();
+        self.guarded(Operation::Script, async {
+            command.query_async(&mut self.0.connection.clone()).await
+        })
+        .await
+    }
+
     pub fn pipeline(&self) -> Pipeline {
         Pipeline::new(self.0.namespace.clone())
     }

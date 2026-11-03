@@ -25,6 +25,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     budget_windows_absent_cache_key,
 )
+from litellm.redis.stores.spend_counters import SpendCounterStore
 
 
 class _RecordingRedisClient(Redis):
@@ -296,6 +297,36 @@ async def test_subscriber_deletes_additional_in_memory_cache_entry_on_message() 
         await subscriber.stop()
 
     assert spend_counter_in_memory_cache.get_cache("spend:team_member:u-1:t-1") is None
+
+
+@pytest.mark.asyncio
+async def test_subscriber_writes_and_drops_the_native_spend_counter_copies_a_broadcast_names() -> None:
+    """The spend counters' memory tier lives in the native store, not in a Python InMemoryCache, so a broadcast
+    has to reach it there: a SET carries the reset value into it, a delete drops it, and keys outside the spend
+    counter keyspace leave it alone."""
+    store = SpendCounterStore(None)
+    store.set_local("spend:team_member:u-1:t-1", 999.0)
+    store.set_local("spend:key:k-1", 7.0)
+    pubsub = _QueuePubSub(
+        initial_messages=[
+            _invalidation_message("spend:team_member:u-1:t-1"),
+            {"type": "message", "data": json.dumps({"cache_key": "spend:key:k-1", "new_value": 0.0, "ttl": 60})},
+            {"type": "message", "data": json.dumps({"cache_key": "spend_db_floor:spend:key:k-1", "new_value": 3.0})},
+            {"type": "message", "data": json.dumps({"cache_key": "spend:unknown:x", "new_value": 3.0})},
+        ]
+    )
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=UserApiKeyCache(),
+        spend_counters=store,
+    )
+    subscriber.start()
+    try:
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
+    finally:
+        await subscriber.stop()
+
+    assert store.snapshot() == {"spend:key:k-1": 0.0}
 
 
 @pytest.mark.asyncio

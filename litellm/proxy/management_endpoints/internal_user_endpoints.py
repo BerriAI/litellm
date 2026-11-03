@@ -85,6 +85,9 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
+from litellm.redis.stores.spend_counters import (
+    user_counter,
+)
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -1471,7 +1474,7 @@ async def _invalidate_user_spend_counter_if_changed(
     if non_default_values.get("spend") is not None:
         from litellm.proxy.proxy_server import invalidate_spend_counter
 
-        await invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
+        await invalidate_spend_counter(counter_key=user_counter(str(non_default_values["user_id"])))
 
 
 def _clears_object_permission(user_request: UpdateUserRequest) -> bool:

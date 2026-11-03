@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
+
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from fastapi import HTTPException
 
 import litellm
@@ -2694,9 +2696,9 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
 
 
 @pytest.fixture()
-def live_spend_counters(monkeypatch: pytest.MonkeyPatch) -> DualCache:
-    counters: Final = DualCache()
-    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", counters)
+def live_spend_counters(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
+    counters: Final = SpendCounterStore(None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", counters)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
@@ -2749,8 +2751,8 @@ async def _fail_request(logger: ProxyDBLogger, failure: Mapping[str, object]) ->
     )
 
 
-async def _counter_values(counters: DualCache) -> dict[str, float]:
-    return {key: await counters.async_get_cache(key) for key in _LIVE_COUNTERS}
+async def _counter_values(counters: SpendCounterStore) -> dict[str, float | None]:
+    return {key: counters.get_local(key) for key in _LIVE_COUNTERS}
 
 
 @pytest.mark.asyncio
@@ -2769,12 +2771,12 @@ async def _counter_values(counters: DualCache) -> dict[str, float]:
     ],
 )
 async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
-    live_spend_counters: DualCache, failure: Mapping[str, object], charged: float
+    live_spend_counters: SpendCounterStore, failure: Mapping[str, object], charged: float
 ):
     """#35568: budget checks read the live counters, so a failure row's cost has to land there as well as in the
     spend log, or an over-budget key keeps passing until the counter is next repaired from the database."""
     for key, spend in _LIVE_COUNTERS.items():
-        await live_spend_counters.async_set_cache(key, spend)
+        live_spend_counters.set_local(key, spend)
 
     await _fail_request(ProxyDBLogger(), failure)
 
@@ -2784,11 +2786,11 @@ async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
 
 
 @pytest.mark.asyncio
-async def test_a_completed_cost_failure_raises_the_live_spend_counters_once(live_spend_counters: DualCache):
+async def test_a_completed_cost_failure_raises_the_live_spend_counters_once(live_spend_counters: SpendCounterStore):
     """A failure whose cost was already finalized settles through the success path's write, which raises the
     counters itself."""
     for key, spend in _LIVE_COUNTERS.items():
-        await live_spend_counters.async_set_cache(key, spend)
+        live_spend_counters.set_local(key, spend)
 
     await _fail_request(
         ProxyDBLogger(), {"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}}
@@ -2801,11 +2803,11 @@ async def test_a_completed_cost_failure_raises_the_live_spend_counters_once(live
 
 @pytest.mark.asyncio
 async def test_failure_spend_rows_leave_the_live_spend_counters_alone_while_spend_updates_are_disabled(
-    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
+    live_spend_counters: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_spend_updates": True})
     for key, spend in _LIVE_COUNTERS.items():
-        await live_spend_counters.async_set_cache(key, spend)
+        live_spend_counters.set_local(key, spend)
 
     await _fail_request(ProxyDBLogger(), _failure_with_billed_attempts())
 
@@ -2848,7 +2850,7 @@ async def test_a_slow_spend_counter_store_lets_the_failure_out_and_raises_the_co
 
 @pytest.mark.asyncio
 async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_request_start(
-    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
+    live_spend_counters: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
 ):
     """The window row's one-time seed from the spend log stops at the request start, which keeps the failure row
     it already logged from being counted twice."""
@@ -2885,7 +2887,7 @@ async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_requ
 
 @pytest.mark.asyncio
 async def test_a_billed_attempt_on_a_deployment_the_router_dropped_debits_every_attributed_access_group(
-    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
+    live_spend_counters: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
 ):
     """Its spend row names the dropped deployment, which narrows nothing, so the counters must not narrow it to the
     final attempt's groups either."""
@@ -2911,7 +2913,7 @@ async def test_a_billed_attempt_on_a_deployment_the_router_dropped_debits_every_
     )
 
     assert {
-        group: await live_spend_counters.async_get_cache(f"spend:model_access_group:{group}")
+        group: live_spend_counters.get_local(f"spend:model_access_group:{group}")
         for group in ("premium", "pool")
     } == pytest.approx({"premium": 0.25, "pool": 1.25})
 

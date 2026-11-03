@@ -3,6 +3,8 @@ from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
+
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from pydantic import BaseModel
 
 import litellm.proxy.proxy_server as proxy_server
@@ -70,6 +72,7 @@ def proxy_auth_state(monkeypatch: pytest.MonkeyPatch) -> ProxyAuthState:
         "prisma_client": MagicMock(),
         "user_api_key_cache": cache,
         "spend_counter_cache": DualCache(),
+        "spend_counter_store": SpendCounterStore(None),
         "proxy_logging_obj": ProxyLogging(user_api_key_cache=cache),
         "general_settings": {},
         "user_custom_auth": None,

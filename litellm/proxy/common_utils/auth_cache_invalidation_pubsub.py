@@ -3,7 +3,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
@@ -18,6 +18,13 @@ from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # leg
     pubsub_capable_client,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+
+
+class SpendCounterCopies(Protocol):
+    """This worker's memory copies of the spend counters, which a broadcast SET or delete reaches too."""
+
+    def apply_broadcast(self, cache_key: str, new_value: float | None, ttl: float | None) -> None: ...
+
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -232,17 +239,19 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
 
 
 class AuthCacheInvalidationSubscriber:
-    __slots__ = ("_additional_in_memory_caches", "_redis_cache", "_task", "_user_api_key_cache")
+    __slots__ = ("_additional_in_memory_caches", "_redis_cache", "_spend_counters", "_task", "_user_api_key_cache")
 
     def __init__(
         self,
         redis_cache: "RedisCache",
         user_api_key_cache: "UserApiKeyCache",
         additional_in_memory_caches: Sequence["InMemoryCache"] = (),
+        spend_counters: SpendCounterCopies | None = None,
     ) -> None:
         self._redis_cache = redis_cache
         self._user_api_key_cache = user_api_key_cache
         self._additional_in_memory_caches = tuple(additional_in_memory_caches)
+        self._spend_counters: Final = spend_counters
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -297,6 +306,8 @@ class AuthCacheInvalidationSubscriber:
         parsed: Final = _message_from_data(data)
         if parsed is None:
             return
+        if self._spend_counters is not None:
+            self._spend_counters.apply_broadcast(parsed.cache_key, parsed.new_value, parsed.ttl)
         if parsed.new_value is not None:
             for additional_cache in self._additional_in_memory_caches:
                 additional_cache.set_cache(parsed.cache_key, parsed.new_value, ttl=parsed.ttl)

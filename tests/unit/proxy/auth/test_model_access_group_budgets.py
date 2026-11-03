@@ -34,16 +34,16 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
     model_access_group_registry_cache_key,
-    model_access_group_spend_counter_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.spend_counters import model_access_group_counter
 
 TEAM_ID = "team-1"
 USER_ID = "user-1"
 ORG_ID = "org-1"
 BUDGETED_GROUPS = ("tier-a", "tier-b", "claude-tier")
-MODEL_ACCESS_GROUP_COUNTER_KEY = model_access_group_spend_counter_key("tier-a")
+MODEL_ACCESS_GROUP_COUNTER_KEY = model_access_group_counter("tier-a")
 
 MODEL_LIST = [
     {
@@ -462,7 +462,7 @@ async def test_an_over_budget_group_blocks_even_when_another_matched_group_is_fi
             _MagBudgetRow("tier-b", max_budget=1.0),
             spend_by_counter_key={
                 MODEL_ACCESS_GROUP_COUNTER_KEY: 1.0,
-                model_access_group_spend_counter_key("tier-b"): 5.0,
+                model_access_group_counter("tier-b"): 5.0,
             },
         )
 

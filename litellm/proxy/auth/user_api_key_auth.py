@@ -27,7 +27,6 @@ import litellm
 from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
-from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
@@ -181,6 +180,10 @@ from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
     normalize_route_for_root_path,
+)
+from litellm.redis.stores.spend_counters import (
+    SpendCounterStore,
+    team_member_counter,
 )
 from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
@@ -3097,7 +3100,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         team_member_spend = valid_token.team_member_spend
                         if valid_token.user_id is not None and valid_token.team_id is not None:
                             team_member_spend = await get_current_spend(
-                                counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
+                                counter_key=team_member_counter(valid_token.user_id, valid_token.team_id),
                                 fallback_spend=team_member_spend,
                                 max_budget=team_member_budget,
                             )
@@ -4266,10 +4269,10 @@ async def _authorize_authenticated_request(
     return None
 
 
-def _spend_counter_redis_cache() -> RedisCache | None:
-    from litellm.proxy.proxy_server import spend_counter_cache
+def _spend_counter_store() -> SpendCounterStore:
+    from litellm.proxy.proxy_server import spend_counter_store
 
-    return spend_counter_cache.redis_cache
+    return spend_counter_store
 
 
 def _identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolved: bool) -> tuple[str, ...]:
@@ -4372,7 +4375,7 @@ async def user_api_key_auth(
     with (
         phase_span(f"auth {route}"),
         service_target(AUTH_OBJECTS_TARGET),
-        spend_counter_batch_scope(_spend_counter_redis_cache()),
+        spend_counter_batch_scope(_spend_counter_store()),
     ):
         try:
             user_api_key_auth_obj: Final = await user_api_key_auth_builder(
