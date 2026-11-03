@@ -233,6 +233,23 @@ def test_an_already_blocked_key_gets_no_second_update_or_audit_row(monkeypatch, 
     assert audit_rows == []
 
 
+def test_reporting_an_already_blocked_key_again_evicts_a_stale_cached_copy(monkeypatch, audit_rows, caplog):
+    table: Final = _install(monkeypatch, {BLOCKED_HASH: _row(BLOCKED_HASH, blocked=True)})
+    cache: Final = proxy_server.user_api_key_cache
+    cache.set_cache(key=BLOCKED_HASH, value=UserAPIKeyAuth(token=BLOCKED_HASH, blocked=False).model_dump())
+    assert cache.get_cache(key=BLOCKED_HASH) is not None
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+            assert _revoke(BLOCKED) == ACCEPTED
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    assert cache.get_cache(key=BLOCKED_HASH) is None
+    assert (table.updates, audit_rows) == ([], [])
+    assert not any("Blocked" in record.getMessage() for record in caplog.records), caplog.records
+
+
 @pytest.mark.parametrize(
     "authorization",
     [f"Bearer {MASTER_KEY}", "Bearer sk-not-a-real-key", "Basic Zm9vOmJhcg==", "garbage"],

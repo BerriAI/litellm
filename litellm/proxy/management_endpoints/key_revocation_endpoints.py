@@ -81,16 +81,17 @@ async def _block_live_keys(
 ) -> None:
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-    newly_blocked: Final = tuple(
-        (row.token, row) for row in await tokens.find_by_tokens(hashed_tokens) if row.token and row.blocked is not True
-    )
-    if not newly_blocked:
-        return
+    matched: Final = tuple((row.token, row) for row in await tokens.find_by_tokens(hashed_tokens) if row.token)
+    newly_blocked: Final = tuple((token, row) for token, row in matched if row.blocked is not True)
     blocked_tokens: Final = tuple(token for token, _ in newly_blocked)
     await tokens.block_tokens(blocked_tokens)
     await delete_cache_key_objects(
-        hashed_tokens=blocked_tokens, user_api_key_cache=user_api_key_cache, proxy_logging_obj=proxy_logging_obj
+        hashed_tokens=tuple(token for token, _ in matched),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
+    if not blocked_tokens:
+        return
     if is_audit_logging_enabled():
         await audit(tuple(_audit_row(row, token) for token, row in newly_blocked))
     verbose_proxy_logger.warning(
