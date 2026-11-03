@@ -259,6 +259,15 @@ _POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field
 _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
 _SERIES_CLEANUP_INTERVAL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0)])
 _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS: Final = 60.0
+_LOGGED_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_NO_LOGGED_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _logged_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _LOGGED_FIELDS.validate_python(value)
+    except ValidationError:
+        return _NO_LOGGED_FIELDS
 
 
 def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
@@ -2847,7 +2856,7 @@ class PrometheusLogger(CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
@@ -2870,10 +2879,14 @@ class PrometheusLogger(CustomLogger):
         try:
             _tags: Final = StandardLoggingPayloadSetup.get_request_tags(
                 litellm_params=request_data,
-                proxy_server_request=request_data.get("proxy_server_request", {}),
+                proxy_server_request=_logged_fields(request_data.get("proxy_server_request")),
             )
-            _metadata: Final = request_data.get("metadata", {}) or {}
-            model_id: Final = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
+            _metadata: Final = _logged_fields(request_data.get("metadata"))
+            model_id: Final = (
+                _logged_fields(_metadata.get("model_info")).get("id")
+                or _logged_fields(request_data.get("model_info")).get("id")
+                or _logged_fields(request_data.get("standard_logging_object")).get("model_id")
+            )
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
             api_provider: Final = self._extract_api_provider_from_request_data(
                 request_data
