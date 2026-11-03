@@ -1,3 +1,4 @@
+mod batch;
 mod client;
 mod commands;
 mod config;
@@ -8,6 +9,7 @@ mod namespace;
 mod pipeline;
 mod script;
 
+pub use batch::{Declared, RedisBatch};
 pub use client::{RedisClient, Ttl};
 pub use commands::Expiry;
 pub use config::{Credentials, CredentialsProvider, DEFAULT_TIMEOUT, RedisConfig, Timeouts};

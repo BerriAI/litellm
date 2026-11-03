@@ -9,7 +9,7 @@ use redis::{Cmd, FromRedisValue, RedisError, ToRedisArgs, ToSingleRedisArg, Valu
 
 use crate::{
     CallEvent, ConnectError, Error, Expiry, FailureKind, Namespace, Operation, Outcome, Pipeline,
-    RedisConfig, RedisEvents, Script,
+    RedisBatch, RedisConfig, RedisEvents, Script,
     commands::{self, ScriptCall},
     connection::Connection,
 };
@@ -143,6 +143,10 @@ impl RedisClient {
 
     pub fn pipeline(&self) -> Pipeline {
         Pipeline::new(self.namespace.clone())
+    }
+
+    pub fn batch(&self) -> RedisBatch {
+        RedisBatch::new(self.clone())
     }
 
     pub async fn run(&self, pipeline: &Pipeline) -> Vec<Result<Value, Error>> {
