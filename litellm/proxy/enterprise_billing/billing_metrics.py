@@ -16,7 +16,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Optional, TypedDict, Unpack
+from typing import TYPE_CHECKING, Final, Optional, TypedDict
 from urllib.parse import urlsplit
 
 import requests
@@ -27,7 +27,7 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from pydantic import BaseModel, ConfigDict
 from requests.auth import AuthBase
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
