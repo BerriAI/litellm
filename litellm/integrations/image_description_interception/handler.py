@@ -240,12 +240,16 @@ def _may_be_guarded(kwargs: Mapping[str, object]) -> bool:
     """Whether a guardrail, another request content check or a policy pipeline could check this request. They run on
     the request before the images become text and would not see a description, so such a request gets placeholders
     instead. The test is wide on purpose: any registered check counts, whether or not it would select this request"""
+    from litellm.litellm_core_utils.rules import Rules
     from litellm.proxy.utils import ProxyLogging
 
     capabilities: Final = ProxyLogging.callback_capabilities()
     # Guardrails, request content enforcers (such as prompt injection detection) and moderation hooks all check
     # the request text before or during the call, and none of them would see a description
     if capabilities.has_guardrail or capabilities.has_content_enforcer or capabilities.has_moderation_override:
+        return True
+    # Pre-call rules (litellm.pre_call_rules) check the original request text the same way
+    if Rules.has_pre_call_rules():
         return True
     return any(any(metadata.get(key) for key in _POLICY_PIPELINE_KEYS) for metadata in _request_metadatas(kwargs))
 

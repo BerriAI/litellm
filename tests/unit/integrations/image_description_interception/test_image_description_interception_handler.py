@@ -602,3 +602,17 @@ async def test_policy_pipeline_state_turns_images_into_placeholders(monkeypatch:
 
     assert result == {**request, "messages": [_guarded_turn("hi")]}
     assert describer.requests == []
+
+
+@pytest.mark.asyncio
+async def test_pre_call_rules_turn_images_into_placeholders(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "pre_call_rules", [lambda text: "BLOCK" not in text])
+    describer: Final = _RecordingDescriber([Described("BLOCK")])
+
+    result: Final = await _logger(describer).async_pre_call_deployment_hook(
+        _request([_image_turn("hi")]), CallTypes.acompletion
+    )
+
+    assert result == _request([_guarded_turn("hi")])
+    assert describer.requests == []
