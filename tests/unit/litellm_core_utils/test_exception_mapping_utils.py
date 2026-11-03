@@ -1539,6 +1539,7 @@ def test_bedrock_mantle_served_model_overflow_text_maps_to_prompt_is_too_long():
     assert excinfo.value.status_code == 400
     assert excinfo.value.llm_provider == "bedrock_mantle"
     assert "prompt is too long" in excinfo.value.message
+    assert "your prompt contains at least 262129 input tokens" in excinfo.value.message
 
 
 def test_bedrock_mantle_streamed_context_overflow_event_maps_to_context_window_exceeded():
