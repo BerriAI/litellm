@@ -375,20 +375,27 @@ def test_legacy_policy_keeps_trace_id_fallback():
 
 
 def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
-    """The create call's request id IS the batch id and the poller's cost row appends
-    _batch_cost to it, so deriving the session from the request id lands both rows in one
-    trace on the logs UI even though the poller builds a fresh logging context per cycle."""
+    """The create row, the poller's cost row, a poll's own guardrail row and a redacted cost row
+    all land in one trace on the logs UI even though the poller builds a fresh logging context per cycle."""
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
-    create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
-    cost_session: Final = _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost")
-    assert create_session == cost_session == "batch-uid-1"
+    sessions: Final = (
+        _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1", batch_id="batch-uid-1"),
+        _get_batch_trace_session_id(
+            call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost", batch_id="batch-uid-1"
+        ),
+        _get_batch_trace_session_id(
+            call_type="aretrieve_batch", request_id="poll-1_guardrail_cost", batch_id="batch-uid-1"
+        ),
+        _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost", batch_id=None),
+    )
+    assert set(sessions) == {"batch-uid-1"}
 
 
 def test_non_batch_call_types_derive_no_batch_session():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
-    assert _get_batch_trace_session_id(call_type="acompletion", request_id="chatcmpl-1") is None
+    assert _get_batch_trace_session_id(call_type="acompletion", request_id="chatcmpl-1", batch_id="chatcmpl-1") is None
 
 
 def test_batch_session_outranks_the_per_request_trace_id():

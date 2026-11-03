@@ -428,11 +428,11 @@ def test_job_charge_identity_requires_a_cost_bearing_poll(call_type: str, polled
 
 
 @pytest.mark.parametrize(
-    ("call_type", "polled", "kind"),
-    (("aretrieve_batch", _completed_batch, "batch"), ("avideo_status", _completed_video, "video")),
+    ("call_type", "polled", "kind", "repeat_cost"),
+    (("aretrieve_batch", _completed_batch, "batch", 0.0), ("avideo_status", _completed_video, "video", 0.01)),
 )
 def test_only_the_jobs_own_cost_is_charged_once_since_a_guardrail_charges_every_poll(
-    call_type: str, polled, kind
+    call_type: str, polled, kind, repeat_cost
 ) -> None:
     from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
 
@@ -443,7 +443,7 @@ def test_only_the_jobs_own_cost_is_charged_once_since_a_guardrail_charges_every_
     }
     assert job_to_charge_once(kwargs, polled(), 0.01) is None
     assert job_to_charge_once(kwargs, polled(), 0.43) == ChargeOnceJob(
-        kind=kind, job_id="job-budget", repeat_poll_cost=0.01
+        kind=kind, job_id="job-budget", repeat_poll_cost=repeat_cost
     )
 
 

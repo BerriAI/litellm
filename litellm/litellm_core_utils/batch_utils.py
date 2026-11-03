@@ -321,8 +321,11 @@ def job_cost_of_poll(response_cost: object, standard_logging_payload: object) ->
     return (finite_cost(response_cost) or 0.0) - _guardrail_cost_of_poll(standard_logging_payload)
 
 
-def repeat_poll_cost(response_cost: object, standard_logging_payload: object) -> float:
-    """What a poll still costs once an earlier poll charged its job: the guardrails that ran on it."""
+def repeat_poll_cost(call_type: object, response_cost: object, standard_logging_payload: object) -> float:
+    """What a poll still costs once an earlier poll charged its job: a video poll's guardrails, which every video
+    poll has always paid, and nothing for a batch poll, whose repeats have always been free."""
+    if not is_video_status_call_type(call_type):
+        return 0.0
     return max(0.0, min(finite_cost(response_cost) or 0.0, _guardrail_cost_of_poll(standard_logging_payload)))
 
 
@@ -365,12 +368,9 @@ def charged_video_id(
 def _charged_batch(kwargs: Mapping[str, object], response_obj: object, response_cost: float) -> ChargeOnceJob | None:
     if not is_batch_retrieve_call_type(kwargs.get("call_type")) or not isinstance(response_obj, Batch):
         return None
-    standard_logging_payload: Final = kwargs.get("standard_logging_object")
-    if job_cost_of_poll(response_cost, standard_logging_payload) <= 0:
+    if job_cost_of_poll(response_cost, kwargs.get("standard_logging_object")) <= 0:
         return None
-    return ChargeOnceJob(
-        kind="batch", job_id=response_obj.id, repeat_poll_cost=repeat_poll_cost(response_cost, standard_logging_payload)
-    )
+    return ChargeOnceJob(kind="batch", job_id=response_obj.id)
 
 
 def job_to_charge_once(
@@ -388,5 +388,5 @@ def job_to_charge_once(
     return ChargeOnceJob(
         kind="video",
         job_id=video_id,
-        repeat_poll_cost=repeat_poll_cost(response_cost, kwargs.get("standard_logging_object")),
+        repeat_poll_cost=repeat_poll_cost(call_type, response_cost, kwargs.get("standard_logging_object")),
     )

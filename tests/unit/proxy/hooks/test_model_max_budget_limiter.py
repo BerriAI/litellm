@@ -357,13 +357,15 @@ async def test_polls_of_a_finished_video_charge_each_per_model_budget_once():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call_type", "polled"),
+    ("call_type", "polled", "guardrail_charges"),
     (
-        ("avideo_status", lambda status: VideoObject(id="job_first", object="video", status=status)),
-        ("aretrieve_batch", lambda status: _batch("job_first", status)),
+        ("avideo_status", lambda status: VideoObject(id="job_first", object="video", status=status), 4),
+        ("aretrieve_batch", lambda status: _batch("job_first", status), 2),
     ),
 )
-async def test_every_poll_pays_its_guardrail_and_only_the_finished_poll_pays_the_job(call_type, polled):
+async def test_only_the_finished_poll_pays_the_job_and_only_a_video_repoll_pays_its_guardrail(
+    call_type, polled, guardrail_charges
+):
     limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     guardrail_cost: Final = 0.01
     priced: Final = ({"guardrail_name": "priced", "guardrail_cost": guardrail_cost},)
@@ -375,7 +377,7 @@ async def test_every_poll_pays_its_guardrail_and_only_the_finished_poll_pays_the
     for _ in range(3):
         await _log_success(limiter, poll("completed", BATCH_COST + guardrail_cost), polled("completed"))
 
-    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST + 4 * guardrail_cost)
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST + guardrail_charges * guardrail_cost)
 
 OPUS_GROUP: Final = "claude-opus"
 OPUS_GROUP_MEMBERS: Final = MappingProxyType(

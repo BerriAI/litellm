@@ -4149,6 +4149,7 @@ class _RecordedCharges:
 
 _GUARDED_POLL: Final = MappingProxyType(
     {
+        "call_type": "avideo_status",
         "response_cost": 0.43,
         "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
     }
@@ -4163,8 +4164,15 @@ _GUARDED_POLL: Final = MappingProxyType(
         ((False, True), _GUARDED_POLL, 0.01, (0.01, 0.01, None)),
         ((False, False), _GUARDED_POLL, None, (0.01, 0.01, None)),
         ((False,), {"response_cost": 0.43}, None, None),
+        ((False,), {**_GUARDED_POLL, "call_type": "aretrieve_batch"}, None, None),
     ],
-    ids=["first_poll_pays_the_job", "repeat_poll_pays_its_guardrail", "guardrail_charge_not_written", "repeat_poll_free"],
+    ids=[
+        "first_poll_pays_the_job",
+        "repeat_poll_pays_its_guardrail",
+        "guardrail_charge_not_written",
+        "repeat_poll_free",
+        "repeat_batch_poll_free_whatever_its_guardrails_cost",
+    ],
 )
 async def test_a_poll_of_an_already_charged_job_still_charges_its_own_guardrails(outcomes, poll, charged, second_call):
     charge_spend: Final = _RecordedCharges(outcomes)
