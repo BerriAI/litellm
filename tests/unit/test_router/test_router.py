@@ -25508,7 +25508,16 @@ async def test_router_caller_entra_credential_rejection_leaves_the_shared_deploy
     assert response.choices[0].message.content == "hi"
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-async def test_router_configured_entra_credential_rejection_cools_down_the_deployment():
+@pytest.mark.parametrize(
+    ("deployment_secret", "router_default_secret"),
+    [
+        pytest.param({"client_secret": "configured-secret"}, None, id="deployment"),
+        pytest.param({}, {"client_secret": "configured-secret"}, id="router_default_litellm_params"),
+    ],
+)
+async def test_router_configured_entra_credential_rejection_cools_down_the_deployment(
+    deployment_secret, router_default_secret
+):
     router = Router(
         model_list=[
             {
@@ -25519,11 +25528,12 @@ async def test_router_configured_entra_credential_rejection_cools_down_the_deplo
                     "api_version": "2025-04-01-preview",
                     "tenant_id": "configured-tenant",
                     "client_id": "configured-client",
-                    "client_secret": "configured-secret",
+                    **deployment_secret,
                 },
                 "model_info": {"id": "configured-deployment"},
             }
-        ]
+        ],
+        default_litellm_params=router_default_secret,
     )
 
     with pytest.raises(litellm.AuthenticationError):

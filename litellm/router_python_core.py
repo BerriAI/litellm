@@ -10277,7 +10277,12 @@ class PythonCore(DeprecatedRouterMembers):
                     "Caller-scoped OAuth authentication failed, not the deployment."
                 )
                 return False
-            if is_caller_entra_credential_failure(caller_failure_deployment, failure_call_details, exception_status):
+            if is_caller_entra_credential_failure(
+                caller_failure_deployment,
+                self._active_default_litellm_params(),
+                failure_call_details,
+                exception_status,
+            ):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "Entra ID rejected a credential the caller sent, not the deployment's own."

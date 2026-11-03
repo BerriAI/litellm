@@ -848,7 +848,10 @@ def is_stream_stall(exception: BaseException) -> bool:
 
 
 def is_caller_entra_credential_failure(
-    deployment: Deployment | None, model_call_details: Mapping[str, object], exception_status: str | int
+    deployment: Deployment | None,
+    router_defaults: Mapping[str, object],
+    model_call_details: Mapping[str, object],
+    exception_status: str | int,
 ) -> bool:
     if cast_exception_status_to_int(exception_status) != 401 or deployment is None:
         return False
@@ -866,6 +869,7 @@ def is_caller_entra_credential_failure(
         _CREDENTIAL_VALUES_ADAPTER.validate_python(
             CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
         ),
+        router_defaults,
     )
     return any(
         call_params.get(key) is not None and all(call_params.get(key) != values.get(key) for values in configured)
