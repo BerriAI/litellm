@@ -14926,22 +14926,21 @@ class PythonCore(DeprecatedRouterMembers):
             )
         raise ValueError("Either messages or input must be provided to count tokens")
 
-    def _longest_embedding_input_tokens(self, items: list[object], tokenizer_model: str) -> int | None:
+    def _longest_embedding_input_tokens(self, items: Sequence[object], tokenizer_model: str) -> int | None:
         """An embedding model's context window bounds each input on its own, so a batch is never summed."""
         if not items:
             return None
         if all(isinstance(item, str) for item in items):
             count_tokens: Final = self._host.invoke("token_counter")
             return max(count_tokens(model=tokenizer_model, text=item) for item in items)
+        counting_disabled: Final = self._host.dynamic().disable_token_counter
         if all(isinstance(item, int) and not isinstance(item, bool) for item in items):
-            longest_token_ids = len(items)
-        else:
-            try:
-                token_id_batch: Final = _EMBEDDING_TOKEN_ID_BATCH_ADAPTER.validate_python(items, strict=True)
-            except ValidationError:
-                return None
-            longest_token_ids = max(len(token_ids) for token_ids in token_id_batch)
-        return 0 if self._host.dynamic().disable_token_counter else longest_token_ids
+            return 0 if counting_disabled else len(items)
+        try:
+            token_id_batch: Final = _EMBEDDING_TOKEN_ID_BATCH_ADAPTER.validate_python(items, strict=True)
+        except ValidationError:
+            return None
+        return 0 if counting_disabled else max(len(token_ids) for token_ids in token_id_batch)
 
     def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
         """The deployment's declared context window, or None when it declares none or cannot be resolved."""
