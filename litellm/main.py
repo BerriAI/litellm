@@ -7280,7 +7280,13 @@ def embedding(
                 aembedding=aembedding,
                 drop_params=drop_unsupported_params,
             )
-        elif custom_llm_provider == "oci":
+        elif custom_llm_provider == "oci" or (
+            custom_llm_provider == "azure_ai"
+            and ProviderConfigManager.get_provider_embedding_config(
+                model=model, provider=LlmProviders.AZURE_AI, api_base=api_base
+            )
+            is not None
+        ):
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -7784,20 +7790,7 @@ def embedding(
                 or get_azure_ai_entra_token(litellm_params=litellm_params_dict)
             )
 
-            azure_embedding_handler: Final = (
-                partial(
-                    base_llm_http_handler.embedding,
-                    custom_llm_provider=custom_llm_provider,
-                    litellm_params=litellm_params_dict,
-                    headers=headers,
-                )
-                if ProviderConfigManager.get_provider_embedding_config(
-                    model=model, provider=LlmProviders.AZURE_AI, api_base=api_base
-                )
-                is not None
-                else azure_ai_embedding.embedding
-            )
-            response = azure_embedding_handler(
+            response = azure_ai_embedding.embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
