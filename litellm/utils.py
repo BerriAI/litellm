@@ -3788,24 +3788,31 @@ def _builtin_cost_map() -> dict[str, Mapping[str, object]]:
 
 
 def _replace_cost_map_entry(
-    cost_map: dict[str, Mapping[str, object]], key: str, entry: Mapping[str, object], registration: Mapping[str, object]
+    cost_map: dict[str, Mapping[str, object]],
+    key: str,
+    entry: Mapping[str, object],
+    registration: Mapping[str, object],
+    registered_key: str,
 ) -> None:
     current: Final = cost_map.get(key)
     merged: Final = {**(current or {}), **entry}
-    names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
-    previous_fields: Final[frozenset[str]] = (
-        current.registered_fields if isinstance(current, AliasedCostEntry) else frozenset()
-    )
-    registered_fields: Final = previous_fields | frozenset(
+    previous: Final = current if isinstance(current, AliasedCostEntry) else AliasedCostEntry({}, ())
+    registered_fields: Final = previous.registered_fields | frozenset(
         name for name, value in registration.items() if value is not None
     )
-    created_by_registration: Final = (
-        current.created_by_registration if isinstance(current, AliasedCostEntry) else current is None
-    )
+    changed_fields: Final = frozenset(name for name, value in entry.items() if (current or {}).get(name) != value)
+    created_by_registration: Final = previous.created_by_registration if current is previous else current is None
     cost_map.update(
         dict.fromkeys(
             (key, *_names_sharing_entry(cost_map, key)),
-            AliasedCostEntry(merged, names, registered_fields, created_by_registration),
+            AliasedCostEntry(
+                merged,
+                previous.names,
+                registered_fields,
+                created_by_registration,
+                registered_by=previous.registered_by | {registered_key},
+                written_fields=previous.written_fields | registered_fields | changed_fields,
+            ),
         )
     )
 
@@ -4080,27 +4087,32 @@ def model_cost_registration_row(key: str, provider: object) -> Mapping[str, obje
     return _builtin_cost_map().get(base.key) or base.entry
 
 
-def _carries_registered_fields(entry: Mapping[str, object] | None) -> bool:
-    return isinstance(entry, AliasedCostEntry) and bool(entry.registered_fields)
+def model_cost_rows_written_by(keys: Collection[str]) -> frozenset[str]:
+    """Every ``litellm.model_cost`` name whose entry a ``register_model`` write of one of ``keys`` landed on, each
+    alias sharing that entry included."""
+    return frozenset(
+        name
+        for name, entry in tuple(_builtin_cost_map().items())
+        if isinstance(entry, AliasedCostEntry) and not entry.registered_by.isdisjoint(keys)
+    )
 
 
-def model_cost_rows_off_catalog(rows: Iterable[str]) -> frozenset[str]:
-    """Every name among ``rows`` whose ``litellm.model_cost`` entry registrations moved off the loaded catalog (a row
-    the catalog lacks, or a catalog row carrying registered fields), with each alias sharing that entry."""
-    cost_map: Final = _builtin_cost_map()
-    catalog: Final = GetModelCostMap.loaded_model_cost_map()
-    off_catalog: Final = (row for row in rows if row not in catalog or _carries_registered_fields(cost_map.get(row)))
-    return frozenset(itertools.chain.from_iterable((row, *_names_sharing_entry(cost_map, row)) for row in off_catalog))
+def model_cost_row_writers(rows: Iterable[str]) -> frozenset[str]:
+    """Every ``register_model`` key whose write landed on one of ``rows``."""
+    entries: Final = (_builtin_cost_map().get(row) for row in rows)
+    return frozenset(
+        itertools.chain.from_iterable(entry.registered_by for entry in entries if isinstance(entry, AliasedCostEntry))
+    )
 
 
 def restore_model_cost_rows_to_catalog(rows: Iterable[str]) -> None:
-    """Put each of ``rows`` back to its loaded catalog entry with no registered fields, keeping every alias on the
-    one shared entry. A row the catalog lacks keeps only the fields written into it outside ``register_model``, such
-    as an SDK user's own ``litellm.model_cost`` entry, and goes once none is left or a registration created it, so
-    registrations replayed onto them start where a fresh boot does."""
+    """Put each of ``rows`` back to its loaded catalog entry, keeping every alias on the one shared entry and every
+    field written into it outside ``register_model``, such as an SDK user's own price, so registrations replayed onto
+    them start where a fresh boot does. A row the catalog lacks goes once no such field is left or a registration
+    created it."""
     cost_map: Final = _builtin_cost_map()
     catalog: Final = GetModelCostMap.loaded_model_cost_map()
-    for row, restored in ((row, catalog.get(row) or _unregistered_fields(cost_map.get(row))) for row in rows):
+    for row, restored in ((row, {**catalog.get(row, {}), **_unregistered_fields(cost_map.get(row))}) for row in rows):
         if restored:
             cost_map.update(_entry_on_row_and_aliases(cost_map, row, restored))
         else:
@@ -4111,8 +4123,8 @@ def restore_model_cost_rows_to_catalog(rows: Iterable[str]) -> None:
 def _unregistered_fields(entry: Mapping[str, object] | None) -> Mapping[str, object]:
     if isinstance(entry, AliasedCostEntry) and entry.created_by_registration:
         return {}
-    registered: Final[frozenset[str]] = entry.registered_fields if isinstance(entry, AliasedCostEntry) else frozenset()
-    return {name: value for name, value in (entry or {}).items() if name not in registered and value is not None}
+    written: Final[frozenset[str]] = entry.written_fields if isinstance(entry, AliasedCostEntry) else frozenset()
+    return {name: value for name, value in (entry or {}).items() if name not in written and value is not None}
 
 
 def _entry_on_row_and_aliases(
@@ -4190,7 +4202,7 @@ def _registration_attempt(
 ) -> _RegistrationWrite | None:
     source: Final = _builtin_cost_map()
     write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
-    _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry, value)
+    _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry, value, key)
     return write if final_attempt or litellm.model_cost is source else None
 
 
@@ -4280,11 +4292,15 @@ def reapply_runtime_model_cost_registrations() -> None:
 
 
 def runtime_model_cost_registrations_on(rows: Collection[str]) -> Mapping[str, Mapping[str, object]]:
-    """The ``register_model`` entries replayed on every reload whose write lands on one of ``rows``."""
+    """The ``register_model`` entries replayed on every reload whose write landed on one of ``rows`` and still does."""
+    writers: Final = model_cost_row_writers(rows)
+    written: Final = tuple(
+        (key, value) for key, value in tuple(_runtime_registered_model_cost.items()) if key in writers
+    )
     return MappingProxyType(
         {
             key: value
-            for key, value in tuple(_runtime_registered_model_cost.items())
+            for key, value in written
             if model_cost_registration_key(key, value.get("litellm_provider")) in rows
         }
     )
