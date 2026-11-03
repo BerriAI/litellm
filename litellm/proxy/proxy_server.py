@@ -7927,9 +7927,13 @@ class ProxyConfig:
                 len(kept_config_ids),
             )
 
-        for model_id in router_model_ids:
-            if model_id not in combined_id_list and model_id not in kept_config_ids:
-                llm_router.apply(ChangeSet(delete=[model_id]))
+        stale_ids: Final = tuple(
+            model_id
+            for model_id in router_model_ids
+            if model_id not in combined_id_list and model_id not in kept_config_ids
+        )
+        if stale_ids:
+            llm_router.apply(ChangeSet(delete=stale_ids))
         return frozenset(combined_id_list) | kept_config_ids
 
     def _resolve_db_litellm_param(self, key: str, value: object) -> object:

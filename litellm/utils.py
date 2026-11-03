@@ -3868,19 +3868,55 @@ def _builtin_cost_map() -> dict[str, Mapping[str, object]]:
 
 
 def _replace_cost_map_entry(
-    cost_map: dict[str, Mapping[str, object]], key: str, entry: Mapping[str, object], registration: Mapping[str, object]
+    cost_map: dict[str, Mapping[str, object]],
+    key: str,
+    entry: Mapping[str, object],
+    registration: Mapping[str, object],
+    registered_key: str,
+    saved: bool,
 ) -> None:
     current: Final = cost_map.get(key)
-    merged: Final = {**(current or {}), **entry}
+    before: Final[Mapping[str, object]] = current or {}
+    merged: Final = {**before, **entry}
+    previous: Final = current if isinstance(current, AliasedCostEntry) else AliasedCostEntry({}, ())
+    set_fields: Final = frozenset(name for name, value in registration.items() if value is not None)
+    registered_fields: Final = previous.registered_fields | set_fields
+    changed_fields: Final = frozenset(name for name, value in entry.items() if before.get(name) != value)
+    first_overwritten: Final = changed_fields - previous.written_fields
+    displaced_values: Final = tuple(
+        {
+            **{name: before[name] for name in first_overwritten if before.get(name) is not None},
+            **dict(previous.displaced_values),
+        }.items()
+    )
+    written_now: Final = {name: value for name, value in entry.items() if name in changed_fields or name in set_fields}
+    cost_map.update(
+        dict.fromkeys(
+            (key, *_names_sharing_entry(cost_map, key)),
+            AliasedCostEntry(
+                merged,
+                previous.names,
+                registered_fields,
+                registered_by=previous.registered_by | {registered_key},
+                written_fields=previous.written_fields | registered_fields | changed_fields,
+                displaced_values=displaced_values,
+                saved_write_fields=(
+                    previous.saved_write_fields | set_fields if saved else previous.saved_write_fields - set_fields
+                ),
+                latest_unsaved_write_fields=previous.latest_unsaved_write_fields if saved else set_fields,
+                written_values=(
+                    *((name, value) for name, value in previous.written_values if name not in written_now),
+                    *written_now.items(),
+                ),
+            ),
+        )
+    )
+
+
+def _names_sharing_entry(cost_map: Mapping[str, Mapping[str, object]], key: str) -> tuple[str, ...]:
+    current: Final = cost_map.get(key)
     names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
-    previous_fields: Final[frozenset[str]] = (
-        current.registered_fields if isinstance(current, AliasedCostEntry) else frozenset()
-    )
-    registered_fields: Final = previous_fields | frozenset(
-        name for name, value in registration.items() if value is not None
-    )
-    sharing_names: Final = tuple(name for name in names if cost_map.get(name) is current)
-    cost_map.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, names, registered_fields)))
+    return tuple(name for name in names if cost_map.get(name) is current)
 
 
 def _without_synthesized_costs(
@@ -4129,14 +4165,175 @@ class _RegistrationWrite:
     entry: Mapping[str, object]
 
 
+def _provider_registration_base(key: str, provider: object) -> _RegistrationWrite:
+    return _registration_base(key, {"litellm_provider": provider}, custom_llm_provider=None, warning_display_name=None)
+
+
+def model_cost_registration_key(key: str, provider: object) -> str:
+    """The ``litellm.model_cost`` key a ``register_model`` write of a ``key`` entry with this ``litellm_provider``
+    lands on, the row ``model_cost_registration_row`` reads."""
+    return _provider_registration_base(key, provider).key
+
+
 def model_cost_registration_row(key: str, provider: object) -> Mapping[str, object]:
     """The row a ``register_model`` write of a ``key`` entry with this ``litellm_provider`` merges onto: the
     ``litellm.model_cost`` row it resolves to (``openai/o3-pro`` lands on ``o3-pro``), else the row it seeds ``key``
     with from the built-in entry it falls back to (an OpenAI fine-tune takes its base model's row)."""
-    base: Final = _registration_base(
-        key, {"litellm_provider": provider}, custom_llm_provider=None, warning_display_name=None
-    )
+    base: Final = _provider_registration_base(key, provider)
     return _builtin_cost_map().get(base.key) or base.entry
+
+
+def model_cost_rows_written_by(keys: Collection[str]) -> frozenset[str]:
+    """Every ``litellm.model_cost`` name whose entry a ``register_model`` write of one of ``keys`` landed on, each
+    alias sharing that entry included."""
+    return frozenset(
+        name
+        for name, entry in tuple(_builtin_cost_map().items())
+        if isinstance(entry, AliasedCostEntry) and not entry.registered_by.isdisjoint(keys)
+    )
+
+
+def model_cost_keys_written_onto_shared_rows(keys: Collection[str]) -> frozenset[str]:
+    """Each of ``keys`` whose ``register_model`` write landed on a row other deployments read too: a row named
+    otherwise, as an ``openai/gpt-4o`` write lands on the ``gpt-4o`` row, a catalog row, or a row another key
+    wrote."""
+    cost_map: Final = _builtin_cost_map()
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    entries: Final = (entry for entry in tuple(cost_map.values()) if isinstance(entry, AliasedCostEntry))
+    writes: Final = itertools.chain.from_iterable(
+        ((key, entry) for key in entry.registered_by.intersection(keys)) for entry in entries
+    )
+    return frozenset(
+        key for key, entry in writes if cost_map.get(key) is not entry or key in catalog or len(entry.registered_by) > 1
+    )
+
+
+def model_cost_row_writers(rows: Iterable[str]) -> frozenset[str]:
+    """Every ``register_model`` key whose write landed on one of ``rows``."""
+    entries: Final = (_builtin_cost_map().get(row) for row in rows)
+    return frozenset(
+        itertools.chain.from_iterable(entry.registered_by for entry in entries if isinstance(entry, AliasedCostEntry))
+    )
+
+
+def restore_model_cost_rows_to_catalog(rows: Iterable[str]) -> None:
+    """Put each of ``rows`` back to its loaded catalog entry, keeping every alias on the one shared entry and every
+    field written into it outside ``register_model``, such as an SDK user's own price, at the value it had before a
+    registration first overwrote it, so registrations replayed onto them start where a fresh boot does. A row the
+    catalog lacks goes once no such field is left."""
+    cost_map: Final = _builtin_cost_map()
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    entries: Final = ((row, cost_map.get(row)) for row in rows)
+    restored_rows: Final = (
+        (row, {**catalog.get(row, {}), **_fields_outside_registrations(entry)})
+        for row, entry in entries
+        if isinstance(entry, AliasedCostEntry)
+    )
+    for row, restored in restored_rows:
+        if restored:
+            cost_map.update(_entry_on_row_and_aliases(cost_map, row, restored))
+        else:
+            cost_map.pop(row, None)
+    _invalidate_model_cost_lowercase_map()
+
+
+def _fields_outside_registrations(entry: AliasedCostEntry) -> Mapping[str, object]:
+    unwritten: Final = {
+        name: value for name, value in entry.items() if name not in entry.written_fields and value is not None
+    }
+    return {**dict(entry.displaced_values), **unwritten}
+
+
+def give_back_fields_left_by_earlier_writes(rows: Iterable[str]) -> None:
+    """Give each of ``rows`` back the catalog value, or the value it had before any registration, of every field an
+    earlier ``register_model`` write put there that neither its latest unsaved write nor a saved registration that
+    wrote last still sets, in one assignment, so a reader never sees the row without the fields it keeps."""
+    cost_map: Final = _builtin_cost_map()
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    entries: Final = ((row, cost_map.get(row)) for row in rows)
+    trimmed_rows: Final = (
+        (row, _without_fields_left_by_earlier_writes(entry, catalog.get(row, {})))
+        for row, entry in entries
+        if isinstance(entry, AliasedCostEntry)
+    )
+    for row, trimmed in trimmed_rows:
+        cost_map.update(dict.fromkeys((row, *_names_sharing_entry(cost_map, row)), trimmed))
+    _invalidate_model_cost_lowercase_map()
+
+
+def _without_fields_left_by_earlier_writes(
+    current: AliasedCostEntry, catalog_entry: Mapping[str, object]
+) -> AliasedCostEntry:
+    kept: Final = current.latest_unsaved_write_fields | current.saved_write_fields
+    dropped: Final = frozenset(name for name in current.written_fields - kept if current.get(name) is not None)
+    given_back: Final = {**catalog_entry, **dict(current.displaced_values)}
+    return AliasedCostEntry(
+        {
+            **{name: value for name, value in current.items() if name not in dropped},
+            **{name: given_back[name] for name in dropped if name in given_back},
+        },
+        current.names,
+        registered_fields=current.registered_fields - dropped,
+        registered_by=current.registered_by,
+        written_fields=current.written_fields - dropped,
+        displaced_values=tuple((name, value) for name, value in current.displaced_values if name not in dropped),
+        saved_write_fields=current.saved_write_fields,
+        latest_unsaved_write_fields=current.latest_unsaved_write_fields,
+        written_values=tuple((name, value) for name, value in current.written_values if name not in dropped),
+    )
+
+
+def model_cost_fields_set_in_place(rows: Iterable[str]) -> Mapping[str, Mapping[str, object]]:
+    """The fields of each of ``rows`` set in place, as ``litellm.model_cost[row][field] = value`` does, since the
+    ``register_model`` write that last put a value there, read before the rows are rebuilt so the rebuild can set
+    them back last."""
+    cost_map: Final = _builtin_cost_map()
+    entries: Final = ((row, cost_map.get(row)) for row in rows)
+    set_in_place: Final = (
+        (row, _fields_set_in_place(entry)) for row, entry in entries if isinstance(entry, AliasedCostEntry)
+    )
+    return MappingProxyType({row: fields for row, fields in set_in_place if fields})
+
+
+def _fields_set_in_place(entry: AliasedCostEntry) -> Mapping[str, object]:
+    fields: Final = ((name, entry.get(name), written) for name, written in entry.written_values)
+    return MappingProxyType({name: value for name, value, written in fields if value is not None and value != written})
+
+
+def put_back_model_cost_fields_set_in_place(fields: Mapping[str, Mapping[str, object]]) -> None:
+    """Set each row's ``fields`` back over what a rebuild wrote there, so the next rebuild still reads them as set in
+    place."""
+    cost_map: Final = _builtin_cost_map()
+    entries: Final = ((row, cost_map.get(row), values) for row, values in fields.items())
+    for row, entry, values in entries:
+        if isinstance(entry, AliasedCostEntry):
+            cost_map.update(
+                dict.fromkeys((row, *_names_sharing_entry(cost_map, row)), _with_fields_set_in_place(entry, values))
+            )
+    _invalidate_model_cost_lowercase_map()
+
+
+def _with_fields_set_in_place(entry: AliasedCostEntry, values: Mapping[str, object]) -> AliasedCostEntry:
+    return AliasedCostEntry(
+        {**entry, **values},
+        entry.names,
+        registered_fields=entry.registered_fields,
+        registered_by=entry.registered_by,
+        written_fields=entry.written_fields,
+        displaced_values=entry.displaced_values,
+        saved_write_fields=entry.saved_write_fields,
+        latest_unsaved_write_fields=entry.latest_unsaved_write_fields,
+        written_values=entry.written_values,
+    )
+
+
+def _entry_on_row_and_aliases(
+    cost_map: Mapping[str, Mapping[str, object]], row: str, entry: Mapping[str, object]
+) -> Mapping[str, AliasedCostEntry]:
+    current: Final = cost_map.get(row)
+    names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
+    restored: Final = AliasedCostEntry(entry, names)
+    return MappingProxyType(dict.fromkeys((row, *_names_sharing_entry(cost_map, row)), restored))
 
 
 def _registration_base(
@@ -4202,15 +4399,22 @@ def _registration_attempt(
     custom_llm_provider: str | None,
     warning_display_name: str | None,
     final_attempt: bool,
+    saved: bool,
 ) -> _RegistrationWrite | None:
     source: Final = _builtin_cost_map()
     write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
-    _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry, value)
+    _replace_cost_map_entry(
+        _builtin_cost_map() if final_attempt else source, write.key, write.entry, value, key, saved=saved
+    )
     return write if final_attempt or litellm.model_cost is source else None
 
 
 def _register_on_current_map(
-    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
+    key: str,
+    value: Mapping[str, object],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+    saved: bool,
 ) -> _RegistrationWrite:
     """A price data reload that swaps the map while the entry is being built or written would otherwise get the old
     map's prices written over its own, or drop the entry with the old map, so each attempt writes into the map it was
@@ -4218,7 +4422,12 @@ def _register_on_current_map(
     writes into the current map, so the entry is never lost."""
     attempts: Final = (
         _registration_attempt(
-            key, value, custom_llm_provider, warning_display_name, final_attempt=attempt == _REGISTRATION_ATTEMPTS - 1
+            key,
+            value,
+            custom_llm_provider,
+            warning_display_name,
+            final_attempt=attempt == _REGISTRATION_ATTEMPTS - 1,
+            saved=saved,
         )
         for attempt in range(_REGISTRATION_ATTEMPTS)
     )
@@ -4349,6 +4558,50 @@ def reapply_runtime_model_cost_registrations() -> None:
         )
 
 
+def runtime_model_cost_registrations_written_last(
+    registrations: Mapping[str, Mapping[str, object]],
+) -> Mapping[str, Mapping[str, object]]:
+    """The fields of each of ``registrations`` that no unsaved write has set since on the row it lands on, with the
+    provider that row is found by, read before the row is rebuilt so the rebuild can apply them last again."""
+    landing: Final = (
+        (key, value, _builtin_cost_map().get(model_cost_registration_key(key, value.get("litellm_provider"))))
+        for key, value in registrations.items()
+    )
+    written_last: Final = (
+        (key, value, row.saved_write_fields) for key, value, row in landing if isinstance(row, AliasedCostEntry)
+    )
+    return MappingProxyType(
+        {
+            key: MappingProxyType(
+                {
+                    name: field_value
+                    for name, field_value in value.items()
+                    if name in fields or name == "litellm_provider"
+                }
+            )
+            for key, value, fields in written_last
+            if not fields.isdisjoint(value)
+        }
+    )
+
+
+def runtime_model_cost_registrations_on(rows: Collection[str]) -> Mapping[str, Mapping[str, object]]:
+    """The ``register_model`` entries replayed on every reload whose write landed on one of ``rows`` and still does,
+    oldest registration first, as the reload replays them."""
+    writers: Final = model_cost_row_writers(rows)
+    written: Final = sorted(
+        ((key, value) for key, value in tuple(_runtime_registered_model_cost.items()) if key in writers),
+        key=lambda registration: _runtime_registration_order.get(registration[0], -1),
+    )
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in written
+            if model_cost_registration_key(key, value.get("litellm_provider")) in rows
+        }
+    )
+
+
 def cost_map_omits_token_price(*keys: object) -> bool:
     """Whether the raw ``litellm.model_cost`` entries under ``keys`` exist but none carries a per-token price.
 
@@ -4423,12 +4676,11 @@ def register_model(
             _runtime_registration_order[_registered_key] = next(_REGISTRATION_TICKS)
 
     for key, value in loaded_model_cost.items():
-        write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
+        write = _register_and_invalidate(
+            str(key), value, custom_llm_provider, warning_display_name, saved=persist_across_reloads
+        )
         if persist_across_reloads:
             _record_registered_name(write.key, str(key))
-
-        # Invalidate case-insensitive lookup map since model_cost was modified
-        _invalidate_model_cost_lowercase_map()
 
         verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", write.key, write.key)
         if add_to_provider_model_sets and value.get("litellm_provider") == "openrouter":
@@ -4436,6 +4688,22 @@ def register_model(
     if add_to_provider_model_sets:
         litellm.add_known_models(loaded_model_cost)
     return model_cost
+
+
+def _register_and_invalidate(
+    key: str,
+    value: Mapping[str, object],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+    saved: bool,
+) -> _RegistrationWrite:
+    write: Final = _register_on_current_map(key, value, custom_llm_provider, warning_display_name, saved=saved)
+    lowercase_map: Final = _model_cost_lowercase_map
+    if lowercase_map is not None and lowercase_map.get(write.key.lower()) == write.key:
+        _invalidate_model_cost_values()
+    else:
+        _invalidate_model_cost_lowercase_map()
+    return write
 
 
 def _should_drop_param(k, additional_drop_params) -> bool:
@@ -6726,11 +6994,16 @@ def _invalidate_model_cost_lowercase_map() -> None:
     Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
     Also clears related LRU caches that depend on model_cost data.
     """
-    global _model_cost_lowercase_map, _model_cost_mutation_generation
+    global _model_cost_lowercase_map
     _model_cost_lowercase_map = None
-    _model_cost_mutation_generation += 1
+    _invalidate_model_cost_values()
 
-    # Clear LRU caches that depend on model_cost data
+
+def _invalidate_model_cost_values() -> None:
+    """Clear what ``litellm.model_cost`` values feed, keeping the case-insensitive lookup map, which only its names
+    feed."""
+    global _model_cost_mutation_generation
+    _model_cost_mutation_generation += 1
     _cached_get_model_info.cache_clear()
     cached_get_model_info_helper.cache_clear()
     cached_cost_map_key.cache_clear()

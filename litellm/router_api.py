@@ -1328,7 +1328,7 @@ def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
     if changes.settings:
         router._core_update_settings(**{name: detached(value) for name, value in changes.settings.items()})
     upserted: Final = [router._core_upsert_deployment(deployment=d) for d in changes.upsert]
-    deleted: Final = [router._core_delete_deployment(id=i) for i in changes.delete]
+    deleted: Final = list(router._core_delete_deployments(changes.delete))
     if changes.redis_cache is not None:
         router._core_update_redis_cache(cache=changes.redis_cache)
     return ApplyResult(version=router._registry_version, upserted=upserted, deleted=deleted)

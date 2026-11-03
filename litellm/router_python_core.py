@@ -35,6 +35,7 @@ from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
+    Collection,
     Generator,
     Iterable,
     Iterator,
@@ -46,7 +47,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
-from itertools import chain
+from itertools import accumulate, chain, count, groupby
+from operator import itemgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
 
@@ -55,7 +57,7 @@ import httpx
 import openai
 from openai import AsyncOpenAI
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import assert_never, overload
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never, overload
 
 from litellm import exceptions as litellm_exceptions
 from litellm import get_secret_str
@@ -479,12 +481,14 @@ from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     COST_MAP_LOOKUP_KEY,
+    DEPLOYMENT_SCOPED_PRICING_FIELDS,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
     LlmProviders,
     ModelInfo,
+    ModelInfoBase,
     ModelResponseStream,
     StandardLoggingPayload,
     StandardLoggingRoutingDecision,
@@ -511,11 +515,21 @@ from litellm.utils import (
     get_non_default_completion_params,
     get_secret,
     get_utc_datetime,
+    give_back_fields_left_by_earlier_writes,
     is_generalized_model_info,
     is_region_allowed,
     lookup_model_info_for_registration,
+    model_cost_fields_set_in_place,
+    model_cost_keys_written_onto_shared_rows,
+    model_cost_registration_key,
+    model_cost_row_writers,
+    model_cost_rows_written_by,
     model_info_with_pricing_overrides,
     provider_rejectable_params,
+    put_back_model_cost_fields_set_in_place,
+    restore_model_cost_rows_to_catalog,
+    runtime_model_cost_registrations_on,
+    runtime_model_cost_registrations_written_last,
     set_live_deployment_replay,
     token_counter,
 )
@@ -1094,6 +1108,89 @@ class _StreamRetriesExhausted:
 _StreamRetryOutcome: TypeAlias = _StreamRetryOpened | _StreamRetriesExhausted
 
 
+class _CostRowEntryParams(TypedDict):
+    model: ReadOnly[str]
+    custom_llm_provider: ReadOnly[NotRequired[str | None]]
+
+
+class _CostRowEntry(TypedDict):
+    model_name: ReadOnly[str]
+    litellm_params: ReadOnly[Mapping[str, object]]
+    model_info: ReadOnly[NotRequired[Mapping[str, object] | None]]
+
+
+class _CostRowEntryBackend(TypedDict):
+    litellm_params: ReadOnly[_CostRowEntryParams]
+
+
+_COST_ROW_ENTRY_ADAPTER: Final = TypeAdapter(_CostRowEntry)
+_COST_ROW_ENTRY_PARAMS_ADAPTER: Final = TypeAdapter(_CostRowEntryParams)
+_COST_ROW_ENTRY_BACKEND_ADAPTER: Final = TypeAdapter(_CostRowEntryBackend)
+_MODEL_INFO_COST_WRITE_INPUTS: Final = frozenset(
+    ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__ | {"base_model", "pricing_provider"}
+)
+_LITELLM_PARAMS_COST_WRITE_INPUTS: Final = frozenset(CustomPricingLiteLLMParams.model_fields) | {
+    "base_model",
+    "model_id",
+}
+_PRICE_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields) | DEPLOYMENT_SCOPED_PRICING_FIELDS
+
+
+@dataclass(frozen=True, slots=True)
+class _SharedCostWrite:
+    """What a ``model_list`` entry writes onto ``litellm.model_cost``, read without building a ``Deployment``: the
+    ``register_model`` keys of its id row and its shared backend rows, and every field its write is derived from."""
+
+    model_id: str | None
+    backend_keys: tuple[str, ...]
+    model: str
+    custom_llm_provider: str | None
+    model_info: Mapping[str, object]
+    litellm_params: Mapping[str, object]
+
+    def lands_on(self, writers: frozenset[str]) -> bool:
+        return self.model_id in writers or not writers.isdisjoint(self.backend_keys)
+
+    @property
+    def mode(self) -> str | None:
+        mode: Final = self.model_info.get("mode")
+        return mode if isinstance(mode, str) else None
+
+    @property
+    def copies_backend_entry(self) -> bool:
+        """Whether its write copies the backend entry an off-peak schedule inherits, as that row stands."""
+        return bool(self.model_info.get("off_peak_pricing"))
+
+    def replay_key(self, targets: frozenset[str]) -> tuple[str | None, str]:
+        """Equal for two entries whose writes set the same fields of the ``targets`` rows, so the later write replaces
+        every value the earlier one set. A mapping merges into the row's value, and a string can name the row or the
+        mode the write lands with, so those count by value and every other value only as set. A shared row never takes
+        a price, only what a price being set pulls in from the backend model, so prices count only as set or unset,
+        and an id that names a target row or wrote onto one keeps its write apart by its id."""
+        write_inputs: Final = (
+            self.model,
+            self.custom_llm_provider,
+            _SharedCostWrite._write_inputs(self.model_info, _MODEL_INFO_COST_WRITE_INPUTS),
+            _SharedCostWrite._write_inputs(self.litellm_params, _LITELLM_PARAMS_COST_WRITE_INPUTS),
+        )
+        return (
+            self.model_id if self.model_id in targets else None,
+            json.dumps(write_inputs, sort_keys=True, default=repr),
+        )
+
+    @staticmethod
+    def _write_inputs(fields: Mapping[str, object], inputs: frozenset[str]) -> Mapping[str, object]:
+        return {
+            name: bool(value) if name in _PRICE_FIELDS else _SharedCostWrite._value_written(value)
+            for name, value in fields.items()
+            if name in inputs and value is not None
+        }
+
+    @staticmethod
+    def _value_written(value: object) -> object:
+        return value if isinstance(value, (str, Mapping)) else True
+
+
 MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
 
 
@@ -1219,13 +1316,19 @@ class RoutingArgs(enum.Enum):
 # as the per-request one built from a caller-supplied user_config, drops out on its
 # own rather than leaving entries behind that nothing can withdraw.
 _live_routers: Final["weakref.WeakSet[PythonCore]"] = weakref.WeakSet()
+_live_router_creation_ticks: Final["weakref.WeakKeyDictionary[PythonCore, int]"] = weakref.WeakKeyDictionary()
+_next_router_creation_tick: Final = count()
 _routers_holding_global_callbacks: Final["weakref.WeakSet[PythonCore]"] = weakref.WeakSet()
 _routers_holding_global_callbacks_lock: Final = threading.Lock()
 
 
+def _live_routers_oldest_first() -> tuple["PythonCore", ...]:
+    return tuple(sorted(_live_routers, key=_live_router_creation_ticks.__getitem__))
+
+
 def _replay_live_router_model_cost() -> None:
-    """Re-assert every live router's deployments after the cost map is refreshed."""
-    for router in tuple(_live_routers):
+    """Re-assert every live router's deployments, oldest router first, after the cost map is refreshed."""
+    for router in _live_routers_oldest_first():
         router.replay_model_cost_registrations()
 
 
@@ -1846,6 +1949,7 @@ class PythonCore(DeprecatedRouterMembers):
         self.model_group_affinity_config = model_group_affinity_config
         warn_on_unknown_model_group_affinity_flags(model_group_affinity_config)
 
+        self._core_model_list: list = []  # initialize an empty list - to allow _add_deployment and delete_deployment to work
         if model_list is not None:
             # set_model_list will build indices automatically
             self.set_model_list(model_list)
@@ -1853,11 +1957,10 @@ class PythonCore(DeprecatedRouterMembers):
             for m in model_list:
                 if "model" in m["litellm_params"]:
                     self._core_deployment_latency_map[m["litellm_params"]["model"]] = 0
-        else:
-            self._core_model_list: list = []  # initialize an empty list - to allow _add_deployment and delete_deployment to work
         # Track this router so a price data reload can rebuild its deployments'
         # cost-map entries from the list it is serving at that moment, whether
         # those deployments came from model_list or were added later from the DB.
+        _live_router_creation_ticks[self] = next(_next_router_creation_tick)
         _live_routers.add(self)
 
         if allowed_fails is not None:
@@ -11631,6 +11734,7 @@ class PythonCore(DeprecatedRouterMembers):
 
     def set_model_list(self, model_list: list):
         original_model_list: Final = copy.deepcopy(model_list)
+        previous_model_list: Final = self._model_list_entries()
         self._discovered_model_info_cache.flush_cache()
         with self._deployment_index_lock:
             self._core_model_list = []
@@ -11721,6 +11825,7 @@ class PythonCore(DeprecatedRouterMembers):
         # Deferred: build the AdaptiveRouter strategy now that all underlying
         # deployments have been registered.
         self._finalize_adaptive_router_if_configured()
+        self._rebuild_model_cost_rows(lambda: self._rebuild_rows_a_replaced_model_list_wrote(previous_model_list))
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
@@ -12092,9 +12197,18 @@ class PythonCore(DeprecatedRouterMembers):
                 # Free the outgoing deployment's pre-routing strategy slot (keyed by the
                 # OLD model_name/tags) before the re-add below re-registers it.
                 self._unregister_pre_routing_strategy_for_deployment(deployment=_deployment_on_router)
+                self._rebuild_model_cost_rows(
+                    lambda: self._rebuild_cost_rows_written_by(
+                        PythonCore._shared_write_keys(
+                            (PythonCore._deployment_shared_cost_write(_deployment_on_router),)
+                        )
+                    )
+                )
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
+            if _deployment_on_router is not None:
+                self._rebuild_model_cost_rows(lambda: self._give_back_id_row_fields((_deployment_model_id,)))
             # add_deployment() builds every strategy EXCEPT the adaptive one, which
             # set_model_list() defers until the whole model_list is visible. Re-run that
             # deferred pass so an adaptive router whose slot was just released above is
@@ -12218,12 +12332,15 @@ class PythonCore(DeprecatedRouterMembers):
         return model_info
 
     @staticmethod
-    def _register_deployment_pricing(deployment: Deployment) -> None:
+    def _register_deployment_pricing(
+        deployment: Deployment, *, onto: Collection[str] | None = None, host: PythonHost = python_host
+    ) -> None:
         """Register a deployment's custom/inherited pricing in ``litellm.model_cost``.
 
         Takes only a ``Deployment``, so it registers pricing for a deployment that
         is never added to ``self._core_model_list`` (a per-request client-side-credential
-        deployment) just as readily as one that is.
+        deployment) just as readily as one that is. ``onto`` limits the writes to those rows, and the id's write to an
+        id it names, which is how a rebuild replays an id whose write landed on a rebuilt row named otherwise.
         """
         PythonCore._register_deployment_in_model_cost(
             model_id=deployment.model_info.id,
@@ -12231,18 +12348,22 @@ class PythonCore(DeprecatedRouterMembers):
             model=deployment.litellm_params.model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             pricing_provider=deployment.model_info.pricing_provider,
+            onto=onto,
+            host=host,
         )
 
     @staticmethod
     def _register_deployment_in_model_cost(
         *,
         model_id: str | None,
-        model_info: dict,  # mutable-ok: cost-map entry
+        model_info: dict[str, object],  # mutable-ok: cost-map entry
         model: str,
         custom_llm_provider: str | None,
         pricing_provider: str | None = None,
+        onto: Collection[str] | None = None,
+        host: PythonHost = python_host,
     ) -> None:
-        """Write a deployment's metadata into ``litellm.model_cost``.
+        """Write a deployment's metadata into ``litellm.model_cost``, only onto the ``onto`` rows when given.
 
         Runs when a deployment is added and again after a price data reload, so
         the entries a refresh rebuilds are the ones a fresh boot would produce.
@@ -12259,8 +12380,8 @@ class PythonCore(DeprecatedRouterMembers):
         if classify_strategy_router_model(model) is not None:
             model_info = {k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields}
 
-        if model_id is not None:
-            python_host.invoke("register_model")(
+        if model_id is not None and (onto is None or model_id in onto):
+            host.invoke("register_model")(
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
                 warning_display_name=model,
@@ -12278,10 +12399,15 @@ class PythonCore(DeprecatedRouterMembers):
         # name. Each deployment's full model_info is already stored under
         # its unique model_id above.
         shared_model_info: Final = shared_backend_model_info(model_info)
-        python_host.invoke("register_model")(
-            model_cost={_key: keep_registered_mode(_key, shared_model_info) for _key in backend_keys},
-            persist_across_reloads=False,
+        shared_provider: Final = shared_model_info.get("litellm_provider") or ""
+        written_keys: Final = tuple(
+            key for key in backend_keys if onto is None or model_cost_registration_key(key, shared_provider) in onto
         )
+        if written_keys:
+            host.invoke("register_model")(
+                model_cost={_key: keep_registered_mode(_key, shared_model_info) for _key in written_keys},
+                persist_across_reloads=False,
+            )
 
     def replay_model_cost_registrations(self) -> None:
         """Re-assert this router's deployments onto a freshly fetched catalog.
@@ -12293,24 +12419,216 @@ class PythonCore(DeprecatedRouterMembers):
         self._provider_unresolved_deployments = ()
         for create_deployment in provider_unresolved:
             create_deployment()
-        for entry in tuple(self._core_model_list):
-            try:
-                deployment = entry if isinstance(entry, Deployment) else Deployment(**entry)
-            except Exception:  # noqa: BLE001  # a malformed entry must not abort the rest of the rebuild
-                verbose_router_logger.exception(
-                    "Router: could not rebuild cost-map entry for a deployment during a price data reload"
-                )
-                continue
-            PythonCore._register_deployment_in_model_cost(
-                model_id=deployment.model_info.id,
-                model_info=PythonCore._deployment_model_cost_payload(deployment),
-                model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-                pricing_provider=deployment.model_info.pricing_provider,
-            )
+        for deployment in self._served_deployments():
+            PythonCore._register_deployment_pricing(deployment)
         self._invalidate_model_group_info_cache()
 
     _replay_model_cost_registrations = replay_model_cost_registrations
+
+    def _served_deployments(self) -> Iterator[Deployment]:
+        """Every deployment in ``model_list``, skipping an entry that cannot be rebuilt into a ``Deployment``."""
+        return PythonCore._buildable_deployments(self._model_list_entries())
+
+    @staticmethod
+    def _buildable_deployments(entries: Iterable[object]) -> Iterator[Deployment]:
+        for entry in entries:
+            try:
+                yield PythonCore._deployment_from_entry(entry)
+            except Exception:  # noqa: BLE001  # a malformed entry must not abort the rest of the rebuild
+                verbose_router_logger.exception("Router: could not rebuild the cost-map entry of a deployment")
+
+    def _model_list_entries(self) -> tuple[object, ...]:
+        return tuple(self._core_model_list)
+
+    @staticmethod
+    def _deployment_from_entry(entry: object) -> Deployment:
+        if isinstance(entry, Deployment):
+            return entry
+        if not isinstance(entry, dict):
+            raise TypeError(f"a model_list entry must be a Deployment or a dict, got {type(entry).__name__}")
+        return Deployment(**entry)
+
+    @staticmethod
+    def _shared_cost_write(
+        model: str,
+        custom_llm_provider: str | None,
+        model_info: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> _SharedCostWrite:
+        model_id: Final = model_info.get("id")
+        return _SharedCostWrite(
+            model_id=model_id if isinstance(model_id, str) else None,
+            backend_keys=PythonCore._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            model_info=model_info,
+            litellm_params=litellm_params,
+        )
+
+    @staticmethod
+    def _shared_write_keys(writes: Iterable[_SharedCostWrite]) -> frozenset[str]:
+        """The ``register_model`` keys of ``writes`` whose rows other deployments read too: every backend key, each id
+        whose write landed on such a row, like the ``gpt-4o`` row an ``openai/gpt-4o`` id resolves to, and each id a
+        live deployment writes as its backend key."""
+        listed: Final = tuple(writes)
+        ids: Final = frozenset(write.model_id for write in listed if write.model_id is not None)
+        backend_keys: Final = chain.from_iterable(write.backend_keys for write in listed)
+        return (
+            frozenset(backend_keys)
+            | model_cost_keys_written_onto_shared_rows(ids)
+            | PythonCore._ids_written_as_live_backend_keys(ids)
+        )
+
+    @staticmethod
+    def _ids_written_as_live_backend_keys(ids: frozenset[str]) -> frozenset[str]:
+        """Each of ``ids`` that a deployment of a live router writes as its backend key, as an id equal to a sibling's
+        unmapped model string does, which makes that id's row the sibling's shared backend row."""
+        if not ids:
+            return frozenset()
+        entries: Final = chain.from_iterable(router._model_list_entries() for router in _live_routers_oldest_first())
+        return ids.intersection(chain.from_iterable(map(PythonCore._entry_backend_keys, entries)))
+
+    @staticmethod
+    def _entry_backend_keys(entry: object) -> tuple[str, ...]:
+        if isinstance(entry, Deployment):
+            return PythonCore._backend_cost_map_keys(
+                entry.litellm_params.model, entry.litellm_params.custom_llm_provider
+            )
+        try:
+            params: Final = _COST_ROW_ENTRY_BACKEND_ADAPTER.validate_python(entry)["litellm_params"]
+        except ValidationError:
+            return ()
+        return PythonCore._backend_cost_map_keys(params["model"], params.get("custom_llm_provider"))
+
+    def _rebuild_rows_a_replaced_model_list_wrote(self, previous: Iterable[object]) -> None:
+        """Rebuild the shared rows a replaced ``model_list`` wrote and trim the id rows of the deployments still
+        served to their new write, leaving the id rows of deployments no longer served pricing the requests they
+        already have in flight, as a delete leaves them."""
+        writes: Final = tuple(
+            write for write in map(PythonCore._entry_shared_cost_write, previous) if write is not None
+        )
+        self._rebuild_cost_rows_written_by(PythonCore._shared_write_keys(writes))
+        self._give_back_id_row_fields(
+            write.model_id
+            for write in writes
+            if write.model_id is not None and write.model_id in self.model_id_to_deployment_index_map
+        )
+
+    def _give_back_id_row_fields(self, model_ids: Iterable[str]) -> None:
+        listed: Final = frozenset(model_ids)
+        give_back_fields_left_by_earlier_writes(
+            listed
+            - model_cost_keys_written_onto_shared_rows(listed)
+            - PythonCore._ids_written_as_live_backend_keys(listed)
+        )
+        self._invalidate_model_group_info_cache()
+
+    @staticmethod
+    def _deployment_shared_cost_write(deployment: Deployment) -> _SharedCostWrite:
+        return PythonCore._shared_cost_write(
+            deployment.litellm_params.model,
+            deployment.litellm_params.custom_llm_provider,
+            _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True)),
+            _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True)),
+        )
+
+    @staticmethod
+    def _entry_shared_cost_write(entry: object) -> _SharedCostWrite | None:
+        """A ``model_list`` entry's shared cost-map write, or ``None`` for an entry that cannot be read."""
+        if isinstance(entry, Deployment):
+            return PythonCore._deployment_shared_cost_write(entry)
+        try:
+            fields: Final = _COST_ROW_ENTRY_ADAPTER.validate_python(entry)
+            params: Final = _COST_ROW_ENTRY_PARAMS_ADAPTER.validate_python(fields["litellm_params"])
+        except ValidationError:
+            verbose_router_logger.exception("Router: could not read the cost-map entry of a deployment")
+            return None
+        return PythonCore._shared_cost_write(
+            params["model"],
+            params.get("custom_llm_provider"),
+            fields.get("model_info") or {},
+            fields["litellm_params"],
+        )
+
+    def _rebuild_model_cost_rows(self, rebuild: Callable[[], None]) -> None:
+        """Run a rebuild of the cost-map rows a removed or edited deployment wrote, logging a failure instead of
+        raising it, since the change to ``model_list`` has already happened."""
+        try:
+            rebuild()
+        except Exception:  # noqa: BLE001  # the deployment is already out of model_list, so the change stands
+            verbose_router_logger.exception(
+                "Router: could not rebuild the shared cost-map rows a removed or edited deployment wrote; the next "
+                "reload rebuilds them"
+            )
+
+    def _rebuild_cost_rows_written_by(self, written_keys: frozenset[str]) -> None:
+        """Rebuild the rows ``register_model`` writes of ``written_keys`` landed on: the loaded catalog row, then the
+        ``register_model`` registrations replayed on every reload, then every live deployment that wrote it, oldest router
+        first and each router's in ``model_list`` order, then again the fields of those registrations no deployment wrote over since, then the
+        fields set in place after their last write, so each field keeps the order its writes came in, whether the
+        registration came before the router or after it. The replay writes only those rows, so a row it leaves alone
+        keeps what later deployments and registrations put there, and deployments with the same write replay it once,
+        which leaves the rows as replaying every one of them does."""
+        stale: Final = model_cost_rows_written_by(written_keys) if written_keys else frozenset[str]()
+        if not stale:
+            return
+        writers: Final = model_cost_row_writers(stale)
+        targets: Final = stale | writers
+        routers: Final = _live_routers_oldest_first()
+        entries: Final = tuple(chain.from_iterable(router._model_list_entries() for router in routers))
+        writes: Final = (PythonCore._entry_shared_cost_write(entry) for entry in entries)
+        landing: Final = tuple(
+            (position, write) for position, write in enumerate(writes) if write is not None and write.lands_on(writers)
+        )
+        replayed: Final = tuple(
+            PythonCore._buildable_deployments(
+                entries[position] for position in PythonCore._replayed_positions(landing, targets)
+            )
+        )
+        persisted: Final = runtime_model_cost_registrations_on(stale)
+        written_last: Final = runtime_model_cost_registrations_written_last(persisted)
+        set_in_place: Final = model_cost_fields_set_in_place(stale)
+        restore_model_cost_rows_to_catalog(stale)
+        if persisted:
+            self._host.invoke("register_model")(model_cost=dict(persisted))
+        for deployment in replayed:
+            PythonCore._register_deployment_pricing(deployment, onto=targets, host=self._host)
+        if written_last:
+            self._host.invoke("register_model")(model_cost=dict(written_last))
+        if set_in_place:
+            put_back_model_cost_fields_set_in_place(set_in_place)
+        for router in routers:
+            router._invalidate_model_group_info_cache()
+
+    @staticmethod
+    def _replayed_positions(
+        landing: tuple[tuple[int, _SharedCostWrite], ...], targets: frozenset[str]
+    ) -> tuple[int, ...]:
+        """The position of the last of each set of ``landing`` writes that set the same fields of the ``targets`` rows.
+        Each field keeps the last value written to it, so the last write of a set leaves every field as replaying the
+        whole set does. What a ``mode`` write does depends on the mode the row holds, so a set never spans a change of
+        mode. An off-peak schedule copies its backend entry as that row stands, so with one only back-to-back writes
+        with the same inputs collapse."""
+        if any(write.copies_backend_entry for _position, write in landing):
+            keyed: Final = tuple((position, write.replay_key(targets)) for position, write in landing)
+            return tuple(tuple(run)[-1][0] for _replay_key, run in groupby(keyed, key=itemgetter(1)))
+        runs: Final = PythonCore._mode_runs(tuple(write.mode for _position, write in landing))
+        last_positions: Final = {
+            (write.replay_key(targets), run): position for (position, write), run in zip(landing, runs, strict=True)
+        }
+        return tuple(sorted(last_positions.values()))
+
+    @staticmethod
+    def _mode_runs(modes: tuple[str | None, ...]) -> tuple[int, ...]:
+        """For each write, how many times the ``mode`` the writes carry changed up to it."""
+        return tuple(run for _mode, run in accumulate(modes, PythonCore._next_mode_run, initial=(None, 0)))[1:]
+
+    @staticmethod
+    def _next_mode_run(held: tuple[str | None, int], mode: str | None) -> tuple[str | None, int]:
+        held_mode, run = held
+        if mode is None or mode == held_mode:
+            return held
+        return (mode, run if held_mode is None else run + 1)
 
     def _core_delete_deployment(self, id: str) -> Deployment | None:
         """
@@ -12321,6 +12639,24 @@ class PythonCore(DeprecatedRouterMembers):
         - The deleted deployment
         - OR None (if deleted deployment not found)
         """
+        return self._core_delete_deployments((id,))[0]
+
+    def _core_delete_deployments(self, ids: Sequence[str]) -> tuple[Deployment | None, ...]:
+        """Remove each of ``ids``, then rebuild the cost-map rows the removed deployments wrote once, which leaves the
+        rows as rebuilding after each removal does."""
+        removed: Final = tuple(map(self._remove_deployment, ids))
+        entries: Final = tuple(item for item in removed if item is not None)
+        if entries:
+            self._rebuild_model_cost_rows(
+                lambda: self._rebuild_cost_rows_written_by(
+                    PythonCore._shared_write_keys(
+                        write for write in map(PythonCore._entry_shared_cost_write, entries) if write is not None
+                    )
+                )
+            )
+        return removed
+
+    def _remove_deployment(self, id: str) -> Deployment | None:
         try:
             with self._deployment_index_lock:
                 deployment_idx: Final = self.model_id_to_deployment_index_map.get(id)
@@ -12335,9 +12671,7 @@ class PythonCore(DeprecatedRouterMembers):
             if _budget_limiter is not None:
                 _budget_limiter.unregister_deployment_budget(model_id=id)
             try:
-                self._unregister_pre_routing_strategy_for_deployment(
-                    deployment=item if isinstance(item, Deployment) else Deployment(**item)
-                )
+                self._unregister_pre_routing_strategy_for_deployment(deployment=PythonCore._deployment_from_entry(item))
             except Exception:
                 verbose_router_logger.exception(
                     "delete_deployment: could not release pre-routing strategies for model_id=%s; "
