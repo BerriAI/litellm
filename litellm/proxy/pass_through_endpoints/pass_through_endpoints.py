@@ -2152,9 +2152,11 @@ async def pass_through_request(
                 request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
-                _response_headers = _with_callback_headers(  # rebind-ok: replaces this branch's headers with the room kept
-                    _response_headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
-                    callback_headers,
+                _response_headers = (
+                    _with_callback_headers(  # rebind-ok: replaces this branch's headers with the room kept
+                        _response_headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
+                        callback_headers,
+                    )
                 )
 
             return StreamingResponse(
@@ -2260,9 +2262,11 @@ async def pass_through_request(
                 request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
-                _response_headers = _with_callback_headers(  # rebind-ok: replaces this branch's headers with the room kept
-                    _response_headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
-                    callback_headers,
+                _response_headers = (
+                    _with_callback_headers(  # rebind-ok: replaces this branch's headers with the room kept
+                        _response_headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
+                        callback_headers,
+                    )
                 )
 
             return StreamingResponse(
