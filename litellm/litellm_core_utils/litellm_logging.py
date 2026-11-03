@@ -56,10 +56,10 @@ from litellm.constants import (
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    declared_cost_map_pricing,
     get_response_cost_from_hidden_params,
     get_usage_object,
     pricing_entry_for_cost_calc,
-    raw_cost_map_entry,
     select_model_name_for_cost_calc,
 )
 from litellm.exceptions import (
@@ -216,14 +216,11 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
     batch_chat_usage,
-    is_server_derived_pricing_key,
 )
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     get_base_model_from_metadata,
-    mapped_model_fill_missing,
     print_verbose,
-    unmapped_model_generalization,
 )
 
 from ..integrations.argilla import ArgillaLogger
@@ -2615,19 +2612,8 @@ class Logging(LiteLLMLoggingBaseClass):
         model_info: Final = payload["model_map_information"]["model_map_value"]
         if model_info is None:
             return False
-        raw_entry: Final = raw_cost_map_entry(model_info["key"])
-        rule_entry: Final = (
-            unmapped_model_generalization(model_info["key"], payload["custom_llm_provider"])
-            if raw_entry is None
-            else mapped_model_fill_missing(model_info["key"], raw_entry)
-        )
-        prices: Final = MappingProxyType({**(rule_entry or {}), **(raw_entry or {})})
-        return any(
-            value is not None
-            and ("cost" in key or "pricing" in key)
-            and (is_server_derived_pricing_key(key) or key in DEPLOYMENT_SCOPED_PRICING_FIELDS)
-            for key, value in prices.items()
-        )
+        prices: Final = declared_cost_map_pricing(model_info["key"], model_info["key"], payload["custom_llm_provider"])
+        return any(value is not None and ("cost" in key or "pricing" in key) for key, value in prices.items())
 
     def prepare_response_cost(self, response: object, now: datetime.datetime) -> PreparedCost | None:
         if self.prepared_cost is not None:

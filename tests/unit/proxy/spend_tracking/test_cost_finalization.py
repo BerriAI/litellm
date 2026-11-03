@@ -680,11 +680,14 @@ async def test_finalized_header_distinguishes_missing_prices_from_free_models(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "source", ["unpriced", "cache", "non-inference", "provider", "provider-header", "per-token", "per-second"]
+    "source",
+    ["unpriced", "cache", "non-inference", "provider", "provider-header", "per-token", "per-second", "passthrough"],
 )
 @pytest.mark.parametrize("guardrail_cost", [0.0, 0.1])
 async def test_zero_cost_headers_preserve_known_free_calls_and_guardrail_charges(
-    source: Literal["unpriced", "cache", "non-inference", "provider", "provider-header", "per-token", "per-second"],
+    source: Literal[
+        "unpriced", "cache", "non-inference", "provider", "provider-header", "per-token", "per-second", "passthrough"
+    ],
     guardrail_cost: float,
 ) -> None:
     model: Final = "unmapped-header-cost"
@@ -711,6 +714,8 @@ async def test_zero_cost_headers_preserve_known_free_calls_and_guardrail_charges
             logging.custom_cost_per_token = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
         case "per-second":
             logging.custom_cost_per_second = 0.0
+        case "passthrough":
+            logging.model_call_details["passthrough_logging_payload"] = {"cost_per_request": 0.0}
         case _:
             pass
     finalized: Final = await finalize_response_cost(logging, result, None, NOW, guardrail_cost=guardrail_cost)
@@ -724,6 +729,35 @@ async def test_zero_cost_headers_preserve_known_free_calls_and_guardrail_charges
     assert headers.get("x-litellm-response-cost") == (
         None if source == "unpriced" and guardrail_cost == 0 else str(guardrail_cost)
     )
+
+
+@pytest.mark.asyncio
+async def test_free_model_priced_only_per_request_keeps_the_zero_cost_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "gpt-free-per-request-header"
+    monkeypatch.setitem(
+        litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat", "input_cost_per_request": 0.0}
+    )
+    logging: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=NOW,
+        litellm_call_id="per-request-header",
+        function_id="per-request-header",
+    )
+    logging.update_environment_variables(
+        model=model, custom_llm_provider="openai", litellm_params={}, optional_params={}
+    )
+    result: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    finalized: Final = await finalize_response_cost(logging, result, None, NOW)
+    assert finalized is not None and finalized.amount == 0.0
+    headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response_cost=finalized.amount,
+        litellm_logging_obj=logging,
+    )
+    assert headers["x-litellm-response-cost"] == "0.0"
 
 
 @pytest.mark.asyncio

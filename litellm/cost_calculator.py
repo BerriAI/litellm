@@ -979,7 +979,7 @@ def _bedrock_pricing_info(
 
 
 def cost_map_key_prices_anything(key: str) -> bool:
-    entry: Final = raw_cost_map_entry(key)
+    entry: Final = _raw_cost_map_entry(key)
     return entry is not None and _cost_map_entry_prices_anything(entry)
 
 
@@ -1102,20 +1102,19 @@ def _cost_map_model_name(model: str, custom_llm_provider: str | None, region_nam
     return _strip_unregistered_leading_segments(f"{provider_prefix}/{model}", region_name)
 
 
-def _rule_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
-    rule_info: Final = unmapped_model_generalization(model, custom_llm_provider)
-    return rule_info is not None and _cost_map_entry_prices_anything(rule_info)
+def declared_cost_map_pricing(key: str, model: str, custom_llm_provider: str | None) -> Mapping[str, object]:
+    entry: Final = _raw_cost_map_entry(key)
+    if entry is None:
+        return unmapped_model_generalization(model, custom_llm_provider) or MappingProxyType({})
+    fill_missing: Final = mapped_model_fill_missing(key, entry)
+    return entry if fill_missing is None else MappingProxyType({**fill_missing, **entry})
 
 
 def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
     key: Final = cached_cost_map_key(model, custom_llm_provider)
-    if key is None:
-        return False
-    entry: Final = raw_cost_map_entry(key)
-    if entry is None:
-        return _rule_declares_rates(model, custom_llm_provider)
-    fill_missing: Final = mapped_model_fill_missing(key, entry)
-    return _cost_map_entry_prices_anything(entry if fill_missing is None else {**fill_missing, **entry})
+    return key is not None and _cost_map_entry_prices_anything(
+        declared_cost_map_pricing(key, model, custom_llm_provider)
+    )
 
 
 def _served_or_priced_requested_model(
@@ -2420,6 +2419,9 @@ def completion_cost(
         raise e
 
 
+_ADDITIONAL_HEADERS: Final = TypeAdapter(Mapping[str, object])
+
+
 def get_response_cost_from_hidden_params(
     hidden_params: Mapping[str, object] | BaseModel,
 ) -> float | None:
@@ -2429,7 +2431,7 @@ def get_response_cost_from_hidden_params(
     additional_headers: Final = params.get("additional_headers")
     if not isinstance(additional_headers, Mapping):
         return None
-    headers: Final = TypeAdapter(Mapping[str, object]).validate_python(additional_headers)
+    headers: Final = _ADDITIONAL_HEADERS.validate_python(additional_headers)
     return _billable_header_cost(headers.get("llm_provider-x-litellm-response-cost"))
 
 
@@ -2623,7 +2625,7 @@ def _deployment_model_info(
 ) -> ModelInfo | None:
     if not custom_pricing:
         return None
-    registered_deployment_info: Final = raw_cost_map_entry(router_model_id) if router_model_id is not None else None
+    registered_deployment_info: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
     if registered_deployment_info is not None:
         return cast(ModelInfo, registered_deployment_info)  # cast-ok: router registers deployment prices under its id
     if litellm_logging_obj is None:
@@ -2696,7 +2698,7 @@ def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, .
     )
 
 
-def raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
+def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
     raw_entry: Final = litellm.model_cost.get(key)
     return raw_entry if isinstance(raw_entry, Mapping) else None
 
@@ -2740,7 +2742,7 @@ def pricing_entry_for_cost_calc(
     )
     if resolved is None:
         return None
-    return resolved["key"], raw_cost_map_entry(resolved["key"]) or resolved
+    return resolved["key"], _raw_cost_map_entry(resolved["key"]) or resolved
 
 
 def ocr_cost(
