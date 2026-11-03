@@ -247,32 +247,44 @@ def _grouped_values(pairs: Iterable[tuple[str, str]]) -> Mapping[str, tuple[str,
     return MappingProxyType({key: tuple(dict.fromkeys(value for _, value in group)) for key, group in groups})
 
 
-def _extra_body(data: object) -> Mapping[str, object] | None:
+def _request_layers(data: object) -> tuple[Mapping[str, object], ...]:
     fields: Final = _object_mapping(data)
-    return _object_mapping(fields.get("extra_body")) if fields is not None else None
+    extra_body: Final = _object_mapping(fields.get("extra_body")) if fields is not None else None
+    return tuple(layer for layer in (fields, extra_body) if layer is not None)
 
 
-def _extra_body_tools(data: object) -> Sequence[object] | None:
-    return _request_list(_extra_body(data), "tools")
-
-
-def _extra_body_input_items(data: object) -> Sequence[object]:
-    return _request_list(_extra_body(data), "input") or ()
-
-
-def _extra_body_tool_choice(data: object) -> object:
-    extra_body: Final = _extra_body(data)
-    return extra_body.get("tool_choice") if extra_body is not None else None
+def _layer_sent_tools(layer: Mapping[str, object]) -> tuple[object, ...]:
+    return (
+        *(_request_list(layer, "tools") or ()),
+        *(_request_list(layer, "functions") or ()),
+        *_tools_in_items(_input_items(layer)),
+    )
 
 
 def _sent_tools(data: object) -> tuple[object, ...]:
-    return (
-        *(_request_list(data, "tools") or ()),
-        *(_request_list(data, "functions") or ()),
-        *(_extra_body_tools(data) or ()),
-        *_tools_in_items(_input_items(data)),
-        *_tools_in_items(_extra_body_input_items(data)),
-    )
+    return tuple(chain.from_iterable(map(_layer_sent_tools, _request_layers(data))))
+
+
+@dataclass(frozen=True, slots=True)
+class _KeptLayer:
+    fields: Mapping[str, object]
+    tools: tuple[object, ...] | None
+    functions: tuple[object, ...] | None
+    mcp_servers: tuple[object, ...] | None
+    input: tuple[object, ...] | None
+
+    def sent_tools(self) -> tuple[object, ...]:
+        kept_input: Final = _input_items(self.fields) if self.input is None else self.input
+        return (*(self.tools or ()), *(self.functions or ()), *_tools_in_items(kept_input))
+
+    def kept_lists(self) -> dict[str, object]:
+        lists: Final = (
+            ("tools", self.tools),
+            ("functions", self.functions),
+            ("mcp_servers", self.mcp_servers),
+            ("input", self.input),
+        )
+        return {key: list(kept) for key, kept in lists if kept is not None}
 
 
 def _mcp_server_target(server: object) -> _ToolTarget:
@@ -1133,53 +1145,77 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return function_call
         return self._get_mapping_value(function_call, "name")
 
-    def _collect_request_tools(self, data: Mapping[str, object]) -> list[_ToolTarget]:
-        request_tools: Final[list[_ToolTarget]] = []
+    def _listed_layer_targets(self, layer: Mapping[str, object]) -> tuple[_ToolTarget, ...]:
+        return (
+            *chain.from_iterable(map(self._get_request_tool_targets, _request_list(layer, "tools") or ())),
+            *map(_mcp_server_target, _request_list(layer, "mcp_servers") or ()),
+            *chain.from_iterable(map(self._legacy_function_targets, _request_list(layer, "functions") or ())),
+        )
+
+    def _forced_layer_names(self, layer: Mapping[str, object]) -> tuple[str | None, ...]:
+        return (self._get_named_tool_choice(layer.get("tool_choice")), self._get_named_function_call(layer))
+
+    def _collect_request_tools(self, data: Mapping[str, object]) -> tuple[_ToolTarget, ...]:
         request: Final = _REQUEST_DATA.validate_python(data)
-
-        for tool in _request_list(request, "tools") or ():
-            request_tools.extend(self._get_request_tool_targets(tool))
-        for extra_body_tool in _extra_body_tools(request) or ():
-            request_tools.extend(self._get_request_tool_targets(extra_body_tool))
-        request_tools.extend(map(_mcp_server_target, _request_list(request, "mcp_servers") or ()))
-
-        for function in _request_list(request, "functions") or ():
-            request_tools.extend(self._legacy_function_targets(function))
-
-        listed_names: Final = frozenset(name for name, _ in request_tools)
-        for forced_tool_name in (
-            self._get_named_tool_choice(_REQUEST_DATA.validate_python(data.get("tool_choice"))),
-            self._get_named_tool_choice(_extra_body_tool_choice(request)),
-            self._get_named_function_call(data),
-        ):
-            if forced_tool_name is not None and forced_tool_name not in listed_names:
-                request_tools.append((forced_tool_name, "function"))
-
+        layers: Final = _request_layers(request)
+        listed: Final = tuple(chain.from_iterable(map(self._listed_layer_targets, layers)))
+        listed_names: Final = frozenset(name for name, _ in listed)
+        forced: Final = chain.from_iterable(map(self._forced_layer_names, layers))
         replayed: Final = map(_function_tool_name, replayed_tool_search_tools(request))
-        request_tools.extend((name, "function") for name in replayed if name is not None)
-        for input_tool in _tools_in_items((*_input_items(request), *_extra_body_input_items(request))):
-            request_tools.extend(self._get_request_tool_targets(input_tool))
-
-        return request_tools
+        input_tools: Final = _tools_in_items(tuple(chain.from_iterable(map(_input_items, layers))))
+        return (
+            *listed,
+            *((name, "function") for name in forced if name is not None and name not in listed_names),
+            *((name, "function") for name in replayed if name is not None),
+            *chain.from_iterable(map(self._get_request_tool_targets, input_tools)),
+        )
 
     def _legacy_function_targets(self, function: object) -> tuple[_ToolTarget, ...]:
         targets: Final = self._get_request_tool_targets(function)
         as_functions: Final = tuple((name, "function") for name, _ in targets if name is not None)
         return tuple(dict.fromkeys(targets + as_functions))
 
-    def _rewritten_extra_body(
+    def _kept_layer(
         self,
-        extra_body: Mapping[str, object],
-        kept_tools: tuple[object, ...] | None,
-        kept_input: tuple[object, ...] | None,
+        layer: Mapping[str, object],
+        denied_targets: frozenset[_ToolTarget],
+        denied_names: frozenset[str],
+    ) -> _KeptLayer:
+        is_denied: Final = partial(_is_denied_target, denied_targets=denied_targets, denied_names=denied_names)
+        tools: Final = _request_list(layer, "tools")
+        functions: Final = _request_list(layer, "functions")
+        mcp_servers: Final = _request_list(layer, "mcp_servers")
+        return _KeptLayer(
+            fields=layer,
+            tools=None if tools is None else self._kept_tool_list(tools, denied_targets, denied_names),
+            functions=None if functions is None else self._kept_tool_list(functions, denied_targets, denied_names),
+            mcp_servers=(
+                None
+                if mcp_servers is None
+                else tuple(server for server in mcp_servers if not is_denied(_mcp_server_target(server)))
+            ),
+            input=self._kept_input_list(_input_items(layer), denied_targets, denied_names),
+        )
+
+    def _rewritten_layer_fields(
+        self,
+        kept: _KeptLayer,
         rewrite_choice: Callable[[object], object],
+        removed_names: frozenset[str],
+        functions_remain: bool,
     ) -> dict[str, object]:
-        choice: Final = extra_body.get("tool_choice")
+        layer: Final = kept.fields
+        choice: Final = layer.get("tool_choice")
+        relaxes_function_call: Final = self._get_named_function_call(layer) in removed_names
         return {
-            **extra_body,
-            **({"tools": list(kept_tools)} if kept_tools is not None else {}),
-            **({"input": list(kept_input)} if kept_input is not None else {}),
+            **kept.kept_lists(),
             **({"tool_choice": rewrite_choice(choice)} if choice is not None else {}),
+            **({"function_call": "none"} if relaxes_function_call else {}),
+            **{
+                key: _rewritten_tool_config(layer[key], removed_names, functions_remain)
+                for key in _TOOL_CONFIG_KEYS
+                if key in layer
+            },
         }
 
     def _tool_names_in(self, tools: Sequence[object]) -> frozenset[str]:
@@ -1288,82 +1324,31 @@ class ToolPermissionGuardrail(CustomGuardrail):
         verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_targets))
 
         denied_names: Final = frozenset(name for name, _ in denied_targets if name is not None)
-        is_denied: Final = partial(_is_denied_target, denied_targets=denied_targets, denied_names=denied_names)
-        kept_tool_list: Final = partial(self._kept_tool_list, denied_targets=denied_targets, denied_names=denied_names)
-
         request: Final = _REQUEST_DATA.validate_python(data)
+        kept_layers: Final = tuple(
+            self._kept_layer(layer, denied_targets, denied_names) for layer in _request_layers(request)
+        )
+
         sent_tools: Final = _sent_tools(request)
-
-        tools: Final = _request_list(request, "tools")
-        kept_tools: Final = None if tools is None else kept_tool_list(tools)
-        if kept_tools is not None:
-            data["tools"] = list(kept_tools)  # rebind-ok: rewrite mode edits the request in place
-
-        extra_body: Final = _extra_body(request)
-        extra_body_tools: Final = _extra_body_tools(request)
-        kept_extra_body_tools: Final = None if extra_body_tools is None else kept_tool_list(extra_body_tools)
-
-        functions: Final = _request_list(request, "functions")
-        kept_functions: Final = None if functions is None else kept_tool_list(functions)
-        if kept_functions is not None:
-            data["functions"] = list(kept_functions)  # rebind-ok: rewrite mode edits the request in place
-
-        mcp_servers: Final = _request_list(request, "mcp_servers")
-        kept_mcp_servers: Final = (
-            None
-            if mcp_servers is None
-            else tuple(server for server in mcp_servers if not is_denied(_mcp_server_target(server)))
-        )
-        if kept_mcp_servers is not None:
-            data["mcp_servers"] = list(kept_mcp_servers)  # rebind-ok: rewrite mode edits the request in place
-
-        kept_input_list: Final = partial(
-            self._kept_input_list, denied_targets=denied_targets, denied_names=denied_names
-        )
-        input_items: Final = _input_items(request)
-        rewritten_input: Final = kept_input_list(input_items)
-        kept_input_items: Final = input_items if rewritten_input is None else rewritten_input
-        if rewritten_input is not None:
-            data["input"] = list(rewritten_input)  # rebind-ok: rewrite mode edits the request in place
-        extra_body_input: Final = _extra_body_input_items(request)
-        kept_extra_body_input: Final = kept_input_list(extra_body_input)
-
-        kept_sent_tools: Final = (
-            *(kept_tools or ()),
-            *(kept_functions or ()),
-            *(kept_extra_body_tools or ()),
-            *_tools_in_items(kept_input_items),
-            *_tools_in_items(extra_body_input if kept_extra_body_input is None else kept_extra_body_input),
-        )
+        kept_sent_tools: Final = tuple(chain.from_iterable(kept.sent_tools() for kept in kept_layers))
         removed_names: Final = denied_names | (self._tool_names_in(sent_tools) - self._tool_names_in(kept_sent_tools))
         kept_types: Final = self._tool_types_in(kept_sent_tools)
         removed_types: Final = self._tool_types_in(sent_tools) - kept_types
 
-        tools_remain: Final = bool(kept_sent_tools) or bool(kept_mcp_servers)
+        tools_remain: Final = bool(kept_sent_tools) or any(kept.mcp_servers for kept in kept_layers)
         rewrite_choice: Final = partial(
             self._rewritten_tool_choice,
             removed_names=removed_names,
             removed_types=removed_types,
             tools_remain=tools_remain,
         )
-        tool_choice: Final = _REQUEST_DATA.validate_python(data.get("tool_choice"))
-        if tool_choice is not None:
-            data["tool_choice"] = rewrite_choice(tool_choice)  # rebind-ok: rewrite mode edits the request in place
-        rewrites_extra_body: Final = kept_extra_body_tools is not None or kept_extra_body_input is not None
-        if extra_body is not None and (rewrites_extra_body or "tool_choice" in extra_body):
-            data["extra_body"] = self._rewritten_extra_body(  # rebind-ok: rewrite mode edits the request in place
-                extra_body, kept_extra_body_tools, kept_extra_body_input, rewrite_choice
-            )
-
-        named_function_call: Final = self._get_named_function_call(data)
-        if named_function_call in removed_names:
-            data["function_call"] = "none"  # rebind-ok: rewrite mode edits the request in place
-
-        functions_remain: Final = "function" in kept_types
-        for config_key in (key for key in _TOOL_CONFIG_KEYS if key in data):
-            data[config_key] = _rewritten_tool_config(  # rebind-ok: rewrite mode edits the request in place
-                data[config_key], removed_names, functions_remain
-            )
+        rewritten: Final = tuple(
+            self._rewritten_layer_fields(kept, rewrite_choice, removed_names, "function" in kept_types)
+            for kept in kept_layers
+        )
+        data.update(rewritten[0])
+        if len(rewritten) > 1 and rewritten[1]:
+            data["extra_body"] = {**kept_layers[1].fields, **rewritten[1]}  # rebind-ok: rewrite mode edits in place
 
         messages: Final = without_tool_search_items_loading(_REQUEST_DATA.validate_python(data), denied_names)
         if messages is not None:

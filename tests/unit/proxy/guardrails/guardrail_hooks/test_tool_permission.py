@@ -2186,6 +2186,55 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert rewritten["extra_body"] == {"tool_choice": "none", "seed": 7}
 
     @pytest.mark.asyncio
+    async def test_pre_call_checks_and_strips_legacy_functions_in_extra_body(self) -> None:
+        rules = [{"id": "deny_delete", "tool_name": r"^delete_db$", "decision": "deny"}]
+        weather = {"name": "get_weather", "parameters": {"type": "object"}}
+        delete_db = {"name": "delete_db", "parameters": {"type": "object"}}
+        request = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "extra_body": {"functions": [weather, delete_db], "function_call": {"name": "delete_db"}, "seed": 7},
+        }
+
+        message, rewritten = await self._blocked_and_rewritten(rules, request, "acompletion")
+
+        assert message == "Tool 'delete_db' denied by rule 'deny_delete'"
+        assert rewritten["extra_body"] == {"functions": [weather], "function_call": "none", "seed": 7}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"functions": [{"name": "get_weather"}, {"name": "delete_db"}], "function_call": "delete_db"},
+            {
+                "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+                "mcp_servers": [{"type": "url", "url": "https://mcp.example.com/mcp", "name": "delete_db"}],
+                "tool_choice": "required",
+            },
+            {
+                "tools": [{"functionDeclarations": [{"name": "get_weather"}, {"name": "delete_db"}]}],
+                "toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["delete_db"]}},
+            },
+        ],
+        ids=["legacy_functions", "mcp_servers", "gemini_tool_config"],
+    )
+    async def test_extra_body_fields_are_judged_and_rewritten_like_the_same_top_level_fields(
+        self, fields: dict[str, object]
+    ) -> None:
+        rules = [{"id": "deny_delete", "tool_name": r"^delete_db$", "decision": "deny"}]
+        base = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+        top_request = {**base, **copy.deepcopy(fields)}
+        extra_request = {**base, "extra_body": {**copy.deepcopy(fields), "seed": 7}}
+
+        top_message, top = await self._blocked_and_rewritten(rules, top_request, "acompletion")
+        extra_message, extra = await self._blocked_and_rewritten(rules, extra_request, "acompletion")
+
+        top_fields = {key: top[key] for key in fields}
+        assert top_fields != fields
+        assert extra_message == top_message
+        assert extra["extra_body"] == {**top_fields, "seed": 7}
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "rule",
         [
