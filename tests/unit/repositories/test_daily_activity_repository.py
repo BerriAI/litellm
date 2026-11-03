@@ -680,7 +680,7 @@ async def test_daily_rows_exclusion_without_entity_filter_keeps_null_entity_rows
 
 @pytest.mark.asyncio
 async def test_export_redacts_credential_named_values_inside_metadata_objects() -> None:
-    database = _FakeDatabase(
+    database: Final = _FakeDatabase(
         (
             (
                 {
@@ -699,7 +699,7 @@ async def test_export_redacts_credential_named_values_inside_metadata_objects() 
     )
     repository, _ = _repository(database)
 
-    rows = [row async for row in repository.export_rows(_scope(), export_type=ExportType.DAILY_WITH_KEYS)]
+    rows: Final = [row async for row in repository.export_rows(_scope(), export_type=ExportType.DAILY_WITH_KEYS)]
 
     assert rows[0].key_metadata == {
         "cost_center": "cc-1",
