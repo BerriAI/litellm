@@ -15,7 +15,7 @@ memory in long-lived deployments.
 import asyncio
 import functools
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -123,6 +123,23 @@ async def _wait_for_cold_seed(in_flight: asyncio.Future[float | None]) -> None:
     _cold_seed_waited.set(waited + loop.time() - started)
 
 
+_late_writes: Final[set[asyncio.Task[float | None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
+
+
+def _late_write_finished(task: asyncio.Task[float | None]) -> None:
+    _late_writes.discard(task)
+    if not task.cancelled():
+        task.exception()
+
+
+async def _landing_even_if_cancelled(write: Coroutine[object, object, float | None]) -> float | None:
+    """Await ``write`` in a task of its own, so cancelling the caller leaves it to land as a command already sent does."""
+    task: Final = asyncio.ensure_future(write)
+    _late_writes.add(task)
+    task.add_done_callback(_late_write_finished)
+    return await asyncio.shield(task)
+
+
 def _redis_breaker_closed(spend_counter_cache: "DualCache") -> bool:
     redis_cache: Final = spend_counter_cache.redis_cache
     return redis_cache is None or redis_cache.circuit_breaker_closed
@@ -183,12 +200,13 @@ class SpendCounterReseed:
     ) -> None:
         """Run ``add``, this process adding ``spend`` to a cold counter, once for all of this process's requests that
         read the counter cold before that add landed. A request joins an add that started after its read came back and
-        gets its result, and starts or joins another add when that one fails or is cancelled. A request whose read went
-        out before an add landed, and one still waiting on an add after ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` across
-        its counters, runs ``set_if_missing``, which calls its argument if it created the counter, in place of ``add``,
-        then runs ``add`` too if the counter holds less than the spend it should already hold, beyond what
-        INCRBYFLOAT's 17 decimal places can round away. A request on another event loop than the add in flight, one that finds the
-        Redis circuit breaker not closed, and each other process, still run ``add``."""
+        gets its result, and starts or joins another add when that one fails, is cancelled or wrote nothing after its
+        read went out. A request whose read went out before an add landed, and one still waiting on an add after
+        ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` across its counters, runs ``set_if_missing``, which calls its argument
+        if it added the spend, in place of ``add``, then runs ``add`` too if it did not and the counter holds less than
+        the spend it should already hold, beyond what INCRBYFLOAT's 17 decimal places can round away.
+        Those two steps finish even if the request is cancelled. A request on another event loop than the add in flight,
+        one that finds the Redis circuit breaker not closed, and each other process, still run ``add``."""
         seed: Final = _cached_spend_seed(spend_counter_cache, counter_key)
 
         def spend_landed() -> None:
@@ -200,12 +218,21 @@ class SpendCounterReseed:
             spend_landed()
             return added
 
-        async def add_if_short() -> float | None:
+        async def write_if_short() -> float | None:
             least: Final = min(spend, seed.landed_spend) if seed.landed_at >= read.sent_at else spend
-            current: Final = await set_if_missing(spend_landed)
-            if current is not None and least - current > SPEND_COUNTER_INCRBYFLOAT_ROUNDING:
-                return await add_spend()
-            return current
+            set_added: Final = asyncio.Event()
+
+            def on_added() -> None:
+                set_added.set()
+                spend_landed()
+
+            current: Final = await set_if_missing(on_added)
+            if current is None or set_added.is_set():
+                return current
+            return await add_spend() if least - current > SPEND_COUNTER_INCRBYFLOAT_ROUNDING else current
+
+        async def add_if_short() -> float | None:
+            return await _landing_even_if_cancelled(write_if_short())
 
         async def add_unless_covered() -> float | None:
             in_flight: Final = seed.in_flight
@@ -217,7 +244,7 @@ class SpendCounterReseed:
             await _wait_for_cold_seed(in_flight)
             if not in_flight.done():
                 return await seed.run(add_if_short)
-            if covers and not in_flight.cancelled():
+            if covers and not in_flight.cancelled() and seed.landed_at >= read.sent_at:
                 return in_flight.result()
             return await add_unless_covered()
 
@@ -232,10 +259,10 @@ class SpendCounterReseed:
         counter_key: str,
         increment: float,
         only_if_missing: bool = False,
-        on_created: Callable[[], None] | None = None,
+        on_added: Callable[[], None] | None = None,
     ) -> float | None:
         """Apply local deltas after an in-flight reseed establishes the spend balance. With ``only_if_missing``, a
-        counter that exists keeps its value, which is returned, and ``on_created`` runs if this call created it."""
+        counter that exists keeps its value, which is returned, and ``on_added`` runs if this call added to it."""
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
             current: Final[float | None] = (  # pyright: ignore[reportUnknownVariableType]  # untyped in-memory cache
@@ -248,8 +275,8 @@ class SpendCounterReseed:
             added: Final = await spend_counter_cache.async_increment_cache(
                 key=counter_key, value=increment, local_only=True, refresh_ttl=True
             )
-            if on_created is not None:
-                on_created()
+            if on_added is not None:
+                on_added()
             return added
 
     @staticmethod

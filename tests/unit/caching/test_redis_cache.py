@@ -9,7 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
-from redis.exceptions import NoPermissionError, ResponseError
+from redis.exceptions import ClusterDownError, NoPermissionError, RedisError, ResponseError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -1537,20 +1539,20 @@ async def test_async_increment_only_if_missing_reports_only_a_key_it_created(
 
     with patch.object(redis_cache, "init_async_client", return_value=client):
         await redis_cache.async_increment(
-            key="spend:key:k", value=1.5, ttl=60, only_if_missing=True, on_created=lambda: created.append("created")
+            key="spend:key:k", value=1.5, ttl=60, only_if_missing=True, on_added=lambda: created.append("created")
         )
 
     assert created == reported
 
 
-class _RepliesPipeline:
-    """A pipeline whose execute returns the given replies the way ``raise_on_error=False`` does."""
+class _RaisingPipeline:
+    """A pipeline whose execute raises the first error in its replies, as redis-py's does by default."""
 
     def __init__(self, replies: list[object]) -> None:
         self.replies = replies
         self.commands: list[tuple[object, ...]] = []
 
-    async def __aenter__(self) -> "_RepliesPipeline":
+    async def __aenter__(self) -> "_RaisingPipeline":
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
@@ -1565,65 +1567,128 @@ class _RepliesPipeline:
     def expire(self, name: str, ttl: int) -> None:
         self.commands.append(("EXPIRE", name, ttl))
 
+    async def execute(self) -> list[object]:
+        first_error: Final = next((reply for reply in self.replies if isinstance(reply, Exception)), None)
+        if first_error is not None:
+            raise first_error
+        return self.replies
+
+
+class _ClusterPipelineAfterADroppedConnection(_RaisingPipeline):
+    """The first attempt reads a dropped connection. As in redis-py 5.3.1's ClusterPipeline.execute, raising is what
+    drives the retry, and ``raise_on_error=False`` hands the error back as a reply instead."""
+
     async def execute(self, raise_on_error: bool = True) -> list[object]:
-        assert raise_on_error is False
+        if not raise_on_error:
+            return [RedisConnectionError("Connection closed by server."), self.replies[1], self.replies[2]]
         return self.replies
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("read_back", [pytest.param(0.0, id="missing"), pytest.param(7.0, id="held")])
-async def test_async_increment_only_if_missing_reads_the_key_back_when_the_user_is_denied_setnx(
-    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, read_back: float
+async def test_async_increment_only_if_missing_keeps_the_cluster_retry_of_a_dropped_connection(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object
 ):
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache: Final = RedisCache(namespace="ns")
-    pipeline: Final = _RepliesPipeline(
-        [NoPermissionError("no permissions to run the 'setnx' command"), read_back, True]
-    )
     client: Final = MagicMock()
-    client.pipeline.return_value = pipeline
+    client.pipeline.return_value = _ClusterPipelineAfterADroppedConnection([True, 1.5, True])
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        current: Final = await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True
+        )
+
+    assert current == 1.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        pytest.param(NoPermissionError("no permissions to run the 'setnx' command"), id="denied"),
+        pytest.param(ResponseError("unknown command 'SETNX'"), id="renamed"),
+        pytest.param(RedisError("SETNX command doesn't exist in Redis commands"), id="renamed-on-a-cluster-client"),
+    ],
+)
+async def test_async_increment_only_if_missing_adds_the_value_when_the_server_refuses_the_set(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, refusal: Exception
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    add: Final = _RaisingPipeline([7.5, True])
+    client: Final = MagicMock()
+    client.pipeline.side_effect = [_RaisingPipeline([refusal, 6.0, True]), add]
     failure_hook: Final = AsyncMock()
-    created: Final = MagicMock()
+    added: Final = MagicMock()
 
     with (
         patch.object(redis_cache, "init_async_client", return_value=client),
         patch.object(redis_cache.service_logger_obj, "async_service_failure_hook", failure_hook),
     ):
         current: Final = await redis_cache.async_increment(
-            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True, on_created=created
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True, on_added=added
         )
     await asyncio.sleep(0)
 
-    assert current == read_back
-    created.assert_not_called()
-    assert pipeline.commands == [
-        ("SETNX", "ns:spend:key:k", 1.5),
-        ("INCRBYFLOAT", "ns:spend:key:k", 0),
-        ("EXPIRE", "ns:spend:key:k", 60),
-    ]
+    assert current == 7.5
+    added.assert_called_once_with()
+    assert add.commands == [("INCRBYFLOAT", "ns:spend:key:k", 1.5), ("EXPIRE", "ns:spend:key:k", 60)]
     failure_hook.assert_not_awaited()
     assert redis_cache._circuit_breaker._hard_failure_count == 0
 
 
 @pytest.mark.asyncio
+async def test_async_increment_only_if_missing_reports_a_write_redis_refuses_with_the_add_and_its_error_text(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    add_error: Final = ResponseError("Command # 1 (INCRBYFLOAT ns:spend:key:k 1.5) of pipeline caused error")
+    client: Final = MagicMock()
+    client.pipeline.side_effect = [
+        _RaisingPipeline([ResponseError("Command # 1 (SETNX) of pipeline caused error"), 0.0, True]),
+        _RaisingPipeline([add_error, True]),
+    ]
+    failure_hook: Final = AsyncMock()
+    added: Final = MagicMock()
+
+    with (
+        patch.object(redis_cache, "init_async_client", return_value=client),
+        patch.object(redis_cache.service_logger_obj, "async_service_failure_hook", failure_hook),
+        pytest.raises(ResponseError) as raised,
+    ):
+        await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True, on_added=added
+        )
+    await asyncio.sleep(0)
+
+    assert raised.value is add_error
+    added.assert_not_called()
+    failure_hook.assert_awaited_once()
+    assert failure_hook.await_args.kwargs["error"] is add_error
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("replies", "raised"),
+    "failure",
     [
-        pytest.param([ResponseError("LOADING"), 7.0, True], ResponseError, id="setnx-failed-for-another-reason"),
-        pytest.param([True, NoPermissionError("denied"), True], NoPermissionError, id="incrbyfloat-denied"),
-        pytest.param([True, 7.0, NoPermissionError("denied")], NoPermissionError, id="expire-denied"),
+        pytest.param(RedisConnectionError("Connection closed by server."), id="dropped-connection"),
+        pytest.param(RedisTimeoutError("Timeout reading from socket"), id="stalled-node"),
+        pytest.param(ClusterDownError("CLUSTERDOWN The cluster is down"), id="cluster-down"),
     ],
 )
-async def test_async_increment_only_if_missing_raises_any_other_error_in_the_replies(
-    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, replies: list[object], raised: type[Exception]
+async def test_async_increment_only_if_missing_sends_no_add_after_a_failure_the_client_already_retried(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, failure: Exception
 ):
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache: Final = RedisCache(namespace="ns")
     client: Final = MagicMock()
-    client.pipeline.return_value = _RepliesPipeline(replies)
+    client.pipeline.return_value = _RaisingPipeline([failure, 0.0, True])
 
-    with patch.object(redis_cache, "init_async_client", return_value=client), pytest.raises(raised):
+    with patch.object(redis_cache, "init_async_client", return_value=client), pytest.raises(type(failure)):
         await redis_cache.async_increment(key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True)
+
+    assert client.pipeline.call_count == 1
 
 
 @pytest.mark.asyncio

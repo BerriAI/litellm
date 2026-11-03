@@ -1474,26 +1474,46 @@ class RedisCache(BaseCache):
             await _redis_client.expire(key, ttl)
         return float(result)
 
-    async def _set_if_missing_with_ttl(
-        self, key: str, value: float, ttl: int | None, on_created: Callable[[], None] | None
-    ) -> float:
-        """SETNX, a zero INCRBYFLOAT that reads the key back, and its TTL command in one round trip; the value the key
-        holds afterwards. Those last two are the commands a plain add sends, so a user denied only SETNX reads back what
-        the key holds, which is 0 for a key that was missing. ``on_created`` runs when the SETNX created the key."""
-        from redis.exceptions import NoPermissionError
+    async def _setnx_and_read_back(self, key: str, value: float, ttl: int | None) -> tuple[bool, float] | None:
+        """SETNX, a zero INCRBYFLOAT that reads the key back, and its TTL command in one round trip: whether the key was
+        created and the value it holds, or None when the server refused a command rather than failed to answer."""
+        from redis.exceptions import ClusterError, RedisError
+        from redis.exceptions import ConnectionError as RedisConnectionError
+        from redis.exceptions import TimeoutError as RedisTimeoutError
 
-        async with self._async_commands().pipeline(transaction=False) as pipe:
-            pipe.setnx(name=key, value=value)
-            pipe.incrbyfloat(name=key, amount=0)
-            if ttl is not None:
-                pipe.expire(key, ttl)
-            replies: Final[Sequence[object]] = await pipe.execute(raise_on_error=False)  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # redis generics
-        for index, reply in enumerate(replies):  # pyright: ignore[reportUnknownArgumentType]  # redis generics
-            if isinstance(reply, Exception) and not (index == 0 and isinstance(reply, NoPermissionError)):
-                raise reply
-        if on_created is not None and replies[0] == 1:
-            on_created()
-        return _INCRBYFLOAT_REPLY.validate_python(replies[1])
+        try:
+            async with self._async_commands().pipeline(transaction=False) as pipe:
+                pipe.setnx(name=key, value=value)
+                pipe.incrbyfloat(name=key, amount=0)
+                if ttl is not None:
+                    pipe.expire(key, ttl)
+                replies: Final[Sequence[object]] = await pipe.execute()  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # redis generics
+        except RedisError as e:
+            if isinstance(e, (RedisConnectionError, RedisTimeoutError, ClusterError)):
+                raise
+            return None
+        return replies[0] == 1, _INCRBYFLOAT_REPLY.validate_python(replies[1])  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # redis generics
+
+    async def _set_if_missing_with_ttl(
+        self,
+        _redis_client: "Redis[bytes]",
+        key: str,
+        value: float,
+        ttl: int | None,
+        refresh_ttl: bool,
+        on_added: Callable[[], None] | None,
+    ) -> float:
+        """The value the key holds after setting it if it was missing. A server that refuses the commands this sends,
+        such as a user denied SETNX, gets a plain add instead. ``on_added`` runs when this call added the value."""
+        written: Final = await self._setnx_and_read_back(key=key, value=value, ttl=ttl)
+        current: Final = (
+            await self._incrbyfloat_with_ttl(_redis_client, key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl)
+            if written is None
+            else written[1]
+        )
+        if on_added is not None and (written is None or written[0]):
+            on_added()
+        return current
 
     @_redis_circuit_breaker_guard
     async def async_increment(
@@ -1504,10 +1524,10 @@ class RedisCache(BaseCache):
         parent_otel_span: Span | None = None,
         refresh_ttl: bool = False,
         only_if_missing: bool = False,
-        on_created: Callable[[], None] | None = None,
+        on_added: Callable[[], None] | None = None,
     ) -> float:
         """Add ``value`` to the key and return its new value. With ``only_if_missing``, a key that exists keeps its
-        value, which is returned, and only the TTL is refreshed, and ``on_created`` runs if this call created the key."""
+        value, which is returned, and only the TTL is refreshed, and ``on_added`` runs if this call added the value."""
         from redis.asyncio import Redis
 
         _redis_client: Final[Redis] = self.init_async_client()
@@ -1516,7 +1536,14 @@ class RedisCache(BaseCache):
         key = self.check_and_fix_namespace(key=key)
         try:
             result: Final = await (
-                self._set_if_missing_with_ttl(key=key, value=value, ttl=_used_ttl, on_created=on_created)
+                self._set_if_missing_with_ttl(
+                    _redis_client,  # pyright: ignore[reportUnknownArgumentType]  # redis generics
+                    key=key,
+                    value=value,
+                    ttl=_used_ttl,
+                    refresh_ttl=refresh_ttl,
+                    on_added=on_added,
+                )
                 if only_if_missing
                 else self._incrbyfloat_with_ttl(
                     _redis_client, key=key, value=value, ttl=_used_ttl, refresh_ttl=refresh_ttl
