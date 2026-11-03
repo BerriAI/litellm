@@ -385,3 +385,64 @@ def test_embedding_sends_the_entra_token_only_as_the_bearer_header(respx_mock: r
     request: Final = route.calls.last.request
     assert request.headers["Authorization"] == "Bearer entra-token"
     assert "azure_ad_token" not in json.loads(request.content)
+
+
+IMAGE_RESPONSE: Final = {"created": 1, "data": [{"b64_json": "aGk="}]}
+PNG_BYTES: Final = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_image_edit_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
+        return_value=httpx.Response(200, json=IMAGE_RESPONSE)
+    )
+
+    litellm.image_edit(
+        model="azure_ai/FLUX.1-Kontext-pro",
+        api_base="https://example-resource.services.ai.azure.com",
+        api_version="2025-04-01-preview",
+        azure_ad_token="entra-token",
+        image=PNG_BYTES,
+        prompt="add a hat",
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer entra-token"
+    assert b"entra-token" not in request.content
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_image_generation_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
+        return_value=httpx.Response(200, json=IMAGE_RESPONSE)
+    )
+
+    litellm.image_generation(
+        model="azure_ai/FLUX-1.1-pro",
+        api_base="https://example-resource.services.ai.azure.com",
+        azure_ad_token="entra-token",
+        prompt="a red circle",
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer entra-token"
+    assert "azure_ad_token" not in json.loads(request.content)
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_transcription_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
+        return_value=httpx.Response(200, json={"text": "hi"})
+    )
+
+    litellm.transcription(
+        model="azure_ai/whisper",
+        api_base="https://example-resource.services.ai.azure.com",
+        api_version="2024-06-01",
+        azure_ad_token="entra-token",
+        file=("hello.wav", b"RIFF" + b"\x00" * 32),
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer entra-token"
+    assert b"entra-token" not in request.content

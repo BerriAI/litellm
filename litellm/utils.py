@@ -6001,7 +6001,7 @@ EXTRA_BODY_ROUTING_KEYS: Final = frozenset({"model"})
 LITELLM_ONLY_PARAMS: Final = frozenset(("cache_control_injection_points",))
 
 
-def _header_auth_params(custom_llm_provider: str) -> frozenset[str]:
+def header_auth_params(custom_llm_provider: str) -> frozenset[str]:
     if custom_llm_provider != "azure_ai":
         return frozenset()
     from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_CREDENTIAL_PARAM_KEYS
@@ -6045,7 +6045,7 @@ def add_provider_specific_params_to_optional_params(
 
             dropped_keys: Final = (
                 EXTRA_BODY_ROUTING_KEYS
-                | _header_auth_params(custom_llm_provider)
+                | header_auth_params(custom_llm_provider)
                 | frozenset(param for param in (additional_drop_params or ()) if isinstance(param, str))
             )
             ensure_extra_body_is_safe: Final = litellm_utils.ensure_extra_body_is_safe
