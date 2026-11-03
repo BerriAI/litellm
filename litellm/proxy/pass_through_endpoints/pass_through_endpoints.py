@@ -1024,6 +1024,17 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     _update_stream_param_based_on_request_body = update_stream_param_based_on_request_body
 
 
+def _drop_unmergeable_guardrail_fields(
+    parsed_body: dict[str, object],  # mutable-ok: strips the request body in place before the guardrail merge
+) -> None:
+    """Drop a ``guardrails`` that isn't a list or an object and a ``guardrail_config`` that isn't an object, which the
+    merge can't combine with the metadata's own. The provider receives neither field."""
+    if "guardrails" in parsed_body and not isinstance(parsed_body["guardrails"], list | dict):
+        parsed_body.pop("guardrails")
+    if "guardrail_config" in parsed_body and not isinstance(parsed_body["guardrail_config"], dict):
+        parsed_body.pop("guardrail_config")
+
+
 async def _inherit_auth_guardrails(
     parsed_body: dict[str, object] | None,  # mutable-ok: merges the guardrails into the live request body
     user_api_key_dict: UserAPIKeyAuth,
@@ -1039,6 +1050,7 @@ async def _inherit_auth_guardrails(
     """
     if configured_guardrails or not inherit or not parsed_body:
         return configured_guardrails
+    _drop_unmergeable_guardrail_fields(parsed_body)
     if not isinstance(parsed_body.get("metadata"), dict):
         parsed_body["metadata"] = {}  # rebind-ok: the merge below writes into the live request body's metadata
     client_named: Final = (as_str_mapping(parsed_body["metadata"]) or {}).get("guardrails")
@@ -1150,12 +1162,16 @@ def _provider_charge_settlement(
 async def _run_post_call_guardrails_keeping_the_charge(
     run_guardrails: Callable[[], Awaitable[_GuardedResponse]],
     settle_provider_charge: Callable[[], Awaitable[None]],
+    settles_the_charge: bool = True,
 ) -> _GuardedResponse:
     """A guardrail that blocks the response, or fails, does so after the provider answered and billed the call, so the
-    charge is settled before the failure path writes its row, as on the native routes."""
+    charge is settled before the failure path writes its row, as on the native routes. A custom endpoint runs every
+    hook here, not only guardrails, and doesn't settle, so its failure row stays uncharged."""
     try:
         return await run_guardrails()
     except Exception:
+        if not settles_the_charge:
+            raise
         try:
             await settle_provider_charge()
         except Exception:  # noqa: BLE001 - the guardrail's outcome still reaches the client
@@ -1810,7 +1826,7 @@ async def pass_through_request(
         )
         hooked_body: Final = _json_object(_parsed_body)
         client_user_id: Final = _anthropic_user_id_to_forward(
-            hooked_body, str(url), proxy_logging_obj.request_has_pre_call_guardrails
+            hooked_body, str(url), proxy_logging_obj.request_is_scanned_before_the_provider
         )
         kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(  # rebind-ok: pre-existing rebinding on a rename-only line
             user_api_key_dict=user_api_key_dict,
@@ -2297,7 +2313,7 @@ async def pass_through_request(
                 inherit_auth_guardrails,
             )
             post_call_guardrail_data = hook_data
-            response_body = await _run_post_call_guardrails_keeping_the_charge(
+            guarded_body: Final = await _run_post_call_guardrails_keeping_the_charge(
                 partial(
                     proxy_logging_obj.post_call_success_hook,
                     data=hook_data,
@@ -2315,14 +2331,16 @@ async def pass_through_request(
                     custom_llm_provider,
                     cast(dict[str, object], kwargs),  # cast-ok: the logging fields init_kwargs built above
                 ),
+                settles_the_charge=inherit_auth_guardrails,
             )
-            if isinstance(response_body, dict):
+            if isinstance(guarded_body, dict):
+                response_body = guarded_body
                 content = json.dumps(response_body).encode("utf-8")
                 _content_modified = True
             else:
                 verbose_proxy_logger.debug(
                     "pass_through_endpoint: post_call_success_hook returned %s, expected dict — using original response",
-                    type(response_body).__name__,
+                    type(guarded_body).__name__,
                 )
         elif response_body is None:
             verbose_proxy_logger.debug(

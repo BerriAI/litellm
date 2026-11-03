@@ -44,6 +44,11 @@ OPENAI_ROUTE: Final = "/openai/v1/chat/completions"
 ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
 GEMINI_ROUTE: Final = "/gemini/v1beta/models/gemini-2.5-flash:generateContent"
 CUSTOM_ROUTE: Final = "/passthrough-auth-custom"
+CUSTOM_GUARDED_ROUTE: Final = "/passthrough-auth-custom-guarded"
+UNPRICED_MODEL: Final = "passthrough-auth-unpriced-model"
+MONITOR_POST_CALL: Final = "passthrough-auth-monitor-post-call"
+MONITORED_PROMPT: Final = "reply-with-the-monitored-id"
+MONITORED_REPLY_ID: Final = "msg_passthrough_auth_monitored"
 PHONE_POST_CALL: Final = "passthrough-auth-phone-post-call"
 PIPELINE_BLOCKS: Final = "passthrough-pipeline-blocks-the-response"
 PIPELINE_ALLOWS: Final = "passthrough-pipeline-allows-the-response"
@@ -95,6 +100,18 @@ def _openai_reply(_request: Request) -> Reply:
     return Reply(body=_OPENAI_BODY)
 
 
+def _lakera_pii_only(_request: Request) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "flagged": True,
+                "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 0}],
+                "payload": [],
+            }
+        ).encode()
+    )
+
+
 def _lakera_clean(_request: Request) -> Reply:
     return Reply(body=json.dumps({"flagged": False, "breakdown": [], "payload": []}).encode())
 
@@ -126,8 +143,20 @@ _UPSTREAM_BODIES: Final = MappingProxyType(
 )
 
 
-def _anthropic_reply(_request: Request) -> Reply:
-    return Reply(body=_ANTHROPIC_BODY)
+_MONITORED_ANTHROPIC_BODY: Final = json.dumps(
+    _JSON.validate_json(message_json(MONITORED_REPLY_ID, "claude-sonnet-5-5", "Hi"))
+).encode()
+
+
+_UNPRICED_ANTHROPIC_BODY: Final = json.dumps(
+    _JSON.validate_json(message_json("msg_passthrough_auth_unpriced", UNPRICED_MODEL, "Hi"))
+).encode()
+
+
+def _anthropic_reply(request: Request) -> Reply:
+    if UNPRICED_MODEL.encode() in request.body:
+        return Reply(body=_UNPRICED_ANTHROPIC_BODY)
+    return Reply(body=_MONITORED_ANTHROPIC_BODY if MONITORED_PROMPT.encode() in request.body else _ANTHROPIC_BODY)
 
 
 def _gemini_reply(_request: Request) -> Reply:
@@ -154,6 +183,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
         key_post_call_vendor: Final = stack.enter_context(wire_server(_lakera_flagged))
         generic_post_call_vendor: Final = stack.enter_context(wire_server(_verdict))
         blocking_post_call_vendor: Final = stack.enter_context(wire_server(_block_every_reply))
+        monitor_post_call_vendor: Final = stack.enter_context(wire_server(_lakera_pii_only))
         model_post_call_vendor: Final = stack.enter_context(wire_server(_verdict))
         upstreams: Final = MappingProxyType(
             {
@@ -181,7 +211,14 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                                 "path": CUSTOM_ROUTE,
                                 "target": f"{upstreams[OPENAI_ROUTE].url}/v1/chat/completions",
                                 "auth": True,
-                            }
+                            },
+                            {
+                                "path": CUSTOM_GUARDED_ROUTE,
+                                "target": f"{upstreams[OPENAI_ROUTE].url}/v1/chat/completions",
+                                "auth": True,
+                                "cost_per_request": 0.25,
+                                "guardrails": {BLOCKING_POST_CALL: None},
+                            },
                         ],
                     },
                     "policies": {
@@ -251,6 +288,17 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                                 "mode": "post_call",
                                 "default_on": False,
                                 "api_base": blocking_post_call_vendor.url,
+                                "api_key": "synthetic-guardrail-key",
+                            },
+                        },
+                        {
+                            "guardrail_name": MONITOR_POST_CALL,
+                            "litellm_params": {
+                                "guardrail": "lakera_v2",
+                                "mode": "post_call",
+                                "default_on": False,
+                                "on_flagged": "monitor",
+                                "api_base": monitor_post_call_vendor.url,
                                 "api_key": "synthetic-guardrail-key",
                             },
                         },
@@ -705,3 +753,100 @@ def test_response_a_post_call_guardrail_blocks_still_charges_the_provider_call(
         assert [row["status"] for row in rows] == ["failure"], rows
         assert float(str(rows[0]["spend"])) > 0, rows
         assert int(str(rows[0]["total_tokens"])) > 0, rows
+
+
+def _row_fields(gateway: Gateway, key: str) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        eventually(
+            lambda: gateway.rows(
+                'SELECT status, spend, total_tokens, api_base, request_id FROM "LiteLLM_SpendLogs" WHERE api_key = %s',
+                (key_hash(key),),
+            ),
+            bool,
+        )
+    )
+
+
+@pytest.mark.parametrize("route", [OPENAI_ROUTE, ANTHROPIC_ROUTE, GEMINI_ROUTE])
+@pytest.mark.parametrize("value", [None, False, 7, "not-a-list"])
+def test_a_body_guardrails_that_is_not_a_list_is_dropped_for_a_guarded_key(
+    rig: AuthGuardrailRig, route: str, value: JsonValue
+) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [GUARDRAIL]})
+        _drain(rig)
+
+        response: Final = _send(gateway, route, {**_route_body(route, "Hello"), "guardrails": value}, key)
+
+        assert response.status_code == 200, response.text
+        assert len(rig.vendor.drain()) == 1
+        assert [b'"guardrails"' in request.body for request in rig.upstreams[route].drain()] == [False]
+
+
+def test_a_blocked_response_with_no_cost_result_keeps_its_usage_on_the_failure_row(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [BLOCKING_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(
+            gateway, ANTHROPIC_ROUTE, {**_route_body(ANTHROPIC_ROUTE, "Hello"), "model": UNPRICED_MODEL}, key
+        )
+
+        assert response.status_code == 400, response.text
+        assert len(rig.upstreams[ANTHROPIC_ROUTE].drain()) == 1
+        rows: Final = _row_fields(gateway, key)
+        assert [row["status"] for row in rows] == ["failure"], rows
+        assert float(str(rows[0]["spend"])) == 0, rows
+        assert int(str(rows[0]["total_tokens"])) > 0, rows
+        assert rows[0]["api_base"], rows
+
+
+def test_custom_endpoint_writes_no_charge_for_a_response_its_post_call_guardrail_blocks(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(
+            team_id=scenario.team(), metadata={"allowed_passthrough_routes": [CUSTOM_GUARDED_ROUTE]}
+        )
+        _drain(rig)
+
+        response: Final = gateway.request("POST", CUSTOM_GUARDED_ROUTE, _route_body(OPENAI_ROUTE, "Hello"), key=key)
+
+        assert response.status_code == 400, response.text
+        assert len(rig.upstreams[OPENAI_ROUTE].drain()) == 1
+        assert [float(str(row["spend"])) for row in _row_fields(gateway, key)] == [0], response.text
+
+
+def test_a_monitored_lakera_flag_keeps_the_provider_id_on_the_row(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [MONITOR_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(gateway, ANTHROPIC_ROUTE, _route_body(ANTHROPIC_ROUTE, MONITORED_PROMPT), key)
+
+        assert response.status_code == 200, response.text
+        assert response.content == _MONITORED_ANTHROPIC_BODY
+        assert [row["request_id"] for row in _row_fields(gateway, key)] == [MONITORED_REPLY_ID]
+
+
+@pytest.mark.parametrize(
+    ("policy", "forwarded"), [(PIPELINE_ALLOWS, True), (PIPELINE_BEFORE_THE_CALL, False)], ids=["post-call", "pre-call"]
+)
+def test_only_a_pipeline_that_runs_before_the_provider_withholds_the_client_user_id(
+    rig: AuthGuardrailRig, policy: str, forwarded: bool
+) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        _drain(rig)
+        body: Final = {
+            **_route_body(ANTHROPIC_ROUTE, "Hello"),
+            "metadata": {"tags": [policy], "user_id": "client-user-1"},
+        }
+
+        response: Final = _send(gateway, ANTHROPIC_ROUTE, body, key)
+
+        assert response.status_code == 200, response.text
+        assert [b"client-user-1" in request.body for request in rig.upstreams[ANTHROPIC_ROUTE].drain()] == [forwarded]

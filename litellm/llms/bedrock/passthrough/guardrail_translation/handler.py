@@ -1416,6 +1416,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 litellm_logging_obj=litellm_logging_obj,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
+                read_whole_response=True,
             )
 
         if not isinstance(response, dict):

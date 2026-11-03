@@ -155,6 +155,7 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     coerce_token_limit,
     get_or_create_metadata_bucket,
     independent_snapshot,
@@ -717,6 +718,20 @@ def pipeline_managed_guardrail_names(
     return _pipeline_step_guardrail_names(
         tuple((policy_name, pipeline) for policy_name, pipeline in _policy_pipelines(data) if pipeline.mode == mode)
     )
+
+
+def _runs_after_the_provider(pipeline_entry: object) -> bool:
+    if not isinstance(pipeline_entry, tuple):
+        return False
+    pipeline: Final = cast("tuple[object, ...]", pipeline_entry)[-1]  # cast-ok: the policy engine's (name, pipeline)
+    return getattr(pipeline, "mode", None) == "post_call"
+
+
+def _holds_pipeline_before_the_provider(pipelines: object) -> bool:
+    if not pipelines:
+        return False
+    entries: Final = as_object_list(pipelines)
+    return entries is None or not all(map(_runs_after_the_provider, entries))
 
 
 def _ran_or_runs_outside_pipelines(
@@ -3108,8 +3123,18 @@ class ProxyLogging:
         request_data: Mapping[str, object],
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
     ) -> bool:
-        if _policy_state_metadata(request_data).get("_guardrail_pipelines"):
-            return True
+        return bool(_policy_state_metadata(request_data).get("_guardrail_pipelines")) or (
+            self._request_has_guardrail_callback(request_data, event_type)
+        )
+
+    def request_is_scanned_before_the_provider(self, request_data: Mapping[str, object]) -> bool:
+        """``request_has_pre_call_guardrails``, except that a resolved policy pipeline running post_call doesn't count"""
+        return _holds_pipeline_before_the_provider(
+            _policy_state_metadata(request_data).get("_guardrail_pipelines")
+        ) or self._request_has_guardrail_callback(request_data, GuardrailEventHooks.pre_call)
+
+    @staticmethod
+    def _request_has_guardrail_callback(request_data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
         caps: Final = ProxyLogging.callback_capabilities()
         if caps.has_content_enforcer:
             return True

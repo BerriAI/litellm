@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 
@@ -633,3 +634,19 @@ async def test_guardrail_json_rejection_retains_completed_provider_usage(
     assert (payload["prompt_tokens"], payload["completion_tokens"]) == (10, 5)
     assert payload["response_cost"] == 0.5
     ProxyLogging._callback_capabilities_cache.clear()
+
+
+def test_a_response_with_no_cost_result_settles_at_zero_only_when_asked(logging_obj: Logging) -> None:
+    from litellm.proxy.spend_tracking.cost_finalization import prepare_response_cost
+
+    unpriced: Final = response()
+    del unpriced._hidden_params["response_cost"]
+
+    with patch.object(logging_obj, "response_cost_calculator", return_value=None):
+        assert prepare_response_cost(logging_obj, unpriced, NOW) is None
+        prepared: Final = prepare_response_cost(logging_obj, unpriced, NOW, settle_unknown_cost_at_zero=True)
+
+    assert prepared is not None
+    assert prepared.amount == 0.0
+    assert prepared.payload["response_cost"] == 0.0
+    assert (prepared.usage.prompt_tokens, prepared.usage.completion_tokens) == (10, 5)

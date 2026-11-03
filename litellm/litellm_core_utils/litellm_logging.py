@@ -2566,7 +2566,10 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
-    def prepare_response_cost(self, response: object, now: datetime.datetime) -> PreparedCost | None:
+    def prepare_response_cost(
+        self, response: object, now: datetime.datetime, settle_unknown_cost_at_zero: bool = False
+    ) -> PreparedCost | None:
+        """The response's cost, ready to finalize, or ``None`` when it has no cost result, unless that settles at 0"""
         if self.prepared_cost is not None:
             return self.prepared_cost
         recorded_cache_hit: Final[object] = self.model_call_details.get("cache_hit")
@@ -2592,8 +2595,10 @@ class Logging(LiteLLMLoggingBaseClass):
             publish_logging_payload=False,
         )
         payload: Final = prepared[3]
-        raw_cost: Final[object] = self.model_call_details.get("response_cost")
-        if payload is None or not isinstance(raw_cost, (int, float)):
+        recorded_cost: Final[object] = self.model_call_details.get("response_cost")
+        unknown_cost: Final = 0.0 if settle_unknown_cost_at_zero else None
+        raw_cost: Final = recorded_cost if isinstance(recorded_cost, (int, float)) else unknown_cost
+        if payload is None or raw_cost is None:
             return None
         recorded_usage: Final[object] = self.model_call_details.get("combined_usage_object")
         response_usage: Final[object] = getattr(prepared[2], "usage", None)

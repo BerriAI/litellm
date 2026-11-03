@@ -229,6 +229,54 @@ class TestPassthroughPostCallGuardrails:
         assert body["error"]["model"] == "gemini-2.0-flash"
 
     @patch(_COLLECT, return_value=["rubrik"])
+    async def test_configured_endpoint_writes_no_charge_for_a_failed_post_call_hook(self, mock_collect):
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=HTTPException(status_code=418, detail="no"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        with (
+            _common_patches(mock_proxy_logging, _make_httpx_response(_GEMINI_RESPONSE)),
+            patch(f"{_PT_MOD}._blocked_response_cost_logging") as settlement,
+            pytest.raises(ProxyException),
+        ):
+            await pass_through_request(
+                request=_make_mock_request(),
+                target="https://example.com/v1/generateContent",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=_make_user_api_key_dict(),
+                stream=False,
+            )
+
+        settlement.pass_through_async_success_handler.assert_not_called()
+
+    @patch(_COLLECT, return_value=["rubrik"])
+    async def test_a_hook_result_that_is_not_a_dict_leaves_the_body_the_logs_read(self, mock_collect):
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock(return_value=MagicMock(id="rebuilt"))
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+        success_handler = AsyncMock()
+
+        with (
+            _common_patches(mock_proxy_logging, _make_httpx_response(_GEMINI_RESPONSE)),
+            patch(
+                f"{_PT_MOD}.pass_through_endpoint_logging",
+                MagicMock(pass_through_async_success_handler=success_handler),
+            ),
+        ):
+            result = await pass_through_request(
+                request=_make_mock_request(),
+                target="https://example.com/v1/generateContent",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=_make_user_api_key_dict(),
+                stream=False,
+            )
+
+        assert success_handler.await_args.kwargs["response_body"] == _GEMINI_RESPONSE
+        assert json.loads(result.body) == _GEMINI_RESPONSE
+
+    @patch(_COLLECT, return_value=["rubrik"])
     async def test_deny_forwards_guardrail_logging_info_to_failure_hook(
         self,
         mock_collect,
