@@ -567,6 +567,28 @@ def test_hosted_vllm_wildcard_listing_sends_the_deployment_extra_headers(monkeyp
     assert listed == ["hosted_vllm/qwen2.5"]
 
 
+
+@respx.mock
+def test_vllm_wildcard_never_lists_the_ids_of_a_configured_vllm_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm-library-env.test:8000")
+    monkeypatch.setenv("VLLM_API_KEY", "vllm-library-env-key")
+    server_route: Final = respx.get(url__regex=r"http://vllm-library(-env)?\.test:8000/.*").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "model-only-a-server-serves"}]})
+    )
+
+    listed: Final = get_known_models_from_wildcard(
+        "vllm/*",
+        LiteLLM_Params(model="vllm/*", api_base="http://vllm-library.test:8000", api_key="vllm-library-key"),
+    )
+
+    assert "vllm/model-only-a-server-serves" not in listed
+    assert not server_route.called
+
 _SELF_SIGNED_CERT_NOT_VALID_BEFORE: Final = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
 _SELF_SIGNED_CERT_NOT_VALID_AFTER: Final = datetime.datetime(9999, 12, 31, tzinfo=datetime.UTC)
 
@@ -611,7 +633,7 @@ def self_signed_vllm_api_base(tmp_path: Path) -> Iterator[str]:
             self.end_headers()
             self.wfile.write(body)
 
-        def log_message(self, format: str, *args: object) -> None:  # matches BaseHTTPRequestHandler
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
     server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -1078,6 +1100,56 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
     result = expand_wildcard_deployments_for_model_info([deployment])
     assert result == [deployment]
 
+
+
+@pytest.mark.parametrize(
+    ("allowed_model_names", "expected_names", "expected_listings"),
+    [
+        pytest.param(None, ["hosted_vllm/qwen2.5"], 1, id="unscoped"),
+        pytest.param(["hosted_vllm/qwen2.5"], ["hosted_vllm/qwen2.5"], 1, id="granted-a-listed-id"),
+        pytest.param(["qwen-open"], [], 0, id="granted-a-name-the-alias-matches"),
+    ],
+)
+@respx.mock
+def test_expand_wildcard_alias_without_a_slash_lists_and_filters_by_its_provider_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    allowed_model_names: list[str] | None,
+    expected_names: list[str],
+    expected_listings: int,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    api_base: Final = f"http://vllm-alias-{request.node.callspec.id}.test:8000/v1"
+    listing: Final = respx.get(f"{api_base}/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+    )
+    deployment: Final = {"model_name": "qwen-*", "litellm_params": {"model": "hosted_vllm/*", "api_base": api_base}}
+
+    rows: Final = expand_wildcard_deployments_for_model_info([deployment], allowed_model_names=allowed_model_names)
+
+    assert ([row["model_name"] for row in rows], listing.call_count) == (expected_names, expected_listings)
+
+
+@pytest.mark.parametrize(
+    ("allowed_model_names", "keeps_the_alias"),
+    [
+        pytest.param(["gpt-4o-mini"], True, id="granted-a-name-the-alias-matches"),
+        pytest.param(["claude-sonnet"], False, id="granted-only-other-names"),
+    ],
+)
+def test_expand_wildcard_alias_over_one_model_is_kept_only_for_keys_with_a_name_it_matches(
+    allowed_model_names: list[str], keeps_the_alias: bool
+) -> None:
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    deployment: Final = {"model_name": "gpt-4o*", "litellm_params": {"model": "openai/gpt-4o"}}
+
+    rows: Final = expand_wildcard_deployments_for_model_info([deployment], allowed_model_names=allowed_model_names)
+
+    assert rows == ([deployment] if keeps_the_alias else [])
 
 def test_get_complete_model_list_excludes_wildcard_routes_by_default():
     """Regression (LIT-4108): a wildcard with a matching router deployment leaked into /v1/models."""
