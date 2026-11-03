@@ -2269,9 +2269,46 @@ def test_unknown_backend_token_limits_still_fill_the_shared_key() -> None:
 
         assert {
             field: (litellm.model_cost.get(backend_model) or {}).get(field) for field in token_fields
-        } == first_limits
+        } == second_limits
         assert {field: litellm.get_model_info(first_id).get(field) for field in token_fields} == first_limits
         assert {field: litellm.get_model_info(second_id).get(field) for field in token_fields} == second_limits
+    finally:
+        _restore_model_cost_entries(model_keys)
+        litellm.get_model_info.cache_clear()
+
+
+def test_unknown_backend_token_limit_updates_when_deployment_is_upserted() -> None:
+    backend_model: Final = "hosted_vllm/somelab.lit4544-token-limit-update"
+    model_id: Final = "unknown-token-limit-updated-deployment"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (backend_model, model_id)
+    }
+    try:
+        deployment: Final = Deployment(
+            model_name="unknown-token-limit-update",
+            litellm_params=LiteLLM_Params(
+                model=backend_model,
+                api_base="https://unknown-model.test/v1",
+                api_key="fake-key",
+            ),
+            model_info=ModelInfo(id=model_id, max_output_tokens=999),
+        )
+        router: Final = Router(model_list=[deployment.to_json()])
+        assert (litellm.model_cost.get(backend_model) or {}).get("max_output_tokens") == 999
+
+        router.upsert_deployment(
+            Deployment(
+                model_name="unknown-token-limit-update",
+                litellm_params=LiteLLM_Params(
+                    model=backend_model,
+                    api_base="https://unknown-model.test/v1",
+                    api_key="fake-key",
+                ),
+                model_info=ModelInfo(id=model_id, max_output_tokens=1500),
+            )
+        )
+
+        assert (litellm.model_cost.get(backend_model) or {}).get("max_output_tokens") == 1500
     finally:
         _restore_model_cost_entries(model_keys)
         litellm.get_model_info.cache_clear()
