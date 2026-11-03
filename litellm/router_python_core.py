@@ -84,6 +84,8 @@ from litellm.constants import (
     MID_STREAM_FAILURE_LOG_WAIT_SECONDS,
     OUTPUT_TOKEN_CEILING_PARAMS,
     PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
@@ -672,6 +674,7 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CALL_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
@@ -847,9 +850,11 @@ def _with_router_resolved_session_model(session: object, model_name: str) -> Map
         typed_session: Final = _SESSION_ADAPTER.validate_python(session)
     except ValidationError:
         return _NO_SESSION_KWARGS
-    if "model" not in typed_session:
+    if "model" not in typed_session and typed_session.get("type") != "transcription":
         return _NO_SESSION_KWARGS
-    return MappingProxyType({"session": {**typed_session, "model": model_name}})
+    from litellm.realtime_api.main import with_resolved_session_model
+
+    return MappingProxyType({"session": with_resolved_session_model(dict(typed_session), model_name)})
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
@@ -2864,6 +2869,14 @@ class PythonCore(DeprecatedRouterMembers):
         self.acreate_realtime_transcription_session = self.factory_function(
             self._host.invoke("acreate_realtime_transcription_session"),
             call_type="acreate_realtime_transcription_session",
+        )
+        self.acreate_realtime_translation_client_secret = self.factory_function(
+            self._host.invoke("acreate_realtime_translation_client_secret"),
+            call_type="acreate_realtime_translation_client_secret",
+        )
+        self.arealtime_translation_calls = self.factory_function(
+            self._host.invoke("arealtime_translation_calls"),
+            call_type="arealtime_translation_calls",
         )
         self._aresponses_websocket = self.factory_function(
             self._host.invoke("_aresponses_websocket"), call_type="_aresponses_websocket"
@@ -6892,6 +6905,22 @@ class PythonCore(DeprecatedRouterMembers):
                 raise safeguard_refusal_error(model=model, stop_details=refusal_details)
 
             self.success_calls[model_name] += 1
+            realtime_session_logging: Final = (
+                _CALL_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
+                if generic_function_name == "_arealtime"
+                else None
+            )
+            realtime_session_deployment_id: Final = (
+                _MODEL_INFO_ADAPTER.validate_python(kwargs["model_info"]).get("id")
+                if isinstance(realtime_session_logging, LiteLLMLogging)
+                and realtime_session_logging.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+                and realtime_session_logging.model_call_details.get(REALTIME_SESSION_ENDED_ABNORMALLY_KEY) is not True
+                else None
+            )
+            if realtime_session_deployment_id is not None:
+                increment_deployment_successes_for_current_minute(
+                    ctx=self._core_ctx, deployment_id=str(realtime_session_deployment_id)
+                )
             verbose_router_logger.info("ageneric_api_call_with_fallbacks(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             return response
@@ -8433,6 +8462,8 @@ class PythonCore(DeprecatedRouterMembers):
             "acreate_realtime_client_secret",
             "arealtime_calls",
             "acreate_realtime_transcription_session",
+            "acreate_realtime_translation_client_secret",
+            "arealtime_translation_calls",
             "_aresponses_websocket",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
@@ -8703,6 +8734,8 @@ class PythonCore(DeprecatedRouterMembers):
                 "acreate_realtime_client_secret",
                 "arealtime_calls",
                 "acreate_realtime_transcription_session",
+                "acreate_realtime_translation_client_secret",
+                "arealtime_translation_calls",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

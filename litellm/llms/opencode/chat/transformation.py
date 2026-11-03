@@ -112,6 +112,9 @@ class OpenCodeGoMessagesChatConfig(_GoReportedCostMixin, AnthropicConfig):
     def custom_llm_provider(self) -> str:
         return "opencode_go"
 
+    def translates_prompt_cache_breakpoint(self, model: str) -> bool:
+        return "claude" in model.lower()
+
     def get_complete_url(
         self,
         api_base: str | None,

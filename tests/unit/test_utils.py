@@ -108,6 +108,7 @@ from litellm.utils import (
     client,
     get_non_default_completion_params,
     get_optional_params_image_gen,
+    get_optional_params_transcription,
     get_prompt_cache_min_tokens,
     get_supported_openai_params,
     get_token_count,
@@ -1269,6 +1270,9 @@ _COST_MAP_ROW_SCHEMA: Final = {
                         "/v1/images/generations",
                         "/v1/realtime",
                         "/v1/realtime/transcription_sessions",
+                        "/v1/realtime/translations",
+                        "/v1/realtime/translations/client_secrets",
+                        "/v1/realtime/translations/calls",
                         "/v1/images/variations",
                         "/v1/images/edits",
                         "/v1/batch",
@@ -11095,6 +11099,49 @@ def test_get_provider_audio_transcription_config_resolves_for_every_provider() -
     assert isinstance(configs[LlmProviders.OPENAI], litellm.OpenAIWhisperAudioTranscriptionConfig)
 
 
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("groq", "whisper-large-v3"),
+        ("deepgram", "nova-3"),
+        ("mistral", "voxtral-mini-latest"),
+        ("elevenlabs", "scribe_v1"),
+        ("fireworks_ai", "whisper-v3"),
+    ],
+)
+def test_openai_sdk_transcription_params_pass_through_to_other_providers(custom_llm_provider: str, model: str) -> None:
+    hints: Final = {"stream": True, "languages": ["en"], "keywords": ["LiteLLM"]}
+
+    params: Final = get_optional_params_transcription(model=model, custom_llm_provider=custom_llm_provider, **hints)
+
+    forwarded: Final = {**params.get("extra_body", {}), **params}
+    assert {key: forwarded.get(key) for key in hints} == hints
+
+
+@respx.mock
+def test_drop_params_keeps_openai_sdk_transcription_params_out_of_a_deepgram_request() -> None:
+    route: Final = respx.post(url__startswith="https://api.deepgram.com/v1/listen").mock(
+        return_value=httpx.Response(
+            200,
+            json={"metadata": {"duration": 1.0}, "results": {"channels": [{"alternatives": [{"transcript": "hi"}]}]}},
+        )
+    )
+
+    litellm.transcription(
+        model="deepgram/nova-3",
+        file=("sample.wav", b"audio"),
+        api_key="dg-test",
+        punctuate=True,
+        stream=True,
+        languages=["en"],
+        keywords=["LiteLLM"],
+        drop_params=True,
+    )
+
+    assert dict(route.calls.last.request.url.params) == {"model": "nova-3", "punctuate": "true"}
+
+
 @pytest.mark.parametrize(
     ("model", "optional_params", "expected_response_format"),
     [
@@ -11384,6 +11431,26 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
         prefixed_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
         assert litellm.get_model_info(model=short_name, custom_llm_provider="vertex_ai") == prefixed_info, model
         assert prefixed_info["key"] == f"vertex_ai/{model}", model
+
+
+def test_the_catalog_with_register_model_entries_lists_each_model_once_and_leaves_router_registrations_out() -> None:
+    from litellm.utils import catalog_with_runtime_registrations
+
+    catalog: Final = catalog_with_runtime_registrations()
+    catalog_size: Final = len(catalog)
+    catalogued_model: Final = next(iter(catalog))
+    catalogued_entry: Final = dict(catalog[catalogued_model])
+    litellm.register_model({catalogued_model: {"supports_prompt_cache_breakpoint": True}})
+    litellm.register_model({"qa-registered-only-model": {"litellm_provider": "openai", "mode": "chat"}})
+    litellm.register_model({"qa-router-deployment-id": {"mode": "chat"}}, persist_across_reloads=False)
+
+    merged: Final = catalog_with_runtime_registrations()
+    listed: Final = list(merged)
+
+    assert len(listed) == len(merged) == catalog_size + 1
+    assert "qa-registered-only-model" in listed
+    assert "qa-router-deployment-id" not in listed
+    assert dict(merged[catalogued_model]) == {**catalogued_entry, "supports_prompt_cache_breakpoint": True}
 
 
 @pytest.mark.parametrize(
