@@ -1462,62 +1462,82 @@ class TestBuildPromptModerationPayload:
 
 # -- rac_agent_id forwarding --------------------------------------------------
 
-_LITELLM_ENRICHED_METADATA = {
-    "rac_agent_id": "agent-42",
-    "headers": {"authorization": "Bearer sk-secret"},
-    "litellm_parent_otel_span": object(),
-    "user_api_key_hash": "hash",
-}
+
+def _proxy_metadata(
+    key_meta: Dict[str, Any] | None = None,
+    team_meta: Dict[str, Any] | None = None,
+    **caller_fields: Any,
+) -> Dict[str, Any]:
+    """Request metadata as the proxy hands it to guardrails: the authenticated
+    key/team metadata under ``user_api_key_*``, next to fields the caller sent"""
+    return {
+        **caller_fields,
+        "headers": {"authorization": "Bearer sk-secret"},
+        "litellm_parent_otel_span": object(),
+        "user_api_key_metadata": key_meta or {},
+        "user_api_key_team_metadata": team_meta or {},
+    }
+
+
+def _prompt_and_response_metadata(request_data: Dict[str, Any]):
+    inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
+    prompt_payload = RubrikLogger._build_prompt_moderation_payload(
+        inputs, inputs["structured_messages"], request_data
+    )
+    response_request = RubrikLogger._extract_request_data(
+        {"model": "gpt-4"}, request_data
+    )
+    return prompt_payload.get("metadata"), response_request.get("metadata")
 
 
 class TestRacAgentIdForwarding:
-    def test_prompt_payload_forwards_only_rac_agent_id(self):
-        inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
-        payload = RubrikLogger._build_prompt_moderation_payload(
-            inputs,
-            inputs["structured_messages"],
-            {"metadata": dict(_LITELLM_ENRICHED_METADATA)},
+    def test_forwards_rac_agent_id_from_key_metadata_only(self):
+        request_data = {"metadata": _proxy_metadata(key_meta={"rac_agent_id": "agent-42", "other": 1})}
+        assert _prompt_and_response_metadata(request_data) == (
+            {"rac_agent_id": "agent-42"},
+            {"rac_agent_id": "agent-42"},
         )
-        assert payload["metadata"] == {"rac_agent_id": "agent-42"}
 
-    def test_response_request_data_forwards_only_rac_agent_id(self):
-        result = RubrikLogger._extract_request_data(
-            {"model": "gpt-4"}, {"metadata": dict(_LITELLM_ENRICHED_METADATA)}
+    def test_forwards_rac_agent_id_from_team_metadata(self):
+        request_data = {"metadata": _proxy_metadata(team_meta={"rac_agent_id": "team-agent"})}
+        assert _prompt_and_response_metadata(request_data) == (
+            {"rac_agent_id": "team-agent"},
+            {"rac_agent_id": "team-agent"},
         )
-        assert result["metadata"] == {"rac_agent_id": "agent-42"}
 
-    def test_rac_agent_id_read_from_litellm_metadata(self):
-        """/v1/messages and /v1/responses keep proxy metadata under litellm_metadata"""
-        request_data = {"litellm_metadata": dict(_LITELLM_ENRICHED_METADATA)}
-        inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
-        prompt_payload = RubrikLogger._build_prompt_moderation_payload(
-            inputs, inputs["structured_messages"], request_data
-        )
-        response_request = RubrikLogger._extract_request_data(
-            {"model": "gpt-4"}, request_data
-        )
-        assert prompt_payload["metadata"] == {"rac_agent_id": "agent-42"}
-        assert response_request["metadata"] == {"rac_agent_id": "agent-42"}
+    def test_key_metadata_overrides_team_metadata(self):
+        request_data = {
+            "metadata": _proxy_metadata(
+                key_meta={"rac_agent_id": "key-agent"},
+                team_meta={"rac_agent_id": "team-agent"},
+            )
+        }
+        assert _prompt_and_response_metadata(request_data)[0] == {"rac_agent_id": "key-agent"}
 
-    def test_metadata_takes_precedence_over_litellm_metadata(self):
-        result = RubrikLogger._extract_request_data(
-            {"model": "gpt-4"},
-            {
-                "metadata": {"rac_agent_id": "from-metadata"},
-                "litellm_metadata": {"rac_agent_id": "from-litellm-metadata"},
-            },
-        )
-        assert result["metadata"] == {"rac_agent_id": "from-metadata"}
+    def test_admin_metadata_under_litellm_metadata(self):
+        """/v1/messages and /v1/responses put proxy metadata under litellm_metadata"""
+        request_data = {"litellm_metadata": _proxy_metadata(key_meta={"rac_agent_id": "agent-42"})}
+        assert _prompt_and_response_metadata(request_data)[0] == {"rac_agent_id": "agent-42"}
 
-    def test_falls_back_to_litellm_metadata_when_metadata_has_no_valid_id(self):
-        result = RubrikLogger._extract_request_data(
-            {"model": "gpt-4"},
-            {
-                "metadata": {"rac_agent_id": ""},
-                "litellm_metadata": {"rac_agent_id": "from-litellm-metadata"},
-            },
+    @pytest.mark.parametrize("container", ["metadata", "litellm_metadata"])
+    def test_caller_supplied_rac_agent_id_is_ignored(self, container):
+        """A caller must not choose the policy scope: the request-body value is
+        never forwarded, even when the key has no agent configured"""
+        request_data = {container: _proxy_metadata(rac_agent_id="exempt-agent")}
+        assert _prompt_and_response_metadata(request_data) == (None, None)
+
+    def test_caller_cannot_override_the_keys_agent(self):
+        request_data = {
+            "metadata": _proxy_metadata(
+                key_meta={"rac_agent_id": "assigned-agent"},
+                rac_agent_id="exempt-agent",
+            ),
+            "litellm_metadata": {"rac_agent_id": "exempt-agent"},
+        }
+        assert _prompt_and_response_metadata(request_data) == (
+            {"rac_agent_id": "assigned-agent"},
+            {"rac_agent_id": "assigned-agent"},
         )
-        assert result["metadata"] == {"rac_agent_id": "from-litellm-metadata"}
 
     @pytest.mark.parametrize(
         "request_data",
@@ -1525,29 +1545,20 @@ class TestRacAgentIdForwarding:
             {},
             {"metadata": None},
             {"metadata": "not-a-dict"},
-            {"metadata": {"rac_agent_id": ""}},
-            {"metadata": {"rac_agent_id": {"nested": "object"}}},
-            {"metadata": {"other": 1}},
-            {"litellm_metadata": {"rac_agent_id": {"nested": "object"}}},
-            {"litellm_metadata": "not-a-dict"},
+            {"metadata": _proxy_metadata()},
+            {"metadata": _proxy_metadata(key_meta={"rac_agent_id": ""})},
+            {"metadata": _proxy_metadata(key_meta={"rac_agent_id": {"nested": "object"}})},
+            {"metadata": _proxy_metadata(key_meta={"rac_agent_id": 42})},
         ],
     )
-    def test_metadata_omitted_without_rac_agent_id(self, request_data):
-        inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
-        prompt_payload = RubrikLogger._build_prompt_moderation_payload(
-            inputs, inputs["structured_messages"], request_data
-        )
-        response_request = RubrikLogger._extract_request_data(
-            {"model": "gpt-4"}, request_data
-        )
-        assert "metadata" not in prompt_payload
-        assert "metadata" not in response_request
+    def test_metadata_omitted_without_a_valid_admin_rac_agent_id(self, request_data):
+        assert _prompt_and_response_metadata(request_data) == (None, None)
 
     @pytest.mark.asyncio
     async def test_both_webhooks_receive_rac_agent_id_and_payloads_serialize(
         self, handler
     ):
-        request_data = {"metadata": dict(_LITELLM_ENRICHED_METADATA)}
+        request_data = {"metadata": _proxy_metadata(key_meta={"rac_agent_id": "agent-42"})}
         handler.moderation_client, prompt_captured = _capturing_service({})
         await handler.apply_guardrail(
             inputs={"structured_messages": [{"role": "user", "content": "hi"}]},

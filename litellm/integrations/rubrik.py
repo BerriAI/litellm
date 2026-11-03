@@ -689,22 +689,25 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     @staticmethod
     def _rac_agent_metadata(request_data: _RequestContextSource) -> Mapping[str, object]:
-        """Forward only ``rac_agent_id``, which the webhooks use to scope
-        agent-specific policies. The rest of the request metadata carries
-        non-JSON-serializable objects and inbound HTTP headers. Routes such as
-        ``/v1/messages`` and ``/v1/responses`` keep proxy metadata under
-        ``litellm_metadata``, so callers there may set it in either place."""
-        rac_agent_id: Final = next(
-            (
-                value
-                for key in ("metadata", "litellm_metadata")
-                if isinstance(container := request_data.get(key), dict)
-                and isinstance(value := container.get("rac_agent_id"), str)
-                and value
-            ),
-            None,
-        )
-        return {"metadata": {"rac_agent_id": rac_agent_id}} if rac_agent_id else _EMPTY_MAPPING
+        """Forward ``rac_agent_id`` from the caller's key or team metadata.
+
+        The webhooks use it to choose which agent-scoped policies apply, so it
+        must come from configuration an admin controls, never from the request
+        body: a caller who could set it would select any agent's policies,
+        including one a policy exempts. ``_get_admin_metadata`` reads only the
+        ``user_api_key_metadata`` / ``user_api_key_team_metadata`` the proxy
+        writes from the authenticated key (key overrides team); the proxy strips
+        client-supplied ``user_api_key_*`` fields from both metadata dicts.
+        """
+        rac_agent_id: Final[object] = RubrikLogger._admin_rac_agent_id(request_data)
+        if not isinstance(rac_agent_id, str) or not rac_agent_id:
+            return _EMPTY_MAPPING
+        return {"metadata": {"rac_agent_id": rac_agent_id}}
+
+    @staticmethod
+    def _admin_rac_agent_id(request_data: _RequestContextSource) -> object:
+        """``rac_agent_id`` from the merged key/team admin metadata, untyped."""
+        return RubrikLogger._get_admin_metadata(request_data).get("rac_agent_id")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportArgumentType]  # upstream helper takes and returns a bare dict; caller narrows to str
 
     @staticmethod
     def _sanitize_proxy_server_request(proxy_server_request: Mapping[str, object] | str | None) -> object:
