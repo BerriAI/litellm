@@ -915,11 +915,12 @@ def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map)
     assert info.get("supports_adaptive_thinking") is None
     assert info.get("supports_legacy_thinking") is None
     assert info.get("max_input_tokens") is None
-    assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic").items() >= {
+    assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic") == {
+        **_claude_baseline()["model_info"],
         "supports_adaptive_thinking": True,
         "supports_legacy_thinking": True,
         "supports_tool_search": True,
-    }.items()
+    }
     assert match_fill_missing_generalizations("claude-sonnet-4-6", "perplexity") is None
 
 
@@ -964,7 +965,13 @@ def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipp
     assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None
 
 
-CLAUDE_BASELINE_FILL_PROVIDERS: Final = ("anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models")
+CLAUDE_BASELINE_FILL_PROVIDERS: Final = (
+    "anthropic",
+    "azure_ai",
+    "bedrock",
+    "bedrock_converse",
+    "vertex_ai-anthropic_models",
+)
 
 
 def _claude_baseline() -> Mapping[str, object]:
@@ -989,7 +996,9 @@ def test_shipped_claude_baseline_fills_only_missing_keys_on_mapped_entries(shipp
     """A mapped Claude entry from a first-party host gets each baseline key it leaves out,
     while every baseline key the entry sets keeps the entry's own value."""
     baseline: Final = _claude_baseline()["model_info"]
-    entries: Final = tuple((key, entry) for key, entry in _mapped_claude_chat_entries() if entry["litellm_provider"] == provider)
+    entries: Final = tuple(
+        (key, entry) for key, entry in _mapped_claude_chat_entries() if entry["litellm_provider"] == provider
+    )
     assert any(baseline.keys() - entry.keys() for _, entry in entries)
     assert any(_fields_overriding_baseline(entry, baseline) for _, entry in entries)
 
