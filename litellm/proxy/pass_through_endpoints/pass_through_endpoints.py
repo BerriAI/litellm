@@ -298,29 +298,23 @@ def _is_sendable_header_value(value: str) -> bool:
     )
 
 
-def _with_header_in_budget(
-    kept: Mapping[str, str], header: tuple[str, str], budget: int = _GUARDRAIL_HEADERS_MAX_BYTES
-) -> Mapping[str, str]:
+def _with_header_in_budget(kept: Mapping[str, str], header: tuple[str, str]) -> Mapping[str, str]:
     size: Final = sum(len(name) + len(value) for name, value in (*kept.items(), header))
-    return MappingProxyType({**kept, header[0]: header[1]}) if size <= budget else kept
+    return MappingProxyType({**kept, header[0]: header[1]}) if size <= _GUARDRAIL_HEADERS_MAX_BYTES else kept
+
+
+def _with_header_in_response_limit(headers: Mapping[str, str], header: tuple[str, str]) -> Mapping[str, str]:
+    merged: Final = {**headers, header[0]: header[1]}
+    size: Final = sum(len(name) + len(value) + _HEADER_FRAMING_BYTES for name, value in merged.items())
+    return merged if size <= _RESPONSE_HEADERS_MAX_BYTES else headers
 
 
 def _guardrail_headers_with_room(
     guardrail_headers: Mapping[str, str], response_headers: Mapping[str, str]
 ) -> Mapping[str, str]:
-    """``guardrail_headers``, without one the response's other headers leave no room for, so adding them can't cost a
-    client the response"""
-    others: Final = sum(
-        len(name) + len(value) + _HEADER_FRAMING_BYTES
-        for name, value in response_headers.items()
-        if name not in guardrail_headers
-    )
-    no_headers: Final[Mapping[str, str]] = MappingProxyType({})
-    return reduce(
-        partial(_with_header_in_budget, budget=_RESPONSE_HEADERS_MAX_BYTES - others),
-        guardrail_headers.items(),
-        no_headers,
-    )
+    """``response_headers`` with each of ``guardrail_headers`` that fits, so adding them can't cost a client the
+    response. One that doesn't fit leaves the header of that name as it was."""
+    return reduce(_with_header_in_response_limit, guardrail_headers.items(), response_headers)
 
 
 def _add_callback_headers(
@@ -333,10 +327,10 @@ def _add_callback_headers(
         for name, value in response_headers.items()
         if name in _GUARDRAIL_HEADER_NAMES and name not in callback_headers
     }
-    response_headers.update(callback_headers)
-    kept: Final = _guardrail_headers_with_room(guardrail_headers, response_headers)
-    for name in guardrail_headers.keys() - kept.keys():
+    for name in guardrail_headers:
         response_headers.pop(name)
+    response_headers.update(callback_headers)
+    response_headers.update(_guardrail_headers_with_room(guardrail_headers, response_headers))
 
 
 def _recorded_guardrail_headers(

@@ -13896,6 +13896,20 @@ class TestGuardrailResponseHeaders:
         assert "x-litellm-applied-guardrails" not in headers
         assert len(headers) == 1_500
 
+    def test_an_upstream_guardrail_header_a_larger_one_cannot_replace_still_counts(self):
+        names: Final = [f"guardrail-{index:03d}" for index in range(280)]
+        upstream: Final = {"x-upstream": "u" * 10_000, "x-litellm-applied-policies": "p" * 4_000}
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers(upstream),
+            guardrail_request_data=(
+                {},
+                {"litellm_params": {"metadata": {"applied_guardrails": names, "applied_policies": names}}},
+            ),
+        )
+
+        assert sum(len(name) + len(value) + 4 for name, value in headers.items()) <= 15360
+        assert headers["x-upstream"] == upstream["x-upstream"]
+
     def test_an_upstream_guardrail_header_the_proxy_replaces_takes_no_room(self):
         headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
             headers=httpx.Headers({"x-litellm-applied-guardrails": "u" * 15_400}),
