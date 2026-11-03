@@ -1262,7 +1262,7 @@ _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
 _LATEST_TURN_STORAGE: Final = "latest_turn"
 _STATEFUL_REQUEST_KEYS: Final = frozenset({"previous_response_id", "conversation"})
-_LATEST_TURN_KEPT_KEYS: Final = frozenset({"model", "classifier_input"})
+_LATEST_TURN_KEPT_KEYS: Final = frozenset({"model"})
 _RESPONSES_CALL_TYPES: Final = frozenset({"responses", "aresponses"})
 _REQUEST_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _TURNS_KEYS: Final = ("messages", "input")
@@ -1328,8 +1328,9 @@ def _latest_user_message_text(turns: object) -> str | None:
     return _user_content_text(message_field(latest, "content"))
 
 
-def _continues_stored_conversation(request_body: Mapping[str, object]) -> bool:
-    return any(request_body.get(key) for key in _STATEFUL_REQUEST_KEYS)
+def _continues_stored_conversation(request_body: Mapping[str, object], call_type: object) -> bool:
+    """Only `/v1/responses` resumes a stored conversation, so the same keys on a chat body do not exempt it."""
+    return call_type in _RESPONSES_CALL_TYPES and any(request_body.get(key) for key in _STATEFUL_REQUEST_KEYS)
 
 
 def _replayed_by_responses_bridge(standard_payload: Mapping[str, object] | None) -> bool:
@@ -1343,8 +1344,8 @@ def _replayed_by_responses_bridge(standard_payload: Mapping[str, object] | None)
     return isinstance(response, Mapping) and "choices" in response
 
 
-def _trimmed_turn(request_body: Mapping[str, object]) -> Mapping[str, object]:
-    if _continues_stored_conversation(request_body):
+def _trimmed_turn(request_body: Mapping[str, object], call_type: object) -> Mapping[str, object]:
+    if _continues_stored_conversation(request_body, call_type):
         return request_body
     kept: Final = {key: value for key, value in request_body.items() if key in _LATEST_TURN_KEPT_KEYS}
     turns_key: Final = next((key for key in _TURNS_KEYS if key in request_body), None)
@@ -1354,13 +1355,19 @@ def _trimmed_turn(request_body: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType({**kept, turns_key: [{"role": "user", "content": text}]})
 
 
-def _latest_turn_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
-    trimmed: Final = _trimmed_turn(request_body)
+def _latest_turn_body(request_body: Mapping[str, object], call_type: object) -> Mapping[str, object]:
+    """A classifier row stores the trimmed originating request, since the composed classifier message quotes the caller's history."""
     originating: Final = request_body.get("originating_request_masked")
-    if not isinstance(originating, Mapping) or trimmed is request_body:
-        return trimmed
+    if not isinstance(originating, Mapping):
+        return _trimmed_turn(request_body, call_type)
+    originating_body: Final = _REQUEST_BODY_ADAPTER.validate_python(originating)
+    model: Final = {key: value for key, value in request_body.items() if key == "model"}
     return MappingProxyType(
-        {**trimmed, "originating_request_masked": _trimmed_turn(_REQUEST_BODY_ADAPTER.validate_python(originating))}
+        {
+            **_trimmed_turn(originating_body, None),
+            **model,
+            "originating_request_masked": _trimmed_turn(originating_body, None),
+        }
     )
 
 
@@ -1369,7 +1376,7 @@ def _stored_request_body(
 ) -> Mapping[str, object]:
     if not stores_latest_turn_only() or _replayed_by_responses_bridge(standard_payload):
         return request_body
-    return _latest_turn_body(request_body)
+    return _latest_turn_body(request_body, None if standard_payload is None else standard_payload.get("call_type"))
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:

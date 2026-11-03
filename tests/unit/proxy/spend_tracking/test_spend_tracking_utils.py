@@ -7281,25 +7281,61 @@ def test_latest_turn_mode_stores_only_the_model_and_the_latest_user_text_of_a_st
     assert _stored_request(body) == expected
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        {
-            "model": "gpt-4o-mini",
-            "previous_response_id": "resp_earlier",
-            "instructions": "system prompt",
-            "input": [{"type": "function_call_output", "call_id": "call_1", "output": "tool out"}],
-        },
-        {"model": "gpt-4o-mini", "conversation": "conv_1", "input": "next question"},
-    ],
+_CONTINUATION_BODIES: Final[tuple[dict[str, object], ...]] = (
+    {
+        "model": "gpt-4o-mini",
+        "previous_response_id": "resp_earlier",
+        "instructions": "system prompt",
+        "input": [{"type": "function_call_output", "call_id": "call_1", "output": "tool out"}],
+    },
+    {"model": "gpt-4o-mini", "conversation": "conv_1", "input": "next question"},
 )
-def test_latest_turn_mode_keeps_the_whole_request_when_it_continues_a_stored_conversation(
+_NATIVE_RESPONSES_PAYLOAD: Final = {"call_type": "aresponses", "response": {"object": "response", "output": []}}
+
+
+@pytest.mark.parametrize("body", _CONTINUATION_BODIES)
+def test_latest_turn_mode_keeps_the_whole_request_when_a_responses_call_continues_a_stored_conversation(
     monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]
 ) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
-    assert _stored_request(body) == body
+    assert _stored_request_with_payload(body, _NATIVE_RESPONSES_PAYLOAD) == body
+
+
+@pytest.mark.parametrize(
+    ("body", "call_type", "expected"),
+    [
+        (
+            {
+                "model": "gpt-4o-mini",
+                "previous_response_id": "resp_earlier",
+                "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}],
+            },
+            "acompletion",
+            {"model": "gpt-4o-mini", "messages": _user_turn("latest")},
+        ),
+        (
+            {
+                "model": "claude",
+                "conversation": "conv_1",
+                "system": "system prompt",
+                "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}],
+            },
+            "anthropic_messages",
+            {"model": "claude", "messages": _user_turn("latest")},
+        ),
+        (_CONTINUATION_BODIES[0], None, {"model": "gpt-4o-mini"}),
+    ],
+)
+def test_latest_turn_mode_trims_a_request_whose_continuation_keys_are_not_on_a_responses_call(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], call_type: str | None, expected: dict[str, object]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    standard_payload: Final = {"call_type": call_type, "response": {"choices": [{"message": {"content": "a"}}]}}
+    assert _stored_request_with_payload(body, standard_payload) == expected
 
 
 _BRIDGED_RESPONSES_BODY: Final = {
@@ -7346,16 +7382,24 @@ def test_latest_turn_mode_keeps_the_whole_request_of_a_responses_turn_served_by_
     assert _stored_request_with_payload(_BRIDGED_RESPONSES_BODY, standard_payload) == expected
 
 
-def test_latest_turn_mode_keeps_the_classifier_audit_with_its_originating_request_trimmed(
+def test_latest_turn_mode_stores_a_classifier_row_as_the_trimmed_originating_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy import proxy_server
 
     originating: Final = {
         "model": "gpt-4o-mini",
-        "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "route me"}],
+        "messages": [
+            {"role": "system", "content": "caller system prompt"},
+            *_PRIOR_CHAT_TURNS,
+            {"role": "user", "content": "route me"},
+        ],
     }
-    classifier_input: Final = {"model": "classifier", "messages": [{"role": "user", "content": "route me"}]}
+    composed_ask: Final = "Caller system prompt, quoted as task context:\ncaller system prompt\nRecent conversation:\n[1] earlier\nCurrent ask:\nroute me"
+    classifier_input: Final = {
+        "model": "classifier",
+        "messages": [{"role": "system", "content": "rubric"}, {"role": "user", "content": composed_ask}],
+    }
     standard_payload: Final = {
         "call_type": "acompletion",
         "classifier_input": classifier_input,
@@ -7363,12 +7407,13 @@ def test_latest_turn_mode_keeps_the_classifier_audit_with_its_originating_reques
         "response": {"choices": [{"message": {"content": "simple"}}]},
     }
     monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
-    assert _stored_request_with_payload(classifier_input, standard_payload) == {
+    stored: Final = _stored_request_with_payload(classifier_input, standard_payload)
+    assert stored == {
         "model": "classifier",
-        "classifier_input": classifier_input,
-        "originating_request_masked": {"model": "gpt-4o-mini", "messages": _user_turn("route me")},
         "messages": _user_turn("route me"),
+        "originating_request_masked": {"model": "gpt-4o-mini", "messages": _user_turn("route me")},
     }
+    assert "caller system prompt" not in json.dumps(stored)
 
 
 @pytest.mark.parametrize("value", ["latest_trun", "Latest_Turn", "full", True])
