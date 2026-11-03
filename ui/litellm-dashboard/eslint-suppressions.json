@@ -215,9 +215,6 @@
     },
     "max-lines": {
       "count": 1
-    },
-    "react/no-unescaped-entities": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/guardrails/_components/content_filter/CompetitorIntentConfiguration.tsx": {
@@ -247,6 +244,9 @@
     }
   },
   "src/app/(dashboard)/guardrails/_components/custom_code/CustomCodeModal.tsx": {
+    "max-lines": {
+      "count": 1
+    },
     "no-nested-ternary": {
       "count": 6
     },
@@ -279,6 +279,9 @@
       "count": 1
     },
     "local/no-complex-jsx-arrow": {
+      "count": 1
+    },
+    "max-lines": {
       "count": 1
     },
     "max-params": {

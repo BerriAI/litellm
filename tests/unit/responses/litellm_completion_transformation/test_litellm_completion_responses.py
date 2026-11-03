@@ -6564,6 +6564,31 @@ def test_an_application_inference_profile_gets_no_item_marks_under_drop_params()
     assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 0
 
 
+
+def test_a_bedrock_deployment_keeps_item_marks_by_its_own_flag_not_a_siblings_on_the_same_model(
+    local_model_cost_map: None,
+):
+    from litellm import Router
+
+    Router(
+        model_list=[
+            {
+                "model_name": "opted-in",
+                "litellm_params": {"model": "bedrock/moonshotai.kimi-k3", "aws_region_name": "us-east-1"},
+                "model_info": {"id": "opted-in-id", "supports_prompt_cache_breakpoint": True},
+            }
+        ]
+    )
+    marked_system: Final = {"role": "system", "content": "House rules", "cache_control": _EPHEMERAL}
+
+    def bridged_system(model_info: Mapping[str, object]) -> Mapping[str, object]:
+        return _bridged_request(marked_system, model="bedrock/moonshotai.kimi-k3", model_info=model_info)[1]
+
+    assert (
+        bridged_system({"id": "flagless-id"}),
+        bridged_system({"id": "opted-in-id", "supports_prompt_cache_breakpoint": True}),
+    ) == ({"role": "system", "content": "House rules"}, marked_system)
+
 def test_the_shared_input_transform_keeps_every_item_mark_for_a_request_it_sends():
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=cast(ResponseInputParam, list(_marked_turns(5))),  # cast-ok: cache_control is not an input TypedDict key
@@ -7190,6 +7215,29 @@ async def test_bridge_partial_response_on_disconnect_bills_only_the_input_since_
     assert await _input_tokens_billed_on_disconnect(
         cast(ResponseInputParam, [*history_it_replaces, *since_compaction])
     ) == await _input_tokens_billed_on_disconnect(since_compaction)
+
+
+def test_a_hosted_mcp_tool_sent_to_responses_on_bedrock_converse_answers_400(monkeypatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        litellm.responses(
+            model="bedrock/converse/us.openai.gpt-oss-120b-1:0",
+            input="What does the deepwiki MCP server say about litellm?",
+            tools=[
+                {
+                    "type": "mcp",
+                    "server_label": "deepwiki",
+                    "server_url": "https://mcp.deepwiki.com/mcp",
+                    "require_approval": "never",
+                }
+            ],
+            aws_access_key_id="AKIAHOSTEDMCP",
+            aws_secret_access_key="hosted-mcp-secret",
+            aws_region_name="us-east-1",
+        )
+    assert raised.value.status_code == 400
+    assert "`deepwiki`" in str(raised.value)
+    assert "litellm_proxy/mcp/" in str(raised.value)
 
 
 _ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-5-5"

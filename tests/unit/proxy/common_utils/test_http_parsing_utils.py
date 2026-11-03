@@ -786,6 +786,17 @@ async def test_get_form_data():
     assert result["temperature"] == "0.2"
     assert result["include"] == ["logprobs"]
     assert result["timestamp_granularities"] == ["word", "segment"]
+    assert tuple(result) == (
+        "file",
+        "model",
+        "include",
+        "language",
+        "prompt",
+        "response_format",
+        "stream",
+        "temperature",
+        "timestamp_granularities",
+    )
 
 
 def test_get_tags_from_request_body_with_metadata_tags():
