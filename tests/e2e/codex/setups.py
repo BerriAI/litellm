@@ -13,7 +13,7 @@ from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from models import LiteLLMParamsBody
 
 GPT_ON_BEDROCK_MANTLE: Final = "bedrock_mantle/openai.gpt-6.1-sol"
-GPT_ON_BEDROCK_RUNTIME: Final = "bedrock/us.openai.gpt-6.1-sol"
+GPT_ON_BEDROCK_RUNTIME: Final = "bedrock/global.openai.gpt-6.1-sol"
 GPT_ON_AZURE_OPENAI: Final = "azure/gpt-6.1-sol"
 GPT_ON_OPENAI: Final = "openai/gpt-6.1-sol"
 CLAUDE_ON_BEDROCK: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
