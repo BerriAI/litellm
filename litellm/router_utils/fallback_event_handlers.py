@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import Logging, same_attempt_marker
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
-from litellm.llms.openai.common_utils import timed_out_after_send
+from litellm.llms.openai.common_utils import create_may_already_exist
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
@@ -691,17 +691,14 @@ PROVIDER_SCOPED_CREATION_FUNCTION_NAMES: Final = frozenset({"_acreate_file"})
 NON_IDEMPOTENT_CREATE_FUNCTION_NAMES: Final = frozenset({"_acreate_file", "_acreate_batch"})
 
 
-def is_timed_out_create(original_function: object, error: BaseException) -> bool:
-    return (
-        timed_out_after_send(error)
-        and getattr(original_function, "__name__", None) in NON_IDEMPOTENT_CREATE_FUNCTION_NAMES
-    )
+def is_create_that_may_already_exist(original_function: object, error: BaseException) -> bool:
+    function_name: Final = getattr(original_function, "__name__", None)
+    return function_name in NON_IDEMPOTENT_CREATE_FUNCTION_NAMES and create_may_already_exist(error)
 
 
 def log_create_not_resent(model_group: str | None) -> None:
     verbose_router_logger.info(
-        "Model group '%s' does not resend a create that timed out after it was sent, "
-        "because the provider may already have created it",
+        "Model group '%s' does not resend a failed create, because the provider may already have created it",
         model_group,
     )
 
@@ -944,7 +941,9 @@ async def run_async_fallback(
                     exception=e,
                     model_call_details=failure_callbacks_blocked_logging_obj.model_call_details,
                 )
-            if is_timed_out_create(_FALLBACK_KWARGS_ADAPTER.validate_python(kwargs).get("original_function"), e):
+            if is_create_that_may_already_exist(
+                _FALLBACK_KWARGS_ADAPTER.validate_python(kwargs).get("original_function"), e
+            ):
                 raise
     raise error_from_fallbacks
 

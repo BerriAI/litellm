@@ -175,7 +175,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
-from litellm.llms.openai.common_utils import timed_out_after_send
+from litellm.llms.openai.common_utils import create_may_already_exist
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
     MODEL_INFO_DISCOVERY_PROVIDERS,
@@ -327,7 +327,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_pre_routing_selection,
     has_unattempted_fallback_target,
     is_bad_request_without_fallback,
-    is_timed_out_create,
+    is_create_that_may_already_exist,
     log_create_not_resent,
     mid_stream_fallback_hop_kwargs,
     mid_stream_fallback_snapshot_kwargs,
@@ -7708,7 +7708,7 @@ class Router(DeprecatedRouterMembers):
             )
             failures: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, BaseException))
             if failures:
-                raise next((failure for failure in failures if timed_out_after_send(failure)), failures[0])
+                raise next((failure for failure in failures if create_may_already_exist(failure)), failures[0])
             responses: Final = [outcome for outcome in outcomes if not isinstance(outcome, BaseException)]
 
             if len(responses) == 0:
@@ -8907,7 +8907,9 @@ class Router(DeprecatedRouterMembers):
             or unsupported_params_without_fallback
         ):
             raise e
-        if is_timed_out_create(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("original_function"), e):
+        if is_create_that_may_already_exist(
+            _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("original_function"), e
+        ):
             if (
                 isinstance(original_exception, openai.APIError)
                 and litellm.expose_router_debug_in_errors
@@ -9339,7 +9341,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             if is_guardrail_intervention(e):
                 raise
-            if is_timed_out_create(_OPAQUE_VALUE_ADAPTER.validate_python(original_function), e):
+            if is_create_that_may_already_exist(_OPAQUE_VALUE_ADAPTER.validate_python(original_function), e):
                 log_create_not_resent(model_group if isinstance(model_group, str) else None)
                 raise
             current_attempt = None
@@ -9446,7 +9448,7 @@ class Router(DeprecatedRouterMembers):
                     return response
 
                 except Exception as e:
-                    if is_timed_out_create(_OPAQUE_VALUE_ADAPTER.validate_python(original_function), e):
+                    if is_create_that_may_already_exist(_OPAQUE_VALUE_ADAPTER.validate_python(original_function), e):
                         log_create_not_resent(model_group if isinstance(model_group, str) else None)
                         raise
                     # Always track the latest error so we raise the most

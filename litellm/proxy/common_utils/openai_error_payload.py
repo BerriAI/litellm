@@ -5,14 +5,14 @@ string ``"None"`` satisfies."""
 import sys
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter
 
 from litellm._logging import redact_internal_details_from_client_fields
 from litellm.constants import STRINGIFIED_NONE
-from litellm.llms.openai.common_utils import timed_out_after_send
+from litellm.llms.openai.common_utils import create_may_already_exist
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
@@ -213,10 +213,28 @@ def with_litellm_call_id(exc: ProxyException, litellm_call_id: str | None) -> Pr
     return exc
 
 
-def with_no_retry_after_a_sent_timeout(exc: ProxyException, error: BaseException) -> ProxyException:
-    if timed_out_after_send(error):
-        exc.headers[SHOULD_RETRY_HEADER] = "false"  # rebind-ok: ProxyException headers are a plain dict
-    return exc
+_CREATE_MAY_EXIST_NOTICES: Final[Mapping[Literal["file", "batch"], str]] = MappingProxyType(
+    {
+        "file": "The provider may already have created this file, so list your files before you send it again",
+        "batch": "The provider may already have created this batch, so list your batches before you send it again",
+    }
+)
+
+
+def with_notice_when_the_create_may_exist(
+    exc: ProxyException, error: BaseException, created: Literal["file", "batch"]
+) -> ProxyException:
+    if not create_may_already_exist(error):
+        return exc
+    return ProxyException(
+        message=f"{exc.message}\n\n{_CREATE_MAY_EXIST_NOTICES[created]}",
+        type=exc.type,
+        param=exc.param,
+        code=exc.code,
+        headers={**exc.headers, SHOULD_RETRY_HEADER: "false"},
+        openai_code=None if exc.openai_code is None else str(exc.openai_code),
+        provider_specific_fields=exc.provider_specific_fields,
+    )
 
 
 def headers_with_litellm_call_id(headers: Mapping[str, str] | None, litellm_call_id: str) -> Mapping[str, str]:

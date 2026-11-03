@@ -229,8 +229,14 @@ def resend_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
 _ANSWERS_A_RESEND_CANNOT_DUPLICATE: Final = (
     pytest.param(lambda: httpx.Response(429, json={"error": {"message": "slow down"}}), id="429"),
     pytest.param(lambda: httpx.Response(503, json={"error": {"message": "overloaded"}}), id="503"),
+    pytest.param(
+        lambda: httpx.Response(504, headers={"x-should-retry": "true"}, json={"error": {"message": "send it again"}}),
+        id="504-should-retry",
+    ),
     pytest.param(lambda: httpx.ConnectError("connection refused"), id="connect-error"),
     pytest.param(lambda: httpx.ConnectTimeout("no connection in time"), id="connect-timeout"),
+    pytest.param(lambda: httpx.ProxyError("the egress proxy refused the connection"), id="proxy-error"),
+    pytest.param(lambda: httpx.WriteTimeout("the body was not written in time"), id="write-timeout"),
 )
 
 _ANSWERS_AFTER_THE_PROVIDER_MAY_HAVE_CREATED_IT: Final = (
@@ -244,6 +250,11 @@ _ANSWERS_AFTER_THE_PROVIDER_MAY_HAVE_CREATED_IT: Final = (
         lambda: httpx.Response(503, headers={"x-should-retry": "false"}, json={"error": {"message": "do not resend"}}),
         openai.APIStatusError,
         id="503-should-not-retry",
+    ),
+    pytest.param(
+        lambda: httpx.Response(504, json={"error": {"message": "the gateway gave up waiting"}}),
+        openai.APIStatusError,
+        id="504",
     ),
 )
 

@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.router import AllowedFailsPolicy, RetryPolicy
 import os
 
@@ -1079,8 +1080,7 @@ async def test_a_create_that_times_out_is_neither_retried_nor_sent_to_a_fallback
     assert raised.value.message.endswith(_NO_FALLBACK_NOTE)
     assert raised.value.message.count(_NO_FALLBACK_NOTE) == 1
     assert [record.getMessage() for record in caplog.records if "does not resend" in record.getMessage()] == [
-        "Model group 'batch-primary' does not resend a create that timed out after it was sent, "
-        "because the provider may already have created it"
+        "Model group 'batch-primary' does not resend a failed create, because the provider may already have created it"
     ]
 
 
@@ -1160,6 +1160,95 @@ async def test_a_create_that_timed_out_before_it_was_sent_is_still_retried_and_s
 
     assert getattr(created, "id") == _CREATED_OBJECTS[create]["id"]
     assert create_route.call_count == 2
+
+
+def _one_deployment_router(model: str, api_base: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "batch-primary",
+                "litellm_params": {"model": model, "api_base": api_base, "api_key": "sk-test"},
+            }
+        ],
+        num_retries=2,
+    )
+
+
+@pytest.mark.parametrize(
+    "outcome, expected_posts",
+    [
+        pytest.param(httpx.ReadTimeout("no answer in time"), 1, id="read-timeout"),
+        pytest.param(httpx.ConnectTimeout("no connection in time"), 3, id="connect-timeout"),
+        pytest.param(httpx.WriteTimeout("the body was not written in time"), 3, id="write-timeout"),
+        pytest.param(httpx.Response(408, json={"message": "the request did not arrive in time"}), 3, id="http-408"),
+    ],
+)
+async def test_a_mistral_batch_create_is_retried_only_when_the_failed_post_cannot_have_created_it(
+    outcome: httpx.TimeoutException | httpx.Response,
+    expected_posts: int,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    api_base: Final = f"https://router-mistral-{request.node.callspec.id}.test/v1"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(side_effect=outcome)
+
+    with pytest.raises(BaseLLMException):
+        await _create(_one_deployment_router("mistral/mistral-small-latest", api_base), "batch")
+
+    assert create_route.call_count == expected_posts
+
+
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_whose_connection_dropped_after_it_was_sent_is_neither_retried_nor_sent_to_a_fallback(
+    create: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_bases: Final = tuple(f"https://router-{create}-dropped-order-{order}.test" for order in (1, 2))
+    dropped_route: Final = respx_mock.post(url__startswith=api_bases[0]).mock(
+        side_effect=httpx.RemoteProtocolError("the server closed the connection before it answered")
+    )
+    fallback_route: Final = respx_mock.post(url__startswith=api_bases[1]).mock(
+        return_value=httpx.Response(200, json=_CREATED_OBJECTS[create])
+    )
+
+    with pytest.raises(openai.APIConnectionError):
+        await _create(_batch_router(api_bases, num_retries=2), create)
+
+    assert (dropped_route.call_count, fallback_route.call_count) == (1, 0)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(
+            httpx.Response(500, headers={"x-should-retry": "false"}, json={"error": {"message": "do not resend"}}),
+            id="500-should-not-retry",
+        ),
+        pytest.param(httpx.Response(504, json={"error": {"message": "the gateway gave up waiting"}}), id="504"),
+    ],
+)
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_whose_answer_says_it_may_exist_is_sent_once(
+    create: str,
+    answer: httpx.Response,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    api_base: Final = f"https://router-{request.node.callspec.id}.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(return_value=answer)
+
+    with pytest.raises(openai.APIStatusError):
+        await _create(_one_deployment_router("litellm_proxy/gpt-batch", api_base), create)
+
+    assert create_route.call_count == 1
 
 
 _ANTHROPIC_FILE: Final = {

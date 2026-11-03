@@ -54,31 +54,73 @@ _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(Azur
 _OPENAI_API_HOST: Final[str] = "api.openai.com"
 
 _CreatedT = TypeVar("_CreatedT")
-_CAUSES_OF_A_REQUEST_THAT_NEVER_LEFT: Final = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+_CAUSES_THAT_CANNOT_HAVE_CREATED_ANYTHING: Final = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.ProxyError,
+    httpx.WriteTimeout,
+)
 _STATUSES_THE_SDK_RETRIES: Final = frozenset({408, 409, 429})
+_GATEWAY_TIMEOUT: Final = 504
+_LONGEST_CAUSE_CHAIN: Final = 10
+_WIRE_FAILURES: Final = (httpx.TransportError, httpx.HTTPStatusError, openai.APIStatusError)
 
 
-def was_never_sent(error: BaseException) -> bool:
+def _cannot_have_created(error: openai.APIError) -> bool:
     return isinstance(error, openai.APIConnectionError) and isinstance(
-        error.__cause__, _CAUSES_OF_A_REQUEST_THAT_NEVER_LEFT
+        error.__cause__, _CAUSES_THAT_CANNOT_HAVE_CREATED_ANYTHING
     )
 
 
-def timed_out_after_send(error: BaseException) -> bool:
-    return isinstance(error, openai.APITimeoutError) and not was_never_sent(error)
+def _retry_the_provider_asked_for(response: httpx.Response) -> bool | None:
+    match response.headers.get("x-should-retry"):
+        case "true":
+            return True
+        case "false":
+            return False
+        case _:
+            return None
 
 
 def _provider_asks_for_a_retry(response: httpx.Response) -> bool:
-    should_retry: Final = response.headers.get("x-should-retry")
-    if should_retry in ("true", "false"):
-        return should_retry == "true"
-    return response.status_code in _STATUSES_THE_SDK_RETRIES or response.status_code >= 500
+    asked: Final = _retry_the_provider_asked_for(response)
+    if asked is not None:
+        return asked
+    return response.status_code in _STATUSES_THE_SDK_RETRIES or (
+        response.status_code >= 500 and response.status_code != _GATEWAY_TIMEOUT
+    )
+
+
+def _answer_says_it_may_exist(response: httpx.Response) -> bool:
+    asked: Final = _retry_the_provider_asked_for(response)
+    if asked is not None:
+        return not asked
+    return response.status_code == _GATEWAY_TIMEOUT
+
+
+def _cause_chain(error: BaseException | None, links_left: int = _LONGEST_CAUSE_CHAIN) -> tuple[BaseException, ...]:
+    if error is None or links_left == 0:
+        return ()
+    return (error, *_cause_chain(error.__cause__, links_left - 1))
+
+
+def create_may_already_exist(error: BaseException) -> bool:
+    chain: Final = _cause_chain(error)
+    wire_failures: Final = tuple(link for link in chain if isinstance(link, _WIRE_FAILURES))
+    match wire_failures[-1] if wire_failures else None:
+        case openai.APIStatusError(response=response) | httpx.HTTPStatusError(response=response):
+            return _answer_says_it_may_exist(response)
+        case httpx.TransportError() as transport_error:
+            return not isinstance(transport_error, _CAUSES_THAT_CANNOT_HAVE_CREATED_ANYTHING)
+        case _:
+            return any(isinstance(link, openai.APITimeoutError) for link in chain)
 
 
 def _resend_cannot_duplicate(error: openai.APIError) -> bool:
     if isinstance(error, openai.APIStatusError):
         return _provider_asks_for_a_retry(error.response)
-    return was_never_sent(error)
+    return _cannot_have_created(error)
 
 
 def _seconds_before_resend(error: openai.APIError, max_retries: int, retries_left: int) -> float:

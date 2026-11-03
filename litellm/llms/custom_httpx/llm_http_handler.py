@@ -6829,7 +6829,7 @@ class BaseLLMHTTPHandler:
         )
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
-        raise provider_error
+        raise provider_error from error
 
     def handle_error(
         self,

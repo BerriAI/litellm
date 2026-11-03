@@ -44,7 +44,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
-from litellm.proxy.common_utils.openai_error_payload import with_no_retry_after_a_sent_timeout
+from litellm.proxy.common_utils.openai_error_payload import with_notice_when_the_create_may_exist
 from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     BATCH_CREATE_HIDDEN_PARAM,
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -543,7 +543,7 @@ async def create_batch(
         )
         litellm_call_id: Final = request_litellm_call_id(data)
         log_llm_api_exception(e, litellm_call_id)
-        raise with_no_retry_after_a_sent_timeout(handle_exception_on_proxy(e, litellm_call_id), e)
+        raise with_notice_when_the_create_may_exist(handle_exception_on_proxy(e, litellm_call_id), e, "batch")
 
 
 @router.get(

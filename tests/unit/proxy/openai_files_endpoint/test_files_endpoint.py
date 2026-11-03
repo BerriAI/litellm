@@ -594,6 +594,11 @@ def _raised_from(error: Exception, cause: Exception) -> Exception:
         return raised
 
 
+_FILE_MAY_EXIST_NOTICE: Final = (
+    "\n\nThe provider may already have created this file, so list your files before you send it again"
+)
+
+
 @pytest.mark.parametrize(
     "upload_error, status_code, should_retry",
     [
@@ -604,6 +609,23 @@ def _raised_from(error: Exception, cause: Exception) -> Exception:
             500,
             "false",
             id="read-timeout",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD),
+                httpx.RemoteProtocolError("the server closed the connection before it answered"),
+            ),
+            500,
+            "false",
+            id="connection-dropped",
+        ),
+        pytest.param(
+            lambda: openai.InternalServerError(
+                "the gateway gave up waiting", response=httpx.Response(504, request=_UPSTREAM_FILE_UPLOAD), body=None
+            ),
+            504,
+            "false",
+            id="504",
         ),
         pytest.param(
             lambda: _raised_from(
@@ -623,7 +645,7 @@ def _raised_from(error: Exception, cause: Exception) -> Exception:
         ),
     ],
 )
-def test_create_file_tells_the_caller_not_to_resend_only_an_upload_that_timed_out_after_it_was_sent(
+def test_create_file_tells_the_caller_not_to_resend_only_an_upload_the_provider_may_have_made(
     monkeypatch: pytest.MonkeyPatch,
     llm_router: Router,
     upload_error: Callable[[], Exception],
@@ -663,8 +685,10 @@ def test_create_file_tells_the_caller_not_to_resend_only_an_upload_that_timed_ou
         headers={"Authorization": "Bearer test-key"},
     )
 
+    notice: Final = _FILE_MAY_EXIST_NOTICE if should_retry == "false" else ""
     assert response.status_code == status_code
     assert response.headers.get("x-should-retry") == should_retry
+    assert response.json()["error"]["message"] == getattr(error, "message", str(error)) + notice
 
 
 @pytest.mark.flaky(retries=3, delay=2)
