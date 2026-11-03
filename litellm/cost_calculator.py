@@ -435,7 +435,7 @@ def cost_per_token(
     ### CUSTOM PRICING ###
     custom_cost_per_token: CostPerToken | None = None,
     custom_cost_per_second: float | None = None,
-    per_call_model_info: ModelInfo | None = None,
+    requested_model_info_override: ModelInfo | None = None,
     ### NUMBER OF QUERIES ###
     number_of_queries: int | None = None,
     ### USAGE OBJECT ###
@@ -547,9 +547,9 @@ def cost_per_token(
     if response_cost is not None:
         return response_cost[0], response_cost[1]
 
-    if per_call_model_info is not None:
+    if requested_model_info_override is not None:
         per_second: Final = _per_second_pricing_cost_from_info(
-            per_call_model_info, response_time_ms, audio_transcription_file_duration
+            requested_model_info_override, response_time_ms, audio_transcription_file_duration
         )
         if per_second is not None:
             return per_second
@@ -558,7 +558,7 @@ def cost_per_token(
             usage=usage_block,
             custom_llm_provider=custom_llm_provider or "",
             service_tier=service_tier,
-            model_info=per_call_model_info,
+            model_info=requested_model_info_override,
         )
 
     model_cost_ref: Final = litellm.model_cost
@@ -1691,7 +1691,7 @@ def completion_cost(
     ### CUSTOM PRICING ###
     custom_cost_per_token: CostPerToken | None = None,
     custom_cost_per_second: float | None = None,
-    per_call_model_info: ModelInfo | None = None,
+    requested_model_info_override: ModelInfo | None = None,
     optional_params: dict | None = None,
     custom_pricing: bool | None = None,
     base_model: str | None = None,
@@ -1745,7 +1745,7 @@ def completion_cost(
                         quality=quality,
                         n=n,
                         custom_cost_per_token=custom_cost_per_token,
-                        per_call_model_info=per_call_model_info,
+                        requested_model_info_override=requested_model_info_override,
                         custom_cost_per_second=custom_cost_per_second,
                         optional_params=optional_params,
                         custom_pricing=custom_pricing,
@@ -2231,7 +2231,7 @@ def completion_cost(
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
                     custom_cost_per_token=custom_cost_per_token,
-                    per_call_model_info=per_call_model_info,
+                    requested_model_info_override=requested_model_info_override,
                     prompt_characters=prompt_characters,
                     completion_characters=completion_characters,
                     cache_creation_input_tokens=cache_creation_input_tokens,
@@ -2464,7 +2464,7 @@ def response_cost_calculator(
     region_name: str | None = None,
     custom_cost_per_token: CostPerToken | None = None,
     custom_cost_per_second: float | None = None,
-    per_call_model_info: ModelInfo | None = None,
+    requested_model_info_override: ModelInfo | None = None,
 ) -> float:
     """
     Returns
@@ -2521,7 +2521,7 @@ def response_cost_calculator(
                 custom_pricing=custom_pricing,
                 base_model=base_model,
                 custom_cost_per_token=custom_cost_per_token,
-                per_call_model_info=per_call_model_info,
+                requested_model_info_override=requested_model_info_override,
                 custom_cost_per_second=custom_cost_per_second,
                 prompt=prompt,
                 standard_built_in_tools_params=standard_built_in_tools_params,
