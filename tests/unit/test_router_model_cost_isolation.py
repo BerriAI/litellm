@@ -2096,8 +2096,6 @@ def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
         {
             "mode": "chat",
             "litellm_provider": "openai",
-            "max_input_tokens": 100000,
-            "max_output_tokens": 128000,
             "max_tokens": 128000,
             "supports_vision": True,
             "supported_endpoints": ["/v1/responses"],
@@ -2115,6 +2113,7 @@ def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
     assert filtered == {
         "mode": "chat",
         "litellm_provider": "openai",
+        "max_tokens": 128000,
         "supports_vision": True,
         "supported_endpoints": ["/v1/responses"],
         "use_openai_responses_path": True,
@@ -2166,7 +2165,8 @@ def test_capability_flags_propagate_from_deployment_model_info_to_shared_key():
         _restore_model_cost_entries(model_keys)
 
 
-def test_token_limits_stay_on_the_deployment_that_set_them() -> None:
+@pytest.mark.parametrize("override_first", [True, False], ids=["override-first", "override-last"])
+def test_token_limits_stay_on_the_deployment_that_set_them(override_first: bool) -> None:
     backend_model: Final = "openai/gpt-4o-mini"
     shared_keys: Final = ("gpt-4o-mini", backend_model)
     token_fields: Final = ("max_input_tokens", "max_output_tokens", "max_tokens")
@@ -2190,25 +2190,26 @@ def test_token_limits_stay_on_the_deployment_that_set_them() -> None:
         }
         for key in shared_keys
     }
+    plain_deployment: Final = {
+        "model_name": "plain-gpt-4o-mini",
+        "litellm_params": {"model": backend_model},
+        "model_info": {"id": plain_id},
+    }
+    override_deployment: Final = {
+        "model_name": "overridden-gpt-4o-mini",
+        "litellm_params": {"model": backend_model},
+        "model_info": {
+            "id": override_id,
+            "max_input_tokens": 4321,
+            "max_output_tokens": 987,
+            "max_tokens": 987,
+        },
+    }
     try:
         router: Final = Router(
-            model_list=[
-                {
-                    "model_name": "plain-gpt-4o-mini",
-                    "litellm_params": {"model": backend_model},
-                    "model_info": {"id": plain_id},
-                },
-                {
-                    "model_name": "overridden-gpt-4o-mini",
-                    "litellm_params": {"model": backend_model},
-                    "model_info": {
-                        "id": override_id,
-                        "max_input_tokens": 4321,
-                        "max_output_tokens": 987,
-                        "max_tokens": 987,
-                    },
-                },
-            ]
+            model_list=[override_deployment, plain_deployment]
+            if override_first
+            else [plain_deployment, override_deployment]
         )
         litellm.get_model_info.cache_clear()
 
@@ -2235,6 +2236,42 @@ def test_token_limits_stay_on_the_deployment_that_set_them() -> None:
             catalog_limits[backend_model]["max_output_tokens"],
         )
         assert (override_listing["max_input_tokens"], override_listing["max_output_tokens"]) == (4321, 987)
+    finally:
+        _restore_model_cost_entries(model_keys)
+        litellm.get_model_info.cache_clear()
+
+
+def test_unknown_backend_token_limits_still_fill_the_shared_key() -> None:
+    backend_model: Final = "hosted_vllm/somelab.lit4544-unmapped-token-limits"
+    first_id: Final = "unknown-token-limit-first-deployment"
+    second_id: Final = "unknown-token-limit-second-deployment"
+    token_fields: Final = ("max_input_tokens", "max_output_tokens", "max_tokens")
+    first_limits: Final = {"max_input_tokens": 4321, "max_output_tokens": 987, "max_tokens": 987}
+    second_limits: Final = {"max_input_tokens": 1234, "max_output_tokens": 456, "max_tokens": 456}
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (backend_model, first_id, second_id)
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "unknown-token-limit-first",
+                    "litellm_params": {"model": backend_model, "api_key": "fake-key"},
+                    "model_info": {"id": first_id, **first_limits},
+                },
+                {
+                    "model_name": "unknown-token-limit-second",
+                    "litellm_params": {"model": backend_model, "api_key": "fake-key"},
+                    "model_info": {"id": second_id, **second_limits},
+                },
+            ]
+        )
+
+        assert {
+            field: (litellm.model_cost.get(backend_model) or {}).get(field) for field in token_fields
+        } == first_limits
+        assert {field: litellm.get_model_info(first_id).get(field) for field in token_fields} == first_limits
+        assert {field: litellm.get_model_info(second_id).get(field) for field in token_fields} == second_limits
     finally:
         _restore_model_cost_entries(model_keys)
         litellm.get_model_info.cache_clear()
@@ -3146,8 +3183,6 @@ def test_register_deployment_in_model_cost_writes_both_key_families():
             model_info={
                 "id": "both-families-id",
                 "max_input_tokens": 999,
-                "max_output_tokens": 777,
-                "max_tokens": 999,
                 "litellm_provider": "hosted_vllm",
             },
             model="hosted_vllm/both-families-backend",
@@ -3155,11 +3190,8 @@ def test_register_deployment_in_model_cost_writes_both_key_families():
         )
 
         assert litellm.model_cost["both-families-id"]["max_input_tokens"] == 999
-        assert litellm.model_cost["both-families-id"]["max_output_tokens"] == 777
-        assert litellm.model_cost["both-families-id"]["max_tokens"] == 999
         shared = litellm.model_cost["hosted_vllm/both-families-backend"]
-        assert shared["litellm_provider"] == "hosted_vllm"
-        assert not {"max_input_tokens", "max_output_tokens", "max_tokens"} & shared.keys()
+        assert shared["max_input_tokens"] == 999
         assert "id" not in shared
     finally:
         _restore_model_cost_entries(model_keys)

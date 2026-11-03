@@ -305,7 +305,7 @@ def coerce_token_limit(value: object) -> int | None:
         return value
     if isinstance(value, (str, float)):
         try:
-            return int(float(value))
+            return int(value)
         except (TypeError, ValueError, OverflowError):
             return None
     return None
