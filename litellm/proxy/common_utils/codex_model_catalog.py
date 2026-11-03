@@ -36,10 +36,8 @@ from urllib.parse import urlparse
 from packaging.version import Version
 from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -578,6 +576,8 @@ def _is_openai_origin(api_base: object) -> bool:
     """Whether a deployment's OpenAI requests go to OpenAI itself, so its key may go to OpenAI's catalog
     endpoint: its own api_base, else the global `litellm.api_base`, `OPENAI_BASE_URL` or `OPENAI_API_BASE`
     override the OpenAI handler would apply, else OpenAI."""
+    import litellm  # noqa: PLC0415  # litellm imports this module while it is initializing, so the global is read late
+
     resolved: Final = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
     if not resolved:
         return True
@@ -596,6 +596,10 @@ def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
         or not api_key
     ):
         return None
+    from litellm.secret_managers.main import (
+        get_secret_str,  # noqa: PLC0415  # secret_managers.main imports litellm, which imports this module
+    )
+
     return (get_secret_str(api_key) if api_key.startswith("os.environ/") else api_key) or None
 
 
