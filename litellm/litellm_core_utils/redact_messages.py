@@ -107,7 +107,13 @@ def redacted_response_obj_for_custom_logger(response_obj: object, custom_logger:
 
 def _is_redactable_response(response_obj: object) -> bool:
     return isinstance(
-        response_obj, (litellm.ModelResponse, litellm.ResponsesAPIResponse, litellm.EmbeddingResponse)
+        response_obj,
+        (
+            litellm.ModelResponse,
+            litellm.TextCompletionResponse,
+            litellm.ResponsesAPIResponse,
+            litellm.EmbeddingResponse,
+        ),
     ) or (isinstance(response_obj, dict) and ("choices" in response_obj or "output" in response_obj))
 
 
@@ -224,6 +230,7 @@ def _redact_choice_content(choice):
     elif isinstance(choice, litellm.utils.TextChoices):
         _redact_field_when_present(choice, "text")
         _redact_field_when_present(choice, "reasoning_content")
+        _drop_field_when_present(choice, "logprobs")
 
 
 def _as_mapping(value: object) -> Mapping[str, object] | None:
@@ -583,7 +590,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             return {"text": REDACTED_BY_LITELLM}
 
         _result: Final = copy.deepcopy(result)
-        if isinstance(_result, litellm.ModelResponse):
+        if isinstance(_result, (litellm.ModelResponse, litellm.TextCompletionResponse)):
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:
                     _redact_choice_content(choice)

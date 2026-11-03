@@ -149,6 +149,20 @@ def test_redaction_hides_reasoning_item_summaries(details: dict[str, object], re
     assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
 
 
+def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted() -> None:
+    logprobs: Final = {"tokens": [SECRET], "token_logprobs": [-0.1], "text_offset": [0], "top_logprobs": [{SECRET: -0.1}]}
+    response: Final = TextCompletionResponse(
+        choices=[{"index": 0, "text": SECRET, "logprobs": logprobs, "finish_reason": "stop"}]
+    )
+
+    redacted: Final = redacted_response_obj_for_custom_logger(response, CustomLogger(message_logging=False))
+
+    assert isinstance(redacted, TextCompletionResponse)
+    assert redacted.choices[0].text == "redacted-by-litellm"
+    assert SECRET not in redacted.model_dump_json()
+    assert response.choices[0].text == SECRET, "the caller's own response is not redacted"
+
+
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
     hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
     original_hidden_params: Final = copy.deepcopy(hidden_params)
