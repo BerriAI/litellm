@@ -4979,6 +4979,79 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
 
 @pytest.mark.parametrize(
+    "request_body",
+    [
+        {
+            "model": "claude-sonnet-4-6",
+            "model_id": "us.amazon.nova-micro-v1:0",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        {"model": "claude-sonnet-4-6", "extra_body": {"model_id": "us.amazon.nova-micro-v1:0"}},
+    ],
+    ids=["root", "extra_body"],
+)
+@pytest.mark.parametrize("route", [None, "/v1/chat/completions", "/v1/messages"])
+def test_client_model_id_cannot_swap_the_bedrock_model_behind_an_allowed_model(
+    request_body: dict[str, object], route: str | None
+) -> None:
+    with pytest.raises(ValueError, match="model_id"):
+        is_request_body_safe(
+            request_body=request_body,
+            general_settings={},
+            llm_router=None,
+            model="claude-sonnet-4-6",
+            route=route,
+        )
+
+
+def test_client_model_id_is_allowed_under_proxy_wide_opt_in() -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-4-6", "model_id": "us.amazon.nova-micro-v1:0"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-4-6",
+        )
+        is True
+    )
+
+
+def test_client_model_id_is_allowed_when_the_deployment_opts_in() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4-6",
+                "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-4-6"},
+                "model_info": {"configurable_clientside_auth_params": ["model_id"]},
+            }
+        ]
+    )
+    assert (
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-4-6", "model_id": "us.amazon.nova-micro-v1:0"},
+            general_settings={},
+            llm_router=router,
+            model="claude-sonnet-4-6",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("route", ["/health", "/spend/logs/ui", "/model/block", "/model/unblock"])
+def test_admin_routes_keep_model_id_as_a_deployment_id(route: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model_id": "6a5a6b1e-deployment-id"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route=route,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
     "allowed_param, input_value, should_return_true",
     [
         ("api_base", {"api_base": "http://dummy.com"}, True),
