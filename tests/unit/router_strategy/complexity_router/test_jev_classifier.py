@@ -272,6 +272,63 @@ async def test_jev_accounts_once_with_parent_identity_even_when_the_verdict_fail
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("classifier", [{"provider": "jev"}, {"provider": "laya", "model": "english"}])
+@pytest.mark.parametrize(
+    ("mode", "user_agent", "forwards_system"),
+    [
+        ("auto", "opencode/1.18.20", True),
+        ("auto", "claude-cli/2.1.233", False),
+        ("omit", "opencode/1.18.20", False),
+        ("include", "claude-cli/2.1.233", True),
+    ],
+)
+async def test_oss_classifier_honors_classifier_caller_system_prompt(
+    classifier: dict[str, str], mode: str, user_agent: str, forwards_system: bool
+) -> None:
+    captured: list[Mapping[str, object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={"answers": {"tier": _answer().model_dump()}})
+
+    handler: Final = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    router: Final = ComplexityRouter(
+        "oss-system-prompt",
+        RoutingContext(litellm.Router(model_list=[])),
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": classifier,
+            "classifier_caller_system_prompt": mode,
+            "tiers": {"SIMPLE": "cheap"},
+            "session_affinity": False,
+            "deployment_affinity": False,
+        },
+        jev_client=HttpJevClassifierClient("test", "https://typesafe.test", handler),
+        derive_savings_baseline=False,
+    )
+    messages: Final = [
+        {"role": "system", "content": "HARNESS_SYSTEM_PROMPT"},
+        {"role": "user", "content": "ok, go ahead"},
+    ]
+
+    result: Final = await router.async_pre_routing_hook(
+        model="oss-system-prompt",
+        messages=messages,
+        request_kwargs={"metadata": {"user_agent": user_agent}},
+    )
+    await GLOBAL_LOGGING_WORKER.flush()
+    await handler.client.aclose()
+
+    assert result is not None and result.routing_decision is not None
+    assert result.routing_decision["cause"] == "jev_classifier"
+    assert len(captured) == 1
+    state: Final = str(captured[0]["state"])
+    assert "ok, go ahead" in state
+    assert ("HARNESS_SYSTEM_PROMPT" in state) is forwards_system
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("include_assistant", [False, True])
 async def test_jev_uses_bounded_history_and_separates_operator_instructions(include_assistant: bool) -> None:
     captured: list[Mapping[str, object]] = []
