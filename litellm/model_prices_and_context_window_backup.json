@@ -63749,7 +63749,8 @@
             {
                 "name": "claude-family-baseline",
                 "pattern": "claude-[a-z]+-\\d+(?:[-.]\\d+)?(?:-\\d{8})?",
-                "description": "Any Claude family-major id with an optional minor and an optional 8-digit date suffix, under any provider namespace (bare, bedrock-dotted, vertex, databricks, ...), so bare majors like claude-newfamily-5 get the same baseline as claude-newfamily-5-1. Carries the model-family facts every Claude shares; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number.",
+                "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "description": "Any Claude family-major id with an optional minor and an optional 8-digit date suffix, under any provider namespace (bare, bedrock-dotted, vertex, databricks, ...), so bare majors like claude-newfamily-5 get the same baseline as claude-newfamily-5-1. Carries the model-family facts every Claude shares; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number. On mapped Claude entries from Anthropic, Azure Foundry, Bedrock and Vertex it only fills the keys an entry leaves out, so the entry's own values always win.",
                 "model_info": {
                     "mode": "chat",
                     "max_input_tokens": 200000,
