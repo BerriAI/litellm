@@ -416,6 +416,21 @@ def test_turn_off_message_logging_blanks_messages_and_response():
     assert row["response"] == ""
 
 
+@pytest.mark.parametrize(
+    ("global_redaction", "request_redaction", "redacted"),
+    [(True, False, False), (False, True, True)],
+)
+def test_per_request_turn_off_message_logging_overrides_the_global_setting(
+    global_redaction: bool, request_redaction: bool, redacted: bool
+) -> None:
+    """A key's `callback_vars.turn_off_message_logging` decides, as it does for the DB spend log."""
+    kwargs = {"standard_callback_dynamic_params": {"turn_off_message_logging": request_redaction}}
+    with patch.object(litellm, "turn_off_message_logging", global_redaction):
+        row = spend_log_row_from_payload(_payload(), kwargs)  # type: ignore[arg-type]
+    assert (row["messages"] == "") is redacted
+    assert (row["response"] == "") is redacted
+
+
 @pytest.mark.asyncio
 async def test_failure_event_maps_status_and_error():
     client = MagicMock()

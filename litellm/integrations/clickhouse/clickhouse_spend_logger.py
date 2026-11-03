@@ -21,6 +21,9 @@ from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
 from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
+from litellm.litellm_core_utils.redact_messages import (
+    should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # legacy privacy owner accepts validated call details
+)
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.tracing.types import SpendLogPayload, SpendLogRecord
 from litellm.types.utils import StandardLoggingPayload
@@ -136,7 +139,7 @@ def spend_log_row_from_payload(
     cache_read_tokens, cache_write_tokens = _cache_tokens(usage)
     trace_id, span_id = _find_traceparent(metadata, kwargs)
     response_id: Final = str(payload.get("id") or "")
-    redact = litellm.turn_off_message_logging is True
+    redact = should_redact_message_logging(dict(kwargs))
     track_end_user: Final = not litellm.disable_end_user_cost_tracking
     completion_start_ms = _to_ms(payload.get("completionStartTime"))
     response_cost: Final = payload.get("response_cost")
