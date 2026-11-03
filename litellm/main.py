@@ -7055,6 +7055,7 @@ def embedding(
         encoding_format=encoding_format,
         custom_llm_provider=custom_llm_provider,
         allowed_openai_params=allowed_openai_params,
+        api_base=api_base,
         **non_default_params,
     )
 
@@ -7783,8 +7784,20 @@ def embedding(
                 or get_azure_ai_entra_token(litellm_params=litellm_params_dict)
             )
 
-            ## EMBEDDING CALL
-            response = azure_ai_embedding.embedding(
+            azure_embedding_handler: Final = (
+                partial(
+                    base_llm_http_handler.embedding,
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_params=litellm_params_dict,
+                    headers=headers,
+                )
+                if ProviderConfigManager.get_provider_embedding_config(
+                    model=model, provider=LlmProviders.AZURE_AI, api_base=api_base
+                )
+                is not None
+                else azure_ai_embedding.embedding
+            )
+            response = azure_embedding_handler(
                 model=model,
                 input=input,
                 api_base=api_base,
