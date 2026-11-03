@@ -32,7 +32,7 @@ reflect production.
 
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -435,35 +435,30 @@ def test_db_yaml_credentials_reach_every_handler(seams, handler_name, invoke):
     assert litellm_params.get("vertex_project") == DB_YAML_CREDS["vertex_project"]
 
 
-# =========================================================================== #
-# Custom providers: a BaseVideoConfig registered in custom_provider_map.
-# =========================================================================== #
-
-
-def test_video_generation__custom_provider_map_base_video_config_is_dispatched(monkeypatch):
+def test_video_generation__custom_provider_map_base_video_config_is_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 
     class QueueVideoConfig(OpenAIVideoConfig):
         pass
 
-    video_config = QueueVideoConfig()
+    video_config: Final = QueueVideoConfig()
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "queue-video", "custom_handler": video_config}])
     monkeypatch.setattr(litellm, "_custom_providers", ["queue-video"])
-    handler = MagicMock(spec=BaseLLMHTTPHandler)
+    handler: Final = MagicMock(spec=BaseLLMHTTPHandler)
     with patch.object(videos_main, "base_llm_http_handler", handler):
         videos_main.video_generation(model="queue-video/seedance-1", prompt="a cat", api_base="http://backend.test")
-    kw = handler.video_generation_handler.call_args.kwargs
+    kw: Final = handler.video_generation_handler.call_args.kwargs
     assert kw["video_generation_provider_config"] is video_config
     assert kw["custom_llm_provider"] == "queue-video"
     assert kw["model"] == "seedance-1"
 
 
-def test_video_generation__custom_provider_without_a_video_config_is_a_400(monkeypatch):
+def test_video_generation__custom_provider_without_a_video_config_is_a_400(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.llms.custom_llm import CustomLLM
 
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "image-only", "custom_handler": CustomLLM()}])
     monkeypatch.setattr(litellm, "_custom_providers", ["image-only"])
-    handler = MagicMock(spec=BaseLLMHTTPHandler)
+    handler: Final = MagicMock(spec=BaseLLMHTTPHandler)
     with patch.object(videos_main, "base_llm_http_handler", handler):
         with pytest.raises(litellm.BadRequestError, match="video generation is not supported for image-only"):
             videos_main.video_generation(model="image-only/seedance-1", prompt="a cat")

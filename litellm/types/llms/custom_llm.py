@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -9,4 +9,4 @@ if TYPE_CHECKING:
 
 class CustomLLMItem(TypedDict):
     provider: str
-    custom_handler: "CustomLLM | BaseVideoConfig"
+    custom_handler: ReadOnly["CustomLLM | BaseVideoConfig"]

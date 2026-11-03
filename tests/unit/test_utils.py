@@ -1661,25 +1661,29 @@ def test_get_provider_rerank_config():
     assert isinstance(config, HostedVLLMRerankConfig)
 
 
-def test_get_provider_video_config_resolves_a_custom_provider_map_base_video_config(monkeypatch):
+def test_get_provider_video_config_resolves_a_custom_provider_map_base_video_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A `BaseVideoConfig` registered in `custom_provider_map` answers for its provider name, a `CustomLLM`
-    registered there does not, and built-in names given as strings still resolve."""
+    registered there does not, and a built-in name still resolves to its built-in config even when a `CustomLLM`
+    shadows it in the map."""
     from litellm.llms.custom_llm import CustomLLM
     from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 
     class QueueVideoConfig(OpenAIVideoConfig):
         pass
 
-    video_config = QueueVideoConfig()
+    video_config: Final = QueueVideoConfig()
     monkeypatch.setattr(
         litellm,
         "custom_provider_map",
         [
             {"provider": "queue-video", "custom_handler": video_config},
             {"provider": "image-only", "custom_handler": CustomLLM()},
+            {"provider": "openai", "custom_handler": CustomLLM()},
         ],
     )
-    monkeypatch.setattr(litellm, "_custom_providers", ["queue-video", "image-only"])
+    monkeypatch.setattr(litellm, "_custom_providers", ["queue-video", "image-only", "openai"])
 
     assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="queue-video") is video_config
     assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="image-only") is None
