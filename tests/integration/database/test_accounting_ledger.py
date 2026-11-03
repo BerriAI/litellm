@@ -325,11 +325,11 @@ async def test_cost_requires_an_existing_outbound_source(writer: _Writer, ledger
 async def test_interruption_rolls_back_or_retry_recognizes_commit(
     writer: _Writer, ledger_database: str, failure: str
 ) -> None:
-    client, store = writer
+    _, store = writer
 
     @asynccontextmanager
     async def interrupted() -> AsyncGenerator[Prisma]:
-        async with client.writer_db.tx() as tx:
+        async with store._transaction() as tx:
             yield tx
             if failure == "before_commit":
                 raise RuntimeError("injected pre-commit failure")
