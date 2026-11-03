@@ -781,12 +781,17 @@ class AnthropicMessagesHandler(BaseTranslation):
             for event in AnthropicMessagesHandler._parse_sse_data_line(line)
         )
 
-    def _translate_to_openai(self, data: dict) -> ChatCompletionRequest:
+    def _translate_to_openai(
+        self,
+        data: dict,  # mutable-ok: the request body the adapter reads
+        *,
+        keep_cache_control: bool = False,
+    ) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format."""
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        ) = LiteLLMAnthropicMessagesAdapter(keep_cache_control=keep_cache_control).translate_anthropic_to_openai(
             anthropic_message_request=cast(AnthropicMessagesRequest, scannable_tool_result_request(data)),
             preserve_midturn_system=True,
         )
@@ -815,6 +820,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         *,
         request_data: dict[str, object] | None = None,  # mutable-ok: the request dict guardrails receive
+        keep_cache_control: bool = False,
     ) -> Mapping[str, object]:
         """
         Process input messages by applying guardrails to text content. ``request_data`` is what the guardrail sees as
@@ -830,10 +836,17 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # The top-level prompt is translated on its own below so it can be hoisted in front of
         # any mid-turn system entries and scanned first, aligned with that structured position.
+        body_model: Final = data.get("model")
         request_model: Final = (request_data or {}).get("model")
-        model: Final = data.get("model") or (request_model if isinstance(request_model, str) else "")
+        model: Final[str] = (
+            body_model
+            if isinstance(body_model, str) and body_model
+            else (request_model if isinstance(request_model, str) else "")
+        )
         translation_source: Final = {**{key: value for key, value in data.items() if key != "system"}, "model": model}
-        chat_completion_compatible_request: Final = self._translate_to_openai(translation_source)
+        chat_completion_compatible_request: Final = self._translate_to_openai(
+            translation_source, keep_cache_control=keep_cache_control
+        )
 
         full_structured_messages: Final = cast(
             list[AllMessageValues],
@@ -842,7 +855,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_midturn_system_message: Final = any(
             str(message.get("role") or "").lower() == "system" for message in full_structured_messages
         )
-        hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(data)
+        hoisted_system_message: Final = (
+            None if skip_system else self._hoisted_top_level_system_message(data, model, keep_cache_control)
+        )
         if hoisted_system_message is not None:
             full_structured_messages.insert(0, hoisted_system_message)
         # skip_system already excluded the trusted top-level prompt (it is simply not hoisted);
@@ -959,6 +974,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                     hoisted_system_message=hoisted_system_message,
                     preserve_system_messages=has_midturn_system_message,
                     original_tool_names=original_tool_names.used,
+                    model=model,
                 )
             else:
                 if guardrailed_texts and len(guardrailed_texts) != len(scanned):
@@ -981,17 +997,20 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(self, data: Mapping[str, object]) -> AllMessageValues | None:
+    def _hoisted_top_level_system_message(
+        self, data: Mapping[str, object], model: str, keep_cache_control: bool
+    ) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:
             return None
         probe: Final = self._translate_to_openai(
             {
-                "model": data.get("model") or "",
+                "model": model,
                 "messages": [],
                 "system": system,
-            }
+            },
+            keep_cache_control=keep_cache_control,
         )
         hoisted: Final = probe.get("messages") or []
         return hoisted[0] if hoisted else None
@@ -1125,6 +1144,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         preserve_system_messages: bool = False,
         *,
         original_tool_names: Mapping[str, str],
+        model: str,
     ) -> None:
         """Write a guardrail's structured-message rewrite back without losing corrections."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -1133,7 +1153,6 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
         _is_system: Final = AnthropicMessagesHandler._is_system
-        model: Final = str(data.get("model") or "")
         converted: Final[list] = []  # mutable-ok: API message payload
 
         def _convert_run(run: list) -> None:  # mutable-ok: API message payload
