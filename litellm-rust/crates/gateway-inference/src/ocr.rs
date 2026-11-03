@@ -2,9 +2,10 @@ use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
-use litellm_auth::SecretValue;
-use litellm_core::ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
-use litellm_llms::base_llm::ocr::transformation::OcrDocument;
+use litellm_inference_ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
+use litellm_llms::base_llm::ocr::transformation::decode_request_value;
+use litellm_llms_types::formats::ocr::OcrDocument;
+use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
 use crate::{
@@ -34,7 +35,7 @@ async fn handle(
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let deployment = request::resolve_deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, "/ocr", &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {
@@ -42,7 +43,11 @@ async fn handle(
             file_name: upload.file_name,
             mime_type: upload.mime_type,
         },
-        None => OcrDocument::try_from(body.get("document").cloned().unwrap_or_default())?.into(),
+        None => decode_request_value::<OcrDocument>(
+            body.get("document").cloned().unwrap_or_default(),
+            "document",
+        )?
+        .into(),
     };
     let format = body
         .get("req_format")

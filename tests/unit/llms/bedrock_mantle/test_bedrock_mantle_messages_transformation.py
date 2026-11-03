@@ -10,6 +10,7 @@ Bearer/SigV4 auth chain, and the wire request through the public entrypoint.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -193,7 +194,8 @@ class TestEnvironment:
         assert "anthropic-version" not in merged
 
     def test_project_id_becomes_the_workspace_header(self):
-        assert self._validate({}, {"aws_bedrock_project_id": "proj_123"})["anthropic-workspace"] == "proj_123"
+        # header name from https://docs.aws.amazon.com/bedrock/latest/userguide/workspaces.html, checked 2026-10-02
+        assert self._validate({}, {"aws_bedrock_project_id": "proj_123"})["anthropic-workspace-id"] == "proj_123"
 
 
 class TestRequestBody:
@@ -221,6 +223,20 @@ class TestRequestBody:
             headers={},
         )
         assert "stream" not in body
+
+    def test_body_hoists_wrapped_defer_loading_and_drops_custom(self):
+        schema: Final = {"type": "object", "properties": {}}
+        body = BedrockMantleAnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="anthropic.claude-sonnet-5",
+            messages=[{"role": "user", "content": "ping"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 8,
+                "tools": [{"name": "Read", "input_schema": schema, "custom": {"defer_loading": True}}],
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["tools"] == [{"name": "Read", "input_schema": schema, "defer_loading": True}]
 
 
 class TestAuth:
@@ -451,6 +467,14 @@ class TestBetaHeadersOnTheWire:
 
         assert _sent_betas(route) == ["dangerous-tool-use-2026-09-03"]
         assert _sent_body(route)["safeguards"] == safeguards
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_client_dangerous_tool_use_beta_reaches_mantle_without_safeguards(self) -> None:
+        route: Final = await self._send(extra_headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"})
+
+        assert _sent_betas(route) == ["dangerous-tool-use-2026-09-03"]
+        assert "safeguards" not in _sent_body(route)
 
     @pytest.mark.asyncio
     @respx.mock

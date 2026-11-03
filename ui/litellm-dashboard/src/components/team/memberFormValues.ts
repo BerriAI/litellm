@@ -1,8 +1,21 @@
-export type MemberFieldValue = string | number | null | undefined | string[];
+import {
+  entriesToModelMaxBudget,
+  modelMaxBudgetToEntries,
+  type ModelMaxBudget,
+} from "../key_team_helpers/ModelMaxBudgetEditor";
+
+export type MemberFieldValue = string | number | null | undefined | string[] | ModelMaxBudget;
 
 export type MemberFormValues = Record<string, MemberFieldValue>;
 
-export type MemberFieldType = "input" | "select" | "numerical" | "multi-select" | "budget-duration" | "utc-datetime";
+export type MemberFieldType =
+  | "input"
+  | "select"
+  | "numerical"
+  | "multi-select"
+  | "budget-duration"
+  | "utc-datetime"
+  | "model-max-budget";
 
 export interface MemberAdditionalField {
   name: string;
@@ -12,6 +25,8 @@ export interface MemberAdditionalField {
   step?: number;
   min?: number;
   placeholder?: string;
+  availableModels?: string[];
+  premiumUser?: boolean;
 }
 
 export interface MemberFieldsConfig {
@@ -32,6 +47,9 @@ const NULLABLE_NUMERIC_FIELDS: ReadonlySet<string> = new Set([
 export const TEMP_BUDGET_PAIR_MESSAGE = "Set both a temporary budget increase and its expiry, or neither";
 
 const isUnset = (value: MemberFieldValue): boolean => value === null || value === undefined || value === "";
+
+export const isModelMaxBudget = (value: MemberFieldValue): value is ModelMaxBudget =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 export const tempBudgetPairError = (values: MemberFormValues): "temp_budget_increase" | "temp_budget_expiry" | null => {
   const increaseUnset = isUnset(values.temp_budget_increase);
@@ -66,6 +84,9 @@ export const buildMemberFormValues = (
       allowed_models: initialData.allowed_models || [],
       temp_budget_increase: initialData.temp_budget_increase ?? null,
       temp_budget_expiry: initialData.temp_budget_expiry || null,
+      model_max_budget: isModelMaxBudget(initialData.model_max_budget)
+        ? entriesToModelMaxBudget(modelMaxBudgetToEntries(initialData.model_max_budget))
+        : {},
     };
 
     return pickFieldNames(config, seeded);
@@ -78,6 +99,8 @@ const emptyValueForType = (type: MemberFieldType | undefined): MemberFieldValue 
   switch (type) {
     case "multi-select":
       return [];
+    case "model-max-budget":
+      return {};
     case "numerical":
     case "budget-duration":
     case "utc-datetime":

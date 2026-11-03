@@ -187,7 +187,7 @@ class _ParsedRecord:
 
 
 def _rejected(message: str) -> HTTPException:
-    return HTTPException(status_code=400, detail={"error": message})  # mutable-ok: FastAPI detail shape
+    return HTTPException(status_code=400, detail={"error": message})
 
 
 def raise_public(failure: BatchScanFailure) -> NoReturn:
@@ -388,7 +388,7 @@ async def _scan_record(
     # and `tags` are nested containers otherwise shared with the upload request and with every
     # other record in the window. The narrowing above already removed what cannot be copied.
     for injected in _SCAN_METADATA_BAGS:
-        scan_input[injected] = copy.deepcopy(dict(scan_metadata))  # mutable-ok: guardrails write here
+        scan_input[injected] = copy.deepcopy(dict(scan_metadata))
 
     try:
         # The chain hands back the body it produced, which may be a replacement for the dict it was
@@ -421,7 +421,7 @@ async def _scan_record(
     return _Redaction(
         line_number=record.line_number,
         custom_id=custom_id,
-        text=json.dumps({**record.payload, "body": scanned}),  # mutable-ok: json.dumps needs a plain dict
+        text=json.dumps({**record.payload, "body": scanned}),
     )
 
 

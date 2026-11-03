@@ -28,7 +28,7 @@ def remote_and_clone(tmp_path: Path) -> tuple[Path, Path]:
     (seed / "scripts").mkdir()
     for name in (
         "default_branch.py",
-        "budget_ratchet_check.py",
+        "lint_base_counts.py",
         "ruff_strict_gate.py",
         "type_discipline_gate.py",
         "test_quality_gate.py",
@@ -39,11 +39,9 @@ def remote_and_clone(tmp_path: Path) -> tuple[Path, Path]:
     shutil.copyfile(ROOT / "Makefile", seed / "Makefile")
     (seed / "litellm").mkdir()
     (seed / "litellm" / "example.py").write_text("value = 0\n")
-    (seed / "ruff-strict-budget.json").write_text('{"C901": {"limit": 1}}\n')
     _commit(seed, "staging base")
     _git(seed, "checkout", "-qb", "main")
     (seed / "litellm" / "example.py").write_text("value = 1\n")
-    (seed / "ruff-strict-budget.json").write_text('{"C901": {"limit": 0}}\n')
     _commit(seed, "main base")
     remote: Final = tmp_path / "remote.git"
     _git(tmp_path, "clone", "-q", "--bare", str(seed), str(remote))
@@ -121,26 +119,15 @@ def test_explicit_base_works_without_remote_access(
     assert "No changed litellm Python files" in checked.stdout
 
 
-def test_budget_ratchet_compares_against_new_default(remote_and_clone: tuple[Path, Path]) -> None:
-    remote, repo = remote_and_clone
-    _git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
-    resolved: Final = _resolve(repo)
-    assert resolved.returncode == 0, resolved.stderr
-    _git(repo, "checkout", "-qb", "litellm_feature", "origin/main")
-    (repo / "ruff-strict-budget.json").write_text('{"C901": {"limit": 1}}\n')
-    command: Final = [sys.executable, "scripts/budget_ratchet_check.py"]
-    checked: Final = subprocess.run(command, cwd=repo, capture_output=True, text=True, check=False)
-    assert checked.returncode == 1
-    assert "limit raised 0 -> 1" in checked.stdout
-    assert "base origin/main" in checked.stdout
-    overridden: Final = subprocess.run(
-        [*command, "--base", "origin/release_branch"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert overridden.returncode == 0, overridden.stdout + overridden.stderr
+def test_format_check_reads_staged_renames(remote_and_clone: tuple[Path, Path]) -> None:
+    _, repo = remote_and_clone
+    (repo / "litellm" / "before_move.py").write_text("value = 2\n")
+    _commit(repo, "add module")
+    _git(repo, "mv", "litellm/before_move.py", "litellm/after_move.py")
+    checked: Final = _make(repo, "lint-format-check-changed", "BASE_REF=origin/release_branch", "UV_RUN=echo")
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "litellm/after_move.py" in checked.stdout
+    assert "before_move.py" not in checked.stdout
 
 
 def _freshness(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -192,7 +179,6 @@ def test_migration_freshness_refuses_unavailable_remote(remote_and_clone: tuple[
 @pytest.mark.parametrize(
     "gate",
     [
-        "budget_ratchet_check",
         "ruff_strict_gate",
         "type_discipline_gate",
         "test_quality_gate",
@@ -213,14 +199,11 @@ def test_each_gate_refuses_an_unverifiable_default(remote_and_clone: tuple[Path,
     assert "Cannot verify the base branch against origin" in result.stderr
 
 
-@pytest.mark.parametrize(
-    "target", ["lint-format-check-changed", "lint-test-quality", "lint-test-quality-budget-update"]
-)
+@pytest.mark.parametrize("target", ["lint-format-check-changed", "lint-test-quality"])
 def test_direct_make_target_fetches_default_once(remote_and_clone: tuple[Path, Path], target: str) -> None:
     _, repo = remote_and_clone
     trace: Final = repo.parent / "git-trace.jsonl"
     shutil.copyfile(ROOT / "scripts" / "check_test_quality.py", repo / "scripts" / "check_test_quality.py")
-    shutil.copyfile(ROOT / "test-quality-budget.json", repo / "test-quality-budget.json")
     (repo / "tests").mkdir()
     result: Final = subprocess.run(
         ["make", "-o", "install-dev", target, "LINT_DEP_INSTALL=", "UV_RUN=env"],

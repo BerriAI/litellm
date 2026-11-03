@@ -21,25 +21,35 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
-from litellm.proxy._types import KeyManagementSystem
-from litellm.rust_bridge.secret_manager import resolve_native_provider_reader
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.secret_managers.main import KeyManagementSettings
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager
 
 if TYPE_CHECKING:
     from botocore.awsrequest import HTTPHeaders
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _SecretStringResponse(TypedDict):
+    SecretString: ReadOnly[str]
+
+
+_SECRET_STRING_RESPONSE: Final = TypeAdapter(_SecretStringResponse)
+_AWS_SECRET_MANAGER_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
@@ -141,10 +151,6 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 secret_name=secret_name, primary_secret_name=primary_secret_name
             )
 
-        native: Final = resolve_native_provider_reader(self, "aws_secret_manager")
-        if native is not None:
-            return await native.async_read_secret(secret_name, optional_params, timeout)
-
         endpoint_url, headers, body = self._prepare_request(
             action="GetSecretValue",
             secret_name=secret_name,
@@ -159,7 +165,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()["SecretString"]
+            return _SECRET_STRING_RESPONSE.validate_python(response.json())["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
         except Exception as e:
@@ -197,23 +203,19 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 secret_name=secret_name, primary_secret_name=primary_secret_name
             )
 
-        native: Final = resolve_native_provider_reader(self, "aws_secret_manager")
-        if native is not None:
-            return native.sync_read_secret(secret_name, optional_params, timeout)
-
         endpoint_url, headers, body = self._prepare_request(
             action="GetSecretValue",
             secret_name=secret_name,
             optional_params=optional_params,
         )
 
-        sync_client: Final = _get_httpx_client(
+        sync_client: Final = get_httpx_client(
             params={"timeout": timeout},
         )
 
         try:
             response: Final = sync_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
-            return response.json()["SecretString"]
+            return _SECRET_STRING_RESPONSE.validate_python(response.json())["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
         except httpx.HTTPStatusError as e:
@@ -433,7 +435,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _AWS_SECRET_MANAGER_RESPONSE.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -490,7 +492,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _AWS_SECRET_MANAGER_RESPONSE.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -542,7 +544,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _AWS_SECRET_MANAGER_RESPONSE.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -622,7 +624,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _AWS_SECRET_MANAGER_RESPONSE.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -637,11 +639,10 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         request_data: dict | None = None,
     ) -> tuple[str, "HTTPHeaders", bytes]:
         """Prepare the AWS Secrets Manager request"""
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+
         optional_params = optional_params or {}
 
         # Build optional_params from instance settings if not provided

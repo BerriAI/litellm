@@ -153,9 +153,7 @@ class TestFeatherlessAIConfig:
         ):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("FEATHERLESS_AI_API_KEY", "key-from-ai-env")
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            api_base=None, api_key=None
-        )
+        api_base, api_key = config.get_openai_compatible_provider_info(api_base=None, api_key=None)
         assert api_key == "key-from-ai-env"
         assert api_base == "https://api.featherless.ai/v1"
 
@@ -170,15 +168,11 @@ class TestFeatherlessAIConfig:
         ):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("FEATHERLESS_API_KEY", "key-from-legacy-env")
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            api_base=None, api_key=None
-        )
+        api_base, api_key = config.get_openai_compatible_provider_info(api_base=None, api_key=None)
         assert api_key == "key-from-legacy-env"
         assert api_base == "https://api.featherless.ai/v1"
 
-    def test_get_provider_info_prefers_featherless_ai_key_over_legacy(
-        self, monkeypatch
-    ):
+    def test_get_provider_info_prefers_featherless_ai_key_over_legacy(self, monkeypatch):
         """Test that FEATHERLESS_AI_API_KEY takes precedence over FEATHERLESS_API_KEY"""
         config = FeatherlessAIConfig()
         for key in (
@@ -190,9 +184,7 @@ class TestFeatherlessAIConfig:
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("FEATHERLESS_AI_API_KEY", "preferred-key")
         monkeypatch.setenv("FEATHERLESS_API_KEY", "legacy-key")
-        _, api_key = config._get_openai_compatible_provider_info(
-            api_base=None, api_key=None
-        )
+        _, api_key = config.get_openai_compatible_provider_info(api_base=None, api_key=None)
         assert api_key == "preferred-key"
 
     def test_default_api_base(self):

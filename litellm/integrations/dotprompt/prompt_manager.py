@@ -12,12 +12,19 @@ from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
 
 class _PromptFileJson(TypedDict):
     """JSON form of a .prompt file: rendered template text plus its frontmatter."""
 
     content: ReadOnly[NotRequired[str]]
     metadata: ReadOnly[NotRequired[dict[str, object]]]
+
+
+class PromptJsonEntry(TypedDict):
+    content: ReadOnly[str]
+    metadata: ReadOnly[dict[str, object]]
 
 
 def strip_version_suffix(prompt_id: str) -> str | None:
@@ -70,7 +77,7 @@ class PromptManager:
         self,
         prompt_id: str | None = None,
         prompt_directory: str | None = None,
-        prompt_data: dict[str, dict[str, Any]] | None = None,
+        prompt_data: dict[str, dict[str, object]] | None = None,
         prompt_file: str | None = None,
     ):
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
@@ -168,7 +175,7 @@ class PromptManager:
         content: Final = file_path.read_text(encoding="utf-8")
 
         # Split frontmatter and content
-        frontmatter, template_content = self._parse_frontmatter(content)
+        frontmatter, template_content = self.parse_frontmatter(content)
 
         return PromptTemplate(
             content=template_content.strip(),
@@ -176,7 +183,7 @@ class PromptManager:
             template_id=prompt_id,
         )
 
-    def _parse_frontmatter(self, content: str) -> tuple[dict[str, object], str]:
+    def parse_frontmatter(self, content: str) -> tuple[dict[str, object], str]:
         """Parse YAML frontmatter from prompt content."""
         # Match YAML frontmatter between --- delimiters
         frontmatter_pattern: Final = r"^---\s*\n(.*?)\n---\s*\n(.*)$"
@@ -196,6 +203,8 @@ class PromptManager:
             template_content = content
 
         return frontmatter, template_content
+
+    _parse_frontmatter = parse_frontmatter
 
     def render(
         self,
@@ -329,7 +338,7 @@ class PromptManager:
         content: Final = file_path.read_text(encoding="utf-8")
 
         # Parse frontmatter and content
-        frontmatter, template_content = self._parse_frontmatter(content)
+        frontmatter, template_content = self.parse_frontmatter(content)
 
         return {"content": template_content.strip(), "metadata": frontmatter}
 
@@ -356,20 +365,26 @@ class PromptManager:
 
         return f"---\n{frontmatter_yaml}---\n{content}"
 
-    def get_all_prompts_as_json(self) -> dict[str, dict[str, Any]]:
+    def get_all_prompts_as_json(self) -> dict[str, PromptJsonEntry]:
         """Get all loaded prompts in JSON format.
 
         Returns:
             Dictionary mapping prompt_id to prompt data
         """
-        result: Final = {}
-        for prompt_id, template in self.prompts.items():
-            result[prompt_id] = {
+        return {
+            prompt_id: {
                 "content": template.content,
                 "metadata": template.metadata,
             }
-        return result
+            for prompt_id, template in self.prompts.items()
+        }
 
-    def load_prompts_from_json_data(self, prompt_data: dict[str, dict[str, Any]]) -> None:
-        """Load additional prompts from JSON data (merges with existing prompts)."""
-        self._load_prompts_from_json(prompt_data)
+    def load_prompts_from_json_data(self, prompt_data: Mapping[str, object]) -> None:
+        """Load additional prompts from JSON data (merges with existing prompts). Entries that are not
+        mappings are skipped, the same as a malformed entry inside the loader."""
+        entries: Final = {
+            prompt_id: dict(entry)
+            for prompt_id, raw in prompt_data.items()
+            if (entry := as_str_mapping(raw)) is not None
+        }
+        self._load_prompts_from_json(entries)

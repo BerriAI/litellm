@@ -26,6 +26,7 @@ from typing import Any, Mapping, Optional
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -53,6 +54,16 @@ def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
 
 
 @pytest.mark.covers("llm.messages.azure_foundry.prompt_cache_5m.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.AZURE_AI,),
+        models=tuple(AZURE_MODELS),
+        capabilities=(Capability.PROMPT_CACHING,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_prompt_caching_5m_azure(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
     upstream usage block surfaces a non-zero cache token count."""

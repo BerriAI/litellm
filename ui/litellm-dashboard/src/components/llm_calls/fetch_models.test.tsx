@@ -38,6 +38,21 @@ describe("fetchAvailableModels", () => {
     vi.clearAllMocks();
   });
 
+  it("retains provider identity without inventing it for an unknown route", async () => {
+    modelHubCallMock.mockResolvedValue({
+      data: [
+        { model_group: "direct", providers: ["anthropic"] },
+        { model_group: "mixed", providers: ["bedrock", "anthropic"] },
+        { model_group: "unknown", providers: null },
+      ],
+    });
+    expect(await fetchAvailableModels("token")).toEqual([
+      { model_group: "direct", providers: ["anthropic"] },
+      { model_group: "mixed", providers: ["bedrock", "anthropic"] },
+      { model_group: "unknown" },
+    ]);
+  });
+
   it("carries the reasoning capabilities the model hub reports for each group", async () => {
     modelHubCallMock.mockResolvedValue({
       data: [
@@ -115,4 +130,19 @@ describe("fetchAutoRouterModels", () => {
     modelAvailableCallMock.mockRejectedValueOnce(new Error("team catalog unavailable"));
     await expect(fetchAutoRouterModels("token", "destination")).rejects.toThrow("team catalog unavailable");
   });
+});
+
+it("retains explicit native search support without assuming it for unknown models", async () => {
+  modelHubCallMock.mockResolvedValue({
+    data: [
+      { model_group: "search", supports_web_search: true },
+      { model_group: "plain", supports_web_search: false },
+      { model_group: "unknown" },
+    ],
+  });
+  expect(await fetchAvailableModels("token")).toEqual([
+    { model_group: "plain" },
+    { model_group: "search", supports_web_search: true },
+    { model_group: "unknown" },
+  ]);
 });

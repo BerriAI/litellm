@@ -1,5 +1,5 @@
 """Live e2e: a few hundred requests that fail before any provider answers must not
-grow the proxy's resident memory past a fixed budget once the proxy is warm.
+grow the proxy's resident memory past a loose ceiling once the proxy is warm.
 
 The regression this guards shipped in v1.100.0: every retry breadcrumb copied the
 whole request and the copies nested into one router-global list, so a proxy under
@@ -13,18 +13,26 @@ deployment that fails a handful of times in a row is benched (a bad-credential 4
 included), the router answers "No deployments available" without retrying, and the
 retry loop that leaks stops running; cooldown_time 0 keeps it running.
 
-Two identical phases run back to back. The first is the warmup that grows the
-proxy's caches and allocator arenas to their steady state, the second is the one
-the budget applies to, so a healthy proxy shows the second phase adding roughly
-nothing while a leaking one adds a fixed amount per request. RSS is read through
-/debug/memory/summary on every configured replica; a burst of failing calls leaves
-a transient bulge of garbage that gc reclaims within seconds, so each checkpoint
-samples until no new worker has answered for a settle window and keeps the lowest
-reading per worker. The growth is judged per worker (by replica address, hostname
-and pid, since pods in their own pid namespaces report the same pids) so each
-worker is compared with itself, and the two checkpoints must see the same workers:
-a single load-balanced address reaches the workers behind it one answer at a time,
-and a worker that answered only one checkpoint would otherwise drop out of the
+Four identical batches run back to back. The first two are the warmup that grows
+the proxy's caches and allocator arenas, the last two are the measured window, and
+each worker's RSS may grow at most a loose ceiling over that window. RSS cannot be
+held to a tight per-batch budget: on the x86 release gate (rc/1.107.0 and v1.105.1
+on isolated stacks, 28 batches each) the allocator kept setting new high-water marks
+for the first several batches, about 60 MB on the third batch of a fresh stack and
+more after the rest of the suite, with the gc-tracked object count flat to 0.1%, and
+only settled to a couple of MB per batch after twenty. So the ceiling catches a gross
+leak and nothing slower. RSS is read through /debug/memory/summary on every
+configured replica; a burst of failing calls leaves a transient bulge of garbage that
+gc reclaims within seconds, so each checkpoint samples until no new worker has
+answered for a settle window and keeps the lowest reading per worker. A checkpoint
+runs before the warmup and after every batch, and each batch's settled growth per
+worker rides out as a repeated `rss_batch_growth` JUnit property as soon as that
+batch settles, so a run that fails keeps the curve up to the batch it failed in. The
+ceiling is judged per worker (by replica address, hostname and pid, since pods in
+their own pid namespaces report the same pids) so each worker is compared with
+itself, and the checkpoints around the measured window must see the same workers: a
+single load-balanced address reaches the workers behind it one answer at a time, and
+a worker that answered only one checkpoint would otherwise drop out of the
 comparison, which is where a leaking worker could hide.
 
 RSS alone is a coarse gauge: on the release stack (spend logs storing prompts,
@@ -58,7 +66,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -72,7 +80,7 @@ from e2e_config import (
     MEMORY_IDLE_RSS_BUDGET_MB,
     MEMORY_REQUESTS_PER_PHASE,
     MEMORY_RETRIES_PER_REQUEST,
-    MEMORY_RSS_BUDGET_MB,
+    MEMORY_RSS_CEILING_MB,
     MEMORY_RSS_SAMPLE_INTERVAL_SECONDS,
     MEMORY_RSS_SETTLE_SAMPLES,
     MEMORY_STORED_REQUEST_BUDGET_KB,
@@ -80,16 +88,21 @@ from e2e_config import (
     PROXY_REPLICA_URLS,
     unique_marker,
 )
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from memory_readings import RssCapture, RssReading, WorkerKey, read_rss_everywhere
 from models import ChatMessage, RouterSettingsOverride, SpendLogRow
 from proxy_client import ProxyClient
-from reliability_support import chat_override, create_never_benched_refusing_deployment
+from reliability_support import REAL_MODEL, chat_override, create_never_benched_refusing_deployment
 
 pytestmark = [pytest.mark.e2e, pytest.mark.quiet_stack]
 
 DEPLOYMENTS_PER_GROUP: Final = 2
 RSS_SAMPLE_CAP: Final = 4 * MEMORY_RSS_SETTLE_SAMPLES
+WARMUP_BATCHES: Final = 2
+MEASURED_BATCHES: Final = 2
+FIRST_MEASURED_BATCH: Final = WARMUP_BATCHES + 1
+LAST_BATCH: Final = WARMUP_BATCHES + MEASURED_BATCHES
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,12 +189,56 @@ def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[WorkerKey, RssReading
     )
 
 
+def _record_batch_growth(
+    record_property: Callable[[str, object], None],
+    batch: int,
+    before: Mapping[WorkerKey, RssReading],
+    after: Mapping[WorkerKey, RssReading],
+) -> None:
+    for growth in (WorkerGrowth(before[worker], after[worker]) for worker in before.keys() & after.keys()):
+        record_property(
+            "rss_batch_growth",
+            json.dumps(
+                {
+                    "batch": batch,
+                    "worker": growth.warm.where,
+                    "before_mb": growth.warm.ram_usage_mb,
+                    "after_mb": growth.after.ram_usage_mb,
+                    "growth_mb": round(growth.growth_mb, 2),
+                }
+            ),
+        )
+
+
+def _settled_rss_after_batches(
+    proxy: ProxyClient,
+    key: str,
+    model: str,
+    override: RouterSettingsOverride,
+    fallback: str,
+    record_property: Callable[[str, object], None],
+    before: Mapping[WorkerKey, RssReading],
+    batch: int,
+    last_batch: int,
+) -> Mapping[WorkerKey, RssReading]:
+    calls: Final = _fail_many(proxy, key, model, override)
+    _assert_every_call_failed_through_fallback(calls, fallback)
+    after: Final = _settled_rss_per_worker(proxy)
+    _record_batch_growth(record_property, batch, before, after)
+    if batch == last_batch:
+        return after
+    return _settled_rss_after_batches(
+        proxy, key, model, override, fallback, record_property, after, batch + 1, last_batch
+    )
+
+
 def _heaviest_worker_growth(
     warm: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading]
 ) -> WorkerGrowth:
     assert warm.keys() == after.keys(), (
-        f"the workers answering /debug/memory/summary changed between the checkpoints, so not every worker can "
-        f"be compared with itself: gone after the measured batch {sorted(warm.keys() - after.keys())} (a worker "
+        f"the workers answering /debug/memory/summary changed around measured batches {FIRST_MEASURED_BATCH}-"
+        f"{LAST_BATCH}, so not every "
+        f"worker can be compared with itself: gone after it {sorted(warm.keys() - after.keys())} (a worker "
         f"that died or was restarted under failing traffic, which is what an OOM kill looks like), first seen "
         f"after it {sorted(after.keys() - warm.keys())} (the warm window never reached them, so they have no "
         f"baseline; raise E2E_MEMORY_RSS_SETTLE_SAMPLES if the stack has more workers than the window covers)"
@@ -222,6 +279,11 @@ def _stored_request_kb(proxy: ProxyClient, call: FailedCall) -> float:
 
 class TestReliabilityMemory:
     @pytest.mark.covers("reliability.perf.idle_memory.under_slo")
+    @meta(
+        Subject(
+            domain=Domain.DEPLOY_OPS,
+        )
+    )
     def test_workers_idle_under_rss_budget_before_traffic(self, idle_rss: RssCapture) -> None:
         assert not idle_rss.failures, (
             f"{len(idle_rss.failures)} replica(s) gave no RSS reading when the session started, so their idle "
@@ -241,9 +303,22 @@ class TestReliabilityMemory:
             f"leaves the worker little room for traffic"
         )
 
+    @pytest.mark.filterwarnings("ignore:record_property is incompatible with junit_family")
     @pytest.mark.covers("reliability.perf.memory.under_slo")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_failing_requests_do_not_grow_rss_or_stored_request(
-        self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
+        self,
+        client: ComplexityRouterClient,
+        resources: ResourceManager,
+        scoped_key: str,
+        record_property: Callable[[str, object], None],
     ) -> None:
         marker: Final = unique_marker()
         primary: Final = f"reliability-memory-{marker}"
@@ -264,21 +339,35 @@ class TestReliabilityMemory:
             f"request into the stored snapshot the way the v1.100.0 ones did"
         )
 
-        warmup: Final = _fail_many(client.proxy, scoped_key, primary, override)
-        _assert_every_call_failed_through_fallback(warmup, fallback)
-        warm: Final = _settled_rss_per_worker(client.proxy)
-
-        measured: Final = _fail_many(client.proxy, scoped_key, primary, override)
-        _assert_every_call_failed_through_fallback(measured, fallback)
-        after: Final = _settled_rss_per_worker(client.proxy)
+        warm: Final = _settled_rss_after_batches(
+            client.proxy,
+            scoped_key,
+            primary,
+            override,
+            fallback,
+            record_property,
+            _settled_rss_per_worker(client.proxy),
+            1,
+            WARMUP_BATCHES,
+        )
+        after: Final = _settled_rss_after_batches(
+            client.proxy,
+            scoped_key,
+            primary,
+            override,
+            fallback,
+            record_property,
+            warm,
+            FIRST_MEASURED_BATCH,
+            LAST_BATCH,
+        )
 
         heaviest: Final = _heaviest_worker_growth(warm, after)
-        assert heaviest.growth_mb <= MEMORY_RSS_BUDGET_MB, (
-            f"proxy RSS grew {heaviest.growth_mb:.1f} MB over a second batch of {MEMORY_REQUESTS_PER_PHASE} failing "
-            f"requests ({MEMORY_RETRIES_PER_REQUEST} retries each plus a fallback) after an identical warmup batch, "
-            f"past the {MEMORY_RSS_BUDGET_MB:.0f} MB budget: worker pid {heaviest.warm.worker_pid} on "
+        assert heaviest.growth_mb <= MEMORY_RSS_CEILING_MB, (
+            f"proxy RSS grew {heaviest.growth_mb:.1f} MB over measured batches {FIRST_MEASURED_BATCH}-{LAST_BATCH} "
+            f"({MEASURED_BATCHES * MEMORY_REQUESTS_PER_PHASE} failing requests) after {WARMUP_BATCHES} identical "
+            f"warmup batches, past the {MEMORY_RSS_CEILING_MB:.0f} MB ceiling: worker pid {heaviest.warm.worker_pid} on "
             f"{heaviest.warm.hostname or 'an unnamed host'} behind {heaviest.warm.replica} settled at "
-            f"{heaviest.warm.ram_usage_mb:.1f} MB warm and "
-            f"{heaviest.after.ram_usage_mb:.1f} MB after; failing requests are leaking memory the way the "
-            f"v1.100.0 retry breadcrumbs did"
+            f"{heaviest.warm.ram_usage_mb:.1f} MB warm and {heaviest.after.ram_usage_mb:.1f} MB after; failing "
+            f"requests are leaking memory the way the v1.100.0 retry breadcrumbs did"
         )

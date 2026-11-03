@@ -1,8 +1,10 @@
 import enum
 from typing import Final
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class ServiceMetrics(enum.Enum):
@@ -25,6 +27,8 @@ class ServiceTypes(str, enum.Enum):
     AUTH = "auth"
     PROXY_PRE_CALL = "proxy_pre_call"
     POD_LOCK_MANAGER = "pod_lock_manager"
+    ANTHROPIC_WIF = "anthropic_wif"
+    ANTHROPIC_WIF_CACHE = "anthropic_wif_cache"
 
     """
     Operational metrics for DB Transaction Queues
@@ -67,6 +71,9 @@ DEFAULT_SERVICE_CONFIGS: Final = {
     ServiceTypes.ROUTER.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
     ServiceTypes.AUTH.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
     ServiceTypes.PROXY_PRE_CALL.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
+    ServiceTypes.ANTHROPIC_WIF.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
+    # cache hits are counter-only: no HTTP call happens, so observing a latency would be a lie
+    ServiceTypes.ANTHROPIC_WIF_CACHE.value: {"metrics": [ServiceMetrics.COUNTER]},
     # Operational metrics for DB Transaction Queues
     ServiceTypes.POD_LOCK_MANAGER.value: {"metrics": [ServiceMetrics.GAUGE]},
     ServiceTypes.IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE.value: {"metrics": [ServiceMetrics.GAUGE]},
@@ -90,7 +97,7 @@ class ServiceEventMetadata(TypedDict, total=False):
     gauge_value: float | None
 
 
-class ServiceLoggerPayload(BaseModel):
+class ServiceLoggerPayload(LiteLLMBaseModel):
     """
     The payload logged during service success/failure
     """
@@ -101,6 +108,7 @@ class ServiceLoggerPayload(BaseModel):
     duration: float = Field(description="How long did the request take?")
     call_type: str = Field(description="The call of the service, being made")
     caller: str | None = Field(None, description="The litellm call chain that made the service call, innermost first")
+    target: str | None = Field(None, description="The key family the call served, e.g. llm_response or auth_objects")
     event_metadata: dict | None = Field(description="The metadata logged during service success/failure")
 
     def to_json(self, **kwargs):

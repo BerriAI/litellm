@@ -70,7 +70,7 @@ class RAGQuery:
         return None
 
     @staticmethod
-    def build_context_message(context_chunks: list[Any]) -> ChatCompletionUserMessage:
+    def build_context_message(context_chunks: Sequence[_SearchResultView | str | None]) -> ChatCompletionUserMessage:
         """
         Process search results and build a context message.
         """

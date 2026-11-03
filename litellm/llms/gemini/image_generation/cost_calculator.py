@@ -2,7 +2,7 @@
 Google AI Image Generation Cost Calculator
 """
 
-from typing import Any, Final
+from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
@@ -14,7 +14,7 @@ from litellm.types.utils import ImageResponse, ModelInfo
 
 def cost_calculator(
     model: str,
-    image_response: Any,
+    image_response: object,
     model_info: ModelInfo | None = None,
 ) -> float:
     """

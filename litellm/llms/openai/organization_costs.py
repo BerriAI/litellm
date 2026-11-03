@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm.constants import (
     OPENAI_ORGANIZATION_COSTS_PAGE_LIMIT,
@@ -16,12 +16,13 @@ from litellm.constants import (
     PROVIDER_BILLING_TIMEOUT_SECONDS,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 OPENAI_ADMIN_KEY_ENV_VAR: Final = "OPENAI_ADMIN_KEY"
 
 BillingHttpGet: TypeAlias = Callable[
-    [str, Mapping[str, object], Mapping[str, str]],  # mutable-ok: Callable parameter list is type syntax
+    [str, Mapping[str, object], Mapping[str, str]],
     Awaitable[httpx.Response],
 ]
 
@@ -31,27 +32,27 @@ class OpenAICostsRequestFailed:
     detail: str
 
 
-class _OpenAICostAmount(BaseModel):
+class _OpenAICostAmount(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     value: float
     currency: Literal["usd"]
 
 
-class _OpenAICostResult(BaseModel):
+class _OpenAICostResult(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     amount: _OpenAICostAmount
 
 
-class _OpenAICostBucket(BaseModel):
+class _OpenAICostBucket(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     start_time: int
     results: tuple[_OpenAICostResult, ...] = ()
 
 
-class _OpenAICostsPage(BaseModel):
+class _OpenAICostsPage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     data: tuple[_OpenAICostBucket, ...]
@@ -63,8 +64,8 @@ async def provider_billing_get(url: str, params: Mapping[str, object], headers: 
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.ProviderBilling)
     return await client.get(
         url,
-        params=dict(params),  # mutable-ok: AsyncHTTPHandler.get takes dict params
-        headers=dict(headers),  # mutable-ok: AsyncHTTPHandler.get takes dict headers
+        params=dict(params),
+        headers=dict(headers),
         timeout=PROVIDER_BILLING_TIMEOUT_SECONDS,
     )
 

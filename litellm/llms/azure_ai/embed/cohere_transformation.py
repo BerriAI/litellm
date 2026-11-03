@@ -67,8 +67,16 @@ class AzureAICohereConfig:
 
         return image_embeddings_request, v1_embeddings_request, image_embedding_idx
 
+    def transform_request(
+        self,
+        input: list[str],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        model: str,
+    ) -> tuple[ImageEmbeddingRequest, EmbeddingCreateParams, list[int]]:  # mutable-ok: mirrors override contract
+        return self._transform_request(input, optional_params, model)
+
     def _transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:
-        additional_headers: Final[dict | None] = response._hidden_params.get("additional_headers")
+        additional_headers: Final[dict | None] = response.hidden_params.get("additional_headers")
         if additional_headers:
             # CALCULATE USAGE
             input_tokens: Final[str | None] = additional_headers.get("llm_provider-num_tokens")
@@ -84,3 +92,9 @@ class AzureAICohereConfig:
                 response.model = self._map_azure_model_group(base_model)
 
         return response
+
+    def transform_response(
+        self,
+        response: EmbeddingResponse,
+    ) -> EmbeddingResponse:
+        return self._transform_response(response)

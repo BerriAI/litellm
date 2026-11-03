@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.tinyfish.search.transformation import (
     TinyfishSearchConfig,
     _append_domain_filters,
@@ -821,3 +822,56 @@ class TestDefaultMissingResultFields:
         assert raw_json["results"][0] == "string item"
         assert raw_json["results"][1] == 42
         assert raw_json["results"][2] == {"title": "ok", "url": "", "snippet": ""}
+
+
+def test_transform_search_response_defaults_missing_fields_of_a_decoded_http_body():
+    payload = {
+        "query": "q",
+        "results": [
+            {"title": "T", "url": "https://a.example", "snippet": "S", "position": 1},
+            {"title": None, "position": 2},
+        ],
+    }
+
+    response = TinyfishSearchConfig().transform_search_response(
+        raw_response=httpx.Response(200, json=payload, headers={"x-request-id": "req-1"}),
+        logging_obj=None,
+    )
+
+    assert [result.model_dump(exclude_none=True) for result in response.results] == [
+        {"title": "T", "url": "https://a.example", "snippet": "S", "position": 1},
+        {"title": "", "url": "", "snippet": "", "position": 2},
+    ]
+    assert response.model_dump()["query"] == "q"
+    assert response._hidden_params["headers"]["x-request-id"] == "req-1"
+
+
+@pytest.mark.parametrize("payload", [[], "text", 5, {}, {"results": "text"}, {"results": [5]}])
+def test_transform_search_response_wraps_a_decoded_body_of_the_wrong_shape(payload: object):
+    with pytest.raises(BaseLLMException, match="TinyFish Search: Response shape does not match") as exc_info:
+        TinyfishSearchConfig().transform_search_response(
+            raw_response=httpx.Response(200, json=payload), logging_obj=None
+        )
+
+    assert exc_info.value.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ('{"error": {"code": "INVALID_INPUT", "message": "query is required"}}', "query is required"),
+        ('{"error": {"message": ""}}', '{"error": {"message": ""}}'),
+        ('{"error": {"message": 5}}', '{"error": {"message": 5}}'),
+        ('{"error": "flat"}', '{"error": "flat"}'),
+        ('["not", "an", "envelope"]', '["not", "an", "envelope"]'),
+        ("<html>Bad Gateway</html>", "<html>Bad Gateway</html>"),
+    ],
+)
+def test_transform_search_response_unwraps_only_the_tinyfish_error_envelope(body: str, expected: str):
+    with pytest.raises(BaseLLMException) as exc_info:
+        TinyfishSearchConfig().transform_search_response(raw_response=httpx.Response(400, text=body), logging_obj=None)
+
+    assert (
+        exc_info.value.message == f"TinyFish Search: {expected}. See https://docs.tinyfish.ai/search-api for details."
+    )
+    assert exc_info.value.status_code == 400

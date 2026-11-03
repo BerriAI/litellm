@@ -9,6 +9,7 @@ vi.mock("@/components/networking", () => ({
   getPublicModelHubInfo: vi.fn(),
   updateUsefulLinksCall: vi.fn(),
   getProxyBaseUrl: vi.fn(),
+  getUiPageUrl: (url: string) => url,
 }));
 
 const mockedGetPublicModelHubInfo = vi.mocked(getPublicModelHubInfo);

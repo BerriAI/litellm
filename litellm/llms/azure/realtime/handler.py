@@ -6,10 +6,11 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final, Protocol, cast
+from typing import Final, Protocol, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -28,7 +29,15 @@ from ..azure import AzureChatCompletion
 # BACKEND_WS_URL = "ws://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
 
 
-async def forward_messages(client_ws: Any, backend_ws: Any):
+class _RealtimeTextSource(Protocol):
+    async def recv(self) -> str: ...
+
+
+class _RealtimeTextSink(Protocol):
+    async def send_text(self, data: str) -> None: ...
+
+
+async def forward_messages(client_ws: _RealtimeTextSink, backend_ws: _RealtimeTextSource):
     import websockets
 
     try:
@@ -128,7 +137,18 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             query_parts.append(urlencode({"intent": intent}))
 
         qs: Final = "&".join(query_parts)
-        return f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"
+        endpoint_url: Final = join_api_base(api_base, path)
+        return f"{endpoint_url}?{qs}" if qs else endpoint_url
+
+    def construct_url(
+        self,
+        api_base: str,
+        model: str,
+        api_version: str | None,
+        realtime_protocol: str | None = None,
+        query_params: RealtimeQueryParams | None = None,
+    ) -> str:
+        return self._construct_url(api_base, model, api_version, realtime_protocol, query_params)
 
     async def async_realtime(
         self,

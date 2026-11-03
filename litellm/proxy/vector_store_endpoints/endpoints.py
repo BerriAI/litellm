@@ -9,12 +9,15 @@ from typing import (
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from litellm.constants import VECTOR_STORE_CALLER_METADATA_KWARG
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.http_parsing_utils import read_raw_json_body
+from litellm.proxy.route_llm_request import JSON_OBJECT_ADAPTER
 from litellm.proxy.utils import jsonify_object
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
@@ -22,7 +25,9 @@ from litellm.proxy.vector_store_endpoints.utils import (
     get_litellm_managed_vector_store,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
+from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
 router: Final = APIRouter()
@@ -45,6 +50,24 @@ def reject_caller_embedding_selection_params(payload: Mapping[str, object], sour
             detail={
                 "error": f"'{blocked[0]}' cannot be set in {source}. "
                 "Embedding configuration comes from the vector store's server-side registration."
+            },
+        )
+
+
+def reject_caller_opensearch_index_name(
+    caller_body: Mapping[str, object], request_fields: Mapping[str, object], source: str
+) -> None:
+    provider: Final = request_fields.get("custom_llm_provider")
+    if (
+        isinstance(provider, str)
+        and provider.split("/", 1)[0] == LlmProviders.OPENSEARCH.value
+        and "opensearch_index_name" in caller_body
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"'opensearch_index_name' cannot be set in {source}. "
+                "The index comes from the vector store's server-side registration."
             },
         )
 
@@ -118,11 +141,11 @@ async def vector_store_search(
     https://platform.openai.com/docs/api-reference/vector-stores/search
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -132,13 +155,19 @@ async def vector_store_search(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     reject_caller_embedding_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
+    caller_body: Final = JSON_OBJECT_ADAPTER.validate_python(data)
 
     # Check for legacy vector store registry (non-managed vector stores)
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+    )
+    reject_caller_opensearch_index_name(
+        caller_body=caller_body,
+        request_fields=JSON_OBJECT_ADAPTER.validate_python(data),
+        source="the search request body",
     )
 
     # The managed_vector_stores pre-call hook will handle:
@@ -168,7 +197,7 @@ async def vector_store_search(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -198,11 +227,11 @@ async def vector_store_create(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -212,7 +241,10 @@ async def vector_store_create(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
+    data[VECTOR_STORE_CALLER_METADATA_KWARG] = callers_metadata_snapshot(
+        await read_raw_json_body(request), VectorStoreWriteBody.model_validate(data)
+    )
 
     # Check for target_model_names parameter
     target_model_names: Final = data.pop("target_model_names", None)
@@ -275,7 +307,7 @@ async def vector_store_create(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -338,7 +370,7 @@ async def vector_store_retrieve(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -408,7 +440,7 @@ async def vector_store_list(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -431,11 +463,11 @@ async def vector_store_update(
     https://platform.openai.com/docs/api-reference/vector-stores/modify
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -445,9 +477,12 @@ async def vector_store_update(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     if "vector_store_id" not in data:
         data["vector_store_id"] = vector_store_id
+    data[VECTOR_STORE_CALLER_METADATA_KWARG] = callers_metadata_snapshot(
+        await read_raw_json_body(request), VectorStoreWriteBody.model_validate(data)
+    )
 
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
@@ -474,7 +509,7 @@ async def vector_store_update(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -537,7 +572,7 @@ async def vector_store_delete(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -561,7 +596,7 @@ async def index_create(
     ```bash
     curl -L -X POST 'http://0.0.0.0:4000/v1/indexes' \
         -H 'Content-Type: application/json' \
-        -H 'Authorization: Bearer sk-1234' \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -d '{
             "index_name": "dall-e-3",
             "litellm_params": {
@@ -622,7 +657,7 @@ async def index_list(
 
     ```bash
     curl -L -X GET 'http://0.0.0.0:4000/v1/indexes' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -638,5 +673,5 @@ async def index_list(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
-    indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(prisma_client)
+    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(prisma_client)
     return IndexListResponse(data=indexes)

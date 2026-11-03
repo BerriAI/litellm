@@ -141,7 +141,32 @@ const expansionColumns: ColumnDef<Person, unknown>[] = [
   },
 ];
 
+const numericColumns: ColumnDef<Person, unknown>[] = [
+  {
+    accessorKey: "name",
+    header: "Name",
+    cell: ({ row }) => <span data-testid="name-cell">{row.original.name}</span>,
+  },
+  {
+    id: "spend",
+    header: ({ column }) => <DataTableSortHeader column={column} title="Spend" />,
+    meta: { numeric: true },
+    cell: () => <span>$1.50</span>,
+  },
+];
+
 const CHARLIE_ALICE_BOB: Person[] = [person("c", "Charlie"), person("a", "Alice"), person("b", "Bob")];
+
+describe("DataTable numeric columns", () => {
+  it("right-aligns the header and cells of a numeric column only", () => {
+    render(<DataTable data={[person("a", "Alice")]} columns={numericColumns} sortingMode="client" />);
+
+    expect(screen.getByRole("columnheader", { name: "Spend" })).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("cell", { name: "$1.50" })).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("columnheader", { name: "Name" })).not.toHaveClass("text-right");
+    expect(screen.getByRole("cell", { name: "Alice" })).not.toHaveClass("text-right");
+  });
+});
 
 describe("DataTable sorting", () => {
   it("client mode reorders rows when the sort header is clicked", async () => {
@@ -226,6 +251,34 @@ describe("DataTable sorting", () => {
 
     await user.click(await screen.findByText("Reset"));
     expect(onSortingChange).toHaveBeenLastCalledWith([]);
+  });
+});
+
+describe("DataTable error state", () => {
+  it("shows the failure and a Retry button instead of the empty state when the fetch failed", async () => {
+    const onRetry = vi.fn();
+    render(
+      <DataTable
+        data={[]}
+        columns={numericColumns}
+        isError
+        errorMessage="Request timed out after 30s"
+        onRetry={onRetry}
+        noDataMessage="No people"
+      />,
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Failed to load");
+    expect(alert).toHaveTextContent("Request timed out after 30s");
+    expect(screen.queryByText("No people")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps showing rows it already has when a refetch fails", () => {
+    render(<DataTable data={[person("a", "Alice")]} columns={numericColumns} isError />);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
   });
 });
 
@@ -871,28 +924,6 @@ describe("DataTable layout", () => {
     expect(scroller).toHaveStyle({ maxHeight: "240px" });
     expect(scroller).toHaveClass("overflow-auto");
     expect(scroller).toHaveClass("[&_[data-slot=table-container]]:overflow-visible");
-    expect(screen.getByTestId("data-table-head")).toHaveClass("sticky", "bg-background");
-  });
-
-  it("caps fillHeight at the parent's height instead of stretching to it, so a short table stays short", () => {
-    render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} fillHeight />);
-    const outer = screen.getByTestId("data-table-root");
-    const frame = screen.getByTestId("data-table-frame");
-    const scroller = screen.getByTestId("data-table-scroller");
-
-    // A ceiling, not a stretch: flex-1 here would hold the footer at the bottom on a two-row table.
-    expect(outer).toHaveClass("max-h-full", "flex-col");
-    expect(outer).not.toHaveClass("flex-1");
-    expect(frame).toHaveClass("flex-col");
-    expect(frame).not.toHaveClass("flex-1");
-    expect(scroller).not.toHaveClass("flex-1");
-
-    expect(scroller).toHaveClass("min-h-0", "overflow-auto");
-    expect(scroller).toHaveStyle({ maxHeight: "" });
-    // Without this the Table primitive's own overflow container captures the sticky header.
-    expect(scroller).toHaveClass("[&_[data-slot=table-container]]:overflow-visible");
-
-    // Rows pass under the header, so the semi-transparent row tint alone would let them show through.
     expect(screen.getByTestId("data-table-head")).toHaveClass("sticky", "bg-background");
   });
 

@@ -1,13 +1,15 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import Enum
+from types import MappingProxyType
 from typing import Final
 
 import httpx
 
 import litellm
 from litellm import LlmProviders
+from litellm.litellm_core_utils.prompt_templates.common_utils import messages_with_file_parts_as_image_urls
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.utils import ModelResponse
 
@@ -216,7 +218,7 @@ class VertexAIPartnerModels(VertexBase):
                 return base_llm_http_handler.completion(
                     model=model,
                     stream=stream,
-                    messages=messages,
+                    messages=list(messages_with_file_parts_as_image_urls(messages)),
                     acompletion=acompletion,
                     api_base=api_base,
                     model_response=model_response,
@@ -263,6 +265,10 @@ class VertexAIPartnerModels(VertexBase):
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
+        system: object | None = None,
+        tools: list[dict[str, object]] | None = None,
+        count_options: Mapping[str, object] = MappingProxyType({}),
+        context_management: object = None,
     ):
         """
         Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
@@ -296,6 +302,18 @@ class VertexAIPartnerModels(VertexBase):
             request_data: Final = {
                 "model": model,
                 "messages": messages,
+                **MappingProxyType(
+                    {
+                        key: value
+                        for key, value in (
+                            ("system", system),
+                            ("tools", tools),
+                            ("context_management", context_management),
+                        )
+                        if value is not None
+                    }
+                ),
+                **count_options,
             }
 
             # Prepare litellm_params with credentials

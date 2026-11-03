@@ -37,7 +37,10 @@ export function DataTablePagination({
   const lastPage = Math.max(pageCount - 1, 0);
 
   return (
-    <div className={cn("flex flex-wrap items-center justify-between gap-4 px-4 py-2.5", className)}>
+    <div
+      data-slot="table-pagination"
+      className={cn("flex flex-wrap items-center justify-between gap-4 px-4 py-2.5", className)}
+    >
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <span>Rows per page</span>
         <Select
@@ -61,7 +64,7 @@ export function DataTablePagination({
         </Select>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div data-slot="table-pagination-summary" className="flex items-center gap-4">
         <span data-testid="pagination-range" className="text-sm text-muted-foreground tabular-nums">
           {rowCount === 0 ? "No results" : `Showing ${start}-${end} of ${rowCount}`}
         </span>

@@ -47,6 +47,7 @@ export async function expectUnrestrictedDashboard(page: Page): Promise<void> {
   const session = await readDashboardSession(page);
   expect(session.password_reset_required === true, "login must not require a password reset").toBe(false);
   await virtualKeys.click();
+  await expect(page).toHaveURL(/\/ui\/api-keys\/?$/);
   await expect(page.getByRole("main").getByRole("heading", { name: "Virtual Keys", exact: true })).toBeVisible({
     timeout: 30_000,
   });

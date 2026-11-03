@@ -19,16 +19,18 @@ import pytest
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
+MODEL = "claude-haiku-4-5"
 TINY_CAP = 3e-6
 ROOMY_CAP = 100.0
 
 
 def _chat(client: BudgetClient, key: str, *, user: str | None = None) -> StreamingResponse:
-    return client.chat(key, "claude-haiku-4-5", f"spend {unique_marker()}", max_tokens=16, user=user)
+    return client.chat(key, MODEL, f"spend {unique_marker()}", max_tokens=16, user=user)
 
 
 def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> StreamingResponse:
@@ -56,6 +58,14 @@ def _assert_blocked_422(client: BudgetClient, key: str) -> StreamingResponse:
 
 class TestBudgetBlocksPerLevel:
     @pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bare_key_blocks_over_its_own_budget(self, client: BudgetClient, resources: ResourceManager) -> None:
         key = client.generate_key(max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_key(key))
@@ -63,6 +73,14 @@ class TestBudgetBlocksPerLevel:
         _assert_blocked_422(client, key)
 
     @pytest.mark.covers("quota_management.budget.team.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_team_budget_blocks_every_team_key(self, client: BudgetClient, resources: ResourceManager) -> None:
         team_id = client.create_team(alias=f"e2e-budget-team-{unique_marker()}", max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_team(team_id))
@@ -79,6 +97,14 @@ class TestBudgetBlocksPerLevel:
         )
 
     @pytest.mark.covers("quota_management.budget.internal_user.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_user_budget_enforced_across_their_personal_keys(
         self, client: BudgetClient, resources: ResourceManager
     ) -> None:
@@ -113,18 +139,34 @@ class TestBudgetBlocksPerLevel:
         require_successful_call(team_result)
 
     @pytest.mark.covers("quota_management.budget.end_user.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_end_user_budget_blocks_attributed_calls(
         self, client: BudgetClient, resources: ResourceManager
     ) -> None:
         customer = f"e2e-budget-cust-{unique_marker()}"
         client.create_customer(customer, max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_customers([customer]))
-        key = client.generate_key(models=["claude-haiku-4-5"])
+        key = client.generate_key(models=[MODEL])
         resources.defer(lambda: client.delete_key(key))
 
         _assert_budget_blocks(client, key, user=customer)
 
     @pytest.mark.covers("quota_management.budget.organization.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_org_budget_blocks_keys_under_it(self, client: BudgetClient, resources: ResourceManager) -> None:
         org_id = client.create_org(max_budget=TINY_CAP, alias=f"e2e-budget-org-{unique_marker()}")
         resources.defer(lambda: client.delete_org(org_id))
@@ -139,6 +181,14 @@ class TestBudgetBlocksPerLevel:
         )
 
     @pytest.mark.covers("quota_management.budget.team_member.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_member_budget_blocks_without_touching_teammates(
         self, client: BudgetClient, resources: ResourceManager
     ) -> None:
@@ -166,6 +216,14 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
     the capped key is refused, proving nothing around the key was the blocker."""
 
     @pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_personal_key_blocks_over_its_own_budget(
         self, client: BudgetClient, resources: ResourceManager
     ) -> None:
@@ -180,6 +238,14 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
         require_successful_call(_chat(client, control_key))
 
     @pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_team_key_blocks_over_its_own_budget(self, client: BudgetClient, resources: ResourceManager) -> None:
         team_id = client.create_team(alias=f"e2e-key-cap-team-{unique_marker()}", max_budget=ROOMY_CAP)
         resources.defer(lambda: client.delete_team(team_id))
@@ -192,6 +258,14 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
         require_successful_call(_chat(client, control_key))
 
     @pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_team_member_key_blocks_over_its_own_budget(
         self, client: BudgetClient, resources: ResourceManager
     ) -> None:

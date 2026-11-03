@@ -1,7 +1,11 @@
+import json
 from collections.abc import Mapping
 from types import SimpleNamespace
+from typing import Final
 
+import httpx
 import pytest
+import respx
 
 from litellm.exceptions import BadRequestError
 from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
@@ -484,3 +488,138 @@ def test_search_response_keeps_link_metadata_and_positional_scores():
 
 def test_search_response_without_results_key_is_empty():
     assert _search_response({"totalSize": 0})["data"] == []
+
+
+MOCK_VERTEX_SEARCH_RESPONSE: Final = {
+    "results": [
+        {
+            "id": "0",
+            "document": {
+                "name": "projects/648660250433/locations/global/collections/default_collection/dataStores/litellm-docs_1761094140318/branches/0/documents/0",
+                "id": "0",
+                "derivedStructData": {
+                    "htmlTitle": "<b>LiteLLM</b> - Getting Started | <b>liteLLM</b>",
+                    "snippets": [
+                        {
+                            "htmlSnippet": "https://github.com/BerriAI/<b>litellm</b>.",
+                            "snippet": "https://github.com/BerriAI/litellm.",
+                        }
+                    ],
+                    "title": "LiteLLM - Getting Started | liteLLM",
+                    "link": "https://docs.litellm.ai/docs/",
+                    "displayLink": "docs.litellm.ai",
+                },
+            },
+        },
+        {
+            "id": "1",
+            "document": {
+                "name": "projects/648660250433/locations/global/collections/default_collection/dataStores/litellm-docs_1761094140318/branches/0/documents/1",
+                "id": "1",
+                "derivedStructData": {
+                    "title": "Using Vector Stores (Knowledge Bases) | liteLLM",
+                    "link": "https://docs.litellm.ai/docs/completion/knowledgebase",
+                    "snippets": [
+                        {
+                            "snippet": "LiteLLM integrates with vector stores, allowing your models to access your organization's data."
+                        }
+                    ],
+                },
+            },
+        },
+    ],
+    "totalSize": 299,
+    "attributionToken": "mock_token",
+    "summary": {},
+}
+GOOGLE_TOKEN_URL: Final = "https://oauth2.googleapis.com/token"
+VERTEX_AUTHORIZED_USER_CREDENTIALS: Final = json.dumps(
+    {
+        "type": "authorized_user",
+        "client_id": "unit-client-id",
+        "client_secret": "unit-client-secret",
+        "refresh_token": "unit-refresh-token",
+        "quota_project_id": "test-vector-store-db",
+    }
+)
+
+
+def _mock_google_token_refresh(requests_mock) -> None:
+    requests_mock.post(
+        GOOGLE_TOKEN_URL,
+        json={"access_token": "ya29.unit-token", "expires_in": 3600, "token_type": "Bearer"},
+    )
+
+
+def _mock_vertex_search(respx_mock) -> "respx.Route":
+    return respx_mock.post(url__regex=r"https://discoveryengine\.googleapis\.com/.*:search.*").mock(
+        return_value=httpx.Response(200, json=MOCK_VERTEX_SEARCH_RESPONSE)
+    )
+
+
+@pytest.mark.asyncio
+async def test_basic_search_with_mock(respx_mock, requests_mock, monkeypatch: pytest.MonkeyPatch):
+    """Test basic vector search with mocked backend response"""
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _mock_google_token_refresh(requests_mock)
+    search_route = _mock_vertex_search(respx_mock)
+
+    response = await litellm.vector_stores.asearch(
+        query="what is LiteLLM?",
+        vector_store_id="test-litellm-app_1761094730750",
+        custom_llm_provider="vertex_ai/search_api",
+        vertex_project="test-vector-store-db",
+        vertex_location="us-central1",
+        vertex_credentials=VERTEX_AUTHORIZED_USER_CREDENTIALS,
+    )
+
+    assert response is not None
+    assert response["object"] == "vector_store.search_results.page"
+    assert len(response["data"]) > 0
+    assert "search_query" in response
+
+    first_result = response["data"][0]
+    assert len(first_result["content"]) > 0
+    assert first_result["content"][0]["type"] == "text"
+    assert "text" in first_result["content"][0]
+
+    search_request = search_route.calls.last.request
+    url = str(search_request.url)
+    assert "discoveryengine.googleapis.com" in url
+    assert "test-vector-store-db" in url
+    assert "test-litellm-app_1761094730750" in url
+    assert search_request.headers["authorization"] == "Bearer ya29.unit-token"
+
+
+def test_basic_search_sync_with_mock(respx_mock, requests_mock):
+    """Test basic vector search (sync) with mocked backend response"""
+    _mock_google_token_refresh(requests_mock)
+    search_route = _mock_vertex_search(respx_mock)
+
+    response = __import__("litellm").vector_stores.search(
+        query="what is LiteLLM?",
+        vector_store_id="test-litellm-app_1761094730750",
+        custom_llm_provider="vertex_ai/search_api",
+        vertex_project="test-vector-store-db",
+        vertex_location="us-central1",
+        vertex_credentials=VERTEX_AUTHORIZED_USER_CREDENTIALS,
+    )
+
+    assert response is not None
+    assert response["object"] == "vector_store.search_results.page"
+    assert len(response["data"]) > 0
+    assert "search_query" in response
+
+    first_result = response["data"][0]
+    assert len(first_result["content"]) > 0
+    assert first_result["content"][0]["type"] == "text"
+    assert "text" in first_result["content"][0]
+
+    assert "document_id" in first_result["attributes"]
+    assert "link" in first_result["attributes"]
+    assert "title" in first_result["attributes"]
+
+    assert search_route.call_count == 1
+    assert search_route.calls.last.request.headers["authorization"] == "Bearer ya29.unit-token"

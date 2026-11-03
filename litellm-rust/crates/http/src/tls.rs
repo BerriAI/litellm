@@ -1,4 +1,4 @@
-use std::{fmt, path::Path, str::FromStr, sync::Arc};
+use std::{path::Path, str::FromStr, sync::Arc};
 
 use rustls::{
     CipherSuite, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
@@ -9,7 +9,7 @@ use rustls::{
 
 use crate::{
     config::{ClientIdentity, HttpClientConfig, Verify},
-    error::{Error, TlsSource},
+    error::{Error, PemFault, Repr, TlsSource},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -42,30 +42,28 @@ impl KeyExchangeGroup {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, strum::EnumString)]
+#[strum(
+    parse_err_ty = Unsupported,
+    parse_err_fn = unsupported_cipher_token
+)]
 pub enum Tls12CipherSuite {
+    #[strum(serialize = "ECDHE-ECDSA-AES128-GCM-SHA256")]
     EcdheEcdsaAes128Gcm,
+    #[strum(serialize = "ECDHE-ECDSA-AES256-GCM-SHA384")]
     EcdheEcdsaAes256Gcm,
+    #[strum(serialize = "ECDHE-ECDSA-CHACHA20-POLY1305")]
     EcdheEcdsaChacha20,
+    #[strum(serialize = "ECDHE-RSA-AES128-GCM-SHA256")]
     EcdheRsaAes128Gcm,
+    #[strum(serialize = "ECDHE-RSA-AES256-GCM-SHA384")]
     EcdheRsaAes256Gcm,
+    #[strum(serialize = "ECDHE-RSA-CHACHA20-POLY1305")]
     EcdheRsaChacha20,
 }
 
-impl FromStr for Tls12CipherSuite {
-    type Err = Unsupported;
-
-    fn from_str(name: &str) -> Result<Self, Self::Err> {
-        match name {
-            "ECDHE-ECDSA-AES128-GCM-SHA256" => Ok(Self::EcdheEcdsaAes128Gcm),
-            "ECDHE-ECDSA-AES256-GCM-SHA384" => Ok(Self::EcdheEcdsaAes256Gcm),
-            "ECDHE-ECDSA-CHACHA20-POLY1305" => Ok(Self::EcdheEcdsaChacha20),
-            "ECDHE-RSA-AES128-GCM-SHA256" => Ok(Self::EcdheRsaAes128Gcm),
-            "ECDHE-RSA-AES256-GCM-SHA384" => Ok(Self::EcdheRsaAes256Gcm),
-            "ECDHE-RSA-CHACHA20-POLY1305" => Ok(Self::EcdheRsaChacha20),
-            _ => Err(Unsupported::CipherToken(name.to_owned())),
-        }
-    }
+fn unsupported_cipher_token(name: &str) -> Unsupported {
+    Unsupported::CipherToken(name.to_owned())
 }
 
 impl Tls12CipherSuite {
@@ -189,7 +187,7 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
         });
         let builder = ClientConfig::builder_with_provider(Arc::clone(&provider))
             .with_safe_default_protocol_versions()
-            .map_err(|error| Error::Client(error.to_string()))?;
+            .map_err(Repr::TlsConfig)?;
         let verified = match &config.verify {
             Verify::Disabled => builder
                 .dangerous()
@@ -197,6 +195,12 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
             Verify::BuiltInRoots => builder.with_root_certificates(RootCertStore {
                 roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
             }),
+            Verify::NativeRoots => {
+                let native = rustls_native_certs::load_native_certs();
+                let mut roots = RootCertStore::empty();
+                roots.add_parsable_certificates(native.certs);
+                builder.with_root_certificates(roots)
+            }
             Verify::CaBundle(path) => {
                 builder.with_root_certificates(bundle_roots(path, TlsSource::CaBundle)?)
             }
@@ -226,7 +230,7 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
 fn bundle_roots(path: &Path, source: TlsSource) -> Result<RootCertStore, Error> {
     let certificates = certificates(path, source)?;
     if certificates.is_empty() {
-        return Err(invalid_pem(path, source, "no certificates found"));
+        return Err(invalid_pem(path, source, PemFault::NoCertificates));
     }
     let mut store = RootCertStore::empty();
     for certificate in certificates {
@@ -244,7 +248,7 @@ fn client_identity(
     let source = TlsSource::ClientIdentity;
     let chain = certificates(certificate, source)?;
     if chain.is_empty() {
-        return Err(invalid_pem(certificate, source, "no certificates found"));
+        return Err(invalid_pem(certificate, source, PemFault::NoCertificates));
     }
     let private_key = PrivateKeyDer::from_pem_slice(&read(key, source)?)
         .map_err(|error| invalid_pem(key, source, error))?;
@@ -258,19 +262,23 @@ fn certificates(path: &Path, source: TlsSource) -> Result<Vec<CertificateDer<'st
 }
 
 fn read(path: &Path, source: TlsSource) -> Result<Vec<u8>, Error> {
-    std::fs::read(path).map_err(|error| Error::Read {
-        path: path.to_path_buf(),
-        message: error.to_string(),
-        tls_source: source,
+    std::fs::read(path).map_err(|error| {
+        Repr::Read {
+            path: path.to_path_buf(),
+            tls_source: source,
+            source: error,
+        }
+        .into()
     })
 }
 
-fn invalid_pem(path: &Path, source: TlsSource, message: impl fmt::Display) -> Error {
-    Error::InvalidPem {
+fn invalid_pem(path: &Path, tls_source: TlsSource, fault: impl Into<PemFault>) -> Error {
+    Repr::InvalidPem {
         path: path.to_path_buf(),
-        message: message.to_string(),
-        tls_source: source,
+        tls_source,
+        source: fault.into(),
     }
+    .into()
 }
 
 #[derive(Debug)]
@@ -367,6 +375,39 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::ecdhe_ecdsa_aes128(
+        "ECDHE-ECDSA-AES128-GCM-SHA256",
+        Tls12CipherSuite::EcdheEcdsaAes128Gcm
+    )]
+    #[case::ecdhe_ecdsa_aes256(
+        "ECDHE-ECDSA-AES256-GCM-SHA384",
+        Tls12CipherSuite::EcdheEcdsaAes256Gcm
+    )]
+    #[case::ecdhe_ecdsa_chacha20(
+        "ECDHE-ECDSA-CHACHA20-POLY1305",
+        Tls12CipherSuite::EcdheEcdsaChacha20
+    )]
+    #[case::ecdhe_rsa_aes128("ECDHE-RSA-AES128-GCM-SHA256", Tls12CipherSuite::EcdheRsaAes128Gcm)]
+    #[case::ecdhe_rsa_aes256("ECDHE-RSA-AES256-GCM-SHA384", Tls12CipherSuite::EcdheRsaAes256Gcm)]
+    #[case::ecdhe_rsa_chacha20("ECDHE-RSA-CHACHA20-POLY1305", Tls12CipherSuite::EcdheRsaChacha20)]
+    fn tls12_cipher_suite_parses_each_openssl_name(
+        #[case] name: &str,
+        #[case] expected: Tls12CipherSuite,
+    ) {
+        assert_eq!(name.parse::<Tls12CipherSuite>().unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::unknown("AES128-SHA")]
+    #[case::case_sensitive("ecdhe-rsa-aes256-gcm-sha384")]
+    fn unsupported_cipher_token_keeps_the_verbatim_name(#[case] name: &str) {
+        assert_eq!(
+            name.parse::<Tls12CipherSuite>().unwrap_err(),
+            Unsupported::CipherToken(name.to_owned())
+        );
+    }
+
     #[test]
     fn named_suites_are_the_only_tls12_suites_offered_and_tls13_stays() {
         let tls = ClientConfig::try_from(&config(HttpSettings {
@@ -417,11 +458,10 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert!(matches!(
             result,
-            Err(Error::InvalidPem {
-                path: reported,
-                tls_source: TlsSource::ClientIdentity,
-                ..
-            }) if reported == path
+            Err(error) if matches!(
+                error.repr(),
+                Repr::InvalidPem { path: reported, tls_source: TlsSource::ClientIdentity, .. } if *reported == path
+                )
         ));
     }
 

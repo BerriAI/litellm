@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
@@ -21,6 +22,8 @@ from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import EdenAIException, authorized_headers, endpoint_url, reported_cost
 
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+
 
 def _form_fields(model: str, optional_params: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: httpx form data
     """LiteLLM parks non-OpenAI params, `model` included, under `extra_body` for the OpenAI SDK; a
@@ -28,7 +31,7 @@ def _form_fields(model: str, optional_params: Mapping[str, object]) -> dict[str,
     extras: Final = optional_params.get("extra_body")
     nested: Final = extras.items() if isinstance(extras, Mapping) else ()
     fields: Final = (*optional_params.items(), *nested, ("model", model))
-    return {key: value for key, value in fields if key != "extra_body"}  # mutable-ok: httpx form data
+    return {key: value for key, value in fields if key != "extra_body"}
 
 
 class EdenAIAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
@@ -69,13 +72,13 @@ class EdenAIAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         """Eden reports `duration` and `cost` on every body, so the Whisper default of `verbose_json`,
         which the gpt-4o-transcribe models reject, is not needed for cost tracking."""
         audio: Final = process_audio_file(audio_file)
-        files: Final = {"file": (audio.filename, audio.file_content, audio.content_type)}  # mutable-ok: httpx contract
+        files: Final = {"file": (audio.filename, audio.file_content, audio.content_type)}
         return AudioTranscriptionRequestData(data=_form_fields(model, optional_params), files=files)
 
     def transform_audio_transcription_response(self, raw_response: httpx.Response) -> TranscriptionResponse:
         if "application/json" not in raw_response.headers.get("content-type", ""):
             return TranscriptionResponse(text=raw_response.text)
-        body: Final = raw_response.json()
+        body: Final = _JSON_OBJECT.validate_python(raw_response.json())
         response: Final[TranscriptionResponse] = convert_to_model_response_object(
             response_object=body, model_response_object=TranscriptionResponse(), response_type="audio_transcription"
         )

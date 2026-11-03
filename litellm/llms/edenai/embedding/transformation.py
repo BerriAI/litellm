@@ -5,7 +5,7 @@ per-request cost at the top level of the body.
 Docs: https://www.edenai.co/docs/v3/llms/embeddings
 """
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import httpx
 
@@ -24,9 +24,17 @@ if TYPE_CHECKING:
 _SUPPORTED_PARAMS: Final = ("dimensions", "encoding_format", "user")
 
 
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
 class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
-        return list(_SUPPORTED_PARAMS)  # mutable-ok: inherited contract
+        return list(_SUPPORTED_PARAMS)
 
     def map_openai_params(
         self,
@@ -35,7 +43,7 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}  # mutable-ok: inherited contract
+        return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}
 
     def validate_environment(
         self,
@@ -67,7 +75,7 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict[str, object],  # mutable-ok: inherited contract
         headers: dict[str, object],  # mutable-ok: inherited contract
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return {"model": model, "input": input, **optional_params}  # mutable-ok: inherited contract
+        return {"model": model, "input": input, **optional_params}
 
     def transform_embedding_response(
         self,
@@ -80,10 +88,14 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict[str, object],  # mutable-ok: inherited contract
         litellm_params: dict[str, object],  # mutable-ok: inherited contract
     ) -> EmbeddingResponse:
-        body: Final = raw_response.json()
+        body: Final = _json_body(raw_response)
         logging_obj.post_call(original_response=body)
         response: Final[EmbeddingResponse] = convert_to_model_response_object(
-            response_object=body, model_response_object=model_response, response_type="embedding"
+            response_object=cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+                dict[str, object], body
+            ),
+            model_response_object=model_response,
+            response_type="embedding",
         )
         set_response_cost_in_hidden_params(response, reported_cost(body))
         return response

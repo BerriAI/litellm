@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+import type { McpDcrCredentials } from "@/hooks/useMcpOAuthFlow";
 import {
   ADMIN_CONFIG_CREDENTIAL_KEYS,
   AUTH_TYPE,
@@ -73,6 +75,7 @@ export interface EditServerPayload {
 }
 
 export interface EditServerUiState {
+  readonly dcrClient?: McpDcrCredentials | null;
   readonly mcpServer: MCPServer;
   readonly logoUrl: string | undefined;
   readonly costConfig: MCPServerCostInfo;
@@ -112,20 +115,23 @@ const assertNever = (value: never): never => {
   throw new Error(`unhandled edit payload result: ${JSON.stringify(value)}`);
 };
 
-export const editPayloadErrorMessage = (result: Exclude<BuildEditPayloadResult, { kind: "ok" }>): string => {
+export const editPayloadErrorMessage = (
+  result: Exclude<BuildEditPayloadResult, { kind: "ok" }>,
+  t: TFunction,
+): string => {
   switch (result.kind) {
     case "invalid_tool_display_name":
-      return `Tool display name "${result.displayName}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`;
+      return t("mcpServers.editServerPayload.errors.invalidToolDisplayName", { displayName: result.displayName });
     case "stdio_config_missing_command":
-      return "Stdio configuration must include a command";
+      return t("mcpServers.editServerPayload.errors.stdioConfigMissingCommand");
     case "invalid_stdio_json":
-      return "Invalid JSON in stdio configuration";
+      return t("mcpServers.editServerPayload.errors.invalidStdioJson");
     case "invalid_stdio_env_json":
-      return "Invalid JSON in stdio env configuration";
+      return t("mcpServers.editServerPayload.errors.invalidStdioEnvJson");
     case "stdio_command_required":
-      return "Stdio transport requires a command";
+      return t("mcpServers.editServerPayload.errors.stdioCommandRequired");
     case "invalid_token_validation_json":
-      return "Invalid JSON in Token Validation Rules";
+      return t("mcpServers.editServerPayload.errors.invalidTokenValidationJson");
     default:
       return assertNever(result);
   }
@@ -212,7 +218,24 @@ const buildCredentials = (credentialValues: unknown): Readonly<Record<string, un
   return Object.fromEntries(kept);
 };
 
+const unmountedOauth2Endpoints = (authType: string | undefined) =>
+  isClientForwardedTokenMode(authType) ? {} : { authorization_url: null, token_url: null };
+
+const scopesCleared = (credentialValues: unknown): boolean => {
+  if (!credentialValues || typeof credentialValues !== "object") return false;
+  const scopes: unknown = (credentialValues as { scopes?: unknown }).scopes;
+  return Array.isArray(scopes) && scopes.every((scope: unknown) => scope == null || scope === "");
+};
+
+const withClearedScopes = (
+  credentials: Readonly<Record<string, unknown>> | undefined,
+  credentialValues: unknown,
+): Readonly<Record<string, unknown>> | undefined =>
+  scopesCleared(credentialValues) ? { ...(credentials ?? {}), scopes: null } : credentials;
+
 interface CredentialsEntryInput {
+  readonly dcrClient?: McpDcrCredentials | null;
+  readonly oauthFlow?: string;
   readonly authType: string | undefined;
   readonly credentials: Readonly<Record<string, unknown>> | undefined;
   readonly includeCredentials: boolean;
@@ -224,13 +247,18 @@ interface CredentialsEntryInput {
 // updates), so removal must be an explicit-null write: encrypt skips nulls and the merge overrides
 // the stored keys, returning the server to dynamic client registration.
 const resolveCredentialsEntry = ({
+  dcrClient,
+  oauthFlow,
   authType,
   credentials,
   includeCredentials,
   removeStoredApp,
 }: CredentialsEntryInput): { readonly credentials?: Readonly<Record<string, unknown>> } => {
+  if (dcrClient && authType === AUTH_TYPE.OAUTH2 && oauthFlow !== OAUTH_FLOW.M2M) {
+    return { credentials: { ...credentials, ...dcrClient } };
+  }
   if (removeStoredApp && isClientForwardedTokenMode(authType)) {
-    return { credentials: { client_id: null, client_secret: null } };
+    return { credentials: { ...(credentials ?? {}), client_id: null, client_secret: null } };
   }
   if (includeCredentials && credentials && Object.keys(credentials).length > 0) {
     return { credentials };
@@ -325,11 +353,13 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
   // Client-forwarded rows persist ONLY the declared app; strip any token material lingering in the
   // form (e.g. from a prior oauth2 authorize this session) so it can never reach the row.
   const submitCredentials = isClientForwardedTokenMode(restValues.auth_type)
-    ? preservedAdminCredentials(credentialsPayload)
+    ? withClearedScopes(preservedAdminCredentials(credentialsPayload), credentialValues)
     : credentialsPayload;
   const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
   const credentialsEntryInput: CredentialsEntryInput = {
+    dcrClient: ui.dcrClient,
+    oauthFlow: restValues.oauth_flow_type,
     authType: restValues.auth_type,
     credentials: submitCredentials,
     includeCredentials: Boolean(includeCredentials),
@@ -344,7 +374,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     stdio_config: undefined,
     env_json: undefined,
     ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2 && restValues.auth_type !== AUTH_TYPE.OAUTH2
-      ? { issuer: null, authorization_url: null, token_url: null, registration_url: null }
+      ? { issuer: null, ...unmountedOauth2Endpoints(restValues.auth_type), registration_url: null }
       : {}),
     ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE &&
     restValues.auth_type !== AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE

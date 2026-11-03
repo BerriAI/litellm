@@ -2,15 +2,16 @@ import reprlib
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, fields
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.constants import CONTROL_OPTIONS_KEY
+from litellm.constants import CONTROL_OPTIONS_KEY, SESSION_ID_FROM_TRACE_ID_PARAM_KEY
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
 from litellm.types.router import CustomPricingLiteLLMParams
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -26,11 +27,20 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
         "aws_external_id",
         "aws_session_tags",
         "aws_bedrock_runtime_endpoint",
+        "aws_bedrock_control_plane_endpoint",
         "aws_bedrock_project_id",
     }
 )
 
 PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
+OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS: Final = frozenset(
+    {
+        "token_exchange_endpoint",
+        "token_exchange_profile",
+        "token_exchange_scope",
+        "token_exchange_audience",
+    }
+)
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -65,16 +75,32 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "rpm",
             "itpm",
             "otpm",
+            "tpd",
+            "rpd",
+            "daily_reset_time",
             "use_xai_oauth",
+            "chatgpt_auth_file",
+            "github_copilot_auth_type",
+            "github_copilot_host",
+            "github_copilot_user_session",
+            "fireworks_forward_user_id",
+            "thought_signature_in_tool_call_id",
+            "responses_api_version",
+            "allowed_openai_params",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | ANTHROPIC_WIF_KWARGS_KEYS
+    | OPENAI_WIF_KWARGS_KEYS
+    | OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
+
+SUPPLEMENTAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS | {"provider_specific_header", "extra_headers"}
 
 _CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
 _CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))
@@ -99,9 +125,7 @@ class InvalidControlOption:
 
 
 def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | InvalidControlOption:
-    given: Final = {  # mutable-ok: TypeAdapter.validate_python takes a dict
-        name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs
-    }
+    given: Final = {name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs}
     try:
         return _CONTROL_OPTIONS.validate_python(given)
     except ValidationError as e:
@@ -118,19 +142,25 @@ def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptio
 
 def with_control_options(litellm_params: Mapping[str, object], control: ControlOptions) -> dict[str, object]:
     if control == ControlOptions():
-        return dict(litellm_params)  # mutable-ok: completion() hands litellm_params to provider code typed as dict
-    return {**litellm_params, CONTROL_OPTIONS_KEY: control}  # mutable-ok: same dict contract as above
+        return dict(litellm_params)
+    return {**litellm_params, CONTROL_OPTIONS_KEY: control}
 
 
-def _get_base_model_from_litellm_call_metadata(
-    metadata: dict | None,
+def get_base_model_from_litellm_call_metadata(
+    metadata: Mapping[str, object] | None,
 ) -> str | None:
     if metadata is None:
         return None
     model_info: Final = metadata.get("model_info")
-    if model_info:
-        return model_info.get("base_model")
-    return None
+    if not model_info:
+        return None
+    base_model: Final = cast(  # cast-ok: model metadata is caller-provided and preserves its mapping shape
+        Mapping[str, object], model_info
+    ).get("base_model")
+    return base_model if isinstance(base_model, str) else None
+
+
+_get_base_model_from_litellm_call_metadata = get_base_model_from_litellm_call_metadata
 
 
 def get_litellm_params(
@@ -155,6 +185,7 @@ def get_litellm_params(
     allm_passthrough_route=None,
     preset_cache_key=None,
     no_log=None,
+    cost_per_second: float | None = None,
     input_cost_per_second=None,
     input_cost_per_token=None,
     output_cost_per_token=None,
@@ -188,6 +219,9 @@ def get_litellm_params(
 
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
     _meta: Final = resolved_metadata or {}
+    session_id_from_trace_id: Final = (
+        litellm_session_id is None and not _meta.get("session_id") and bool(_meta.get("trace_id"))
+    )
     if litellm_session_id is None:
         litellm_session_id = _meta.get("session_id") or _meta.get("trace_id")
     if litellm_trace_id is None:
@@ -216,6 +250,7 @@ def get_litellm_params(
         "preset_cache_key": preset_cache_key,
         "no-log": no_log or kwargs.get("no-log"),
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
+        "cost_per_second": cost_per_second,
         "input_cost_per_token": input_cost_per_token,
         "input_cost_per_second": input_cost_per_second,
         "output_cost_per_token": output_cost_per_token,
@@ -226,9 +261,10 @@ def get_litellm_params(
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
         "base_model": base_model
-        or (_get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
+        or (get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
         "litellm_trace_id": litellm_trace_id,
         "litellm_session_id": litellm_session_id,
+        **({SESSION_ID_FROM_TRACE_ID_PARAM_KEY: True} if session_id_from_trace_id else {}),
         "hf_model_name": hf_model_name,
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,

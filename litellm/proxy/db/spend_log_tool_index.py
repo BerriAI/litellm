@@ -15,14 +15,19 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from itertools import groupby
-from typing import TYPE_CHECKING, Any, Final
+from itertools import chain, groupby
+from typing import TYPE_CHECKING, Final, Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import LiteralString
 
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
+from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
 from litellm.proxy.db.spend_log_batching import spend_log_write_batches
 from litellm.repositories.table_repositories import SpendLogToolIndexRepository
 
@@ -43,19 +48,71 @@ class ToolUsageTransaction:
 def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
     """Tool names invoked in a completion response, in call order, for any response
     surface get_tool_calls_from_response understands (chat completions, Responses
-    API output items, Anthropic Messages tool_use blocks). Reads every choice of
-    an ``n>1`` chat response: each choice cost money and its tool calls ran."""
+    API output items, Anthropic Messages tool_use blocks), plus the MCP tools an
+    auto-executed Responses API call ran. Reads every choice of an ``n>1`` chat
+    response: each choice cost money and its tool calls ran."""
     if completion_response is None or isinstance(completion_response, Exception):
         return ()
     from litellm.litellm_core_utils.prompt_templates.factory import (
         get_tool_calls_from_response,
     )
 
+    called_names: Final = (
+        tool_call.get("name")
+        for tool_call in get_tool_calls_from_response(completion_response, include_all_choices=True)
+    )
     return tuple(
         stripped
-        for tool_call in get_tool_calls_from_response(completion_response, include_all_choices=True)
-        if isinstance(name := tool_call.get("name"), str) and (stripped := name.strip())
+        for name in chain(called_names, _auto_executed_mcp_tool_names(completion_response))
+        if isinstance(name, str) and (stripped := name.strip())
     )
+
+
+class _ExecutedTool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str | None = None
+
+
+class _OutputText(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    text: str
+
+
+class _ToolExecutionResults(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    type: Literal["tool_execution_results"]
+    content: tuple[_OutputText, ...]
+
+
+class _ResponsesApiOutput(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    output: tuple[object, ...]
+
+
+_EXECUTED_TOOLS: Final = TypeAdapter(tuple[_ExecutedTool, ...])
+
+
+def _auto_executed_mcp_tool_names(completion_response: object) -> tuple[str | None, ...]:
+    try:
+        response: Final = _ResponsesApiOutput.model_validate(completion_response)
+    except ValidationError:
+        return ()
+    return tuple(chain.from_iterable(_executed_tool_names(item) for item in response.output))
+
+
+def _executed_tool_names(output_item: object) -> tuple[str | None, ...]:
+    try:
+        results: Final = _ToolExecutionResults.model_validate(output_item)
+        executed: Final = tuple(
+            chain.from_iterable(_EXECUTED_TOOLS.validate_json(content.text) for content in results.content)
+        )
+    except ValidationError:
+        return ()
+    return tuple(tool.name for tool in executed)
 
 
 def build_tool_usage_transaction(
@@ -65,7 +122,7 @@ def build_tool_usage_transaction(
     spend: float,
     total_tokens: int,
     completion_response: object,
-    realtime_tool_calls: Any = None,
+    realtime_tool_calls: object = None,
 ) -> ToolUsageTransaction | None:
     """None when the request invoked no tools. Realtime sessions carry invoked
     tools in kwargs["realtime_tool_calls"] (OpenAI tool_calls shape) rather than
@@ -96,6 +153,27 @@ def build_tool_usage_transaction(
         spend=spend,
         total_tokens=total_tokens,
     )
+
+
+class _ToolRollupTable(Protocol):
+    def upsert(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
+
+
+class _ToolRollupBatch(Protocol):
+    litellm_dailytoolspend: _ToolRollupTable
+
+    def execute_raw(self, query: LiteralString, *args: object) -> None: ...
+
+
+class _ToolRollupBatchManager(Protocol):
+    async def __aenter__(self) -> _ToolRollupBatch: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+def _tool_rollup_batch(prisma_client: PrismaClient) -> _ToolRollupBatchManager:
+    batch: Final[_ToolRollupBatchManager] = prisma_client.db.batch_()
+    return batch
 
 
 async def flush_tool_usage_transactions(
@@ -135,8 +213,13 @@ async def flush_tool_usage_transactions(
             for statement_rows in spend_log_write_batches(
                 index_rows, SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
             ):
-                await index_table.create_many(data=statement_rows, skip_duplicates=True)
-            async with prisma_client.db.batch_() as batcher:
+                async with db_span("index_spend_log_tools", "LiteLLM_SpendLogToolIndex"):
+                    await index_table.create_many(data=statement_rows, skip_duplicates=True)
+            async with (
+                db_span("commit_daily_tool_spend", "LiteLLM_DailyToolSpend"),
+                _tool_rollup_batch(prisma_client) as batcher,
+            ):
+                batcher.execute_raw(ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting())
                 for (date_key, tool_name), grouped in groupby(per_tool_day, key=lambda entry: (entry[0], entry[1])):
                     entries = tuple(grouped)
                     spend = sum(entry[2] for entry in entries)

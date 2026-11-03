@@ -25,6 +25,7 @@ green if all three pass.
 
 from __future__ import annotations
 
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 AZURE_OPENAI_MODELS = [
@@ -34,6 +35,15 @@ AZURE_OPENAI_MODELS = [
 ]
 
 
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.AZURE,),
+        models=tuple(AZURE_OPENAI_MODELS),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_basic_messaging_non_streaming_azure_openai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     non-empty reply from each GPT-5.6 tier."""

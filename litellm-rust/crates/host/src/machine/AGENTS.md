@@ -19,7 +19,7 @@ Credential acquisition contracts and reusable adapters belong in `litellm-auth-t
 
 The coroutine polls the route future until it completes or yields a `HostRequest`. Each request carries a typed `Reply` that its driver must answer before resuming, or abandon when interrupting or dropping the execution. A pending network future is an ordinary async wait, not a host suspension
 
-`CallContext` gives the route separate capabilities: `HostServices` requests host operations, `ChannelInterceptors` requests interception, `ObservationSender` publishes events, and `StreamSender` delivers stream values. Keep their yield-and-reply mechanics in `context.rs`. The actual service and hook implementations belong to the host. This follows the effect-handler pattern: the route requests an operation, the driver handles it, and the route continues with the reply. The suspended computation stays in the coroutine; `Reply` only supplies its result
+`CallContext` gives the route separate capabilities: `HostServices` requests host operations, `ChannelInterceptors` requests interception, `ObservationSender` publishes events, and `StreamSender` delivers stream values. Keep their yield-and-reply mechanics in `context.rs`. The actual service and hook implementations belong to the host. This follows the effect-handler pattern: the route requests an operation, the driver handles it, and the route continues with the reply. The suspended computation stays in the coroutine. `Reply` only supplies its result
 
 Stream replies use `std::ops::ControlFlow<()>`. `ControlFlow::Continue(())` permits stream execution to continue. `ControlFlow::Break(())` tells it that the consumer stopped reading. Holding the reply applies backpressure until the consumer advances. Keep stream forwarding and the distinction between stream exhaustion and detachment in `crate::call::hosted_call`
 
@@ -29,4 +29,4 @@ Stream replies use `std::ops::ControlFlow<()>`. `ControlFlow::Continue(())` perm
 
 Rust drivers live in `litellm-host-native` and `litellm-host-http`. The Python driver lives in `litellm-host-python` and awaits Python hooks in the caller's task. Keep runtime scheduling, encoding, terminal observation, and callback policy in those layers and their adapters
 
-Public behavior tests belong in `crates/host/tests`; private behavior tests stay inline with their owning implementation. Test suspension answers, interruption, resource release, and stream demand through behavior, rather than asserting file layout
+Public behavior tests belong in `crates/host/tests`. Private behavior tests stay inline with their owning implementation. Test suspension answers, interruption, resource release, and stream demand through behavior, rather than asserting file layout

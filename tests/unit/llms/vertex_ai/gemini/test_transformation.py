@@ -1,12 +1,15 @@
 
 import json
+import logging
 import uuid
+from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -42,7 +45,7 @@ async def test__transform_request_body_labels():
         "cached_content": None,
     }
 
-    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+    rb: RequestBody = transformation.transform_request_body(**transform_request_params)
 
     # Check URL
     assert rb["contents"] == [
@@ -83,7 +86,7 @@ async def test__transform_request_body_metadata():
         "cached_content": None,
     }
 
-    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+    rb: RequestBody = transformation.transform_request_body(**transform_request_params)
 
     # Check URL
     assert rb["contents"] == [
@@ -126,7 +129,7 @@ async def test__transform_request_body_labels_and_metadata():
         "cached_content": None,
     }
 
-    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+    rb: RequestBody = transformation.transform_request_body(**transform_request_params)
 
     # Check URL
     assert rb["contents"] == [
@@ -171,7 +174,7 @@ async def test__transform_request_body_image_config():
         "cached_content": None,
     }
 
-    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+    rb: RequestBody = transformation.transform_request_body(**transform_request_params)
 
     assert "generationConfig" in rb
     assert "imageConfig" in rb["generationConfig"]
@@ -207,7 +210,7 @@ async def test__transform_request_body_image_config_snake_case():
         "cached_content": None,
     }
 
-    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+    rb: RequestBody = transformation.transform_request_body(**transform_request_params)
 
     assert "generationConfig" in rb
     assert "image_config" in rb["generationConfig"]
@@ -240,7 +243,7 @@ async def test__transform_request_body_image_config_with_image_size():
         "cached_content": None,
     }
 
-    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+    rb: RequestBody = transformation.transform_request_body(**transform_request_params)
 
     assert "generationConfig" in rb
     assert "imageConfig" in rb["generationConfig"]
@@ -270,7 +273,7 @@ def test__transform_request_body_google_maps_json_schema_uses_response_format():
         "cached_content": None,
     }
 
-    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+    rb: RequestBody = transformation.transform_request_body(**transform_request_params)
 
     gen = rb["generationConfig"]
     assert "responseFormat" in gen
@@ -290,7 +293,7 @@ def test_map_function_google_search_snake_case():
 
     # Test snake_case google_search
     tools = [{"google_search": {}}]
-    result = config._map_function(tools, optional_params)
+    result = config.map_function(tools, optional_params)
 
     assert len(result) == 1
     assert "googleSearch" in result[0]
@@ -306,7 +309,7 @@ def test_map_function_google_search_camel_case():
 
     # Test camelCase googleSearch
     tools = [{"googleSearch": {}}]
-    result = config._map_function(tools, optional_params)
+    result = config.map_function(tools, optional_params)
 
     assert len(result) == 1
     assert "googleSearch" in result[0]
@@ -320,14 +323,8 @@ def test_map_function_google_search_retrieval_snake_case():
     config = VertexGeminiConfig()
     optional_params = {}
 
-    tools = [
-        {
-            "google_search_retrieval": {
-                "dynamic_retrieval_config": {"mode": "MODE_DYNAMIC"}
-            }
-        }
-    ]
-    result = config._map_function(tools, optional_params)
+    tools = [{"google_search_retrieval": {"dynamic_retrieval_config": {"mode": "MODE_DYNAMIC"}}}]
+    result = config.map_function(tools, optional_params)
 
     assert len(result) == 1
     assert "googleSearchRetrieval" in result[0]
@@ -341,7 +338,7 @@ def test_map_function_enterprise_web_search_snake_case():
     optional_params = {}
 
     tools = [{"enterprise_web_search": {}}]
-    result = config._map_function(tools, optional_params)
+    result = config.map_function(tools, optional_params)
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
@@ -475,3 +472,16 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
         {"file_data": {"mime_type": "application/pdf", "file_uri": files_api_pdf}},
     ]
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
+
+
+def test_image_only_user_content_logs_the_blank_text_fixup_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    messages: Final = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}]}
+    ]
+
+    with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+        contents: Final = transformation.gemini_convert_messages_with_history(messages)
+
+    fixups: Final = tuple(r for r in caplog.records if "No text in user content" in r.getMessage())
+    assert tuple(r.levelno for r in fixups) == (logging.DEBUG,)
+    assert contents[0]["parts"][-1] == {"text": " "}

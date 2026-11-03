@@ -370,3 +370,89 @@ void isClientForwardedTokenMode;
 void normalizeEnvVars;
 void preservedAdminCredentials;
 export type { MCPServer };
+
+it.each([
+  [AUTH_TYPE.OAUTH2, OAUTH_FLOW.INTERACTIVE, true],
+  [AUTH_TYPE.OAUTH2, OAUTH_FLOW.M2M, false],
+  [AUTH_TYPE.TRUE_PASSTHROUGH, OAUTH_FLOW.INTERACTIVE, false],
+])("applies a pending DCR client only to an interactive gateway OAuth save (%s, %s)", (authType, flow, useDcr) => {
+  const values: EditServerFormValues = {
+    auth_type: authType,
+    oauth_flow_type: flow,
+    transport: "http",
+    credentials: { client_id: "configured-client", client_secret: "configured-secret" },
+  };
+  const ui: EditServerUiState = {
+    ...baseUi,
+    dcrClient: {
+      client_id: "new-client",
+      client_secret: null,
+      dcr_issuer: "https://new.example",
+      dcr_server_url: "https://new.example/mcp",
+    },
+  };
+  const result = buildEditServerPayload(values, ui);
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
+  expect(result.payload.credentials?.client_id).toBe(useDcr ? "new-client" : "configured-client");
+  expect(result.payload.credentials?.client_secret).toBe(useDcr ? null : "configured-secret");
+  expect(result.payload.credentials?.dcr_issuer).toBe(useDcr ? "https://new.example" : undefined);
+});
+
+it.each([AUTH_TYPE.OAUTH_DELEGATE, AUTH_TYPE.TRUE_PASSTHROUGH])(
+  "keeps the endpoints typed for %s when the server was saved as oauth2",
+  (authType) => {
+    const authorizationUrl = "https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize";
+    const tokenUrl = "https://login.microsoftonline.com/tenant/oauth2/v2.0/token";
+    const values: EditServerFormValues = {
+      auth_type: authType,
+      transport: "http",
+      authorization_url: authorizationUrl,
+      token_url: tokenUrl,
+    };
+    const ui: EditServerUiState = { ...baseUi, mcpServer: { ...baseUi.mcpServer, auth_type: AUTH_TYPE.OAUTH2 } };
+    const result = buildEditServerPayload(values, ui);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
+    expect(result.payload.authorization_url).toBe(authorizationUrl);
+    expect(result.payload.token_url).toBe(tokenUrl);
+    expect(result.payload.issuer).toBeNull();
+    expect(result.payload.registration_url).toBeNull();
+  },
+);
+
+it.each([AUTH_TYPE.OAUTH_DELEGATE, AUTH_TYPE.TRUE_PASSTHROUGH])(
+  "writes an explicit null when the admin removes every scope on a %s server",
+  (authType) => {
+    const values: EditServerFormValues = {
+      auth_type: authType,
+      transport: "http",
+      credentials: { client_id: "org-app", scopes: [""] },
+    };
+    const ui: EditServerUiState = { ...baseUi, mcpServer: { ...baseUi.mcpServer, auth_type: authType } };
+    const result = buildEditServerPayload(values, ui);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
+    expect(result.payload.credentials).toEqual({ client_id: "org-app", scopes: null });
+  },
+);
+
+it.each([
+  [["read"], ["read"]],
+  [[""], null],
+])("keeps the scope edit %j when the saved app is removed on a client-forwarded server", (typed, expected) => {
+  const values: EditServerFormValues = {
+    auth_type: AUTH_TYPE.TRUE_PASSTHROUGH,
+    transport: "http",
+    credentials: { client_id: "cid", client_secret: "csec", scopes: typed },
+  };
+  const ui: EditServerUiState = {
+    ...baseUi,
+    removeStoredApp: true,
+    mcpServer: { ...baseUi.mcpServer, auth_type: AUTH_TYPE.TRUE_PASSTHROUGH },
+  };
+  const result = buildEditServerPayload(values, ui);
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
+  expect(result.payload.credentials).toEqual({ scopes: expected, client_id: null, client_secret: null });
+});

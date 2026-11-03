@@ -20,7 +20,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm.litellm_core_utils.cli_keyring import (
     SYSTEM_KEYRING,
@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.private_json import (
     stage_private_json,
     write_private_json,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +84,7 @@ SecretSave: TypeAlias = SecretWrite | CredentialNotSaved | CredentialNotRecorded
 SecretClear: TypeAlias = SecretErase | CredentialNotCleared
 
 
-class CliTokenRecord(BaseModel):
+class CliTokenRecord(LiteLLMBaseModel):
     """A stored CLI credential.
 
     `key is None` means the metadata was found but the secret could not be
@@ -104,7 +105,7 @@ class CliTokenRecord(BaseModel):
     refresh_token: str | None = None
 
 
-class CliTokenSecret(BaseModel):
+class CliTokenSecret(LiteLLMBaseModel):
     """The secret material as stored in the OS keychain.
 
     `base_url` is duplicated from the metadata file purely as a pairing tag: a
@@ -352,9 +353,9 @@ def is_cli_token_fresh(
     buffer_hours: float = CLI_TOKEN_FRESHNESS_BUFFER_SECONDS / 3600,
 ) -> bool:
     """Check whether a cached CLI token is still within its expiration window.
-    Used by `lite auth print-token` to fail fast, without a network round trip,
-    once the cached token is past `LITELLM_CLI_JWT_EXPIRATION_HOURS`. A `--pkce`
-    credential carries its own `expires_at`, which is authoritative when present."""
+    Used by `lite auth print-token` to skip asking the proxy while the cached token
+    is younger than `LITELLM_CLI_JWT_EXPIRATION_HOURS`. A `--pkce` credential
+    carries its own `expires_at`, which is authoritative when present."""
     from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 
     expires_at: Final = (

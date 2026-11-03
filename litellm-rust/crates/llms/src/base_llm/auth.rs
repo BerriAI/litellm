@@ -5,8 +5,11 @@
 //! that split: `validate_environment` shapes the forwarded headers and names the credential
 //! as an [`AuthScheme`], and [`resolve_auth`] turns the scheme into headers and a signer.
 
-use litellm_auth::{AuthServices, CredentialPlacement, SecretValue, TokenProviderHandle};
+use litellm_auth::{AuthServices, CredentialPlacement, TokenProviderHandle};
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
+use litellm_auth_gcp::VertexConfig;
 use litellm_http::request::with_header;
 
 pub type Headers = Vec<(String, String)>;
@@ -24,6 +27,9 @@ pub enum AuthScheme {
     /// A bearer acquired when the request is sent, from a token source such as a cloud SDK
     /// or a caller-supplied callable.
     Token { provider: TokenProviderHandle },
+    /// A Google access token for the Vertex AI project the config names, acquired when the
+    /// request is sent through the shared GCP token cache.
+    GcpAccessToken { config: Box<VertexConfig> },
     /// AWS SigV4 over the bytes that go on the wire, so the handler signs after the body is
     /// serialized.
     AwsSigV4 {
@@ -70,6 +76,13 @@ pub async fn resolve_auth(
                     CredentialPlacement::Bearer,
                     token.secret().expose(),
                 ),
+                signer: None,
+            })
+        }
+        AuthScheme::GcpAccessToken { config } => {
+            let token = services.gcp.access_token(&config, env_lookup).await?;
+            Ok(Authenticated {
+                headers: with_credential(headers, CredentialPlacement::Bearer, &token),
                 signer: None,
             })
         }

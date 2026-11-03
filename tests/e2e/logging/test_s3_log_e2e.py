@@ -22,11 +22,14 @@ alias per test turns the poll into a cheap prefix listing.
 from __future__ import annotations
 
 import math
+import re
 import time
+from typing import Final
 
 import pytest
 
-from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, S3_PARTITION_GRANULARITY, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import (
     INVALID_UPSTREAM_API_KEY,
@@ -42,6 +45,7 @@ pytestmark = pytest.mark.e2e
 
 #: The active s3_v2 callback's name in /health/readiness/details success_callbacks.
 S3_LOGGER_NAME = "S3Logger"
+UNREACHABLE_ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 
 
 @pytest.fixture(scope="session")
@@ -63,6 +67,14 @@ def _assert_s3_configured(client: LoggingClient) -> None:
 
 class TestS3LogDelivery:
     @pytest.mark.covers("logging.s3.success.writes_object", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_writes_one_success_object(
         self, client: LoggingClient, s3_logs: S3LogReader, resources: ResourceManager
     ) -> None:
@@ -106,7 +118,63 @@ class TestS3LogDelivery:
             record.response_cost, outcome.response_cost, rel_tol=1e-9
         ), f"payload response_cost {record.response_cost!r} must equal the header cost {outcome.response_cost}"
 
+    @pytest.mark.covers("logging.s3.success.partition_layout", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_chat_completions_object_key_follows_the_partition_granularity(
+        self, client: LoggingClient, s3_logs: S3LogReader, resources: ResourceManager
+    ) -> None:
+        """The one object a call writes must sit in the folder layout the proxy's
+        s3_partition_granularity names: {alias}/{date}/ for day and
+        {alias}/{date}/{HH}/ for hour, where HH is the hour the object's own
+        time- file name records. E2E_S3_PARTITION_GRANULARITY tells the test
+        which one the proxy under test runs."""
+        _assert_s3_configured(client)
+
+        alias = f"s3-layout-{unique_marker()}"
+        key = client.key_with_alias(alias, models=[CHEAP_ANTHROPIC_MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        outcome = first_ok(
+            client,
+            lambda: client.chat_raw(
+                key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {unique_marker()}", max_tokens=16
+            ),
+        )
+        body_id = completion_response_id(outcome.body)
+        assert body_id is not None, "the completion body must carry an id (it names the s3 object)"
+        records = s3_logs.poll_records(prefix=f"{alias}/", predicate=lambda r: r.id == body_id)
+        assert len(records) == 1, f"expected exactly ONE s3 object for response {body_id}, got {len(records)}"
+
+        file_id = body_id.replace("/", "_").replace(":", "_")
+        hour_folder = r"(?P<folder_hour>\d{2})/" if S3_PARTITION_GRANULARITY == "hour" else ""
+        layout = re.compile(
+            rf"{re.escape(alias)}/\d{{4}}-\d{{2}}-\d{{2}}/{hour_folder}"
+            rf"time-(?P<file_hour>\d{{2}})-\d{{2}}-\d{{2}}-\d{{6}}_{re.escape(file_id)}\.json"
+        )
+        keys = [object_key for object_key in s3_logs.list_keys(f"{alias}/") if file_id in object_key]
+        assert len(keys) == 1, f"expected one object key for response {body_id}, got {keys}"
+        match = layout.fullmatch(keys[0])
+        assert match is not None, f"{keys[0]!r} is outside the {S3_PARTITION_GRANULARITY} layout {layout.pattern!r}"
+        assert S3_PARTITION_GRANULARITY != "hour" or match.group("folder_hour") == match.group("file_hour"), (
+            f"the hour folder must be the hour the object's file name records: {keys[0]!r}"
+        )
+
     @pytest.mark.covers("logging.s3.failure.writes_object", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(UNREACHABLE_ANTHROPIC_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_failure_writes_one_object(
         self, client: LoggingClient, s3_logs: S3LogReader, resources: ResourceManager
     ) -> None:
@@ -126,7 +194,7 @@ class TestS3LogDelivery:
         model_name = f"s3-err-{unique_marker()}"
         model_id = client.create_model(
             model_name,
-            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+            LiteLLMParamsBody(model=UNREACHABLE_ANTHROPIC_BACKEND, api_key=INVALID_UPSTREAM_API_KEY),
         )
         resources.defer(lambda: client.delete_model(model_id))
         alias = f"s3-err-key-{unique_marker()}"

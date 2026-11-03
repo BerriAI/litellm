@@ -1,0 +1,12 @@
+{% from 'types.jinja2' import hint %}
+class {{ class_name }}({{ base_class }}):
+{% if config %}
+{% filter indent(4, true) %}{% include 'ConfigDict.jinja2' %}{% endfilter %}
+{% endif %}
+{%- for field in fields %}
+{%- set normalized = field.extras.get("x-python-normalized") %}
+    {{ field.name }}: {% if normalized %}{{ normalized.type }}{% if "minimum" in normalized %} = Field({% if field.required %}...{% else %}{{ field.default | int }}{% endif %}, ge={{ normalized.minimum }}, le={{ normalized.maximum }}){% elif not field.required %} = {{ "True" if field.default else "False" }}{% endif %}{% else %}{{ hint(field.data_type) }}{% if not field.required and field.default == [] %} = (){% elif field.field %} = {{ field.field }}{% elif not field.required or field.use_default_with_required %} = {{ field.represented_default }}{% endif %}{% endif %}
+{%- endfor %}
+{% if not fields and not config %}
+    pass
+{% endif %}
