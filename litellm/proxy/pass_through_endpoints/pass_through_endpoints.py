@@ -1202,6 +1202,23 @@ async def _run_post_call_guardrails_keeping_the_charge(
         raise
 
 
+def _response_after_post_call_guardrails(
+    guarded_body: object,
+    response_body: dict[str, object] | None,  # mutable-ok: pass_through_request's own response dict, returned as is
+    content: bytes,
+) -> tuple[dict[str, object] | None, bytes, bool]:  # mutable-ok: pass_through_request keeps a dict for the id rewrite
+    """The response body, its bytes and whether they changed, once the guardrails returned ``guarded_body``. A hook that
+    returns anything but a JSON object leaves the response as the provider sent it."""
+    if isinstance(guarded_body, dict):
+        guarded: Final = cast("dict[str, object]", guarded_body)  # cast-ok: the hook's JSON response
+        return guarded, json.dumps(guarded).encode("utf-8"), True
+    verbose_proxy_logger.debug(
+        "pass_through_endpoint: post_call_success_hook returned %s, expected dict — using original response",
+        type(guarded_body).__name__,
+    )
+    return response_body, content, False
+
+
 def _named_guardrail_runs_post_call(data: Mapping[str, object], entries: Sequence[object]) -> bool:
     names: Final = frozenset(chain.from_iterable(map(guardrail_entry_names, entries)))
     return any(
@@ -2356,15 +2373,9 @@ async def pass_through_request(
                 ),
                 settles_the_charge=inherit_auth_guardrails,
             )
-            if isinstance(guarded_body, dict):
-                response_body = guarded_body
-                content = json.dumps(response_body).encode("utf-8")
-                _content_modified = True
-            else:
-                verbose_proxy_logger.debug(
-                    "pass_through_endpoint: post_call_success_hook returned %s, expected dict — using original response",
-                    type(guarded_body).__name__,
-                )
+            response_body, content, _content_modified = _response_after_post_call_guardrails(
+                guarded_body, response_body, content
+            )
         elif response_body is None:
             verbose_proxy_logger.debug(
                 "pass_through_endpoint: response body not JSON-parseable, skipping post-call guardrails"
