@@ -1051,8 +1051,9 @@ async def test_messages_web_search_honors_the_native_tool_domain_filter(
     expected_urls: list[str],
     expected_provider_filter: list[str] | None,
 ):
-    import litellm
     from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+
+    import litellm
     from litellm.llms.base_llm.search.transformation import SearchResult
     from litellm.proxy import proxy_server
 
@@ -1103,8 +1104,9 @@ async def test_messages_web_search_domain_path_rules_match_whole_path_segments(
     rule: str,
     expected_urls: list[str],
 ):
-    import litellm
     from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+
+    import litellm
     from litellm.llms.base_llm.search.transformation import SearchResult
     from litellm.proxy import proxy_server
 
@@ -1254,9 +1256,9 @@ async def test_messages_web_search_forwards_allowed_domains_only_where_the_provi
 ):
     import httpx
     import respx
+    from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
 
     import litellm
-    from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
     from litellm.proxy import proxy_server
 
     router = MagicMock()
