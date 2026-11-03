@@ -159,6 +159,7 @@ from litellm.proxy._types import (
     ProxyException,
     ProxyLifespanState,
     SpecialModelNames,
+    SSOUserDefinedValues,
     SupportedDBObjectType,
     TeamDefaultSettings,
     TokenCountRequest,
@@ -3112,16 +3113,23 @@ def _apply_background_response_settings(value: SettingsJsonValue) -> None:
     )
 
 
-user_custom_auth = None
-user_custom_key_generate = None
+_CustomKeyHook: TypeAlias = Callable[..., Awaitable[Mapping[str, object]]]
+
+
+class _CustomSsoHandler(Protocol):
+    async def __call__(self, sso_response: object) -> SSOUserDefinedValues | None: ...
+
+
+user_custom_auth: Callable[..., Awaitable[object]] | None = None
+user_custom_key_generate: _CustomKeyHook | None = None
 # Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
 _pkce_no_redis_warning_emitted: bool = False
 _cp_no_redis_warning_emitted: bool = False
-user_custom_key_update = None
-user_custom_key_policy = None
-user_custom_sso = None
-user_custom_ui_sso_sign_in_handler = None
+user_custom_key_update: _CustomKeyHook | None = None
+user_custom_key_policy: _CustomKeyHook | None = None
+user_custom_sso: _CustomSsoHandler | None = None
+user_custom_ui_sso_sign_in_handler: object | None = None
 use_background_health_checks = None
 use_shared_health_check = None
 use_queue = False

@@ -5,7 +5,7 @@ import os
 import time
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -16,7 +16,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.litellm_core_utils.cloud_storage_security import (
     sanitize_cloud_object_component,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
 from litellm.types.utils import StandardBatchLineItemsPayload, StandardLoggingPayload
@@ -25,6 +25,10 @@ if TYPE_CHECKING:
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 else:
     VertexBase = Any
+
+
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: str, /) -> object: ...
 
 
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
@@ -296,7 +300,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         else:
             await self._send_individual_logs(items_to_process)
 
-    def _get_object_name(self, kwargs: dict, logging_payload: StandardLoggingPayload, response_obj: Any) -> str:
+    def _get_object_name(self, kwargs: dict, logging_payload: StandardLoggingPayload, response_obj: object) -> str:
         """
         Get the object name to use for the current payload
         """
@@ -308,7 +312,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         else:
             object_name = self._generate_success_object_name(
                 request_date_str=current_date,
-                response_id=response_obj.get("id", ""),
+                response_id=require_attributes(response_obj, _SupportsGetWithDefault, "get").get("id", ""),
             )
 
         # used for testing
@@ -361,7 +365,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def _generate_success_object_name(
         self,
         request_date_str: str,
-        response_id: str,
+        response_id: object,
     ) -> str:
         return f"{request_date_str}/{response_id}"
 

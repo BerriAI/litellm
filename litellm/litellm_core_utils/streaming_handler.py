@@ -17,7 +17,7 @@ import httpx
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
     attribute_or_none,
     chunk_usage,
+    decoded_json_object,
     provider_reported_usage_cost,
     stamp_litellm_bill_on_usage,
 )
@@ -345,6 +346,9 @@ class _VertexChunkLike(Protocol):
 class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
     upstream_provider: str | None = None
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _provider_response_model(chunk: object) -> str | None:
@@ -953,7 +957,7 @@ class CustomStreamWrapper:
                 if "text_output" in chunk:
                     response = CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
                     response = response.strip()
-                    parsed_response = json.loads(response)
+                    parsed_response = decoded_json_object(_DECODED_JSON.validate_python(json.loads(response)))
                 else:
                     return {
                         "text": "",

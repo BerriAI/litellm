@@ -5,7 +5,7 @@ import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
@@ -24,6 +24,7 @@ T = TypeVar("T", bound=BaseModel)
 from litellm.constants import AUTH_OBJECTS_TARGET as AUTH_OBJECTS_TARGET  # noqa: E402, PLC0414  # public re-export
 
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
+_CACHED_VALUE: Final = TypeAdapter(object)
 
 
 def is_user_key_cache_key(key: str) -> bool:
@@ -134,7 +135,7 @@ class UserApiKeyCache(DualCache):
     ) -> object:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        cached: Final = (
+        cached: Final = _CACHED_VALUE.validate_python(
             self.key_object_cache.get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
             if is_user_key_cache_key(key)
             else super().get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
@@ -184,7 +185,7 @@ class UserApiKeyCache(DualCache):
     ) -> object:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        cached: Final = (
+        cached: Final = _CACHED_VALUE.validate_python(
             await self.key_object_cache.async_get_cache(
                 key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
             )

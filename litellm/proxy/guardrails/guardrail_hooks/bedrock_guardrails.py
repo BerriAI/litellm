@@ -16,7 +16,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
 from types import MappingProxyType
@@ -2925,7 +2925,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[object],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
@@ -2977,7 +2977,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # Collect all chunks to process them together
         started_at: Final = time.monotonic()
-        all_chunks: Final[list[ModelResponseStream]] = []
+        all_chunks: Final[list[object]] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
@@ -3086,18 +3086,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Return the reconstructed stream
             async for chunk in mock_response:
                 yield chunk
-        elif raw_sse:
-            # Forwarding an unscannable stream would silently disable the guardrail, so fail closed.
-            # A raise cannot reach the client once a keepalive ping has flushed the headers, so the
-            # refusal travels as a frame, matching how a block is delivered above
-            for error_frame in anthropic_sse_error_frames(
-                f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
-            ):
-                yield error_frame
-            return
         else:
-            for chunk in all_chunks:
-                yield chunk
+            for unassembled_chunk in (
+                # Forwarding an unscannable stream would silently disable the guardrail, so fail closed.
+                # A raise cannot reach the client once a keepalive ping has flushed the headers, so the
+                # refusal travels as a frame, matching how a block is delivered above
+                anthropic_sse_error_frames(
+                    f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
+                )
+                if raw_sse
+                else all_chunks
+            ):
+                yield unassembled_chunk
 
     def _extract_masked_texts_from_response(self, bedrock_guardrail_response: BedrockGuardrailResponse) -> list[str]:
         """

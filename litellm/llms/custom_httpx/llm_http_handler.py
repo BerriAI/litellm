@@ -142,7 +142,7 @@ from litellm.types.containers.main import (
 )
 from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
 from litellm.types.extraction import ExtractionResponse
-from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
+from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig, TwoStepFileUploadRequest
 from litellm.types.integrations.custom_logger import (
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopPlan,
@@ -4118,7 +4118,7 @@ class BaseLLMHTTPHandler:
         ):
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
-            presigned_request: Final = cast(dict[str, Any], transformed_request)
+            presigned_request: Final = cast(TwoStepFileUploadRequest, transformed_request)
             upload_response = getattr(sync_httpx_client, presigned_request["method"].lower())(
                 url=presigned_request["url"],
                 headers=presigned_request["headers"],
@@ -4332,7 +4332,7 @@ class BaseLLMHTTPHandler:
         ):
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
-            presigned_request: Final = cast(dict[str, Any], transformed_request)
+            presigned_request: Final = cast(TwoStepFileUploadRequest, transformed_request)
             upload_response = await getattr(async_httpx_client, presigned_request["method"].lower())(
                 url=presigned_request["url"],
                 headers=presigned_request["headers"],

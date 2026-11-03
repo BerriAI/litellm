@@ -1576,6 +1576,10 @@ async def get_batch_from_database(
         return None, None
 
 
+class _BatchCostJobScheduler(Protocol):
+    def get_job(self, job_id: str, /) -> object: ...
+
+
 def batch_cost_poller_is_active() -> bool:
     """
     Whether the CheckBatchCost poller will account for a managed batch's cost itself.
@@ -1596,10 +1600,10 @@ def batch_cost_poller_is_active() -> bool:
     try:
         import litellm.proxy.proxy_server as proxy_server_module
 
-        scheduler = getattr(proxy_server_module, "scheduler", None)
+        scheduler: Final[_BatchCostJobScheduler | None] = getattr(proxy_server_module, "scheduler", None)
         if scheduler is None:
             return False
-        job = scheduler.get_job("check_batch_cost_job")
+        job: Final = scheduler.get_job("check_batch_cost_job")
         if job is None:
             return False
         poller = getattr(getattr(job, "func", None), "__self__", None)

@@ -9685,9 +9685,12 @@ class PythonCore(DeprecatedRouterMembers):
                     _metadata["attempted_retries"] = current_attempt + 1
                     _metadata["max_retries"] = num_retries
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
-                    response = await self.make_call(original_function, *args, **kwargs)
-                    if coroutine_checker.is_async_callable(response):  # async errors are often returned as coroutines
-                        response = await response
+                    made = await self.make_call(original_function, *args, **kwargs)
+                    response = (
+                        _OPAQUE_VALUE_ADAPTER.validate_python(await made)
+                        if coroutine_checker.is_async_callable(made)
+                        else _OPAQUE_VALUE_ADAPTER.validate_python(made)
+                    )
 
                     response = add_retry_headers_to_response(
                         response=response,
@@ -9783,9 +9786,13 @@ class PythonCore(DeprecatedRouterMembers):
                 getattr(endpoint_function, "__module__", None),
                 model=_OPAQUE_VALUE_ADAPTER.validate_python(model_group),
             ):
-                response = original_function(*args, **kwargs)
-                if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
-                    response = await response
+                called: Final = original_function(*args, **kwargs)
+                result: Final = _OPAQUE_VALUE_ADAPTER.validate_python(called)
+                response: Final = (
+                    _OPAQUE_VALUE_ADAPTER.validate_python(await called)
+                    if coroutine_checker.is_async_callable(result) or inspect.isawaitable(result)
+                    else result
+                )
         except Exception:
             with contextlib.suppress(Exception):
                 await async_io_token_refund_failure(
@@ -9794,11 +9801,9 @@ class PythonCore(DeprecatedRouterMembers):
             raise
         await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)
         ## PROCESS RESPONSE HEADERS
-        response = await self.set_response_headers(
+        return await self.set_response_headers(
             response=response, model_group=model_group if isinstance(model_group, str) else None, request_kwargs=kwargs
         )
-
-        return response
 
     def _handle_mock_testing_rate_limit_error(self, kwargs: dict, model_group: str | None = None):
         """

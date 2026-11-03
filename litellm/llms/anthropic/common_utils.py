@@ -2038,7 +2038,7 @@ def _strip_empty_content_blocks_from_message(message: object) -> object:
 
 def strip_empty_content_blocks_from_anthropic_messages(
     messages: Sequence[object],
-) -> list[Any]:
+) -> Sequence[object]:
     """
     Return a new message list with empty or whitespace-only ``{"type": "text"}``
     content blocks and empty *unsigned* ``{"type": "thinking"}`` blocks removed.
@@ -2151,7 +2151,7 @@ def _sanitize_tool_use_id_content_block(block: object) -> object:
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> list[Any]:
+def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> Sequence[object]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's

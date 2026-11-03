@@ -10,6 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -295,9 +296,10 @@ def extract_sse_data(event_str: str) -> dict | None:
     if payload is None or not payload.startswith("{"):
         return None
     try:
-        return json.loads(payload)
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
     except (ValueError, TypeError):
         return None
+    return decoded if is_str_keyed_dict(decoded) else None
 
 
 def build_usage_only_response_from_chunks(
