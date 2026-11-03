@@ -3,6 +3,7 @@
 import React, { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import BaseSSOSettingsForm, {
+  buildSSOSettingsPatch,
   emptySSOSettingsFormValues,
   submitMountedSSOValues,
   useSSOSettingsForm,
@@ -12,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { detectSSOProvider, diffSSOSettingsPayload, processSSOSettingsPayload } from "../utils";
+import { detectSSOProvider, processSSOSettingsPayload } from "../utils";
 import { useSSOSettings, type SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -88,10 +89,7 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
 
   const handleFormSubmit = async (formValues: SSOSettingsFormValues) => {
     try {
-      const payload = diffSSOSettingsPayload(
-        processSSOSettingsPayload(seededValues),
-        processSSOSettingsPayload(formValues),
-      );
+      const payload = buildSSOSettingsPatch(seededValues, formValues, "sso-settings", processSSOSettingsPayload);
 
       await mutateAsync(payload, {
         onSuccess: () => {
