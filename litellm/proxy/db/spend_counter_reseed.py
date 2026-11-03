@@ -43,6 +43,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.types.proxy.carried_budget_state import END_USER_COUNTER_PREFIX
 
 if TYPE_CHECKING:
     from prisma.types import LiteLLM_EndUserTableWhereUniqueInput
@@ -57,8 +58,6 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
         "Team": Litellm_EntityType.TEAM.value,
     }
 )
-
-END_USER_COUNTER_PREFIX: Final = "spend:end_user:"
 
 _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -96,6 +95,10 @@ class SpendCounterReseed:
 
     _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
     _registry_lock: ClassVar[asyncio.Lock | None] = None
+
+    @staticmethod
+    async def counter_lock(counter_key: str) -> asyncio.Lock:
+        return await SpendCounterReseed._get_lock(counter_key)
 
     @staticmethod
     async def _get_lock(counter_key: str) -> asyncio.Lock:

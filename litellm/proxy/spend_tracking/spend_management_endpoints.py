@@ -52,6 +52,7 @@ from litellm.proxy.auth.authorization_dependencies import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.openai_error_payload import error_status_code, openai_error_param, openai_error_type
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, drop_committed_spend
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
     ProviderBillingRequestFailed,
@@ -3695,6 +3696,43 @@ async def view_spend_logs(
         )
 
 
+class _EntityIdRow(TypedDict):
+    id: ReadOnly[str]
+
+
+_COMMITTED_DROP_PAGE_SIZE: Final = 1000
+_TOKEN_PAGE_QUERY: Final = (
+    'SELECT token AS id FROM "LiteLLM_VerificationToken" WHERE token > $1 ORDER BY token LIMIT $2'
+)
+_TEAM_PAGE_QUERY: Final = 'SELECT team_id AS id FROM "LiteLLM_TeamTable" WHERE team_id > $1 ORDER BY team_id LIMIT $2'
+
+
+async def _drop_committed_spend_page(
+    prisma_client: PrismaClient, page_query: str, counter_prefix: str, after_id: str
+) -> str | None:
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    rows: Final[Sequence[_EntityIdRow]] = await _query_raw(
+        prisma_client, page_query, after_id, _COMMITTED_DROP_PAGE_SIZE
+    )
+    await drop_committed_spend(spend_counter_cache, tuple(f"{counter_prefix}{row['id']}" for row in rows))
+    return rows[-1]["id"] if len(rows) == _COMMITTED_DROP_PAGE_SIZE else None
+
+
+async def _drop_committed_spend_pages(prisma_client: PrismaClient, page_query: str, counter_prefix: str) -> None:
+    after_id: str | None = ""  # rebind-ok: the keyset cursor moves one page at a time
+    while after_id is not None:
+        after_id = await _drop_committed_spend_page(prisma_client, page_query, counter_prefix, after_id)
+
+
+async def _drop_all_key_and_team_committed_spend(prisma_client: PrismaClient) -> None:
+    try:
+        await _drop_committed_spend_pages(prisma_client, _TOKEN_PAGE_QUERY, "spend:key:")
+        await _drop_committed_spend_pages(prisma_client, _TEAM_PAGE_QUERY, "spend:team:")
+    except Exception as e:  # noqa: BLE001  # the reset already committed; a kept twin lasts until charges stop for its TTL
+        verbose_proxy_logger.warning("committed spend drop after a global reset failed: %s", e)
+
+
 @router.post(
     "/global/spend/reset",
     tags=["Budget & Spend Tracking"],
@@ -3723,6 +3761,8 @@ async def global_spend_reset():
 
     await _verification_token_table(prisma_client).update_many(data={"spend": 0.0}, where={})
     await _team_table(prisma_client).update_many(data={"spend": 0.0}, where={})
+    if committed_spend_tracked():
+        await _drop_all_key_and_team_committed_spend(prisma_client)
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",
