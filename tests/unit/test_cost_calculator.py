@@ -9878,6 +9878,107 @@ def test_deployment_prices_fill_only_missing_components_from_the_pricing_provide
     assert litellm.model_cost[deployment_id]["litellm_provider"] == "deepseek"
 
 
+@pytest.mark.parametrize("provider", ("bedrock", "openai"))
+@pytest.mark.parametrize("known_base", (False, True))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_deployment_prices_inherit_cache_rates_from_configured_base_model(
+    provider: str, known_base: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = f"{provider}/owned-request-pricing-model"
+    base_model: Final = f"{provider}/owned-base-pricing-model"
+    public_rates: Final = {
+        "litellm_provider": provider,
+        "mode": "chat",
+        "input_cost_per_token": 0.03,
+        "output_cost_per_token": 0.04,
+        "cache_read_input_token_cost": 0.001,
+    }
+    monkeypatch.setitem(litellm.model_cost, model, public_rates)
+    if known_base:
+        monkeypatch.setitem(litellm.model_cost, base_model, {**public_rates, "cache_read_input_token_cost": 0.004})
+    deployment_id: Final = "configured-base-pricing-deployment"
+    litellm.register_model(
+        {
+            deployment_id: {
+                "litellm_provider": provider,
+                "mode": "chat",
+                "base_model": base_model,
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+            }
+        }
+    )
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=100,
+            completion_tokens=3,
+            total_tokens=103,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+        ),
+    )
+    cache_rate: Final = 0.004 if known_base else 0.01
+    assert completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider=provider,
+        custom_pricing=True,
+        router_model_id=deployment_id,
+    ) == pytest.approx(20 * 0.01 + 80 * cache_rate + 3 * 0.02)
+
+
+@pytest.mark.parametrize("cache_rate", (None, 0.0, 0.0001))
+@pytest.mark.parametrize("explicit_rate", (None, 0.0, 0.0002))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_deployment_cache_prices_preserve_explicit_cache_override_precedence(
+    cache_rate: float | None, explicit_rate: float | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = "dashscope/owned-explicit-cache-pricing-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 0.005,
+            "output_cost_per_token": 0.008,
+            "cache_read_input_token_cost": 0.0005,
+            "explicit_cache_read_input_token_cost": 0.00025,
+        },
+    )
+    deployment_id: Final = "explicit-cache-pricing-deployment"
+    litellm.register_model(
+        {
+            deployment_id: {
+                "litellm_provider": "dashscope",
+                "mode": "chat",
+                "input_cost_per_token": 0.001,
+                **({"cache_read_input_token_cost": cache_rate} if cache_rate is not None else {}),
+                **({"explicit_cache_read_input_token_cost": explicit_rate} if explicit_rate is not None else {}),
+            }
+        }
+    )
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            total_tokens=1000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=1000, cache_type="ephemeral"),
+        ),
+    )
+    expected_rate: Final = (
+        explicit_rate if explicit_rate is not None else cache_rate if cache_rate is not None else 0.00025
+    )
+    assert completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="dashscope",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+    ) == pytest.approx(1000 * expected_rate)
+
+
 @pytest.mark.parametrize("custom_pricing", (False, True))
 @pytest.mark.usefixtures("isolated_pricing_registry")
 def test_perplexity_deployment_prices_keep_citation_reasoning_and_search_charges(custom_pricing: bool) -> None:

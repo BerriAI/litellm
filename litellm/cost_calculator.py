@@ -2768,9 +2768,11 @@ def _deployment_token_model_info(
         return None
     if model is None:
         return deployment_info
-    prefix: Final = model.partition("/")[0]
+    base_model: Final = deployment_info.get("base_model")
+    pricing_model: Final = base_model if isinstance(base_model, str) and base_model else model
+    prefix: Final = pricing_model.partition("/")[0]
     public_provider: Final = pricing_provider or (prefix if prefix in LlmProvidersSet else custom_llm_provider)
-    public_info: Final = lookup_model_info_for_registration(model, public_provider)
+    public_info: Final = lookup_model_info_for_registration(pricing_model, public_provider)
     if isinstance(public_info, ModelInfoLookupMiss):
         return deployment_info
     public_entry: Final = _raw_cost_map_entry(public_info["key"])
