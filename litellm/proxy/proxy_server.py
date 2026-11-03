@@ -13890,7 +13890,7 @@ async def audio_transcriptions(
             api_base=api_base,
             version=version,
             response_cost=response_cost,
-            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            model_region=user_api_key_dict.allowed_model_region,
             call_id=response_call_id,
             request_data=data,
             hidden_params=hidden_params,
