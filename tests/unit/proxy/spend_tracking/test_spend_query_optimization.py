@@ -731,6 +731,34 @@ async def test_spend_logs_ui_cancelled_read_is_reported_as_503_with_a_date_range
 
 
 @pytest.mark.asyncio
+async def test_global_spend_report_returns_the_503_hint_not_its_catch_all_400_when_postgres_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fastapi import HTTPException
+
+    from litellm.proxy.spend_tracking.spend_management_endpoints import get_global_spend_report
+
+    mock_prisma = MagicMock()
+    statement_timeout_reads(mock_prisma, AsyncMock(side_effect=statement_timeout_error()))
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_global_spend_report(
+            start_date="2026-02-01",
+            end_date="2026-02-16",
+            group_by="api_key",
+            api_key=None,
+            internal_user_id=None,
+            team_id=None,
+            customer_id=None,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "Spend logs took longer than 30s. Pick a shorter date range" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_global_spend_report_reads_are_cancelled_by_postgres_after_30s(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy.spend_tracking.spend_management_endpoints import get_global_spend_report
 
