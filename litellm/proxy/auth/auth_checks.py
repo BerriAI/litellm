@@ -125,6 +125,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
+    budget_windows_absent_cache_key,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
     get_management_object_ttl,
@@ -3471,9 +3472,20 @@ async def delete_cache_key_object(
         )
 
     await publish_auth_cache_invalidation(cache_key=key)
+    await evict_budget_windows_absent_marker(
+        entity_type=Litellm_EntityType.KEY, entity_id=hashed_token, user_api_key_cache=user_api_key_cache
+    )
 
 
 _delete_cache_key_object: Final = delete_cache_key_object
+
+
+async def evict_budget_windows_absent_marker(
+    entity_type: Litellm_EntityType, entity_id: str, user_api_key_cache: UserApiKeyCache
+) -> None:
+    marker: Final = budget_windows_absent_cache_key(entity_type.value, entity_id)
+    evict_local(cache_keys=(marker,), user_api_key_cache=user_api_key_cache)
+    await publish_auth_cache_invalidation(cache_key=marker)
 
 
 async def delete_cache_key_objects(

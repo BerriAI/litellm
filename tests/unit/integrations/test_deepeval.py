@@ -2,11 +2,15 @@ import os
 import unittest
 from litellm._uuid import uuid
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 from litellm.integrations.deepeval.api import Endpoints, HttpMethods
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.deepeval.types import SpanApiType, TraceSpanApiStatus
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.internal_call_metadata import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 
 class TestDeepEvalLogger(unittest.TestCase):
@@ -93,6 +97,37 @@ class TestDeepEvalLogger(unittest.TestCase):
         )
         self.assertEqual(llm_span["inputTokenCount"], 10)
         self.assertEqual(llm_span["outputTokenCount"], 20)
+
+    def test_background_cost_span_keeps_its_own_uuid_beside_its_create(self) -> None:
+        standard_logging_object: Final = {
+            "id": "resp_YWJjZA",
+            "trace_id": self.trace_id,
+            "model": self.model,
+            "response": {"usage": {}, "choices": [{"message": {"content": "OK"}}]},
+        }
+        create_kwargs: Final = {
+            "input": self.input_str,
+            "call_type": "aresponses",
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": standard_logging_object,
+        }
+        cost_kwargs: Final = {
+            "input": self.input_str,
+            "call_type": "aget_responses",
+            "litellm_params": {
+                "metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}
+            },
+            "standard_logging_object": standard_logging_object,
+        }
+
+        for kwargs in (create_kwargs, cost_kwargs):
+            self.logger.log_success_event(kwargs, self.mock_response_obj, self.start_time, self.end_time)
+
+        span_uuids: Final = [
+            call.kwargs["body"]["llmSpans"][0]["uuid"]
+            for call in self.mock_api_instance.send_request.call_args_list
+        ]
+        self.assertEqual(span_uuids, ["resp_YWJjZA", f"resp_YWJjZA{BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX}"])
 
     def test_log_failure_event(self):
         error_message = "This is an error."

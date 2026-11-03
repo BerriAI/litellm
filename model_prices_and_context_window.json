@@ -13478,6 +13478,10 @@
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
+        "token_count_framing": 149,
+        "token_count_tool_framing": 302,
+        "token_count_responses_framing": 145,
+        "token_count_responses_tool_framing": 100,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "mode": "chat",
@@ -13831,7 +13835,7 @@
         "input_cost_per_token_flex": 3.7e-07,
         "input_cost_per_token_priority": 1.295e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 156000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
@@ -13845,7 +13849,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/ap-northeast-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -14002,7 +14006,7 @@
         "input_cost_per_token_flex": 3.7e-07,
         "input_cost_per_token_priority": 1.295e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 156000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
@@ -14016,7 +14020,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/ap-south-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -14140,12 +14144,12 @@
         "input_cost_per_token": 7.4e-07,
         "input_cost_per_token_flex": 3.7e-07,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 156000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
         "output_cost_per_token_flex": 1.11e-06,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.html",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md",
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_native_structured_output": true,
@@ -14250,7 +14254,7 @@
         "input_cost_per_token_flex": 3.7e-07,
         "input_cost_per_token_priority": 1.295e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 156000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
@@ -14264,7 +14268,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/eu-north-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -14786,7 +14790,7 @@
         "input_cost_per_token_flex": 3.7e-07,
         "input_cost_per_token_priority": 1.295e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 156000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 2.22e-06,
@@ -14800,7 +14804,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/sa-east-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -15035,7 +15039,7 @@
         "input_cost_per_token_flex": 3.1e-07,
         "input_cost_per_token_priority": 1.085e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 156000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.85e-06,
@@ -15049,7 +15053,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/us-east-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -15156,7 +15160,7 @@
         "input_cost_per_token_flex": 3.1e-07,
         "input_cost_per_token_priority": 1.085e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 156000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.85e-06,
@@ -15170,7 +15174,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/us-east-2/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -15552,6 +15556,7 @@
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
     },
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
+        "deprecation_date": "2027-03-30",
         "input_cost_per_token": 2.65e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
@@ -15562,6 +15567,7 @@
         "supports_pdf_input": true
     },
     "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0": {
+        "deprecation_date": "2027-03-30",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
@@ -15708,7 +15714,7 @@
         "input_cost_per_token_flex": 3.1e-07,
         "input_cost_per_token_priority": 1.085e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 163840,
+        "max_input_tokens": 156000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.85e-06,
@@ -15722,7 +15728,7 @@
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md"
     },
     "bedrock/us-west-2/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -23519,12 +23525,12 @@
         ]
     },
     "deepgram/streaming/nova-3": {
-        "input_cost_per_second": 8e-05,
+        "input_cost_per_second": 0.00012833,
         "litellm_provider": "deepgram",
         "metadata": {
-            "calculation": "$0.0048/60 seconds = $0.00008000 per second",
+            "calculation": "$0.0077/60 seconds = $0.00012833 per second",
             "note": "Nova-3 monolingual streaming, pay as you go",
-            "original_pricing_per_minute": 0.0048
+            "original_pricing_per_minute": 0.0077
         },
         "mode": "audio_transcription",
         "output_cost_per_second": 0.0,
@@ -23533,13 +23539,28 @@
             "/v1/listen"
         ]
     },
-    "deepgram/streaming/nova-3-multilingual": {
-        "input_cost_per_second": 9.667e-05,
+    "deepgram/streaming/nova-3-medical": {
+        "input_cost_per_second": 0.00012833,
         "litellm_provider": "deepgram",
         "metadata": {
-            "calculation": "$0.0058/60 seconds = $0.00009667 per second",
+            "calculation": "$0.0077/60 seconds = $0.00012833 per second",
+            "note": "Nova-3 Medical streaming, launch price from Deepgram's 2025-03-03 announcement. deepgram.com/pricing does not list Nova-3 Medical, and this matches its current Nova-3 monolingual streaming pay as you go rate",
+            "original_pricing_per_minute": 0.0077
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://www.businesswire.com/news/home/20250303470439/en",
+        "supported_endpoints": [
+            "/v1/listen"
+        ]
+    },
+    "deepgram/streaming/nova-3-multilingual": {
+        "input_cost_per_second": 0.00015333,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0092/60 seconds = $0.00015333 per second",
             "note": "Nova-3 multilingual (language=multi) streaming, pay as you go",
-            "original_pricing_per_minute": 0.0058
+            "original_pricing_per_minute": 0.0092
         },
         "mode": "audio_transcription",
         "output_cost_per_second": 0.0,
@@ -24519,7 +24540,7 @@
         "input_cost_per_token_flex": 3.1e-07,
         "input_cost_per_token_priority": 1.085e-06,
         "litellm_provider": "bedrock_converse",
-        "max_input_tokens": 164000,
+        "max_input_tokens": 156000,
         "max_output_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.85e-06,
@@ -24530,7 +24551,7 @@
         "supports_reasoning": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-2.md",
         "supports_audio_input": false,
         "supports_response_schema": true,
         "supports_vision": false
@@ -54457,6 +54478,8 @@
         "input_cost_per_token_above_200k_tokens_batches": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "xai",
+        "token_count_framing": 185,
+        "token_count_tool_framing": 214,
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "mode": "chat",
@@ -62640,7 +62663,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "token_count_framing": 23,
+        "token_count_tool_framing": 12
     },
     "deepseek/deepseek-v4-flash-vision-exp": {
         "cache_creation_input_token_cost": 0.0,
@@ -62746,7 +62771,9 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "token_count_framing": 76,
+        "token_count_tool_framing": 75
     },
     "tencent/deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
@@ -64032,6 +64059,7 @@
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_priority": 3.75e-07,
         "litellm_provider": "fireworks_ai",
+        "token_count_framing": 23,
         "max_input_tokens": 1048576,
         "max_output_tokens": 393216,
         "mode": "chat",
@@ -64133,6 +64161,7 @@
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_priority": 3.75e-07,
         "litellm_provider": "fireworks_ai",
+        "token_count_framing": 23,
         "max_input_tokens": 1048576,
         "max_output_tokens": 393216,
         "mode": "chat",
@@ -76801,6 +76830,7 @@
         "supports_audio_input": true,
         "supports_audio_output": false,
         "supports_computer_use": true,
+        "supports_continuation": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
@@ -76860,6 +76890,7 @@
         ],
         "supports_audio_input": true,
         "supports_computer_use": true,
+        "supports_continuation": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
@@ -76917,6 +76948,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_continuation": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
