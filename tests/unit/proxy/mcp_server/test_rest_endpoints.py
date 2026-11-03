@@ -5106,3 +5106,16 @@ async def test_rest_guardrail_bearer_excludes_admission_key(
             assert (authorization.removeprefix("Bearer ") or None) == expected
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("guarded-")
+
+
+@pytest.mark.asyncio
+async def test_provider_registration_does_not_open_gateway_connection() -> None:
+    request: Final = NewMCPServerRequest(
+        execution_mode="provider", url="https://mcp.example.com/mcp", allowed_tools=["read"]
+    )
+
+    async def unexpected_operation(_client: object) -> dict[str, object]:
+        pytest.fail("Provider registrations must not open a gateway client")
+
+    result: Final = await rest_endpoints._execute_with_mcp_client(request, unexpected_operation)
+    assert result == {"error": "Provider-executed MCP registrations do not support gateway connections"}

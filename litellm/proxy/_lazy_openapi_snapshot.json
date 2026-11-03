@@ -37315,6 +37315,14 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPExecutionMode": {
+          "enum": [
+            "litellm",
+            "provider"
+          ],
+          "title": "MCPExecutionMode",
+          "type": "string"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -37506,10 +37514,8 @@
               "title": "Env Vars"
             },
             "execution_mode": {
-              "const": "litellm",
-              "default": "litellm",
-              "title": "Execution Mode",
-              "type": "string"
+              "$ref": "#/components/schemas/MCPExecutionMode",
+              "default": "litellm"
             },
             "extra_headers": {
               "anyOf": [
@@ -37797,14 +37803,21 @@
               "title": "Tool Name To Display Name"
             },
             "transport": {
-              "default": "sse",
-              "enum": [
-                "sse",
-                "http",
-                "stdio"
+              "anyOf": [
+                {
+                  "enum": [
+                    "sse",
+                    "http",
+                    "stdio"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Transport",
-              "type": "string"
+              "default": "sse",
+              "title": "Transport"
             },
             "url": {
               "anyOf": [
@@ -40359,10 +40372,8 @@
               "title": "Env Vars"
             },
             "execution_mode": {
-              "const": "litellm",
-              "default": "litellm",
-              "title": "Execution Mode",
-              "type": "string"
+              "$ref": "#/components/schemas/MCPExecutionMode",
+              "default": "litellm"
             },
             "extra_headers": {
               "anyOf": [
@@ -40650,14 +40661,21 @@
               "title": "Tool Name To Display Name"
             },
             "transport": {
-              "default": "sse",
-              "enum": [
-                "sse",
-                "http",
-                "stdio"
+              "anyOf": [
+                {
+                  "enum": [
+                    "sse",
+                    "http",
+                    "stdio"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Transport",
-              "type": "string"
+              "default": "sse",
+              "title": "Transport"
             },
             "url": {
               "anyOf": [
@@ -44427,10 +44445,8 @@
               "title": "Env Vars"
             },
             "execution_mode": {
-              "const": "litellm",
-              "default": "litellm",
-              "title": "Execution Mode",
-              "type": "string"
+              "$ref": "#/components/schemas/MCPExecutionMode",
+              "default": "litellm"
             },
             "extra_headers": {
               "anyOf": [
@@ -44718,14 +44734,21 @@
               "title": "Tool Name To Display Name"
             },
             "transport": {
-              "default": "sse",
-              "enum": [
-                "sse",
-                "http",
-                "stdio"
+              "anyOf": [
+                {
+                  "enum": [
+                    "sse",
+                    "http",
+                    "stdio"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Transport",
-              "type": "string"
+              "default": "sse",
+              "title": "Transport"
             },
             "url": {
               "anyOf": [
@@ -45241,14 +45264,21 @@
               "title": "Tool Name To Display Name"
             },
             "transport": {
-              "default": "sse",
-              "enum": [
-                "sse",
-                "http",
-                "stdio"
+              "anyOf": [
+                {
+                  "enum": [
+                    "sse",
+                    "http",
+                    "stdio"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Transport",
-              "type": "string"
+              "default": "sse",
+              "title": "Transport"
             },
             "url": {
               "anyOf": [
@@ -47706,6 +47736,14 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPExecutionMode": {
+          "enum": [
+            "litellm",
+            "provider"
+          ],
+          "title": "MCPExecutionMode",
+          "type": "string"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -47897,10 +47935,8 @@
               "title": "Env Vars"
             },
             "execution_mode": {
-              "const": "litellm",
-              "default": "litellm",
-              "title": "Execution Mode",
-              "type": "string"
+              "$ref": "#/components/schemas/MCPExecutionMode",
+              "default": "litellm"
             },
             "extra_headers": {
               "anyOf": [
@@ -48188,14 +48224,21 @@
               "title": "Tool Name To Display Name"
             },
             "transport": {
-              "default": "sse",
-              "enum": [
-                "sse",
-                "http",
-                "stdio"
+              "anyOf": [
+                {
+                  "enum": [
+                    "sse",
+                    "http",
+                    "stdio"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Transport",
-              "type": "string"
+              "default": "sse",
+              "title": "Transport"
             },
             "url": {
               "anyOf": [
