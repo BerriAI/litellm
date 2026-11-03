@@ -1518,6 +1518,22 @@ class RoutingContext:
     ) -> int:
         return self._router._count_pre_call_check_tokens(messages, input, request_kwargs)
 
+    async def acount_pre_call_check_tokens(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        messages: Sequence[Mapping[str, object]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+    ) -> Mapping[str | None, int] | None:
+        return await self._router._acount_pre_call_check_tokens(
+            model=model,
+            healthy_deployments=healthy_deployments,
+            messages=messages,
+            input=input,
+            request_kwargs=request_kwargs,
+        )
+
     def update_kwargs_before_fallbacks(
         self,
         model: str,

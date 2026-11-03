@@ -295,6 +295,7 @@ from litellm.router_utils.context_window_fit import (
     ContextWindowOverflow,
     context_window_overflow,
     pre_call_tokenizer,
+    token_count_key,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -14886,8 +14887,8 @@ class PythonCore(DeprecatedRouterMembers):
     def _pre_call_check_tokenizer_models(
         self, model: str, healthy_deployments: Sequence[Mapping[str, object]]
     ) -> frozenset[str | None]:
-        """The counts the prompt needs: one per OpenAI model and one stand-in count shared by every other deployment
-        that declares a context window.
+        """The models the prompt is counted for: each OpenAI model, and None for the stand-in shared by every other
+        deployment that declares a context window.
 
         Resolves each deployment the way ``_pre_call_checks`` does, so one unmappable deployment
         cannot hide a later one that does declare a limit.
@@ -14902,24 +14903,29 @@ class PythonCore(DeprecatedRouterMembers):
         input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None,
     ) -> Mapping[str | None, int]:
-        return MappingProxyType(
+        keys: Final = MappingProxyType(
+            {openai_model: token_count_key(openai_model) for openai_model in tokenizer_models}
+        )
+        counted_models: Final = MappingProxyType({key: openai_model for openai_model, key in keys.items()})
+        counts: Final = MappingProxyType(
             {
-                openai_model: self._count_pre_call_check_tokens(
+                key: self._count_pre_call_check_tokens(
                     messages=messages,
                     input=input,
                     request_kwargs=request_kwargs,
                     model=openai_model or "",
                     custom_tokenizer=pre_call_tokenizer(openai_model),
                 )
-                for openai_model in tokenizer_models
+                for key, openai_model in counted_models.items()
             }
         )
+        return MappingProxyType({openai_model: counts[key] for openai_model, key in keys.items()})
 
     async def _acount_pre_call_check_tokens(
         self,
         model: str,
         healthy_deployments: Sequence[Mapping[str, object]],
-        messages: Sequence[Mapping[str, str]] | None,
+        messages: Sequence[Mapping[str, object]] | None,
         input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None,
     ) -> Mapping[str | None, int] | None:

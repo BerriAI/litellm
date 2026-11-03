@@ -384,13 +384,26 @@ async def _check_client_managed_admission(
 ) -> None:
     if not ctx.settings().enable_pre_call_checks:
         return
-    await asyncio.to_thread(
-        ctx.pre_call_checks,
-        model=str(payload["model"]),
-        healthy_deployments=list[object](_ITEMS.validate_python((deployment,))),
-        messages=_ITEMS.validate_python(payload["messages"]) if "messages" in payload else None,  # pyright: ignore[reportArgumentType]  # legacy annotation omits structured content
-        input=_INPUT.validate_python(payload.get("input")),
-        request_kwargs=_DICT.validate_python(payload),
+    model: Final = str(payload["model"])
+    healthy_deployments: Final = _ITEMS.validate_python((deployment,))
+    messages: Final = _ITEMS.validate_python(payload["messages"]) if "messages" in payload else None
+    request_input: Final = _INPUT.validate_python(payload.get("input"))
+    request_kwargs: Final = _DICT.validate_python(payload)
+    token_counts: Final = await ctx.acount_pre_call_check_tokens(
+        model=model,
+        healthy_deployments=healthy_deployments,
+        messages=messages,
+        input=request_input,
+        request_kwargs=request_kwargs,
+    )
+    ctx.pre_call_checks(
+        model=model,
+        healthy_deployments=list[object](healthy_deployments),
+        messages=messages,  # pyright: ignore[reportArgumentType]  # legacy annotation omits structured content
+        input=request_input,
+        request_kwargs=request_kwargs,
+        input_token_counts=token_counts,
+        skip_inline_token_count=True,
     )
 
 

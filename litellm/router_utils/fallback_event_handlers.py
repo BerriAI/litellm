@@ -621,7 +621,9 @@ def context_window_fallback_resolves() -> bool:
     chain, _ = get_fallback_model_group_for_lookup_groups(
         fallbacks=scope.fallbacks, lookup_groups=fallback_lookup_groups(scope.kwargs, scope.model_group)
     )
-    return chain is not None
+    failed_group: Final = get_pre_routing_selection(scope.kwargs) or scope.model_group
+    remaining: Final = tuple(target for target in chain or () if fallback_attempt_key(target) != failed_group)
+    return bool(remaining) and has_unattempted_fallback_target(remaining, scope.kwargs)
 
 
 def _resolved_a_specific_chain(

@@ -716,6 +716,21 @@ class _MessageCountParams:
         return pdf_page_pricing(self._model)
 
 
+@dataclass(frozen=True, slots=True)
+class MessageCountFraming:
+    legacy_message_accounting: bool
+    tool_section: ChatTemplateToolSection | None
+    pdf_pricing: PdfPagePricing
+
+
+def message_count_framing(model: str) -> MessageCountFraming:
+    return MessageCountFraming(
+        legacy_message_accounting=uses_legacy_message_accounting(model),
+        tool_section=chat_template_tool_section(model),
+        pdf_pricing=pdf_page_pricing(model),
+    )
+
+
 def _is_openai_chat_model(model: str) -> bool:
     return model in litellm.open_ai_chat_completion_models or model in litellm.azure_llms
 

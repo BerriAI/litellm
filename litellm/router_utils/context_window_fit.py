@@ -2,7 +2,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding
+from litellm.litellm_core_utils.token_counter import (
+    MessageCountFraming,
+    message_count_framing,
+    openai_tokenizer_encoding,
+    openai_tokenizer_encoding_name,
+)
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.utils import SelectTokenizerResponse
 
@@ -23,6 +28,12 @@ class ContextWindowOverflow:
     certain: bool
 
 
+@dataclass(frozen=True, slots=True)
+class TokenCountKey:
+    encoding: str
+    framing: MessageCountFraming
+
+
 def stand_in_tokenizer() -> SelectTokenizerResponse:
     return {"type": "openai_tokenizer", "tokenizer": get_encoding(STAND_IN_ENCODING)}
 
@@ -31,6 +42,13 @@ def pre_call_tokenizer(openai_model: str | None) -> SelectTokenizerResponse:
     if openai_model is None:
         return stand_in_tokenizer()
     return {"type": "openai_tokenizer", "tokenizer": openai_tokenizer_encoding(openai_model)}
+
+
+def token_count_key(openai_model: str | None) -> TokenCountKey:
+    return TokenCountKey(
+        encoding=STAND_IN_ENCODING if openai_model is None else openai_tokenizer_encoding_name(openai_model),
+        framing=message_count_framing(openai_model or ""),
+    )
 
 
 def context_window_overflow(

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from collections.abc import Iterator, Mapping
 from copy import deepcopy
 from functools import partial
@@ -10,6 +11,8 @@ import pytest
 import respx
 
 import litellm
+from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms import compaction as native
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.complexity_router.config import ContextCompactionConfig
@@ -20,6 +23,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     compact_to_fit,
     compaction_executor,
 )
+from litellm.router_utils.context_window_fit import STAND_IN_OVERCOUNT_MARGIN, stand_in_tokenizer
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.router import Deployment
 
@@ -412,6 +416,44 @@ async def test_client_managed_overflow_keeps_context_window_admission(
         assert compactor.call_count == 1
         assert "compaction" not in json.loads(compactor.calls[0].request.content)
     assert answer.call_count == 0
+
+
+async def test_client_managed_admission_counts_only_when_a_token_count_slot_is_free(
+    wire: tuple[respx.Route, respx.Route],
+) -> None:
+    router: Final = make_router()
+    deployment: Final = router.get_deployment(model_id="pinned-answer")
+    assert deployment is not None
+    request: Final = {**history("chat"), "model": "small", "max_tokens": 64, "_context_compaction_state": CompactionState()}
+    await arm_compaction(request, ContextCompactionConfig(), ("large",))
+    managed: Final = {**request, "context_management": {"edits": []}}
+    stand_in_count: Final = litellm.token_counter(custom_tokenizer=stand_in_tokenizer(), messages=request["messages"])
+    assert stand_in_count > 512 * STAND_IN_OVERCOUNT_MARGIN
+    loop: Final = asyncio.get_running_loop()
+    holding: Final = asyncio.Queue[None]()
+    release: Final = threading.Event()
+
+    def hold_count_slot() -> bool:
+        loop.call_soon_threadsafe(holding.put_nowait, None)
+        return release.wait(timeout=30)
+
+    holders: Final = tuple(
+        asyncio.create_task(offload_token_count(hold_count_slot)()) for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+    )
+    try:
+        for _ in holders:
+            await holding.get()
+        admission: Final = asyncio.create_task(
+            compact_to_fit(RoutingContext(router), deployment.model_dump(), managed, "chat")
+        )
+        finished_while_slots_held, _ = await asyncio.wait((admission,), timeout=0.2)
+    finally:
+        release.set()
+    assert await asyncio.gather(*holders) == [True] * TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+    assert not finished_while_slots_held
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await admission
+    assert all(route.call_count == 0 for route in wire)
 
 
 @pytest.mark.parametrize("case", ["conflicting_defaults", "small_window", "capability_false", "capability_missing"])

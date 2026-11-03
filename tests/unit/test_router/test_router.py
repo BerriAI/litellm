@@ -1,4 +1,5 @@
 import ast, asyncio, importlib, time
+import base64
 import contextlib
 import copy
 import functools
@@ -23,6 +24,7 @@ import httpx
 import openai
 import pytest
 import respx
+from pypdf import PdfWriter
 from fastapi import HTTPException
 from opentelemetry import trace
 from pydantic import BaseModel, TypeAdapter
@@ -37,6 +39,10 @@ from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding_name
+from litellm.router import router_arguments
+from litellm.router_config import build_router_config
+from litellm.router_python_host import Endpoint, PythonHost
 from litellm.router_utils.context_window_fit import (
     STAND_IN_OVERCOUNT_MARGIN,
     ContextWindow,
@@ -30572,6 +30578,8 @@ def _context_window_fallback_router(**router_settings: object) -> Router:
         ({"context_window_fallbacks": [{"m": ["fallback"]}]}, {"disable_fallbacks": True}, "m"),
         ({"context_window_fallbacks": [{"m": ["fallback"]}], "max_fallbacks": 0}, {}, "m"),
         ({"context_window_fallbacks": [{"other": ["fallback"]}]}, {}, "m"),
+        ({"context_window_fallbacks": [{"m": []}]}, {}, "m"),
+        ({"context_window_fallbacks": [{"m": ["m"]}]}, {}, "m"),
         ({"fallbacks": [{"m": ["fallback"]}]}, {}, "m"),
         ({}, {}, "m"),
     ],
@@ -30582,6 +30590,8 @@ def _context_window_fallback_router(**router_settings: object) -> Router:
         "fallbacks_disabled",
         "no_fallback_budget",
         "fallback_for_another_group",
+        "empty_fallback_chain",
+        "fallback_chain_names_only_the_failing_group",
         "generic_fallbacks_only",
         "no_fallback",
     ],
@@ -30602,6 +30612,33 @@ def test_a_sync_completion_sends_an_uncertain_stand_in_overflow_to_its_context_w
     response: Final = router.completion(model="m", messages=_RUSSIAN_PROMPT)
 
     assert response.choices[0].message.content == "fallback"
+
+
+@pytest.mark.parametrize(
+    "context_window_fallbacks",
+    [[{"a": ["b"]}], [{"a": ["b"]}, {"b": ["a"]}]],
+    ids=["fallback_target_has_no_chain_of_its_own", "fallback_target_falls_back_to_a_tried_group"],
+)
+async def test_a_context_window_fallback_target_keeps_its_own_uncertain_stand_in_overflow(
+    context_window_fallbacks: list[dict[str, list[str]]],
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {"model": model, "api_key": "my-fake-key", "mock_response": group},
+                "model_info": {"id": group, "max_input_tokens": _uncertain_overflow_window()},
+            }
+            for group, model in (("a", "openai/my-fake-model"), ("b", "openai/my-other-fake-model"))
+        ],
+        enable_pre_call_checks=True,
+        num_retries=0,
+        context_window_fallbacks=context_window_fallbacks,
+    )
+
+    response: Final = await router.acompletion(model="a", messages=_RUSSIAN_PROMPT)
+
+    assert response.choices[0].message.content == "b"
 
 
 @pytest.mark.parametrize(("allowed_model_region", "kept"), [("eu", ["eu"]), (["eu"], [])])
@@ -30733,6 +30770,80 @@ async def test_acount_pre_call_check_tokens_counts_every_stand_in_deployment_wit
         None: _stand_in_tokens(_RUSSIAN_PROMPT),
         "gpt-5.6-luna": litellm.token_counter(model="gpt-5.6-luna", messages=_RUSSIAN_PROMPT),
     }
+
+
+class _TokenCounterCallsHost(PythonHost):
+    __slots__ = ("counted_models",)
+
+    def __init__(self) -> None:
+        self.counted_models: Final[list[object]] = []
+
+    def invoke(self, op: str) -> Endpoint:
+        endpoint: Final = super().invoke(op)
+        if op != "token_counter":
+            return endpoint
+
+        def counting_endpoint(**kwargs: object) -> object:
+            self.counted_models.append(kwargs.get("model"))
+            return endpoint(**kwargs)
+
+        return counting_endpoint
+
+
+def _counted_router(models: tuple[str, ...], host: PythonHost) -> tuple[Router, list[dict[str, object]]]:
+    model_list: Final = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": model, "api_key": "my-fake-key"},
+            "model_info": {"id": model, "max_input_tokens": 1_000_000},
+        }
+        for model in models
+    ]
+    router_config: Final = build_router_config(
+        router_arguments(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+    )
+    return Router.from_config(router_config, host), model_list
+
+
+async def test_acount_pre_call_check_tokens_counts_openai_models_that_share_an_encoding_once():
+    models: Final = ("gpt-4o", "gpt-4.1", "gpt-4o-mini", "gpt-5", "gpt-5-mini")
+    host: Final = _TokenCounterCallsHost()
+    router, model_list = _counted_router(models, host)
+
+    counts: Final = await router._acount_pre_call_check_tokens(
+        model="m", healthy_deployments=model_list, messages=_JAPANESE_PROMPT, input=None, request_kwargs=None
+    )
+
+    assert len(host.counted_models) == len({openai_tokenizer_encoding_name(model) for model in models}) < len(models)
+    assert counts == {model: litellm.token_counter(model=model, messages=_JAPANESE_PROMPT) for model in models}
+
+
+def _blank_pdf_prompt() -> list[dict[str, object]]:
+    writer: Final = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    pdf: Final = io.BytesIO()
+    writer.write(pdf)
+    file_data: Final = "data:application/pdf;base64," + base64.b64encode(pdf.getvalue()).decode()
+    return [{"role": "user", "content": [{"type": "file", "file": {"filename": "a.pdf", "file_data": file_data}}]}]
+
+
+async def test_acount_pre_call_check_tokens_gives_each_openai_model_its_own_pdf_framing():
+    prompt: Final = _blank_pdf_prompt()
+    listed_model, unlisted_model = "gpt-4o", "openai/gpt-9.9-preview"
+    assert openai_tokenizer_encoding_name(listed_model) == openai_tokenizer_encoding_name(unlisted_model)
+    host: Final = _TokenCounterCallsHost()
+    router, model_list = _counted_router((listed_model, unlisted_model, "cohere_chat/command-a-plus-05-2026"), host)
+
+    counts: Final = await router._acount_pre_call_check_tokens(
+        model="m", healthy_deployments=model_list, messages=prompt, input=None, request_kwargs=None
+    )
+
+    expected: Final = {
+        None: litellm.token_counter(custom_tokenizer=stand_in_tokenizer(), messages=prompt),
+        **{model: litellm.token_counter(model=model, messages=prompt) for model in (listed_model, unlisted_model)},
+    }
+    assert expected[listed_model] != expected[unlisted_model]
+    assert counts == expected
 
 
 def test_pre_call_checks_context_window_check_is_skipped_but_not_fatal_when_token_counting_fails():
