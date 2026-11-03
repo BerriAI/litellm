@@ -6,6 +6,7 @@ import sys
 from typing import Final, cast
 
 import pytest
+import respx
 from pydantic import BaseModel
 
 sys.path.insert(
@@ -1209,6 +1210,72 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "http://gateway.example.com/ollama/api/chat"
     )
+
+
+_DEEPWIKI_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+}
+
+
+def _ollama_chat_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("http://ollama.test:11434/api/chat").respond(
+        json={
+            "model": "qwen3:0.6b",
+            "message": {"role": "assistant", "content": "Sunny"},
+            "done": True,
+            "prompt_eval_count": 5,
+            "eval_count": 3,
+        }
+    )
+
+
+def test_ollama_chat_answers_400_for_a_hosted_mcp_tool_it_cannot_run(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _ollama_chat_route(respx_mock)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        litellm.completion(
+            model="ollama_chat/qwen3:0.6b",
+            messages=[{"role": "user", "content": "weather in Paris?"}],
+            tools=[_DEEPWIKI_MCP_TOOL, _WEATHER_TOOL],
+            api_base="http://ollama.test:11434",
+        )
+
+    assert raised.value.status_code == 400
+    assert "qwen3:0.6b on ollama_chat cannot run the hosted MCP tool `deepwiki`" in str(raised.value)
+    assert not route.called
+
+
+@pytest.mark.parametrize(
+    ("tools", "sent_tools"),
+    [([_DEEPWIKI_MCP_TOOL, _WEATHER_TOOL], [_WEATHER_TOOL]), ([_DEEPWIKI_MCP_TOOL], None)],
+    ids=["beside-a-function", "alone"],
+)
+def test_ollama_chat_drop_params_sends_only_the_tools_ollama_can_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tools: list[object], sent_tools: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _ollama_chat_route(respx_mock)
+
+    response: Final = litellm.completion(
+        model="ollama_chat/qwen3:0.6b",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=tools,
+        api_base="http://ollama.test:11434",
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content).get("tools") == sent_tools
+    assert response.choices[0].message.content == "Sunny"
 
 
 def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
