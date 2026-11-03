@@ -2692,3 +2692,14 @@ async def test_during_mcp_call_blocked_raises() -> None:
             )
 
     assert exc_info.value.message == "credential detected in tool input"
+
+
+@pytest.mark.parametrize("value", (None, 0, False, "", [], "text", 7))
+def test_extract_user_api_key_metadata_reads_past_a_litellm_metadata_that_is_not_an_object(value: object) -> None:
+    guardrail: Final = GenericGuardrailAPI(api_base="http://vendor.invalid", guardrail_name="generic")
+
+    metadata: Final = guardrail._extract_user_api_key_metadata(
+        {"metadata": {"user_api_key_hash": "hash"}, "litellm_metadata": value}
+    )
+
+    assert metadata["user_api_key_hash"] == "hash"
