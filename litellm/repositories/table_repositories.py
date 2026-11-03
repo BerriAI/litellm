@@ -197,15 +197,17 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
     async def _take_over_uncharged_batches(
         transaction: LedgerTransaction, conflicting: Sequence[Mapping[str, object]]
     ) -> frozenset[str]:
+        from litellm.proxy.db.db_span import db_span
         from litellm.repositories.spend_log_insert import spend_log_takeover_statement
 
-        updated: Final = tuple(
-            [
-                await transaction.query_raw(*spend_log_takeover_statement(row))
-                for row in conflicting
-                if _charges_a_batch(row)
-            ]
-        )
+        async with db_span("update", "LiteLLM_SpendLogs"):
+            updated: Final = tuple(
+                [
+                    await transaction.query_raw(*spend_log_takeover_statement(row))
+                    for row in conflicting
+                    if _charges_a_batch(row)
+                ]
+            )
         return frozenset(str(row["request_id"]) for row in chain.from_iterable(updated))
 
     async def batch_delivery(self, request_id: str) -> Mapping[str, object] | None:
