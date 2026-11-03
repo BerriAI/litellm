@@ -12,9 +12,11 @@ import os
 import socket
 import stat
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 
 import pytest
+import requests
+import requests_mock
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
@@ -74,6 +76,52 @@ def _config(tmp_path: Path, license_id: Optional[str] = "org-1") -> bm.BillingMe
     )
 
 
+def test_export_config_uses_bearer_when_all_credentials_are_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(bm.ENDPOINT_ENV, "https://collector.example:4318")
+    monkeypatch.setenv(bm.CLIENT_ID_ENV, "client-id")
+    monkeypatch.setenv(bm.CLIENT_SECRET_ENV, "client-secret")
+    monkeypatch.setenv(bm.TOKEN_URL_ENV, "https://auth.example/oauth2/token")
+
+    config: Final = bm._load_billing_metrics_export_config(license_data=None, litellm_version="1.0")
+
+    assert isinstance(config, bm.BillingMetricsBearerConfig)
+
+
+def test_export_config_uses_mtls_when_no_bearer_credentials_are_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _set_full_env(monkeypatch, tmp_path)
+
+    config: Final = bm._load_billing_metrics_export_config(license_data=None, litellm_version="1.0")
+
+    assert isinstance(config, bm.BillingMetricsConfig)
+
+
+def test_partial_bearer_config_warns_and_falls_back_to_mtls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _set_full_env(monkeypatch, tmp_path)
+    monkeypatch.setenv(bm.CLIENT_ID_ENV, "client-id")
+    monkeypatch.setenv(bm.TOKEN_URL_ENV, "https://auth.example/oauth2/token")
+
+    config: Final = bm._load_billing_metrics_export_config(license_data=None, litellm_version="1.0")
+
+    assert isinstance(config, bm.BillingMetricsConfig)
+    assert bm.CLIENT_SECRET_ENV in caplog.text
+    assert "client-secret" not in caplog.text
+
+
+def test_partial_bearer_config_disables_without_mtls(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv(bm.CLIENT_ID_ENV, "client-id")
+
+    config: Final = bm._load_billing_metrics_export_config(license_data=None, litellm_version="1.0")
+
+    assert config is None
+    assert bm.CLIENT_SECRET_ENV in caplog.text
+
+
 # ── Factory gating ────────────────────────────────────────────────────────────
 
 
@@ -110,9 +158,7 @@ def test_premium_with_full_config_builds_recorder(monkeypatch, tmp_path):
 
     monkeypatch.setattr(socket, "getaddrinfo", _spy_getaddrinfo)
 
-    recorder = bm.build_billing_metrics_recorder(
-        premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0"
-    )
+    recorder = bm.build_billing_metrics_recorder(premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0")
     assert isinstance(recorder, bm.BillingMetricsRecorder)
     recorder.record(category=BillableCategory.LLM, route="/chat/completions", status_code=200, model_id=None)
     bm.shutdown_billing_metrics_recorder()
@@ -318,10 +364,147 @@ def test_export_interval_default_and_override(monkeypatch):
 # ── OTLP/HTTP exporter wiring ─────────────────────────────────────────────────
 
 
+class _FakeClock:
+    def __init__(self, now: float) -> None:
+        self._now: float = now
+
+    def __call__(self) -> float:
+        return self._now
+
+    def set(self, now: float) -> None:
+        self._now = now
+
+
+def test_bearer_auth_fetches_and_caches_client_credentials_token() -> None:
+    token_url: Final = "https://auth.example/oauth2/token"
+    export_url: Final = "https://collector.example/v1/metrics"
+    auth: Final = bm._BillingMetricsBearerAuth(
+        client_id="client-id",
+        client_secret="client-secret",
+        token_url=token_url,
+        clock=lambda: 100.0,
+    )
+    session: Final = requests.Session()
+    session.auth = auth
+    http_mock: Final = requests_mock.Mocker()
+    with http_mock:
+        http_mock.post(token_url, json={"access_token": "access-token", "expires_in": 3600})
+        http_mock.post(export_url, status_code=200)
+        session.post(export_url, data=b"metrics")
+        session.post(export_url, data=b"metrics")
+
+    token_requests: Final = tuple(request for request in http_mock.request_history if request.url == token_url)
+    export_requests: Final = tuple(request for request in http_mock.request_history if request.url == export_url)
+    assert len(token_requests) == 1
+    assert token_requests[0].headers["Authorization"].startswith("Basic ")
+    assert token_requests[0].text == "grant_type=client_credentials&scope=telemetry%2Fwrite"
+    assert tuple(request.headers["Authorization"] for request in export_requests) == (
+        "Bearer access-token",
+        "Bearer access-token",
+    )
+
+
+def test_bearer_auth_refreshes_after_cached_lifetime() -> None:
+    token_url: Final = "https://auth.example/oauth2/token"
+    export_url: Final = "https://collector.example/v1/metrics"
+    clock: Final = _FakeClock(1000.0)
+    auth: Final = bm._BillingMetricsBearerAuth(
+        client_id="client-id",
+        client_secret="client-secret",
+        token_url=token_url,
+        clock=clock,
+    )
+    session: Final = requests.Session()
+    session.auth = auth
+    http_mock: Final = requests_mock.Mocker()
+    with http_mock:
+        http_mock.post(
+            token_url,
+            [
+                {"json": {"access_token": "first-token", "expires_in": 120}},
+                {"json": {"access_token": "second-token", "expires_in": 120}},
+            ],
+        )
+        http_mock.post(export_url, status_code=200)
+        session.post(export_url, data=b"metrics")
+        clock.set(1059.0)
+        session.post(export_url, data=b"metrics")
+        clock.set(1060.0)
+        session.post(export_url, data=b"metrics")
+
+    token_requests: Final = tuple(request for request in http_mock.request_history if request.url == token_url)
+    export_requests: Final = tuple(request for request in http_mock.request_history if request.url == export_url)
+    assert len(token_requests) == 2
+    assert tuple(request.headers["Authorization"] for request in export_requests) == (
+        "Bearer first-token",
+        "Bearer first-token",
+        "Bearer second-token",
+    )
+
+
+def test_bearer_export_sets_authorization_header() -> None:
+    token_url: Final = "https://auth.example/oauth2/token"
+    endpoint: Final = "https://collector.example:4318"
+    export_url: Final = f"{endpoint}/v1/metrics"
+    config: Final = bm.BillingMetricsBearerConfig(
+        endpoint=endpoint,
+        token_url=token_url,
+        client_id="client-id",
+        client_secret="client-secret",
+        export_interval_ms=60_000,
+        litellm_version="1.0",
+        license_id=None,
+    )
+    http_mock: Final = requests_mock.Mocker()
+    with http_mock:
+        http_mock.post(token_url, json={"access_token": "export-token", "expires_in": 3600})
+        http_mock.post(export_url, status_code=200)
+        provider: Final = bm.build_bearer_meter_provider(config)
+        try:
+            provider.get_meter("test").create_counter("requests").add(1)
+            assert provider.force_flush(timeout_millis=1000)
+        finally:
+            provider.shutdown(timeout_millis=1000)
+
+    export_requests: Final = tuple(request for request in http_mock.request_history if request.url == export_url)
+    assert export_requests
+    assert all(request.headers["Authorization"] == "Bearer export-token" for request in export_requests)
+
+
+def test_failed_bearer_token_fetch_does_not_raise_from_export() -> None:
+    token_url: Final = "https://auth.example/oauth2/token"
+    endpoint: Final = "https://collector.example:4318"
+    export_url: Final = f"{endpoint}/v1/metrics"
+    config: Final = bm.BillingMetricsBearerConfig(
+        endpoint=endpoint,
+        token_url=token_url,
+        client_id="client-id",
+        client_secret="client-secret",
+        export_interval_ms=60_000,
+        litellm_version="1.0",
+        license_id=None,
+    )
+    http_mock: Final = requests_mock.Mocker()
+    with http_mock:
+        http_mock.post(token_url, status_code=400)
+        provider: Final = bm.build_bearer_meter_provider(config)
+        try:
+            provider.get_meter("test").create_counter("requests").add(1)
+            provider.force_flush(timeout_millis=1000)
+        finally:
+            provider.shutdown(timeout_millis=1000)
+
+    request_urls: Final = tuple(request.url for request in http_mock.request_history)
+    assert token_url in request_urls
+    assert export_url not in request_urls
+
+
 def test_metrics_endpoint_appends_signal_path():
     assert bm._metrics_endpoint("https://telemetry.example.com") == "https://telemetry.example.com/v1/metrics"
     assert bm._metrics_endpoint("https://telemetry.example.com/") == "https://telemetry.example.com/v1/metrics"
-    assert bm._metrics_endpoint("https://telemetry.example.com/v1/metrics") == "https://telemetry.example.com/v1/metrics"
+    assert (
+        bm._metrics_endpoint("https://telemetry.example.com/v1/metrics") == "https://telemetry.example.com/v1/metrics"
+    )
 
 
 def _fake_exporter_class(captured: Dict[str, object]) -> type:

@@ -2,27 +2,30 @@
 Push-based OTLP metering for enterprise litellm deployments.
 
 Owns a dedicated OpenTelemetry meter provider and an OTLP/HTTP exporter
-authenticated to our global collector with a TLS client certificate. The
-collector front end terminates mutual TLS: the client certificate presented
-here is validated against our CA at the edge, and the verified subject is
-what identifies the deployment. It is intentionally isolated from the global
-meter provider so the customer's own OTEL metrics are untouched and ours
-never leak into their backend.
+authenticated to our global collector with either a TLS client certificate or
+a Cognito bearer token. It is intentionally isolated from the global meter
+provider so the customer's own OTEL metrics are untouched and ours never leak
+into their backend.
 
-The deployment's identity rides on the TLS client certificate, not on the
-payload; the secret license key is never sent as an attribute or header.
+The secret license key is never sent as an attribute or header.
 """
 
 import os
 import tempfile
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Optional
 
+import requests
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.metrics import Counter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
+from pydantic import BaseModel, ConfigDict
+from requests.auth import AuthBase
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
@@ -36,9 +39,13 @@ ENDPOINT_ENV: Final = "LITELLM_BILLING_METRICS_ENDPOINT"
 CLIENT_CERT_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_CERT"
 CLIENT_KEY_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_KEY"
 CA_CERT_ENV: Final = "LITELLM_BILLING_METRICS_CA_CERT"
+CLIENT_ID_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_ID"
+CLIENT_SECRET_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_SECRET"
+TOKEN_URL_ENV: Final = "LITELLM_BILLING_METRICS_TOKEN_URL"
 EXPORT_INTERVAL_ENV: Final = "LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS"
 DEFAULT_EXPORT_INTERVAL_MS: Final = 60_000
 SHUTDOWN_FLUSH_TIMEOUT_MS: Final = 5_000
+_TOKEN_REFRESH_SKEW_SECONDS: Final = 60
 _METRICS_PATH: Final = "/v1/metrics"
 
 # The cert env vars take a path or the PEM itself. Secret stores that inject
@@ -67,13 +74,31 @@ class BillingMetricsConfig:
     license_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class BillingMetricsBearerConfig:
+    endpoint: str
+    token_url: str
+    client_id: str
+    client_secret: str
+    export_interval_ms: int
+    litellm_version: str
+    license_id: str | None
+
+
+class _BillingMetricsOAuthToken(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    access_token: str
+    expires_in: int
+
+
 def _metrics_endpoint(endpoint: str) -> str:
     """The OTLP/HTTP metric exporter wants the full URL including the signal path."""
     trimmed: Final = endpoint.rstrip("/")
     return trimmed if trimmed.endswith(_METRICS_PATH) else f"{trimmed}{_METRICS_PATH}"
 
 
-def _resource_attributes(config: BillingMetricsConfig) -> dict[str, AttributeValue]:
+def _resource_attributes(config: BillingMetricsConfig | BillingMetricsBearerConfig) -> dict[str, AttributeValue]:
     base: Final[dict[str, AttributeValue]] = {
         "service.name": "litellm-proxy",
         "litellm.version": config.litellm_version,
@@ -109,6 +134,66 @@ def build_mtls_meter_provider(config: BillingMetricsConfig) -> MeterProvider:
         client_certificate_file=config.client_cert_path,
         client_key_file=config.client_key_path,
     )
+    reader: Final = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
+    return MeterProvider(metric_readers=[reader], resource=Resource.create(_resource_attributes(config)))
+
+
+class _BillingMetricsBearerAuth(AuthBase):
+    def __init__(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        token_url: str,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._client_id: Final = client_id
+        self._client_secret: Final = client_secret
+        self._token_url: Final = token_url
+        self._clock: Final = clock
+        self._lock: Final = threading.Lock()
+        self._cached_token: str | None = None
+        self._refresh_at: float = 0.0
+
+    def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
+        token: Final = self._get_token()
+        authenticated_request: Final = request.copy()
+        authenticated_request.headers["Authorization"] = f"Bearer {token}"
+        return authenticated_request
+
+    def _get_token(self) -> str:
+        with self._lock:
+            now: Final = self._clock()
+            if self._cached_token is not None and now < self._refresh_at:
+                return self._cached_token
+            token, cache_seconds = self._fetch_token()
+            self._cached_token = token
+            self._refresh_at = now + cache_seconds
+            return token
+
+    def _fetch_token(self) -> tuple[str, float]:
+        try:
+            response: Final = requests.post(
+                self._token_url,
+                auth=(self._client_id, self._client_secret),
+                data={"grant_type": "client_credentials", "scope": "telemetry/write"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            token_response: Final = _BillingMetricsOAuthToken.model_validate(response.json())
+            return token_response.access_token, max(0.0, float(token_response.expires_in) - _TOKEN_REFRESH_SKEW_SECONDS)
+        except (requests.RequestException, ValueError):
+            raise requests.RequestException("Billing metrics token request failed") from None
+
+
+def build_bearer_meter_provider(config: BillingMetricsBearerConfig) -> MeterProvider:
+    session: Final = requests.Session()
+    session.auth = _BillingMetricsBearerAuth(
+        client_id=config.client_id,
+        client_secret=config.client_secret,
+        token_url=config.token_url,
+    )
+    exporter: Final = OTLPMetricExporter(endpoint=_metrics_endpoint(config.endpoint), session=session)
     reader: Final = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
     return MeterProvider(metric_readers=[reader], resource=Resource.create(_resource_attributes(config)))
 
@@ -261,6 +346,40 @@ def load_billing_metrics_config(
     )
 
 
+def _load_billing_metrics_export_config(
+    *, license_data: Optional["EnterpriseLicenseData"], litellm_version: str
+) -> BillingMetricsConfig | BillingMetricsBearerConfig | None:
+    bearer_env: Final = (
+        (CLIENT_ID_ENV, os.getenv(CLIENT_ID_ENV)),
+        (CLIENT_SECRET_ENV, os.getenv(CLIENT_SECRET_ENV)),
+        (TOKEN_URL_ENV, os.getenv(TOKEN_URL_ENV)),
+    )
+    configured: Final = tuple(value for _, value in bearer_env if value)
+    if len(configured) == len(bearer_env):
+        endpoint: Final = os.getenv(ENDPOINT_ENV)
+        if not endpoint:
+            verbose_proxy_logger.warning(
+                "Enterprise billing metrics disabled: licensed deployment missing config (%s)", ENDPOINT_ENV
+            )
+            return None
+        return BillingMetricsBearerConfig(
+            endpoint=endpoint,
+            token_url=bearer_env[2][1] or "",
+            client_id=bearer_env[0][1] or "",
+            client_secret=bearer_env[1][1] or "",
+            export_interval_ms=_export_interval_ms(),
+            litellm_version=litellm_version,
+            license_id=(license_data or {}).get("user_id"),
+        )
+    if configured:
+        missing_bearer_env: Final = tuple(name for name, value in bearer_env if not value)
+        verbose_proxy_logger.warning(
+            "Enterprise billing metrics bearer auth is incomplete; missing config (%s), falling back to mTLS",
+            ", ".join(missing_bearer_env),
+        )
+    return load_billing_metrics_config(license_data=license_data, litellm_version=litellm_version)
+
+
 class _ActiveRecorderRegistry:
     """One-slot registry linking the factory-built recorder to the shutdown
     hook; the middleware instance holding the recorder is not reachable from
@@ -291,12 +410,17 @@ def build_billing_metrics_recorder(
         verbose_proxy_logger.debug("Enterprise billing metrics disabled: deployment is not licensed")
         return None
 
-    config: Final = load_billing_metrics_config(license_data=license_data, litellm_version=litellm_version)
+    config: Final = _load_billing_metrics_export_config(license_data=license_data, litellm_version=litellm_version)
     if config is None:
         return None
 
     try:
-        recorder: Final = BillingMetricsRecorder(build_mtls_meter_provider(config))
+        provider: Final = (
+            build_bearer_meter_provider(config)
+            if isinstance(config, BillingMetricsBearerConfig)
+            else build_mtls_meter_provider(config)
+        )
+        recorder: Final = BillingMetricsRecorder(provider)
     except Exception as exc:  # noqa: BLE001 -- metering must never break proxy startup
         verbose_proxy_logger.warning("Enterprise billing metrics disabled: failed to initialize exporter: %s", exc)
         return None
