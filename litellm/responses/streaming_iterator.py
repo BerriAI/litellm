@@ -235,6 +235,8 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
         "server_error": 500,
         "rate_limit_exceeded": 429,
         "insufficient_quota": 429,
+        "resource_unavailable": 429,
+        "flex_unavailable": 429,
         "vector_store_timeout": 504,
         "invalid_prompt": 400,
         "invalid_image": 400,

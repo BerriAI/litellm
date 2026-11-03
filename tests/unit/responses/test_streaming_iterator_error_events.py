@@ -75,6 +75,24 @@ def _make_error_chunk(error_type: str, code: str, message: str = "err") -> Error
     return ErrorEvent(type=ResponsesAPIStreamEvents.ERROR, sequence_number=0, error=error_obj)
 
 
+@pytest.mark.parametrize(
+    "error_type,error_code",
+    (
+        ("resource_unavailable", "flex_unavailable"),
+        ("resource_unavailable", None),
+        (None, "flex_unavailable"),
+    ),
+)
+def test_streamed_flex_unavailable_maps_to_429(error_type: str | None, error_code: str | None) -> None:
+    # OpenAI returns 429 for flex-capacity exhaustion on non-streamed requests; the streamed
+    # /v1/responses error event must map to 429 as well, not fall through to 500 (#49736).
+    assert _status_code_for_error_fields(error_type, error_code) == 429
+
+
+def test_streamed_unrelated_server_error_still_maps_to_500() -> None:
+    assert _status_code_for_error_fields("server_error", "server_error") == 500
+
+
 @pytest.mark.parametrize("provider", ("openai", "azure", "bedrock"))
 @pytest.mark.parametrize("header", ("x-amzn-RequestId", "x-request-id", None))
 @pytest.mark.parametrize(
