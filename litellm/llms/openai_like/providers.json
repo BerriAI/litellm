@@ -302,5 +302,13 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "kimchi": {
+    "base_url": "https://llm.kimchi.dev/openai/v1",
+    "api_key_env": "KIMCHI_API_KEY",
+    "api_base_env": "KIMCHI_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions"
+    ]
   }
 }
