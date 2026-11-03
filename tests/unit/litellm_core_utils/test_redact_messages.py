@@ -561,6 +561,83 @@ class TestPerformRedaction:
             {"text": "redacted-by-litellm", "finish_reason": "length", "index": 1},
         ]
 
+    def test_redacts_token_ids_that_decode_to_the_completion(self):
+        details = {
+            "stream": True,
+            "complete_streaming_response": litellm.ModelResponse(
+                choices=[
+                    litellm.Choices(message=litellm.Message(content="secret", role="assistant"), token_ids=[20, 11])
+                ]
+            ),
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "token_ids": [20, 11],
+                            "message": {"content": "secret", "provider_specific_fields": {"token_ids": [20, 11]}},
+                        },
+                        {"text": " Paris.", "token_ids": [20, 11], "index": 1},
+                    ]
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        logged_choices = details["standard_logging_object"]["response"]["choices"]
+        assert [choice["token_ids"] for choice in logged_choices] == [None, None]
+        assert logged_choices[0]["message"]["provider_specific_fields"]["token_ids"] is None
+        assert details["complete_streaming_response"].choices[0].get("token_ids") is None
+
+    def test_redacts_text_completion_stream_text_and_the_token_ids_that_decode_to_it(self):
+        details = {
+            "stream": True,
+            "async_complete_streaming_response": litellm.TextCompletionResponse(
+                choices=[
+                    litellm.utils.TextChoices(
+                        index=0, text=" Paris.", reasoning_content="thinking", token_ids=[20, 11], finish_reason="stop"
+                    )
+                ]
+            ),
+        }
+
+        perform_redaction(details, None)
+
+        logged_choice = details["async_complete_streaming_response"].choices[0]
+        assert (logged_choice.text, logged_choice.reasoning_content) == ("redacted-by-litellm", "redacted-by-litellm")
+        assert logged_choice.get("token_ids") is None
+        assert logged_choice.finish_reason == "stop"
+
+    def test_redacts_token_ids_a_cache_hit_keeps_on_the_choice_provider_specific_fields(self):
+        result = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret", role="assistant"),
+                    provider_specific_fields={"token_ids": [20, 11], "stop_reason": "END"},
+                )
+            ]
+        )
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "message": {"content": "secret"},
+                            "provider_specific_fields": {"token_ids": [20, 11], "stop_reason": "END"},
+                        }
+                    ]
+                }
+            }
+        }
+
+        redacted = perform_redaction(details, result)
+
+        logged_fields = details["standard_logging_object"]["response"]["choices"][0]["provider_specific_fields"]
+        assert logged_fields == {"token_ids": None, "stop_reason": "END"}
+        assert redacted.choices[0].provider_specific_fields["token_ids"] is None
+        assert redacted.choices[0].provider_specific_fields["stop_reason"] == "END"
+        assert result.choices[0].provider_specific_fields["token_ids"] == [20, 11]
+
     def test_redacts_object_choices_inside_model_response_dict(self):
         result = {
             "choices": [

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Eye, EyeOff, Pencil, Plus, Trash2 } from "lucide-react";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "@/components/networking";
@@ -28,6 +29,7 @@ interface Plugin {
 const BLANK_PLUGIN: PluginFormValues = { name: "", display_name: "", url: "", plugin_key: undefined };
 
 export default function PluginSettings() {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [loading, setLoading] = useState(true);
@@ -102,7 +104,7 @@ export default function PluginSettings() {
       return (
         <TableRow>
           <TableCell colSpan={5} className="py-6 text-center text-sm text-muted-foreground">
-            No data
+            {t("adminPanel.pluginSettings.noData")}
           </TableCell>
         </TableRow>
       );
@@ -128,13 +130,18 @@ export default function PluginSettings() {
         </TableCell>
         <TableCell>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="icon-sm" aria-label={`Edit ${plugin.name}`} onClick={() => openEdit(idx)}>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label={t("adminPanel.pluginSettings.editAriaLabel", { name: plugin.name })}
+              onClick={() => openEdit(idx)}
+            >
               <Pencil />
             </Button>
             <Button
               variant="destructive"
               size="icon-sm"
-              aria-label={`Delete ${plugin.name}`}
+              aria-label={t("adminPanel.pluginSettings.deleteAriaLabel", { name: plugin.name })}
               onClick={() => handleDelete(idx)}
             >
               <Trash2 />
@@ -148,30 +155,30 @@ export default function PluginSettings() {
   return (
     <Card>
       <CardHeader>
-        <h4 className="text-base font-semibold text-foreground">Plugins</h4>
-        <p className="text-sm text-foreground">
-          Register external services as plugins. Once added, users can toggle to the plugin from the mode switcher in
-          the top-left of the sidebar.
-        </p>
+        <h4 className="text-base font-semibold text-foreground">{t("adminPanel.pluginSettings.title")}</h4>
+        <p className="text-sm text-foreground">{t("adminPanel.pluginSettings.description")}</p>
         <p className="text-xs text-muted-foreground">
-          Each plugin must expose <code className={INLINE_CODE_CLASS}>GET /api/plugin-manifest</code> returning nav
-          items and capabilities.
+          <Trans
+            i18nKey="adminPanel.pluginSettings.manifestHint"
+            values={{ endpoint: "GET /api/plugin-manifest" }}
+            components={{ code: <code className={INLINE_CODE_CLASS} /> }}
+          />
         </p>
       </CardHeader>
       <CardContent>
         <Button className="mb-4" onClick={openAdd}>
           <Plus />
-          Add Plugin
+          {t("adminPanel.pluginSettings.addPlugin")}
         </Button>
 
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Display Name</TableHead>
-              <TableHead>URL</TableHead>
-              <TableHead>Plugin Key</TableHead>
-              <TableHead>Actions</TableHead>
+              <TableHead>{t("adminPanel.pluginSettings.columns.name")}</TableHead>
+              <TableHead>{t("adminPanel.pluginSettings.columns.displayName")}</TableHead>
+              <TableHead>{t("adminPanel.pluginSettings.columns.url")}</TableHead>
+              <TableHead>{t("adminPanel.pluginSettings.columns.pluginKey")}</TableHead>
+              <TableHead>{t("adminPanel.pluginSettings.columns.actions")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>{renderRows()}</TableBody>
@@ -181,29 +188,42 @@ export default function PluginSettings() {
       <Dialog open={modalOpen} onOpenChange={(open) => !open && setModalOpen(false)}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingIndex !== null ? "Edit Plugin" : "Add Plugin"}</DialogTitle>
+            <DialogTitle>
+              {editingIndex !== null
+                ? t("adminPanel.pluginSettings.modal.editTitle")
+                : t("adminPanel.pluginSettings.modal.addTitle")}
+            </DialogTitle>
           </DialogHeader>
           <form onSubmit={(event) => event.preventDefault()} noValidate style={{ marginTop: 16 }}>
             <FieldGroup>
               <FormField
                 control={form.control}
                 name="name"
-                label="Name (identifier)"
-                description="Used in URLs and config. No spaces. E.g. litellm-platform-plugin"
+                label={t("adminPanel.pluginSettings.modal.fields.name.label")}
+                description={t("adminPanel.pluginSettings.modal.fields.name.description")}
               >
                 {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="litellm-platform-plugin" />}
               </FormField>
-              <FormField control={form.control} name="display_name" label="Display Name">
+              <FormField
+                control={form.control}
+                name="display_name"
+                label={t("adminPanel.pluginSettings.modal.fields.displayName.label")}
+              >
                 {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="Agent Control Plane" />}
               </FormField>
-              <FormField control={form.control} name="url" label="URL" description="Base URL of the plugin service">
+              <FormField
+                control={form.control}
+                name="url"
+                label={t("adminPanel.pluginSettings.modal.fields.url.label")}
+                description={t("adminPanel.pluginSettings.modal.fields.url.description")}
+              >
                 {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="https://your-plugin.example.com" />}
               </FormField>
               <FormField
                 control={form.control}
                 name="plugin_key"
-                label="Plugin Key"
-                description="Optional. The plugin's own credential, injected as Authorization: Bearer <key> only when litellm reverse-proxies API calls to the plugin's backend (/plugin-proxy/<name>/*). Leave blank for plugins that use the forwarded litellm user token (e.g. iframe plugins) — that path uses the user's token, not this key."
+                label={t("adminPanel.pluginSettings.modal.fields.pluginKey.label")}
+                description={t("adminPanel.pluginSettings.modal.fields.pluginKey.description")}
               >
                 {({ ref, ...field }) => (
                   <InputGroup>
@@ -212,13 +232,21 @@ export default function PluginSettings() {
                       ref={ref}
                       type={keyVisible ? "text" : "password"}
                       value={field.value ?? ""}
-                      placeholder={editingIndex !== null ? "Leave blank to keep current key" : "sk-... (optional)"}
+                      placeholder={
+                        editingIndex !== null
+                          ? t("adminPanel.pluginSettings.modal.fields.pluginKey.keepCurrentPlaceholder")
+                          : t("adminPanel.pluginSettings.modal.fields.pluginKey.newPlaceholder")
+                      }
                     />
                     <InputGroupAddon align="inline-end">
                       <InputGroupButton
                         size="icon-xs"
                         onClick={() => setKeyVisible(!keyVisible)}
-                        aria-label={keyVisible ? "Hide plugin key" : "Show plugin key"}
+                        aria-label={
+                          keyVisible
+                            ? t("adminPanel.pluginSettings.modal.fields.pluginKey.hide")
+                            : t("adminPanel.pluginSettings.modal.fields.pluginKey.show")
+                        }
                       >
                         {keyVisible ? <EyeOff /> : <Eye />}
                       </InputGroupButton>
@@ -230,10 +258,10 @@ export default function PluginSettings() {
           </form>
           <DialogFooter>
             <Button variant="outline" onClick={() => setModalOpen(false)}>
-              Cancel
+              {t("adminPanel.pluginSettings.modal.cancel")}
             </Button>
             <Button onClick={form.handleSubmit(handleOk)} disabled={saving} aria-busy={saving}>
-              Save
+              {t("adminPanel.pluginSettings.modal.save")}
             </Button>
           </DialogFooter>
         </DialogContent>

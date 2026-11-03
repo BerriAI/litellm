@@ -388,6 +388,34 @@ def test_vertex_gemini_flash_rows_carry_the_documented_retirement_date(prices: d
     assert prices[f"{prefix}{model}"]["deprecation_date"] == VERTEX_GEMINI_FLASH_RETIREMENT_DATES[model]
 
 
+# https://developers.openai.com/api/docs/deprecations, the 2026-10-14 GPT-4 series notice
+OPENAI_GPT_4_SERIES_SNAPSHOTS: Final = MappingProxyType(
+    {
+        "gpt-4o": ("gpt-4o-2024-08-06", "gpt-4o-2024-11-20"),
+        "gpt-4o-mini": ("gpt-4o-mini-2024-07-18",),
+        "gpt-4.1": ("gpt-4.1-2025-04-14",),
+        "gpt-4.1-mini": ("gpt-4.1-mini-2025-04-14",),
+    }
+)
+
+
+class _ShutdownRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    deprecation_date: str | None = None
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+@pytest.mark.parametrize("alias", sorted(OPENAI_GPT_4_SERIES_SNAPSHOTS))
+def test_openai_gpt_4_series_aliases_retire_with_their_snapshots(path: Path, alias: str) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    snapshot_dates: Final = frozenset(
+        _ShutdownRow.model_validate(prices[snapshot]).deprecation_date
+        for snapshot in OPENAI_GPT_4_SERIES_SNAPSHOTS[alias]
+    )
+    assert snapshot_dates == {_ShutdownRow.model_validate(prices[alias]).deprecation_date}
+
+
 def _sampling_flags_across_provider_twins(prices: Mapping[str, Mapping[str, object]], key: str) -> frozenset[object]:
     bare: Final = key.split("/")[-1]
     twins: Final = tuple(twin for twin in (bare, f"vertex_ai/{bare}", f"gemini/{bare}") if twin in prices)
@@ -843,6 +871,26 @@ def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]
     return MappingProxyType(
         {key: row for key, row in prices.items() if isinstance(row, dict) and "search_free_requests" in row}
     )
+
+
+def _supports_continuation_rows(path: Path) -> frozenset[str]:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    return frozenset(
+        key for key, row in prices.items() if isinstance(row, dict) and row.get("supports_continuation") is True
+    )
+
+
+def test_gemini_4_argon_google_rows_carry_supports_continuation_in_both_cost_map_copies() -> None:
+    main_rows: Final = _supports_continuation_rows(PRICES_PATH)
+    # long decode models: https://ai.google.dev/gemini-api/docs/generate-content/long-decode and
+    # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon (2026-11-02)
+    long_decode_rows: Final = {
+        "gemini/gemini-4-argon",
+        "vertex_ai/gemini-4-argon",
+        "vertex_ai/gemini-4-argon-cyber-permissive",
+    }
+    assert long_decode_rows <= main_rows, sorted(main_rows)
+    assert _supports_continuation_rows(BACKUP_PRICES_PATH) == main_rows
 
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
