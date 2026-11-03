@@ -53,6 +53,14 @@ impl Pipeline {
         self.commands(vec![commands::get(key.clone())], key, true)
     }
 
+    /// One `MGET`, so every key must share a hash slot on a cluster. Only `RedisBatch` sends it,
+    /// and a batch never pipelines on a cluster.
+    pub(crate) fn mget(self, keys: &[&str]) -> Self {
+        let keys: Vec<String> = keys.iter().map(|key| self.namespace.apply(key)).collect();
+        let key = keys.first().cloned().unwrap_or_default();
+        self.commands(vec![commands::mget(keys)], key, true)
+    }
+
     pub fn set(self, key: &str, value: impl ToSingleRedisArg, ttl: Duration) -> Self {
         let key = self.namespace.apply(key);
         self.commands(vec![commands::set(key.clone(), value, ttl)], key, true)
