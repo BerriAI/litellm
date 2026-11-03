@@ -28,6 +28,23 @@ HEADER: Final = "x-litellm-applied-guardrails"
 OPENAI_ROUTE: Final = "/openai/v1/chat/completions"
 ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
 GEMINI_ROUTE: Final = "/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+CALLBACK_HEADERS_MODEL: Final = "passthrough-header-callback-headers"
+UNREQUESTED_STREAM_MODEL: Final = "passthrough-header-callback-headers-unrequested-stream"
+CALLBACK_HEADER: Final = "x-callback-padding"
+CALLBACK_HEADER_VALUE: Final = "c" * 12_000
+_CALLBACK_HEADERS_MODULE: Final = f"""
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class LargeHeadersHook(CustomLogger):
+    async def async_post_call_response_headers_hook(self, data, user_api_key_dict, response, *args, **kwargs):
+        if str(data.get("model")).startswith("{CALLBACK_HEADERS_MODEL}"):
+            return {{"{CALLBACK_HEADER}": "{CALLBACK_HEADER_VALUE}"}}
+        return None
+
+
+proxy_handler_instance = LargeHeadersHook()
+"""
 _CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _JSON: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -61,7 +78,12 @@ def _openai_reply(request: Request) -> Reply:
             status=404,
             body=json.dumps({"error": {"message": "model not found", "type": "invalid_request_error"}}).encode(),
         )
-    return chat_reply("chatcmpl-passthrough-header", "gpt-5.6", "Hello", stream=payload.get("stream") is True)
+    return chat_reply(
+        "chatcmpl-passthrough-header",
+        "gpt-5.6",
+        "Hello",
+        stream=payload.get("stream") is True or payload.get("model") == UNREQUESTED_STREAM_MODEL,
+    )
 
 
 def _anthropic_reply(_request: Request) -> Reply:
@@ -100,11 +122,16 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
             }
         )
         config: Final = _JSON.validate_python(yaml.safe_load(_CONFIG.read_text()))
+        (directory / "passthrough_large_headers_hook.py").write_text(_CALLBACK_HEADERS_MODULE)
         path: Final = directory / "passthrough-applied-guardrails-header.yaml"
         path.write_text(
             yaml.safe_dump(
                 {
                     **config,
+                    "litellm_settings": {
+                        **_JSON.validate_python(config.get("litellm_settings", {})),
+                        "callbacks": ["passthrough_large_headers_hook.proxy_handler_instance"],
+                    },
                     "guardrails": [
                         {
                             "guardrail_name": name,
@@ -292,6 +319,30 @@ def test_header_value_with_a_line_break_is_left_out(rig: HeaderRig, suffix: str)
     assert response.headers.get("x-litellm-applied-policies") == TAG_POLICY
     assert "x-litellm-policy-sources" not in response.headers
     assert "x-injected" not in response.headers
+
+
+@pytest.mark.parametrize(
+    ("model", "stream"),
+    [(CALLBACK_HEADERS_MODEL, True), (UNREQUESTED_STREAM_MODEL, False)],
+    ids=["requested-stream", "unrequested-stream"],
+)
+@pytest.mark.parametrize(("names", "kept"), [(300, False), (100, True)], ids=["no-room", "room"])
+def test_a_callback_header_on_a_stream_leaves_room_or_costs_the_guardrail_header(
+    rig: HeaderRig, model: str, stream: bool, names: int, kept: bool
+) -> None:
+    gateway: Final = rig.owned.gateway
+    body: Final[dict[str, JsonValue]] = {
+        **_route_body(OPENAI_ROUTE),
+        "model": model,
+        "stream": stream,
+        "guardrails": [f"caller-named-{index}" for index in range(names)],
+    }
+    with gateway.scenario() as scenario:
+        response: Final = _send(gateway, scenario, OPENAI_ROUTE, body)
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get(CALLBACK_HEADER) == CALLBACK_HEADER_VALUE
+    assert (HEADER in response.headers) is kept
 
 
 @pytest.mark.parametrize("stream", [False, True])
