@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy.proxy_server import ProxyConfig
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _make_db_model(model_name: str, model_id: str):
@@ -39,7 +40,7 @@ class TestUpdateLlmRouterResilience:
 
         db_models = [_make_db_model("gpt-5.1", "db-id-1")]
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.get_model_list.return_value = []
         mock_router.get_model_ids.return_value = []
 
@@ -79,7 +80,7 @@ class TestUpdateLlmRouterResilience:
 
         db_models = [_make_db_model("gpt-5.1", "db-id-1")]
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.get_model_list.return_value = []
         mock_router.get_model_ids.return_value = []
 
@@ -124,7 +125,7 @@ class TestDeleteDeploymentResilience:
 
         db_models = [_make_db_model("gpt-5.1", "db-id-1")]
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.get_model_ids.return_value = ["db-id-1", "config-id-1"]
 
         with (
@@ -151,7 +152,7 @@ class TestDeleteDeploymentResilience:
 
         db_models = [_make_db_model("gpt-5.1", "db-id-1")]
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         # Router has a model ID that's not in DB or config -> should be deleted
         mock_router.get_model_ids.return_value = ["db-id-1", "stale-id"]
         mock_router.delete_deployment.return_value = True

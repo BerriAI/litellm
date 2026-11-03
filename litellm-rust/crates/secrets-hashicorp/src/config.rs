@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::SecretValue;
+use litellm_secret_value::SecretValue;
 
 use crate::Error;
 

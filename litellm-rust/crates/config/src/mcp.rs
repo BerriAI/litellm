@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt};
 
-use litellm_auth_types::SecretValue;
+use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 
 use crate::Object;
