@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy.mcp_server.policy_freshness import validated_listing
 from litellm.proxy.mcp_server.result_conversion import age_freshness, aggregate_freshness
 
 if TYPE_CHECKING:
@@ -583,6 +584,15 @@ def catalog_operation(
     return decorate
 
 
+def validated_listing_scope(function: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+    @wraps(function)
+    async def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:  # kwargs-ok: preserves ParamSpec
+        async with validated_listing():
+            return await function(*args, **kwargs)
+
+    return wrapped
+
+
 def global_manager() -> MCPServerManager:
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
@@ -1126,6 +1136,7 @@ async def list_gateway_tools(
     )
 
 
+@validated_listing_scope
 async def list_gateway_catalog(
     context: OperationContext, request: CatalogListRequest, *, log_list_tools_to_spendlogs: bool = True
 ) -> CatalogListResult:
