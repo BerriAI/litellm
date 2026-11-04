@@ -21,12 +21,10 @@ MISSING_PACKAGE_MESSAGE: Final = (
 
 
 def has_readiness_guard(package: object) -> bool:
-    """1.0.0 is the first release with the readiness guard, `require_guardrail`, that the package's block mode needs"""
     return getattr(package, "require_guardrail", None) is not None
 
 
 def package_guardrail(package: object) -> type[CustomGuardrail] | None:
-    """The package's guardrail class, or None for a package too old or not shaped as one"""
     guardrail: Final[object] = getattr(package, "CollieAIGuardrail", None)
     if not has_readiness_guard(package) or not isinstance(guardrail, type):
         return None
@@ -34,8 +32,6 @@ def package_guardrail(package: object) -> type[CustomGuardrail] | None:
 
 
 def missing_package(import_error: ImportError | None) -> type[CustomGuardrail]:
-    """A stand-in that fails where the proxy builds the guardrail, naming what to install"""
-
     class MissingPackage(CustomGuardrail):
         def __init__(self, **kwargs: object) -> None:  # kwargs-ok: mirrors the package constructor, only raises
             raise ImportError(MISSING_PACKAGE_MESSAGE) from import_error
