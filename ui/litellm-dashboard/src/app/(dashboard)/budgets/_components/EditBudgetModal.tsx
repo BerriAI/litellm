@@ -1,4 +1,5 @@
 import React, { useEffect, useId } from "react";
+import { useTranslation } from "react-i18next";
 import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { applyBudgetPrecision } from "./budgetPrecision";
@@ -23,6 +24,7 @@ interface EditBudgetModalProps {
   existingBudget: budgetItem;
 }
 const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIsModalVisible, existingBudget }) => {
+  const { t } = useTranslation();
   const formId = useId();
   const form = useBudgetForm(toFormValues(existingBudget));
   const { dirtyFields } = form.formState;
@@ -39,15 +41,15 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
 
   const handleUpdate = async (formValues: BudgetFormValues) => {
     try {
-      toast.info("Making API Call");
+      toast.info(t("budgets.editModal.toast.pending"));
       const changedValues = pickDirty(formValues, dirtyFields);
       await updateBudget.mutateAsync(applyBudgetPrecision({ budget_id: formValues.budget_id, ...changedValues }));
-      toast.success("Budget Updated");
+      toast.success(t("budgets.editModal.toast.updated"));
       form.reset();
       setIsModalVisible(false);
     } catch (error) {
       console.error("Error updating the budget:", error);
-      toast.fromError(`Error updating the budget: ${error}`);
+      toast.fromError(t("budgets.editModal.toast.error", { error: String(error) }));
     }
   };
 
@@ -55,15 +57,15 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
     <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="text-[15px] leading-[22px] font-semibold">Edit budget</DialogTitle>
+          <DialogTitle className="text-[15px] leading-[22px] font-semibold">{t("budgets.editModal.title")}</DialogTitle>
         </DialogHeader>
         <form id={formId} onSubmit={form.handleSubmit(handleUpdate)} noValidate>
           <BudgetFormFields form={form} isEditing />
         </form>
         <DialogFooter>
-          <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+          <DialogClose render={<Button variant="outline" />}>{t("budgets.editModal.cancel")}</DialogClose>
           <Button type="submit" form={formId}>
-            Save
+            {t("budgets.editModal.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>

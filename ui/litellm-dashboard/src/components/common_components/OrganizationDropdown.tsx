@@ -1,6 +1,8 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Organization } from "../networking";
+import i18n from "@/i18n/i18n";
 
 interface OrganizationDropdownProps {
   organizations?: Organization[] | null;
@@ -20,9 +22,10 @@ const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
   disabled,
   loading,
   style,
-  placeholder = "All Organizations",
+  placeholder = i18n.t("organizationDropdown.placeholder"),
   id,
 }) => {
+  const { t } = useTranslation();
   return (
     <div style={{ minWidth: 280, ...style }}>
       <SearchSelect
@@ -34,7 +37,7 @@ const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
         value={value}
         onValueChange={(organizationId) => onChange?.(organizationId)}
         placeholder={placeholder}
-        emptyText={loading ? "Loading organizations…" : "No organizations found"}
+        emptyText={loading ? t("organizationDropdown.loading") : t("organizationDropdown.empty")}
         disabled={disabled}
         inputId={id}
       />

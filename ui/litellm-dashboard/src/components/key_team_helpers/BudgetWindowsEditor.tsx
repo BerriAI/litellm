@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 export interface BudgetWindowEntry {
   budget_duration: string;
@@ -21,6 +22,7 @@ interface BudgetWindowsEditorProps {
 }
 
 export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProps) {
+  const { t } = useTranslation();
   const addWindow = () => {
     onChange([...value, { budget_duration: "24h", max_budget: null }]);
   };
@@ -76,7 +78,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                       updateWindow(idx, "max_budget", Number(typed.toFixed(2)));
                     }
                   }}
-                  placeholder="Max spend ($)"
+                  placeholder={t("keyTeamHelpers.budgetWindowsEditor.maxSpend")}
                 />
               </InputGroup>
               <Button
@@ -100,7 +102,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
           addWindow();
         }}
       >
-        + Add Budget Window
+        {t("keyTeamHelpers.budgetWindowsEditor.addWindow")}
       </Button>
     </div>
   );

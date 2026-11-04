@@ -26,6 +26,7 @@ import { ColumnFiltersState, functionalUpdate, OnChangeFn } from "@tanstack/reac
 import { KeyRound } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
@@ -89,6 +90,7 @@ const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): strin
 };
 
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
+  const { t } = useTranslation();
   const { data: fetchedOrganizations } = useOrganizations();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const { data: fetchedTeams } = useAllTeams();
@@ -162,7 +164,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     }),
     [allTeams, organizations, teamMemberBudgets, setSelectedKeyId, applyUserBudgetToTeamKeys],
   );
-  const columns = useMemo(() => getKeyTableColumns(columnDeps), [columnDeps]);
+  const columns = useMemo(() => getKeyTableColumns(columnDeps, t), [columnDeps, t]);
 
   const selectedKeyFromList = useMemo(
     () => keyList.find((key) => key.token === selectedKeyId),
@@ -223,7 +225,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   if (selectedKeyId) {
     if (!selectedKey && !selectedKeyLoadFailed) {
-      return <div className="p-4 text-sm text-muted-foreground">Loading key...</div>;
+      return <div className="p-4 text-sm text-muted-foreground">{t("apiKeys.virtualKeysTable.loadingKey")}</div>;
     }
     return (
       <div className="w-full h-full overflow-hidden">
@@ -244,9 +246,9 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       <PageHeader>
         <PageHeaderTitle>
           <KeyRound />
-          Virtual Keys
+          {t("apiKeys.virtualKeysTable.title")}
         </PageHeaderTitle>
-        <PageHeaderDescription>Every key that authenticates requests to the gateway.</PageHeaderDescription>
+        <PageHeaderDescription>{t("apiKeys.virtualKeysTable.description")}</PageHeaderDescription>
         {headerActions != null && <PageHeaderControls>{headerActions}</PageHeaderControls>}
       </PageHeader>
       <DataTable
@@ -269,8 +271,8 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         columnResizeMode="onChange"
         isLoading={isPending || isPlaceholderData}
         isError={isError}
-        loadingMessage="Loading keys..."
-        noDataMessage="No keys found"
+        loadingMessage={t("apiKeys.virtualKeysTable.loading")}
+        noDataMessage={t("apiKeys.virtualKeysTable.empty")}
         fillHeight
         size="compact"
         toolbar={(table) => (
@@ -279,7 +281,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               table={table}
               searchValue={searchInput}
               onSearchChange={setSearch}
-              searchPlaceholder="Search by key alias or ID…"
+              searchPlaceholder={t("apiKeys.virtualKeysTable.searchPlaceholder")}
               onRefresh={() => refetch?.()}
               isRefreshing={isFetching}
               onOpenFilters={() => setFiltersOpen(true)}
@@ -290,51 +292,51 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               table={table}
               open={filtersOpen}
               onOpenChange={setFiltersOpen}
-              title="Filters"
-              description="Narrow down virtual keys"
+              title={t("apiKeys.virtualKeysTable.filters.title")}
+              description={t("apiKeys.virtualKeysTable.filters.description")}
             >
               {({ get, set }) => (
                 <>
-                  <DataTableFilterField label="Team">
+                  <DataTableFilterField label={t("apiKeys.virtualKeysTable.filters.team")}>
                     <SearchSelect
                       options={teamOptions}
                       value={(get("team_id") as string) || undefined}
                       onValueChange={(value) => set("team_id", value ?? undefined)}
-                      placeholder="Select a team…"
-                      emptyText="No teams found"
+                      placeholder={t("apiKeys.virtualKeysTable.filters.teamPlaceholder")}
+                      emptyText={t("apiKeys.virtualKeysTable.filters.teamEmpty")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="Organization">
+                  <DataTableFilterField label={t("apiKeys.virtualKeysTable.filters.organization")}>
                     <SearchSelect
                       options={orgOptions}
                       value={(get("org_id") as string) || undefined}
                       onValueChange={(value) => set("org_id", value ?? undefined)}
-                      placeholder="Select an organization…"
-                      emptyText="No organizations found"
+                      placeholder={t("apiKeys.virtualKeysTable.filters.organizationPlaceholder")}
+                      emptyText={t("apiKeys.virtualKeysTable.filters.organizationEmpty")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="User ID">
+                  <DataTableFilterField label={t("apiKeys.virtualKeysTable.filters.userId")}>
                     <Input
                       value={(get("user_id") as string) ?? ""}
                       onChange={(event) => set("user_id", event.target.value)}
-                      placeholder="Enter User ID…"
+                      placeholder={t("apiKeys.virtualKeysTable.filters.userIdPlaceholder")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="Key ID">
+                  <DataTableFilterField label={t("apiKeys.virtualKeysTable.filters.keyId")}>
                     <Input
                       value={(get("key_hash") as string) ?? ""}
                       onChange={(event) => set("key_hash", event.target.value)}
-                      placeholder="Enter Key ID…"
+                      placeholder={t("apiKeys.virtualKeysTable.filters.keyIdPlaceholder")}
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="Status">
+                  <DataTableFilterField label={t("apiKeys.virtualKeysTable.filters.status")}>
                     <Select
                       items={STATUS_FILTER_ITEMS}
                       value={(get("status") as string) || ALL_STATUSES}
                       onValueChange={(value) => set("status", value === ALL_STATUSES ? undefined : value)}
                     >
-                      <SelectTrigger className="w-full" aria-label="Status">
-                        <SelectValue placeholder="All statuses" />
+                      <SelectTrigger className="w-full" aria-label={t("apiKeys.virtualKeysTable.filters.status")}>
+                        <SelectValue placeholder={t("apiKeys.virtualKeysTable.filters.statusPlaceholder")} />
                       </SelectTrigger>
                       <SelectContent>
                         {STATUS_FILTER_ITEMS.map((item) => (

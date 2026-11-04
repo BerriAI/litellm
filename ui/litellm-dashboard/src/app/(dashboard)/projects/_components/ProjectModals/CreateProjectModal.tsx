@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { FolderPlus } from "lucide-react";
 
 import { toast } from "@/lib/toast";
@@ -19,6 +20,7 @@ interface CreateProjectModalProps {
 }
 
 function CreateProjectForm({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
   const form = useZodForm(projectFormSchema, { defaultValues: emptyProjectFormValues });
   const createMutation = useCreateProject();
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -31,12 +33,12 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
 
     createMutation.mutate(params, {
       onSuccess: () => {
-        toast.success("Project created successfully");
+        toast.success(t("projects.createModal.toast.created"));
         form.reset(emptyProjectFormValues);
         onClose();
       },
       onError: (error) => {
-        toast.error(error.message || "Failed to create project");
+        toast.error(error.message || t("projects.createModal.toast.failed"));
       },
     });
   });
@@ -52,11 +54,11 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
 
       <div className="mt-6 flex justify-end gap-2 border-t border-border pt-4">
         <Button type="button" variant="outline" onClick={handleCancel}>
-          Cancel
+          {t("projects.createModal.cancel")}
         </Button>
         <Button type="button" onClick={() => void handleSubmit()} disabled={createMutation.isPending}>
           {createMutation.isPending ? <UiLoadingSpinner /> : <FolderPlus />}
-          Create Project
+          {t("projects.createModal.submit")}
         </Button>
       </div>
     </form>
@@ -64,11 +66,12 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
 }
 
 export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps) {
+  const { t } = useTranslation();
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[720px]">
         <DialogHeader>
-          <DialogTitle className="text-lg">Create New Project</DialogTitle>
+          <DialogTitle className="text-lg">{t("projects.createModal.title")}</DialogTitle>
         </DialogHeader>
         <CreateProjectForm onClose={onClose} />
       </DialogContent>
