@@ -40,6 +40,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.exceptions import BadRequestError
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
@@ -588,13 +589,13 @@ class ChatCompletionSession(TypedDict, total=False):
 ########### End of Initialize Classes used for Responses API  ###########
 
 
-def _redacted_history_error(previous_response_id: str, model: str, provider: str | None) -> litellm.BadRequestError:
+def _redacted_history_error(previous_response_id: str, model: str, provider: str | None) -> BadRequestError:
     message: Final = (
         f"Previous response with id '{previous_response_id}' cannot be replayed. LiteLLM stored the earlier turns "
         "of this conversation redacted because message logging is turned off, so it no longer has their content. "
         "Send the earlier turns in input instead of previous_response_id."
     )
-    return litellm.BadRequestError(
+    return BadRequestError(
         message=message,
         model=model,
         llm_provider=provider,
