@@ -3,7 +3,7 @@ import os
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
@@ -31,6 +31,9 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
 REASONING_EFFORT_OFF: Final = "none"
 RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 _LOWEST_REASONING_TIERS: Final = ("minimal", "low")
+_UNCONFIRMED_MINIMAL_LOWEST_TIERS: Final = ("low",)
+
+ThinkingOffSwitch = Literal["disabled", "between_tools"]
 
 _JsonValue: Final = TypeVar("_JsonValue")
 
@@ -232,6 +235,16 @@ def is_between_tool_calls(request: Mapping[str, object]) -> bool:
     return any(block.get("type") == "tool_result" for block in blocks)
 
 
+def thinking_off_switch(request: Mapping[str, object]) -> ThinkingOffSwitch | None:
+    thinking: Final = as_str_mapping(request.get("thinking"))
+    thinking_type: Final = thinking.get("type") if thinking is not None else None
+    if thinking_type == "disabled":
+        return "disabled"
+    if thinking_type == "between_tools" and not is_between_tool_calls(request):
+        return "between_tools"
+    return None
+
+
 def _mapped_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     from litellm.utils import get_model_info
 
@@ -282,10 +295,19 @@ def _declares(model_info: Mapping[str, object] | None, capability: str) -> bool:
     return model_info is not None and model_info.get(capability) is True
 
 
-def _lowest_tier_instead_of_off(levels: tuple[str, ...] | None) -> str | None:
+def _confirms_minimal(model_info: Mapping[str, object] | None) -> bool:
+    from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts
+
+    return model_info is not None and (
+        declared_reasoning_efforts(model_info) is not None or _declares(model_info, "supports_minimal_reasoning_effort")
+    )
+
+
+def _lowest_tier_instead_of_off(levels: tuple[str, ...] | None, model_info: Mapping[str, object] | None) -> str | None:
     if not levels or REASONING_EFFORT_OFF in levels:
         return None
-    return next((tier for tier in _LOWEST_REASONING_TIERS if tier in levels), None)
+    tiers: Final = _LOWEST_REASONING_TIERS if _confirms_minimal(model_info) else _UNCONFIRMED_MINIMAL_LOWEST_TIERS
+    return next((tier for tier in tiers if tier in levels), None)
 
 
 def reasoning_off_level(
@@ -300,7 +322,7 @@ def reasoning_off_level(
     levels: Final = _resolved_reasoning_efforts(model_info, model, custom_llm_provider)
     if levels == () or (between_tools and levels is None):
         return None
-    lowest_tier: Final = _lowest_tier_instead_of_off(levels)
+    lowest_tier: Final = _lowest_tier_instead_of_off(levels, model_info)
     if lowest_tier is not None:
         return lowest_tier
     if (

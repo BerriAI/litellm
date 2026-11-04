@@ -20,6 +20,7 @@ from litellm.llms.anthropic.messages.utils import (
     maps_bare_output_effort,
     prompt_cache_key_from_user_id,
     reasoning_off_level,
+    thinking_off_switch,
 )
 from litellm.responses.utils import auto_reasoning_summary
 
@@ -1270,15 +1271,16 @@ class LiteLLMAnthropicMessagesAdapter:
                 reasoning_effort, cast(dict[str, object], thinking), model, custom_llm_provider
             )
         )
+        off_switch: Final = thinking_off_switch(anthropic_message_request)
         target_effort: Final = (
             reasoning_off_level(
                 model,
                 custom_llm_provider,
                 deployment_model_info=deployment_model_info,
                 drop_params=drop_params,
-                between_tools=is_between_tools,
+                between_tools=off_switch == "between_tools",
             )
-            if mirrors_responses_bridge and effort_sent == REASONING_EFFORT_OFF
+            if mirrors_responses_bridge and off_switch is not None and effort_sent == REASONING_EFFORT_OFF
             else effort_sent
         )
         if target_effort is None:

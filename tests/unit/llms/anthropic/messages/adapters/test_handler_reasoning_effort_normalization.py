@@ -932,3 +932,107 @@ async def test_a_non_object_thinking_still_reaches_the_responses_bridge(
     )
 
     assert sent["model"] == "gpt-5-mini"
+
+
+_CLIENT_EFFORT_NONE: Final = [
+    {"thinking": {"type": "adaptive"}, "output_config": {"effort": "none"}},
+    {"output_config": {"effort": "none"}},
+]
+
+
+class TestAClientEffortNoneFollowsTheUnsupportedValueRule:
+    @pytest.fixture(autouse=True)
+    def _httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("messages_params", _CLIENT_EFFORT_NONE, ids=["adaptive", "bare"])
+    @pytest.mark.parametrize(
+        "uses_chat_route, reasoning_key", [(True, "reasoning_effort"), (False, "reasoning")], ids=["chat-route", "responses-bridge"]
+    )
+    async def test_drop_params_drops_it_on_a_model_that_refuses_none(
+        self,
+        respx_mock: respx.MockRouter,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        messages_params: Mapping[str, object],
+        uses_chat_route: bool,
+        reasoning_key: str,
+    ) -> None:
+        monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", uses_chat_route)
+
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {"model": "openai/gpt-5-mini", "api_key": "fake-key", "drop_params": True},
+            {},
+            rf"https://api\.openai\.com/v1/{'chat/completions' if uses_chat_route else 'responses'}",
+            _CHAT_COMPLETION if uses_chat_route else _RESPONSE,
+            **messages_params,
+        )
+
+        assert reasoning_key not in sent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("messages_params", _CLIENT_EFFORT_NONE, ids=["adaptive", "bare"])
+    @pytest.mark.parametrize("uses_chat_route", [True, False], ids=["chat-route", "responses-bridge"])
+    async def test_without_drop_params_it_answers_400(
+        self,
+        respx_mock: respx.MockRouter,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        messages_params: Mapping[str, object],
+        uses_chat_route: bool,
+    ) -> None:
+        monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", uses_chat_route)
+
+        with pytest.raises(litellm.UnsupportedParamsError, match="effort=none is not supported for gpt-5-mini"):
+            await _body_sent_upstream(
+                respx_mock,
+                {"model": "openai/gpt-5-mini", "api_key": "fake-key"},
+                {},
+                rf"https://api\.openai\.com/v1/{'chat/completions' if uses_chat_route else 'responses'}",
+                _CHAT_COMPLETION if uses_chat_route else _RESPONSE,
+                **messages_params,
+            )
+
+
+class TestTheOffSwitchUsesMinimalOnlyWhereTheDeploymentConfirmsIt:
+    @pytest.fixture(autouse=True)
+    def _httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model_info, expected",
+        [
+            ({"supports_none_reasoning_effort": False}, "low"),
+            ({"reasoning_effort_levels": ["minimal", "low", "medium", "high"]}, "minimal"),
+        ],
+        ids=["none-flag-only", "declared-levels"],
+    )
+    @pytest.mark.parametrize("thinking", [{"type": "disabled"}, {"type": "between_tools"}], ids=["disabled", "between_tools"])
+    @pytest.mark.parametrize("uses_chat_route", [True, False], ids=["chat-route", "responses-bridge"])
+    @pytest.mark.parametrize("drop_params", [False, True], ids=["no-drop_params", "drop_params"])
+    async def test_an_o3_deployment_gets_the_lowest_level_it_confirms(
+        self,
+        respx_mock: respx.MockRouter,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        model_info: Mapping[str, object],
+        expected: str,
+        thinking: Mapping[str, object],
+        uses_chat_route: bool,
+        drop_params: bool,
+    ) -> None:
+        monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", uses_chat_route)
+
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {"model": "openai/o3", "api_key": "fake-key", "drop_params": drop_params},
+            model_info,
+            rf"https://api\.openai\.com/v1/{'chat/completions' if uses_chat_route else 'responses'}",
+            _CHAT_COMPLETION if uses_chat_route else _RESPONSE,
+            thinking=thinking,
+        )
+
+        assert (sent["reasoning_effort"] if uses_chat_route else sent["reasoning"]["effort"]) == expected

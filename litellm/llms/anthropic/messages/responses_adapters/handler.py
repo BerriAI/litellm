@@ -53,12 +53,14 @@ from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import (
     REASONING_EFFORT_OFF,
+    ThinkingOffSwitch,
     deployment_reasoning_efforts,
     litellm_logging_obj_from_kwargs,
     local_model_name,
     maps_bare_output_effort,
     normalize_reasoning_effort_value,
     reasoning_off_level,
+    thinking_off_switch,
 )
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
@@ -270,19 +272,19 @@ def _reasoning_for_target(
     custom_llm_provider: str | None,
     deployment_model_info: object,
     drop_params: bool,
-    between_tools: bool,
+    off_switch: ThinkingOffSwitch | None,
 ) -> object:
     reasoning_params: Final = as_str_mapping(reasoning)
     effort: Final = reasoning_params.get("effort") if reasoning_params is not None else None
     if reasoning_params is None or not isinstance(effort, str):
         return reasoning
-    if effort == REASONING_EFFORT_OFF:
+    if effort == REASONING_EFFORT_OFF and off_switch is not None:
         off_level: Final = reasoning_off_level(
             model,
             custom_llm_provider,
             deployment_model_info=deployment_model_info,
             drop_params=drop_params,
-            between_tools=between_tools,
+            between_tools=off_switch == "between_tools",
         )
         if off_level is None or _responses_api_refuses_reasoning_effort(model, custom_llm_provider):
             return None
@@ -471,7 +473,7 @@ def _build_responses_kwargs(
             custom_llm_provider=provider,
             deployment_model_info=forwarded_kwargs.get("model_info"),
             drop_params=drop_params,
-            between_tools=isinstance(thinking, dict) and thinking.get("type") == "between_tools",
+            off_switch=thinking_off_switch(anthropic_request),
         )
         if _maps_reasoning(thinking, model, provider, forwarded_kwargs)
         else None
