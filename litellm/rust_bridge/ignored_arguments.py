@@ -11,7 +11,9 @@ from typing import Final
 _LITELLM_ROOT: Final = f"{Path(__file__).parents[1]}{os.sep}"
 
 _DEPRECATED: Final = MappingProxyType(
-    {"client": "client= is ignored: litellm sends this request from Rust with its own HTTP settings"}
+    {
+        "client": "client= is deprecated: litellm is moving requests to Rust, which ignores it and uses its own HTTP settings"
+    }
 )
 _INTERNAL: Final = frozenset({"shared_session"})
 _DROPPED: Final = _INTERNAL | frozenset(_DEPRECATED)
@@ -28,16 +30,19 @@ def _first_stacklevel_outside_litellm() -> int:
     )
 
 
-def warn_ignored(name: str) -> None:
+def warn_deprecated(name: str) -> None:
     if sys.version_info >= (3, 12):
         warnings.warn(_DEPRECATED[name], DeprecationWarning, skip_file_prefixes=(_LITELLM_ROOT,))
         return
     warnings.warn(_DEPRECATED[name], DeprecationWarning, stacklevel=_first_stacklevel_outside_litellm())
 
 
-def without_ignored(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+def warn_deprecated_in(kwargs: Mapping[str, object]) -> None:
     for name in (name for name in _DEPRECATED if kwargs.get(name) is not None):
-        warn_ignored(name)
+        warn_deprecated(name)
+
+
+def without_ignored(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     if _DROPPED.isdisjoint(kwargs):
         return kwargs
     return MappingProxyType({key: value for key, value in kwargs.items() if key not in _DROPPED})
