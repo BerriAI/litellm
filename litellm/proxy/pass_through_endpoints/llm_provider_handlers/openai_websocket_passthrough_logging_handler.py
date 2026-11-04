@@ -158,9 +158,7 @@ def _responses_turn(event: Mapping[str, object], session_model: str) -> _Complet
     return _CompletedTurn(
         model=ended.response.model or session_model,
         response=ended.response,
-        usage=ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # the one shared Responses usage converter
-            ended.response.usage
-        ),
+        usage=ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(ended.response.usage),
     )
 
 

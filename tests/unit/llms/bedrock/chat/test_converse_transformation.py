@@ -10073,6 +10073,461 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
         assert "cachePoint" not in json.dumps(transformed_messages)
 
 
+def test_converse_carries_prompt_cache_breakpoint_to_cache_point():
+    request: Final = litellm.AmazonConverseConfig()._transform_request(
+        model="anthropic.claude-sonnet-5-5",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse.", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            },
+        ],
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert request["system"] == [{"text": "You are terse."}, {"cachePoint": {"type": "default"}}]
+    assert request["messages"] == [
+        {"role": "user", "content": [{"text": "Hello"}, {"cachePoint": {"type": "default"}}]}
+    ]
+
+
+def test_converse_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_cap():
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                for index in range(5)
+            ],
+        }
+    ]
+
+    def transform(litellm_params: dict) -> dict:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model="anthropic.claude-sonnet-5-5",
+            messages=copy.deepcopy(messages),
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="at most 4 cache breakpoints"):
+        transform({})
+
+    cache_point: Final = {"cachePoint": {"type": "default"}}
+    assert transform({"drop_params": True})["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"text": "part 0"},
+                cache_point,
+                {"text": "part 1"},
+                cache_point,
+                {"text": "part 2"},
+                {"text": "part 3"},
+                cache_point,
+                {"text": "part 4"},
+                cache_point,
+            ],
+        }
+    ]
+
+
+_CONVERSE_CAP_TOOL: Final[dict[str, object]] = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize(
+    "tool_cache_params",
+    [
+        {"tools": [{**_CONVERSE_CAP_TOOL, "cache_control": {"type": "ephemeral"}}]},
+        {
+            "tools": [_CONVERSE_CAP_TOOL],
+            "cache_control_injection_points": [{"location": "tool_config", "control": {"type": "ephemeral"}}],
+        },
+    ],
+    ids=["client_tool_cache_control", "tool_config_injection_point"],
+)
+def test_converse_reserves_the_tool_cache_point_within_the_cap(tool_cache_params: dict[str, object]):
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                for index in range(4)
+            ],
+        }
+    ]
+
+    def transform(litellm_params: dict) -> dict:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model="anthropic.claude-sonnet-5-5",
+            messages=copy.deepcopy(messages),
+            optional_params=copy.deepcopy(tool_cache_params),
+            litellm_params=litellm_params,
+        )
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="this request has 5"):
+        transform({})
+
+    request: Final = transform({"drop_params": True})
+    cache_point: Final = {"cachePoint": {"type": "default"}}
+    assert request["messages"][0]["content"] == [
+        {"text": "part 0"},
+        cache_point,
+        {"text": "part 1"},
+        cache_point,
+        {"text": "part 2"},
+        {"text": "part 3"},
+        cache_point,
+    ]
+    assert request["toolConfig"]["tools"][-1] == cache_point
+
+
+
+@pytest.mark.parametrize(
+    "unsent_tool_params",
+    [
+        {
+            "tools": [
+                _CONVERSE_CAP_TOOL,
+                {"type": "tool_search_tool_regex_20251119", "name": "find", "cache_control": {"type": "ephemeral"}},
+            ]
+        },
+        {"tools": [_CONVERSE_CAP_TOOL, {"type": "web_search", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "tools": [{"type": "web_search"}],
+            "cache_control_injection_points": [{"location": "tool_config", "control": {"type": "ephemeral"}}],
+        },
+    ],
+    ids=["tool_search_tool", "built_in_tool", "tool_config_point_with_no_tool_sent"],
+)
+@pytest.mark.parametrize("litellm_params", [{}, {"drop_params": True}], ids=["strict", "drop_params"])
+def test_converse_leaves_the_cap_to_markers_when_a_marked_tool_is_not_sent(
+    unsent_tool_params: dict[str, object], litellm_params: dict[str, object]
+):
+    request: Final = litellm.AmazonConverseConfig()._transform_request(
+        model="anthropic.claude-sonnet-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                    for index in range(4)
+                ],
+            }
+        ],
+        optional_params=copy.deepcopy(unsent_tool_params),
+        litellm_params=dict(litellm_params),
+    )
+
+    cache_point: Final = {"cachePoint": {"type": "default"}}
+    assert request["messages"][0]["content"] == [
+        {"text": "part 0"},
+        cache_point,
+        {"text": "part 1"},
+        cache_point,
+        {"text": "part 2"},
+        cache_point,
+        {"text": "part 3"},
+        cache_point,
+    ]
+    assert cache_point not in request.get("toolConfig", {}).get("tools", [])
+
+def _converse_tool_turn(*result_parts: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": list(result_parts)},
+    ]
+
+
+def _marked_text_parts(count: int) -> list[dict[str, object]]:
+    return [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        for index in range(count)
+    ]
+
+
+def _marked_tool_result_parts() -> list[dict[str, object]]:
+    return [
+        {"type": "text", "text": f"result {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        for index in range(2)
+    ]
+
+
+def test_converse_counts_one_cache_point_for_a_tool_result_with_several_marks():
+    request: Final = litellm.AmazonConverseConfig()._transform_request(
+        model="anthropic.claude-sonnet-5-5",
+        messages=[
+            {"role": "user", "content": _marked_text_parts(3)},
+            *_converse_tool_turn(*_marked_tool_result_parts()),
+        ],
+        optional_params={"tools": [_CONVERSE_CAP_TOOL]},
+        litellm_params={},
+    )
+
+    assert len(_collect_cache_points(request["messages"])) == 4
+
+
+def test_converse_drops_marks_until_a_merged_tool_result_fits_the_cap():
+    messages: Final = [
+        {"role": "user", "content": _marked_text_parts(4)},
+        *_converse_tool_turn(*_marked_tool_result_parts()),
+    ]
+
+    def transform(litellm_params: dict) -> dict:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model="anthropic.claude-sonnet-5-5",
+            messages=copy.deepcopy(messages),
+            optional_params={"tools": [_CONVERSE_CAP_TOOL]},
+            litellm_params=litellm_params,
+        )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="this request has 5"):
+        transform({})
+
+    request: Final = transform({"drop_params": True})
+    cache_point: Final = {"cachePoint": {"type": "default"}}
+    assert request["messages"][0]["content"] == [
+        {"text": "part 0"},
+        cache_point,
+        {"text": "part 1"},
+        cache_point,
+        {"text": "part 2"},
+        cache_point,
+        {"text": "part 3"},
+    ]
+    assert len(_collect_cache_points(request["messages"][1:])) == 1
+
+
+def test_converse_drops_prompt_cache_breakpoint_from_a_nova_tool_result():
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "You are terse.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        },
+        {"role": "user", "content": "Look it up."},
+        *_converse_tool_turn(*_marked_tool_result_parts()),
+    ]
+
+    def transform(litellm_params: dict) -> dict:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model="us.amazon.nova-lite-v1:0",
+            messages=copy.deepcopy(messages),
+            optional_params={"tools": [_CONVERSE_CAP_TOOL]},
+            litellm_params=litellm_params,
+        )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="tool result"):
+        transform({})
+
+    request: Final = transform({"drop_params": True})
+    assert request["system"] == [{"text": "You are terse."}, {"cachePoint": {"type": "default"}}]
+    assert _collect_cache_points(request["messages"]) == []
+
+
+def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_when_flagged(local_model_cost_map):
+    from litellm import Router
+
+    flagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-flagged"
+    unflagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/mistral"
+    Router(
+        model_list=[
+            {
+                "model_name": "claude-profile",
+                "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": True},
+            },
+            {
+                "model_name": "mistral-profile",
+                "litellm_params": {"model": f"bedrock/{unflagged_arn}", "aws_region_name": "us-east-1"},
+            },
+        ]
+    )
+
+    def user_content(model: str, ttl: dict) -> list:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", **ttl}}],
+                }
+            ],
+            optional_params={},
+            litellm_params={},
+        )["messages"][0]["content"]
+
+    assert user_content(flagged_arn, {}) == [{"text": "Hello"}, {"cachePoint": {"type": "default"}}]
+    assert user_content(unflagged_arn, {}) == [{"text": "Hello"}]
+    assert user_content(unflagged_arn, {"ttl": "30m"}) == [{"text": "Hello"}]
+
+
+
+def test_converse_prompt_cache_breakpoint_follows_the_arn_flag_over_its_base_model(local_model_cost_map):
+    from litellm import Router
+
+    opted_in_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-next"
+    opted_out_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-opted-out"
+    Router(
+        model_list=[
+            {
+                "model_name": "opted-in",
+                "litellm_params": {"model": f"bedrock/{opted_in_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": True},
+            },
+            {
+                "model_name": "opted-out",
+                "litellm_params": {"model": f"bedrock/{opted_out_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": False},
+            },
+        ]
+    )
+
+    def user_content(model: str, base_model: str, ttl: dict) -> list:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", **ttl}}],
+                }
+            ],
+            optional_params={},
+            litellm_params={"base_model": base_model},
+        )["messages"][0]["content"]
+
+    assert user_content(opted_in_arn, "anthropic.claude-unmapped-v1:0", {}) == [
+        {"text": "Hello"},
+        {"cachePoint": {"type": "default"}},
+    ]
+    assert user_content(opted_out_arn, "anthropic.claude-sonnet-5-5", {"ttl": "30m"}) == [{"text": "Hello"}]
+
+
+def test_converse_translates_prompt_cache_breakpoint_only_for_families_that_take_cache_points(local_model_cost_map):
+    litellm.register_model(
+        {"zai.glm-next-v1:0": {"litellm_provider": "bedrock_converse", "mode": "chat", "supports_prompt_caching": True}}
+    )
+
+    def user_content(model: str, mark: dict) -> list:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model=model,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Hello", **mark}]}],
+            optional_params={},
+            litellm_params={},
+        )["messages"][0]["content"]
+
+    marker: Final = {"prompt_cache_breakpoint": {"mode": "explicit"}}
+    client_mark: Final = {"cache_control": {"type": "ephemeral"}}
+    cache_point: Final = {"cachePoint": {"type": "default"}}
+    assert user_content("zai.glm-next-v1:0", marker) == [{"text": "Hello"}]
+    assert user_content("zai.glm-next-v1:0", client_mark) == [{"text": "Hello"}, cache_point]
+    assert user_content("us.anthropic.claude-next-v1:0", marker) == [{"text": "Hello"}, cache_point]
+    assert user_content("us.amazon.nova-next-v1:0", marker) == [{"text": "Hello"}, cache_point]
+
+
+def test_converse_prompt_cache_breakpoint_on_guarded_user_text_keeps_its_cache_point(local_model_cost_map):
+    guardrail: Final = {"guardrailConfig": {"guardrailIdentifier": "gr-1", "guardrailVersion": "DRAFT"}}
+
+    def request(system_marks: int) -> dict:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model="anthropic.claude-sonnet-5-5",
+            messages=[
+                *(
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": f"Rule {i}", "cache_control": {"type": "ephemeral"}}],
+                    }
+                    for i in range(system_marks)
+                ),
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+                },
+            ],
+            optional_params=dict(guardrail),
+            litellm_params={},
+        )
+
+    assert request(0)["messages"][0]["content"] == [
+        {"guardContent": {"text": {"text": "Hello"}}},
+        {"cachePoint": {"type": "default"}},
+    ]
+    with pytest.raises(litellm.UnsupportedParamsError):
+        request(4)
+
+    client_marked: Final = litellm.AmazonConverseConfig()._transform_request(
+        model="anthropic.claude-sonnet-5-5",
+        messages=[
+            *(
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": f"Rule {i}", "cache_control": {"type": "ephemeral"}}],
+                }
+                for i in range(4)
+            ),
+            {"role": "user", "content": [{"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}]},
+        ],
+        optional_params=dict(guardrail),
+        litellm_params={},
+    )
+    assert sum("cachePoint" in block for block in client_marked["system"]) == 4
+    assert client_marked["messages"][0]["content"] == [{"guardContent": {"text": {"text": "Hello"}}}]
+
+
+def test_converse_guarded_user_text_keeps_no_cache_point_on_a_model_not_known_to_take_one(local_model_cost_map):
+    request: Final = litellm.AmazonConverseConfig()._transform_request(
+        model="arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unmapped1",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}]}],
+        optional_params={"guardrailConfig": {"guardrailIdentifier": "gr-1", "guardrailVersion": "DRAFT"}},
+        litellm_params={},
+    )
+
+    assert request["messages"][0]["content"] == [{"guardContent": {"text": {"text": "Hello"}}}]
+
+
+def _converse_request_with_30m_breakpoint(model: str, litellm_params: dict) -> dict:
+    return litellm.AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}
+                ],
+            }
+        ],
+        optional_params={},
+        litellm_params=litellm_params,
+    )
+
+
+def test_converse_rejects_30m_breakpoint_ttl_only_where_a_cache_point_is_written():
+    claude: Final = "anthropic.claude-sonnet-5-5"
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        _converse_request_with_30m_breakpoint(claude, {})
+
+    assert _converse_request_with_30m_breakpoint(claude, {"drop_params": True})["messages"] == [
+        {"role": "user", "content": [{"text": "Hello"}, {"cachePoint": {"type": "default"}}]}
+    ]
+    assert _converse_request_with_30m_breakpoint("meta.llama3-1-8b-instruct-v1:0", {})["messages"] == [
+        {"role": "user", "content": [{"text": "Hello"}]}
+    ]
+
+
 @pytest.mark.parametrize(
     "model, expected_supports_tool_call",
     [
