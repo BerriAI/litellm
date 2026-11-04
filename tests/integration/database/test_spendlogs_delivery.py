@@ -664,13 +664,14 @@ async def test_buffered_batch_charge_takes_over_its_zero_cost_receipt(
 ) -> None:
     from types import SimpleNamespace
 
+    from litellm.proxy.utils import accounting_only_spend_log
     from litellm.repositories.table_repositories import SpendLogsRepository
 
     polled: Final = {**_row("buffered_batch"), "spend": 0.0, "call_type": "aretrieve_batch", "status": "success"}
     _insert(delivery_database, (polled,))
     delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET state = \'applied\'::"AccountingDeliveryState"')
     charged: Final = _with_payload({**polled, "spend": 1.0})
-    buffered: Final = {**charged, "accounting_log_disabled": True} if disabled_logs else charged
+    buffered: Final = accounting_only_spend_log(charged) if disabled_logs else charged
     repository: Final = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
 
     assert await repository.insert_with_deliveries((buffered,)) == 1

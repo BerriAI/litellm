@@ -123,7 +123,8 @@ def _delivery_id(row: Mapping[str, object]) -> str:
 
 
 def _charges_a_batch(row: Mapping[str, object]) -> bool:
-    spend: Final = row.get("spend")
+    payload: Final = row.get("accounting_payload")
+    spend: Final = row.get("spend", _accounting_payload(payload).get("spend") if payload is not None else None)
     return _is_batch(row) and isinstance(spend, (int, float)) and spend > 0
 
 
