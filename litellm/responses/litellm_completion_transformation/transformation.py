@@ -1266,10 +1266,16 @@ class LiteLLMCompletionResponsesConfig:
             only_since_compaction=not native_compaction,
             caller_input=numbered_input,
         )
+        # A replayed server search goes back only beside an outbound tool search tool: that tool is what adds the
+        # tool-search beta, so a turn without it (left out by the caller, or dropped for this model) gets no blocks.
+        # The route check runs only when a replay is present, because it resolves the model.
         bridged_messages: Final = (
             input_messages
             if not holds_replayed_server_search(input_messages)
-            or provider_builds_anthropic_request(model, custom_llm_provider)
+            or (
+                any(is_anthropic_tool_search_chat_tool(tool) for tool in tools)
+                and provider_builds_anthropic_request(model, custom_llm_provider)
+            )
             else cast(
                 list[
                     AllMessageValues

@@ -2373,6 +2373,46 @@ class TestToolTransformation:
         assert [call["id"] for call in request["messages"][1]["tool_calls"]] == ["toolu_01Weather"]
         assert "tool_search_tool" not in json.dumps(request["messages"])
 
+    @pytest.mark.usefixtures("local_model_cost_map")
+    @pytest.mark.parametrize(
+        ("model", "keep_search_tool"),
+        [("claude-sonnet-5-5", False), ("claude-3-5-haiku-20241022", True)],
+        ids=["request_without_tool_search", "model_without_tool_search"],
+    )
+    def test_server_tool_search_is_not_replayed_without_a_tool_search_tool(
+        self, model: str, keep_search_tool: bool
+    ) -> None:
+        """History can hold a server search while this request has no tool search tool to send: the caller
+        left it out (a handoff to another agent), or the model cannot run it and the bridge drops it. Without
+        that tool there is no tool-search beta, so the search blocks must not reach the provider."""
+        all_tools: Final = _deferred_tools_with_server_tool_search()
+        tools: Final = all_tools if keep_search_tool else [tool for tool in all_tools if tool["type"] != "tool_search"]
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=_replayed_server_search_input(all_tools),
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+        )
+
+        wire: Final = anthropic_messages_pt(messages=request["messages"], model=model, llm_provider="anthropic")
+
+        assert wire == [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What is the weather in Paris and the price of ACME?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C and sunny"}],
+            },
+        ]
+
     def test_server_tool_search_call_without_its_output_is_not_replayed(self) -> None:
         tools: Final = _deferred_tools_with_server_tool_search()
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
