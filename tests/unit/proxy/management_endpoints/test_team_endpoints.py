@@ -19,6 +19,7 @@ from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import (
+    BudgetLimitEntry,
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
     LiteLLM_ModelTable,
@@ -13214,12 +13215,15 @@ def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("updated_duration", "preserves_reset_at"), (("7d", True), ("14d", False)))
 async def test_update_team_cap_change_preserves_open_budget_window_reset(
-    disable_audit_logging_for_mocked_team, monkeypatch
+    disable_audit_logging_for_mocked_team: None,
+    monkeypatch: pytest.MonkeyPatch,
+    updated_duration: str,
+    preserves_reset_at: bool,
 ):
     from datetime import datetime, timezone, tzinfo
 
-    from litellm.models.team import BudgetLimitEntry
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     class FrozenDateTime(datetime):
@@ -13238,7 +13242,7 @@ async def test_update_team_cap_change_preserves_open_budget_window_reset(
         await update_team(
             data=UpdateTeamRequest(
                 team_id="test_team_id",
-                budget_limits=[{"budget_duration": "7d", "max_budget": 10}],
+                budget_limits=[{"budget_duration": updated_duration, "max_budget": 10}],
             ),
             http_request=MagicMock(spec=Request),
             user_api_key_dict=UserAPIKeyAuth(
@@ -13251,7 +13255,10 @@ async def test_update_team_cap_change_preserves_open_budget_window_reset(
     written_window: Final = json.loads(prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["budget_limits"])[0]
 
     assert written_window["max_budget"] == 10
-    assert written_window["reset_at"] == stored_reset_at.isoformat()
+    if preserves_reset_at:
+        assert written_window["reset_at"] == stored_reset_at.isoformat()
+    else:
+        assert written_window["reset_at"] != stored_reset_at.isoformat()
 
 
 @pytest.mark.asyncio
@@ -15937,7 +15944,11 @@ def test_team_output_token_estimate_admin_gate_matrix(label, request_body, exist
     )
 
 
-def _wire_update_team(stack, existing_metadata, existing_budget_limits=None):
+def _wire_update_team(
+    stack: ExitStack,
+    existing_metadata: object,
+    existing_budget_limits: Sequence[BudgetLimitEntry] | None = None,
+) -> MagicMock:
     """Mock just enough of update_team to reach (or pass) the estimate gate."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
