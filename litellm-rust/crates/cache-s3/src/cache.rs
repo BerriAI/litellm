@@ -4,20 +4,15 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use aws_sdk_s3::{
-    config::{BehaviorVersion, Region, RequestChecksumCalculation, ResponseChecksumValidation},
-    error::SdkError,
-    primitives::ByteStream,
-};
 use aws_smithy_types::{DateTime, date_time::Format};
 use futures_util::future::try_join_all;
 use litellm_auth_aws::AwsAuthConfig;
 use litellm_cache::{
     BaseCache, BatchCache, CacheCodec, DisconnectCache, Error, ExactCacheContext, FlushCache,
 };
+use litellm_storage_s3::aws_sdk_s3::{self, error::SdkError, primitives::ByteStream};
+use litellm_storage_s3::s3_config;
 use tokio::runtime::Handle;
-
-use crate::{auth::S3Credentials, transport::ReqwestHttpClient};
 
 pub struct S3Endpoint {
     pub url: String,
@@ -29,27 +24,6 @@ pub struct S3CacheConfig {
     pub region: String,
     pub endpoint: Option<S3Endpoint>,
     pub auth: AwsAuthConfig,
-}
-
-/// An S3 client config over litellm's HTTP client and AWS credential chain. A custom `endpoint` is addressed path
-/// style, as MinIO and other S3 compatible stores expect
-pub fn s3_config(
-    region: String,
-    endpoint: Option<String>,
-    http: litellm_http::Client,
-    auth: AwsAuthConfig,
-) -> aws_sdk_s3::config::Builder {
-    let base = aws_sdk_s3::Config::builder()
-        .behavior_version(BehaviorVersion::latest())
-        .region(Region::new(region))
-        .http_client(ReqwestHttpClient(http))
-        .credentials_provider(S3Credentials::new(auth))
-        .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
-        .response_checksum_validation(ResponseChecksumValidation::WhenRequired);
-    match endpoint {
-        Some(url) => base.endpoint_url(url).force_path_style(true),
-        None => base,
-    }
 }
 
 pub struct S3Cache<C: CacheCodec> {

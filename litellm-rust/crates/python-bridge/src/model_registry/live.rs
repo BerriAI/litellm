@@ -4,7 +4,6 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyDict, PyString, PyTuple};
 
 const MODULE: &str = "litellm.rust_bridge.host.model_cost";
-const TOKEN_PRICES: [&str; 2] = ["input_cost_per_token", "output_cost_per_token"];
 
 /// The bound `litellm.model_cost`
 pub(super) fn current(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
@@ -16,27 +15,22 @@ pub(super) fn current(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
         .map_err(PyErr::from)
 }
 
-/// Whether some `litellm.model_cost` rows under the `str` keys are dicts and none of them carries a per-token price.
-/// `get_model_info` fills a missing price with `0`, so this tells an unpriced row from a declared zero
+/// `omits_token_price` over the dict rows of `litellm.model_cost` under the `str` keys
 #[pyfunction]
 pub(crate) fn cost_map_omits_token_price(keys: &Bound<'_, PyTuple>) -> PyResult<bool> {
     let model_cost = current(keys.py())?;
-    let mut found_row = false;
-    for key in keys.iter().filter(|key| key.is_instance_of::<PyString>()) {
-        let Some(row) = model_cost.get_item(&key)? else {
-            continue;
-        };
-        let Ok(row) = row.cast_into::<PyDict>() else {
-            continue;
-        };
-        for price in TOKEN_PRICES {
-            if row.contains(price)? {
-                return Ok(false);
-            }
-        }
-        found_row = true;
-    }
-    Ok(found_row)
+    let rows = keys
+        .iter()
+        .filter(|key| key.is_instance_of::<PyString>())
+        .map(|key| model_cost.get_item(&key))
+        .collect::<PyResult<Vec<_>>>()?;
+    let rows = rows
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row.cast_into::<PyDict>().ok());
+    Ok(litellm_model_catalog::omits_token_price(rows.map(|row| {
+        move |name: &str| row.contains(name).unwrap_or(false)
+    })))
 }
 
 /// The `litellm.model_cost` row under `key` when it is truthy, else `fallback`, the row a registration of `key`

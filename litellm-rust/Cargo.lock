@@ -3590,19 +3590,14 @@ dependencies = [
 name = "litellm-cache-s3"
 version = "0.1.0"
 dependencies = [
- "aws-credential-types",
- "aws-sdk-s3",
- "aws-smithy-runtime-api",
  "aws-smithy-types",
- "aws-types",
  "futures-util",
- "http 1.4.2",
  "litellm-auth-aws",
  "litellm-cache",
  "litellm-cache-testing",
  "litellm-error",
  "litellm-http",
- "reqwest",
+ "litellm-storage-s3",
  "rstest",
  "serde_json",
  "tokio",
@@ -4296,11 +4291,10 @@ version = "0.1.0"
 dependencies = [
  "http 1.4.2",
  "litellm-auth-aws",
- "litellm-cache-s3",
  "litellm-error",
  "litellm-http",
- "litellm-model-catalog",
  "litellm-python-compat",
+ "litellm-storage-s3",
  "reqwest",
  "rstest",
  "tempfile",
@@ -4649,6 +4643,22 @@ dependencies = [
  "tokio",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-storage-s3"
+version = "0.1.0"
+dependencies = [
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "http 1.4.2",
+ "litellm-auth-aws",
+ "litellm-http",
+ "reqwest",
+ "rstest",
+ "tokio",
 ]
 
 [[package]]

@@ -1,3 +1,7 @@
+## Boundary
+
+This crate holds every rule about the cost map that more than one host applies, and it does no I/O and has no pyo3. Fetching and retrying a map is `litellm-model-catalog-refresh`. `python-bridge/src/model_registry/` only adapts Python objects to the traits here (`FieldValue`, `Rows`) and keeps the process statics, so a rule written there is a bug. Move it here and call it from the bridge
+
 ## Concepts
 
 Every price in a row lowers to one `Price { meter, channel, when }` and its `UnitPrice`. These keys come from the `FlatKey::parse` tests
@@ -47,6 +51,8 @@ Every price in a row lowers to one `Price { meter, channel, when }` and its `Uni
 `store/` is the catalog's in-memory store and the only place that indexes model names. Its rules are in [src/store/AGENTS.md](src/store/AGENTS.md)
 
 `resolve/` and `model_info.rs` hold types only. The functions over them land with their first caller
+
+`provenance.rs` is where the installed map came from, which hosts record and report
 
 `register.rs` is the `register_model` merge rule, `(base row, registration) -> row`, generic over `FieldValue` so python-bridge runs it on Python objects and a JSON host on `serde_json::Value`
 

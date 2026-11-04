@@ -1,4 +1,4 @@
-use litellm_cache_s3::aws_sdk_s3;
+use litellm_storage_s3::aws_sdk_s3;
 
 use crate::source::S3Object;
 use crate::{Error, Fetch, FetchRequest, Reply};
@@ -12,7 +12,7 @@ pub struct S3Fetch {
 }
 
 impl S3Fetch {
-    /// `config` is built by `litellm_cache_s3::s3_config`, and retries are left to the refresh
+    /// `config` is built by `litellm_storage_s3::s3_config`, and retries are left to the refresh
     pub fn new(config: aws_sdk_s3::config::Builder, location: String, object: S3Object) -> Self {
         let config = config.retry_config(aws_sdk_s3::config::retry::RetryConfig::disabled());
         Self {
@@ -79,7 +79,7 @@ mod tests {
             )
             .mount(&server)
             .await;
-        let config = litellm_cache_s3::s3_config(
+        let config = litellm_storage_s3::s3_config(
             "us-east-1".to_owned(),
             Some(server.uri()),
             litellm_http::Client::for_test(),

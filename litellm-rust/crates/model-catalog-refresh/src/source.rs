@@ -4,6 +4,10 @@ use url::Url;
 
 use crate::Error;
 
+/// Main's default `LITELLM_MODEL_COST_MAP_URL`
+pub const DEFAULT_REGISTRY_URL: &str =
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+
 /// Where a fetched catalog comes from
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {

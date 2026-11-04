@@ -10,7 +10,15 @@ const OUTPUT_COST_PER_TOKEN: &str = "output_cost_per_token";
 const TOKEN_COST_FIELDS: [&str; 2] = [INPUT_COST_PER_TOKEN, OUTPUT_COST_PER_TOKEN];
 const CACHE_READ_INPUT_TOKEN_COST: &str = "cache_read_input_token_cost";
 const EXPLICIT_CACHE_READ_INPUT_TOKEN_COST: &str = "explicit_cache_read_input_token_cost";
-const LITELLM_PROVIDER: &str = "litellm_provider";
+/// The field a row names its provider in, which `Store` groups keys by
+pub const LITELLM_PROVIDER: &str = "litellm_provider";
+
+/// Whether there are rows and none of them carries a per-token price, each row given as its field test.
+/// `get_model_info` fills a missing price with `0`, so this tells an unpriced row from a declared zero
+pub fn omits_token_price<R: Fn(&str) -> bool>(rows: impl IntoIterator<Item = R>) -> bool {
+    let mut rows = rows.into_iter().peekable();
+    rows.peek().is_some() && rows.all(|has| !TOKEN_COST_FIELDS.into_iter().any(&has))
+}
 
 /// How the merge rule sees one field value
 #[derive(Clone, Debug, PartialEq)]
@@ -465,6 +473,28 @@ mod tests {
         assert_eq!(
             written(row),
             r#"{"a":"1e400","b":"99999999999999999999999"}"#
+        );
+    }
+
+    #[rstest]
+    #[case::no_rows(json!([]), false)]
+    #[case::unpriced_rows(json!([{"mode": "chat"}, {}]), true)]
+    #[case::declared_zero(json!([{"mode": "chat"}, {"output_cost_per_token": 0}]), false)]
+    #[case::input_price(json!([{"input_cost_per_token": null}]), false)]
+    fn a_map_omits_token_prices_only_when_no_row_carries_one(
+        #[case] rows: Value,
+        #[case] expected: bool,
+    ) {
+        let rows: Vec<Fields<Value>> = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .cloned()
+            .map(fields)
+            .collect();
+        assert_eq!(
+            omits_token_price(rows.iter().map(|row| |name: &str| row.contains_key(name))),
+            expected
         );
     }
 }
