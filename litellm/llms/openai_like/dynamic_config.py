@@ -201,7 +201,9 @@ def create_config_class(provider: SimpleProviderConfig):
 
             return optional_params
 
-        def transform_parsed_response_dict(self, parsed_response: dict[str, object]) -> dict[str, object]:
+        def transform_parsed_response_dict(
+            self, parsed_response: dict[str, object]
+        ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
             """
             Carry the provider's usage.tool_usage search count as usage.server_tool_use.web_search_requests,
             the field the built-in tool cost path bills per call.
