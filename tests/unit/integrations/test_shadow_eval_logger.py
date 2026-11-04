@@ -405,6 +405,34 @@ class TestSurfaceNormalization:
         assert "stream" not in shadow_call
         assert shadow_call["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
+    @pytest.mark.parametrize(
+        ("thinking", "forwards_effort"),
+        [
+            pytest.param(None, False, id="no_thinking"),
+            pytest.param({"type": "enabled", "budget_tokens": 1024}, True, id="thinking"),
+        ],
+    )
+    async def test_anthropic_arm_sends_a_bedrock_claude_effort_to_the_shadow_model_only_with_thinking(
+        self, thinking: Mapping[str, object] | None, forwards_effort: bool
+    ):
+        hook_kwargs = _success_kwargs(call_type="anthropic_messages")
+        hook_kwargs["model"] = "converse/us.anthropic.claude-sonnet-4-6"
+        hook_kwargs["messages"] = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        hook_kwargs["litellm_params"]["proxy_server_request"] = {
+            "body": {
+                "model": "converse-sonnet",
+                "messages": [],
+                "max_tokens": 2048,
+                "output_config": {"effort": "high"},
+                **({"thinking": thinking} if thinking else {}),
+            }
+        }
+
+        _, router = await self._drive(hook_kwargs, RESPONSE)
+
+        shadow_call = router.acompletion.call_args_list[0].kwargs
+        assert shadow_call.get("output_config") == ({"effort": "high"} if forwards_effort else None)
+
     async def test_responses_arm_translates_wire_body_params_and_drops_surface_only_keys(self):
         from litellm.types.llms.openai import ResponsesAPIResponse
 

@@ -607,6 +607,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         from litellm.litellm_core_utils.litellm_logging import (
             Logging as LiteLLMLoggingObject,
         )
+        from litellm.responses.bridge_check import str_keyed_mapping
 
         request_data: Final[dict[str, object]] = {
             "model": model,
@@ -646,7 +647,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data["output_config"] = extra_kwargs["output_config"]
 
         custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
-        base_model: Final = extra_kwargs.get("base_model")
+        model_info: Final = str_keyed_mapping(extra_kwargs.get("model_info"))
+        base_model: Final = extra_kwargs.get("base_model") or (model_info.get("base_model") if model_info else None)
         (
             openai_request,
             tool_name_mapping,
