@@ -4662,6 +4662,7 @@ class LlmProviders(str, Enum):
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
+    QCA = "qca"
     QWENCLOUD = "qwencloud"
     QWEN_AI_PLATFORM = "qwen_ai_platform"
     MODELSCOPE = "modelscope"
