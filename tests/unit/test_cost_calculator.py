@@ -11645,3 +11645,68 @@ def test_upstream_cost_header_total_on_an_unmapped_alias_is_split_by_the_served_
     input_share: Final = (10 * 0.001) / (10 * 0.001 + 20 * 0.002)
     assert breakdown["input_cost"] == pytest.approx(0.25 * input_share)
     assert breakdown["output_cost"] == pytest.approx(0.25 * (1 - input_share))
+
+
+_PER_CALL_RATES: Final = MappingProxyType({"input_cost_per_token": 2e-06, "output_cost_per_token": 4e-06})
+
+
+def _per_call_priced_reply(model: str, usage_extras: Mapping[str, str]) -> ModelResponse:
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=1000, total_tokens=2000)
+    for field, value in usage_extras.items():
+        setattr(usage, field, value)
+    return ModelResponse(model=model, choices=[Choices(message=Message(content="hi"))], usage=usage)
+
+
+@pytest.mark.parametrize(
+    ("row", "call_kwargs", "usage_extras", "multiplier"),
+    [
+        pytest.param(
+            {"litellm_provider": "openai", "mode": "chat", "regional_processing_uplift_multiplier_eu": 1.25},
+            {
+                "model": "openai/lit-eu-residency-test",
+                "api_key": "fake-key",
+                "api_base": "https://eu.api.openai.com/v1",
+            },
+            {},
+            1.25,
+            id="openai-data-residency",
+        ),
+        pytest.param(
+            {"litellm_provider": "vertex_ai", "mode": "chat", "regional_endpoint_uplift_multiplier": 1.5},
+            {
+                "model": "vertex_ai/lit-regional-endpoint-test",
+                "vertex_project": "lit-project",
+                "vertex_location": "us-east5",
+                "vertex_credentials": "{}",
+            },
+            {},
+            1.5,
+            id="vertex-regional-endpoint",
+        ),
+        pytest.param(
+            {"litellm_provider": "anthropic", "mode": "chat", "provider_specific_entry": {"fast": 2.0}},
+            {"model": "anthropic/lit-fast-mode-test", "api_key": "fake-key"},
+            {"speed": "fast"},
+            2.0,
+            id="anthropic-fast-mode",
+        ),
+    ],
+)
+def test_per_call_custom_prices_keep_the_regional_and_speed_multipliers(
+    monkeypatch: pytest.MonkeyPatch,
+    row: Mapping[str, object],
+    call_kwargs: Mapping[str, str],
+    usage_extras: Mapping[str, str],
+    multiplier: float,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, call_kwargs["model"], {**row, **_PER_CALL_RATES})
+    _invalidate_model_cost_lowercase_map()
+
+    response: Final = litellm.completion(
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response=_per_call_priced_reply(call_kwargs["model"].split("/", 1)[1], usage_extras),
+        **call_kwargs,
+        **_PER_CALL_RATES,
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx((1000 * 2e-06 + 1000 * 4e-06) * multiplier)
