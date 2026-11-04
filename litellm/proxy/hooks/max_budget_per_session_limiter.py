@@ -28,6 +28,7 @@ from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import (
     ChargeOnceJob,
+    charged_poll_cost,
     defers_batch_cost,
     job_charged_once_marker_key,
     job_to_charge_once,
@@ -177,7 +178,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 return
 
             callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
-            response_cost: Final = finite_cost(callback_fields.get("response_cost")) or 0.0
+            response_cost: Final = finite_cost(charged_poll_cost(callback_fields)) or 0.0
             if response_cost <= 0:
                 return
 
@@ -196,7 +197,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             verbose_proxy_logger.debug(
                 "MaxBudgetPerSessionHandler: incremented session %s spend by %.6f",
                 session_id,
-                response_cost,
+                charge,
             )
         except Exception as e:
             verbose_proxy_logger.warning(

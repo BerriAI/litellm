@@ -222,14 +222,14 @@ async def test_a_batch_retrieve_before_its_cost_is_final_charges_the_session_not
 
 
 def _video_poll(
-    cost: float, guardrail_cost: float = 0.0, session_id: str = "session-jobs", status: str = "completed"
+    video_cost: float, guardrail_cost: float = 0.0, session_id: str = "session-jobs", status: str = "completed"
 ) -> dict[str, object]:
     return {
         "call_type": "avideo_status",
-        "response_cost": cost,
+        "response_cost": video_cost,
         POLLED_VIDEO_STATUS_KWARG: status,
         "standard_logging_object": {
-            "response_cost": cost,
+            "response_cost": video_cost + guardrail_cost,
             "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": guardrail_cost}],
         },
         "litellm_params": {"metadata": {"session_id": session_id, "agent_id": "agent-budget-123"}},
@@ -237,28 +237,39 @@ def _video_poll(
 
 
 @pytest.mark.asyncio
-async def test_every_video_poll_pays_its_guardrail_and_only_the_finished_poll_pays_the_session_for_the_video():
+@pytest.mark.parametrize(
+    ("video_cost", "guardrail_cost"),
+    [(0.40, 0.01), (0.05, 0.10)],
+    ids=["video_costs_more_than_its_guardrail", "video_costs_no_more_than_its_guardrail"],
+)
+async def test_every_video_poll_pays_its_guardrail_and_only_the_finished_poll_pays_the_session_for_the_video(
+    video_cost: float, guardrail_cost: float
+):
     from litellm.types.videos.main import VideoObject
 
     handler = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    completed_polls: Final = 3
 
     with patch(
         "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
     ) as mock_registry:
         mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
         await handler.async_log_success_event(
-            _video_poll(0.01, guardrail_cost=0.01, status="in_progress"),
+            _video_poll(0.0, guardrail_cost=guardrail_cost, status="in_progress"),
             VideoObject(id="job-1", object="video", status="in_progress"),
             None,
             None,
         )
-        for _ in range(3):
+        for _ in range(completed_polls):
             await handler.async_log_success_event(
-                _video_poll(0.41, guardrail_cost=0.01), VideoObject(id="job-1", object="video", status="completed"), None, None
+                _video_poll(video_cost, guardrail_cost=guardrail_cost),
+                VideoObject(id="job-1", object="video", status="completed"),
+                None,
+                None,
             )
 
     spend = await handler._get_current_spend(handler._make_cache_key("session-jobs"))
-    assert spend == pytest.approx(0.01 + 0.41 + 2 * 0.01)
+    assert spend == pytest.approx(video_cost + (1 + completed_polls) * guardrail_cost)
 
 
 class _ClockedRedis:

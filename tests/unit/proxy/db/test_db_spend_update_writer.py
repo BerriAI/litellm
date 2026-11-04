@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import functools
+import itertools
 import json
 import logging
 import re
@@ -4785,6 +4786,52 @@ async def test_update_database_charges_a_video_once_from_the_poll_that_sees_it_c
         "video_abc": ("avideo_status", 0.0),
         "video_abc_video_cost": ("avideo_status", 0.42),
     }
+
+
+def _indexed_guardrail_request_ids(prisma: MagicMock, index_table: str) -> tuple[str, ...]:
+    calls: Final = getattr(prisma.db, index_table).create_many.await_args_list
+    batches: Final = tuple(call.kwargs["data"] for call in calls)
+    return tuple(row["request_id"] for row in itertools.chain.from_iterable(batches))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_spend_logs", [False, True], ids=["spend_logs_on", "spend_logs_off"])
+@pytest.mark.parametrize("left_uncharged", [False, True], ids=["claimed_row", "taken_over_row"])
+async def test_a_job_cost_row_counts_its_polls_guardrail_run_in_guardrail_usage_once(
+    disable_spend_logs: bool, left_uncharged: bool
+):
+    """The job's cost row is written by its claim, not the spend log queue whose flush counts guardrail runs, so a
+    finished video's guardrail run must still reach guardrail usage, once, and not when spend logs are off."""
+    from litellm.repositories.table_repositories import (
+        DailyGuardrailMetricsRepository,
+        SpendLogGuardrailIndexRepository,
+    )
+
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_table_prisma()
+    getattr(prisma.db, SpendLogGuardrailIndexRepository.table_name).create_many = AsyncMock(return_value=1)
+    getattr(prisma.db, DailyGuardrailMetricsRepository.table_name).upsert = AsyncMock()
+    if left_uncharged:
+        prisma.db.litellm_spendlogs.rows["video_abc_video_cost"] = {**_video_status_payload(), "spend": 0.0}
+    guarded_poll: Final = {
+        **_video_status_payload(),
+        "metadata": json.dumps(
+            {"guardrail_information": [{"guardrail_name": "priced", "guardrail_status": "success"}]}
+        ),
+    }
+
+    charged = [
+        await _update_database_with(
+            db_writer, prisma, guarded_poll, disable_spend_logs=disable_spend_logs, response_cost=0.43
+        )
+        for _ in range(2)
+    ]
+
+    assert charged == [True, False]
+    assert _indexed_guardrail_request_ids(prisma, SpendLogGuardrailIndexRepository.table_name) == (
+        () if disable_spend_logs else ("video_abc_video_cost",)
+    )
 
 
 def _job_poll(

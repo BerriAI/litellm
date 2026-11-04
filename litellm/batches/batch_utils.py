@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils import batch_utils as core_batch_utils
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -39,6 +40,7 @@ class BatchCostUsageResult:
 
 
 _DECODED_BATCH_LINE: Final = TypeAdapter(object)
+batch_cost_is_final: Final = core_batch_utils.batch_cost_is_final
 
 
 def _uses_native_vertex_output(

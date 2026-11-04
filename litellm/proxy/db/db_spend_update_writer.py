@@ -160,6 +160,22 @@ def _org_member_transaction_key(org_id: str, user_id: str) -> str:
     return f"organization_id::{quote(org_id, safe='')}::user_id::{quote(user_id, safe='')}"
 
 
+async def _track_guardrail_usage_of_cost_row(
+    payload: SpendLogsPayload, prisma_client: "PrismaClient", disable_spend_logs: bool
+) -> None:
+    """A job's cost row skips the spend log queue, so its guardrail runs are counted here instead of at the flush."""
+    if disable_spend_logs:
+        return
+    from litellm.proxy.guardrails.usage_tracking import process_spend_logs_guardrail_usage
+
+    try:
+        await process_spend_logs_guardrail_usage(prisma_client=prisma_client, logs_to_process=(payload,))
+    except Exception as e:  # noqa: BLE001  # guardrail usage is best effort, as at the spend log flush
+        verbose_proxy_logger.warning(
+            "Guardrail usage tracking failed for spend row %s (non-fatal): %s", payload["request_id"], e
+        )
+
+
 def _is_settle_once_cost_row(payload: SpendLogsPayload) -> bool:
     """A poll of a job whose cost is charged once, by the first poll that sees it, however often it is polled.
 
@@ -807,14 +823,15 @@ class DBSpendUpdateWriter:
                 data=[prisma_client.jsonify_object(row)],
                 skip_duplicates=True,
             )
-            if claimed == 1:
-                return True
-            existing: Final = await spend_logs.find_unique(where={"request_id": request_id})
+            existing: Final = None if claimed == 1 else await spend_logs.find_unique(where={"request_id": request_id})
         except Exception as e:  # noqa: BLE001  # prisma raises its own hierarchy; an unreachable DB queues the row like any other spend log
             verbose_proxy_logger.warning(
                 "Could not claim spend row %s for a job's cost, queueing it: %s", request_id, e
             )
             await self._insert_spend_log_to_db(payload=prisma_client.jsonify_object(row), prisma_client=prisma_client)
+            return True
+        if claimed == 1:
+            await _track_guardrail_usage_of_cost_row(payload, prisma_client, disable_spend_logs)
             return True
         if existing is None or existing.call_type != payload["call_type"] or existing.status != "success":
             verbose_proxy_logger.warning(
@@ -826,7 +843,12 @@ class DBSpendUpdateWriter:
         if existing.spend > 0:
             verbose_proxy_logger.debug("Cost tracking skipped: spend row %s already charged this job", request_id)
             return False
-        return await self._take_over_uncharged_cost_row(payload=payload, prisma_client=prisma_client, row=row)
+        taken_over: Final = await self._take_over_uncharged_cost_row(
+            payload=payload, prisma_client=prisma_client, row=row
+        )
+        if taken_over:
+            await _track_guardrail_usage_of_cost_row(payload, prisma_client, disable_spend_logs)
+        return taken_over
 
     async def _take_over_uncharged_cost_row(
         self, payload: SpendLogsPayload, prisma_client: "PrismaClient", row: Mapping[str, object]
