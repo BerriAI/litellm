@@ -109,8 +109,16 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         self._read_configured_max_tokens: Final = read_configured_max_tokens
 
     @classmethod
-    def get_config(cls, *, model: str | None = None) -> dict[str, object]:  # mutable-ok: overrides BaseConfig's dict
-        return {key: value for key, value in super().get_config(model=model).items() if key != "max_tokens"}
+    def get_config(
+        cls, *, model: str | None = None, configured_max_output_tokens: int | None = None
+    ) -> dict[str, object]:  # mutable-ok: overrides BaseConfig's dict
+        return {
+            key: value
+            for key, value in super()
+            .get_config(model=model, configured_max_output_tokens=configured_max_output_tokens)
+            .items()
+            if key != "max_tokens"
+        }
 
     @property
     def custom_llm_provider(self) -> str | None:

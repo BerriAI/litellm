@@ -895,6 +895,25 @@ class TestProxySettingEndpoints:
         env_row_update = prisma_client.db.litellm_config.update.call_args.kwargs
         assert json.loads(env_row_update["data"]["param_value"]) == {"LANGFUSE_PUBLIC_KEY": "unrelated"}
 
+    def test_update_sso_settings_blank_stored_value_keeps_env_row_secret(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import json
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch,
+            {**self._STORED_GENERIC_SSO, "generic_client_secret": ""},
+            {"user_email": "new@example.com"},
+            environment_variables={"GENERIC_CLIENT_SECRET": "env-row-secret", "LANGFUSE_PUBLIC_KEY": "unrelated"},
+        )
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        assert response.status_code == 200, response.text
+        assert saved["generic_client_secret"] == "env-row-secret", saved
+        env_row_update = prisma_client.db.litellm_config.update.call_args.kwargs
+        assert json.loads(env_row_update["data"]["param_value"]) == {"LANGFUSE_PUBLIC_KEY": "unrelated"}
+
     def test_update_sso_settings_maps_saml_fields_to_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):

@@ -28,7 +28,7 @@ from setup.run import run_plan
 from setup.upgrade import assert_finished, monitor_for, upgrade_case, upgrade_properties
 from setup.upgrade_worker import connect, read_state
 
-pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]
+pytestmark = pytest.mark.perf
 
 
 @pytest.mark.skipif(os.environ.get("E2E_DATABASE_UPGRADE") != "1", reason="Dedicated disposable snapshot lane only")

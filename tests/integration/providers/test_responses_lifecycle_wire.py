@@ -4,7 +4,7 @@ import json
 import os
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import parse_qsl, urlsplit
@@ -12,7 +12,15 @@ from urllib.parse import parse_qsl, urlsplit
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
+from integration._support.process import owned_proxy
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
@@ -24,6 +32,16 @@ _API_KEY: Final = "synthetic-responses-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
 _ALIASES: Final = ("/v1", "", "/openai/v1")
+
+
+@pytest.fixture(scope="module")
+def cancel_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("responses-cancel")
+    with (
+        gateway_from_environment() as shared,
+        owned_proxy(shared, directory, {"PROXY_BATCH_POLLING_ENABLED": "false"}, workers=_PROXY_WORKERS) as owned,
+    ):
+        yield owned
 
 
 class _DeleteResponse(BaseModel):
@@ -737,7 +755,7 @@ def test_delete_returns_the_client_held_id_not_the_provider_id(
 
 @pytest.mark.parametrize("prefix", _ALIASES)
 def test_cancel_forwards_provider_id_and_returns_cancelled_response(
-    gateway: Gateway,
+    cancel_gateway: Gateway,
     prefix: str,
 ) -> None:
     raw_id: Final = f"resp_cancel_{uuid.uuid4().hex}"
@@ -756,9 +774,9 @@ def test_cancel_forwards_provider_id_and_returns_cancelled_response(
         assert request.body in (b"", b"{}")
         return Reply(body=_response(raw_id, "cancelled"))
 
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with wire_server(respond) as wire, cancel_gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire)
-        client: Final = _client(gateway, gateway.key, prefix)
+        client: Final = _client(cancel_gateway, cancel_gateway.key, prefix)
         created: Final = client.responses.create(model=model, input="cancel lifecycle", background=True)
         cancelled: Final = client.responses.cancel(created.id)
         assert cancelled.id != raw_id and same_response(cancelled.id, created.id), cancelled.model_dump_json()
