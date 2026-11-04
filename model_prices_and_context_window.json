@@ -9003,11 +9003,7 @@
         "mode": "chat",
         "output_cost_per_token": 5e-05,
         "output_cost_per_token_above_272k_tokens": 7.5e-05,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.014,
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014
-        },
+        "search_context_cost_per_query": {"search_context_size_high":0.014,"search_context_size_low":0.014,"search_context_size_medium":0.014},
         "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -9039,7 +9035,11 @@
         "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-05,
         "cache_read_input_token_cost_above_272k_tokens_flex": 1e-06,
         "input_cost_per_token_above_272k_tokens_flex": 1e-05,
-        "output_cost_per_token_above_272k_tokens_flex": 3.75e-05
+        "output_cost_per_token_above_272k_tokens_flex": 3.75e-05,
+        "input_cost_per_token_flex": 5e-06,
+        "output_cost_per_token_flex": 2.5e-05,
+        "cache_read_input_token_cost_flex": 5e-07,
+        "cache_creation_input_token_cost_flex": 6.25e-06
     },
     "azure/gpt-6-astra-2026-09-03": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -9055,11 +9055,7 @@
         "mode": "chat",
         "output_cost_per_token": 5e-05,
         "output_cost_per_token_above_272k_tokens": 7.5e-05,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.014,
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014
-        },
+        "search_context_cost_per_query": {"search_context_size_high":0.014,"search_context_size_low":0.014,"search_context_size_medium":0.014},
         "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -9091,7 +9087,11 @@
         "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-05,
         "cache_read_input_token_cost_above_272k_tokens_flex": 1e-06,
         "input_cost_per_token_above_272k_tokens_flex": 1e-05,
-        "output_cost_per_token_above_272k_tokens_flex": 3.75e-05
+        "output_cost_per_token_above_272k_tokens_flex": 3.75e-05,
+        "input_cost_per_token_flex": 5e-06,
+        "output_cost_per_token_flex": 2.5e-05,
+        "cache_read_input_token_cost_flex": 5e-07,
+        "cache_creation_input_token_cost_flex": 6.25e-06
     },
     "azure/gpt-6-luna": {
         "cache_creation_input_token_cost": 1.25e-07,
@@ -9107,12 +9107,8 @@
         "mode": "chat",
         "output_cost_per_token": 5e-07,
         "output_cost_per_token_above_272k_tokens": 7.5e-07,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.014,
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014
-        },
-        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "search_context_cost_per_query": {"search_context_size_high":0.014,"search_context_size_low":0.014,"search_context_size_medium":0.014},
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -9139,7 +9135,15 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-07,
+        "cache_creation_input_token_cost_flex": 6.25e-08,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 1e-08,
+        "cache_read_input_token_cost_flex": 5e-09,
+        "input_cost_per_token_above_272k_tokens_flex": 1e-07,
+        "input_cost_per_token_flex": 5e-08,
+        "output_cost_per_token_above_272k_tokens_flex": 3.75e-07,
+        "output_cost_per_token_flex": 2.5e-07
     },
     "azure/gpt-6-luna-2026-09-22": {
         "cache_creation_input_token_cost": 1.25e-07,
@@ -9155,12 +9159,8 @@
         "mode": "chat",
         "output_cost_per_token": 5e-07,
         "output_cost_per_token_above_272k_tokens": 7.5e-07,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.014,
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014
-        },
-        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "search_context_cost_per_query": {"search_context_size_high":0.014,"search_context_size_low":0.014,"search_context_size_medium":0.014},
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -9187,7 +9187,15 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-07,
+        "cache_creation_input_token_cost_flex": 6.25e-08,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 1e-08,
+        "cache_read_input_token_cost_flex": 5e-09,
+        "input_cost_per_token_above_272k_tokens_flex": 1e-07,
+        "input_cost_per_token_flex": 5e-08,
+        "output_cost_per_token_above_272k_tokens_flex": 3.75e-07,
+        "output_cost_per_token_flex": 2.5e-07
     },
     "azure/gpt-6-sol": {
         "cache_creation_input_token_cost": 2.5e-06,
@@ -9239,7 +9247,15 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_flex": 5e-06,
+        "cache_read_input_token_cost_flex": 1e-07,
+        "cache_creation_input_token_cost_flex": 1.25e-06,
+        "input_cost_per_token_above_272k_tokens_flex": 2e-06,
+        "output_cost_per_token_above_272k_tokens_flex": 7.5e-06,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 2e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-06
     },
     "azure/gpt-6-sol-2026-09-22": {
         "cache_creation_input_token_cost": 2.5e-06,
@@ -9291,7 +9307,15 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_flex": 5e-06,
+        "cache_read_input_token_cost_flex": 1e-07,
+        "cache_creation_input_token_cost_flex": 1.25e-06,
+        "input_cost_per_token_above_272k_tokens_flex": 2e-06,
+        "output_cost_per_token_above_272k_tokens_flex": 7.5e-06,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 2e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-06
     },
     "azure/gpt-6.1-terra": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -9354,11 +9378,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.014,
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014
-        },
+        "search_context_cost_per_query": {"search_context_size_high":0.014,"search_context_size_low":0.014,"search_context_size_medium":0.014},
         "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/models",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -9386,7 +9406,15 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_flex": 5e-06,
+        "cache_read_input_token_cost_flex": 5e-08,
+        "cache_creation_input_token_cost_flex": 1.25e-06,
+        "input_cost_per_token_above_272k_tokens_flex": 2e-06,
+        "output_cost_per_token_above_272k_tokens_flex": 7.5e-06,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 1e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-06
     },
     "azure/gpt-6.1-sol-2026-09-29": {
         "cache_creation_input_token_cost": 2.5e-06,
@@ -9402,11 +9430,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.014,
-            "search_context_size_low": 0.014,
-            "search_context_size_medium": 0.014
-        },
+        "search_context_cost_per_query": {"search_context_size_high":0.014,"search_context_size_low":0.014,"search_context_size_medium":0.014},
         "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/models",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -9434,7 +9458,15 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_flex": 5e-06,
+        "cache_read_input_token_cost_flex": 5e-08,
+        "cache_creation_input_token_cost_flex": 1.25e-06,
+        "input_cost_per_token_above_272k_tokens_flex": 2e-06,
+        "output_cost_per_token_above_272k_tokens_flex": 7.5e-06,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 1e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-06
     },
     "azure/us/gpt-6.1-terra": {
         "cache_creation_input_token_cost": 1.375e-06,
@@ -15566,7 +15598,7 @@
         "output_vector_size": 1536
     },
     "bedrock/us-gov-east-1/amazon.titan-embed-text-v2:0": {
-        "input_cost_per_token": 2e-07,
+        "input_cost_per_token": 3e-08,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8192,
         "mode": "embedding",
@@ -38133,7 +38165,7 @@
         "input_cost_per_token": 1.25e-05,
         "input_cost_per_token_above_272k_tokens": 2.5e-05,
         "litellm_provider": "openai",
-        "max_input_tokens": 400000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
@@ -38172,7 +38204,7 @@
         "input_cost_per_token": 1.25e-05,
         "input_cost_per_token_above_272k_tokens": 2.5e-05,
         "litellm_provider": "openai",
-        "max_input_tokens": 400000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
@@ -38211,7 +38243,7 @@
         "input_cost_per_token": 1.25e-05,
         "input_cost_per_token_above_272k_tokens": 2.5e-05,
         "litellm_provider": "openai",
-        "max_input_tokens": 400000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 7.5e-05,
@@ -55968,6 +56000,7 @@
     "openai/sora-2-pro-high-res": {
         "litellm_provider": "openai",
         "deprecation_date": "2026-09-24",
+        "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "mode": "video_generation",
         "output_cost_per_video_per_second": 0.5,
         "source": "https://platform.openai.com/docs/api-reference/videos",
@@ -59830,6 +59863,7 @@
     "sora-2-pro-high-res": {
         "litellm_provider": "openai",
         "deprecation_date": "2026-09-24",
+        "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "mode": "video_generation",
         "output_cost_per_video_per_second": 0.5,
         "source": "https://developers.openai.com/api/docs/pricing",
@@ -69671,14 +69705,14 @@
         "supports_tool_choice": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
-        "input_cost_per_token": 2.7e-06,
-        "input_cost_per_token_above_272k_tokens": 5.4e-06,
-        "cache_creation_input_token_cost": 3.375e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 6.75e-06,
-        "cache_read_input_token_cost": 2.7e-07,
-        "cache_read_input_token_cost_above_272k_tokens": 5.4e-07,
-        "output_cost_per_token": 1.62e-05,
-        "output_cost_per_token_above_272k_tokens": 2.43e-05,
+        "input_cost_per_token": 2.64e-06,
+        "input_cost_per_token_above_272k_tokens": 5.28e-06,
+        "cache_creation_input_token_cost": 3.3e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 6.6e-06,
+        "cache_read_input_token_cost": 2.64e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 5.28e-07,
+        "output_cost_per_token": 1.584e-05,
+        "output_cost_per_token_above_272k_tokens": 2.376e-05,
         "search_context_cost_per_query": {"search_context_size_high":0.0144,"search_context_size_low":0.0144,"search_context_size_medium":0.0144},
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-terra.html",
         "supports_web_search": true
@@ -69708,14 +69742,14 @@
         "supports_tool_choice": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
-        "input_cost_per_token": 2.7e-07,
-        "input_cost_per_token_above_272k_tokens": 5.4e-07,
-        "cache_creation_input_token_cost": 3.375e-07,
-        "cache_creation_input_token_cost_above_272k_tokens": 6.75e-07,
-        "cache_read_input_token_cost": 2.7e-08,
-        "cache_read_input_token_cost_above_272k_tokens": 5.4e-08,
-        "output_cost_per_token": 1.62e-06,
-        "output_cost_per_token_above_272k_tokens": 2.43e-06,
+        "input_cost_per_token": 2.64e-07,
+        "input_cost_per_token_above_272k_tokens": 5.28e-07,
+        "cache_creation_input_token_cost": 3.3e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 6.6e-07,
+        "cache_read_input_token_cost": 2.64e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 5.28e-08,
+        "output_cost_per_token": 1.584e-06,
+        "output_cost_per_token_above_272k_tokens": 2.376e-06,
         "search_context_cost_per_query": {"search_context_size_high":0.0144,"search_context_size_low":0.0144,"search_context_size_medium":0.0144},
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html",
         "supports_web_search": true
@@ -69744,9 +69778,9 @@
         "supports_tool_choice": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
-        "input_cost_per_token": 3.375e-06,
-        "cache_read_input_token_cost": 3.375e-07,
-        "output_cost_per_token": 2.025e-05,
+        "input_cost_per_token": 3.3e-06,
+        "cache_read_input_token_cost": 3.3e-07,
+        "output_cost_per_token": 1.98e-05,
         "search_context_cost_per_query": {"search_context_size_high":0.0144,"search_context_size_low":0.0144,"search_context_size_medium":0.0144},
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html",
         "supports_web_search": true
@@ -84528,6 +84562,1166 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0": {
+        "input_cost_per_token": 3.6e-06,
+        "input_cost_per_token_batches": 1.8e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-05,
+        "output_cost_per_token_batches": 9e-06,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-east-1/index.json",
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "bedrock/us-gov-east-1/anthropic.claude-3-7-sonnet-20250219-v1:0": {
+        "cache_creation_input_token_cost": 4.5e-06,
+        "cache_read_input_token_cost": 3.6e-07,
+        "input_cost_per_token": 3.6e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-05,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-east-1/index.json",
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0": {
+        "input_cost_per_token": 3.6e-06,
+        "input_cost_per_token_batches": 1.8e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-05,
+        "output_cost_per_token_batches": 9e-06,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-west-1/index.json",
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0": {
+        "cache_creation_input_token_cost": 4.5e-06,
+        "cache_read_input_token_cost": 3.6e-07,
+        "input_cost_per_token": 3.6e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-05,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-west-1/index.json",
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "bedrock_mantle/us-gov-east-1/moonshotai.kimi-k3": {
+        "cache_creation_input_token_cost": 4.95e-06,
+        "cache_creation_input_token_cost_flex": 2.475e-06,
+        "cache_creation_input_token_cost_priority": 8.6625e-06,
+        "cache_read_input_token_cost": 3.96e-07,
+        "cache_read_input_token_cost_flex": 1.98e-07,
+        "cache_read_input_token_cost_priority": 6.93e-07,
+        "input_cost_per_token": 3.96e-06,
+        "input_cost_per_token_batches": 1.98e-06,
+        "input_cost_per_token_flex": 1.98e-06,
+        "input_cost_per_token_priority": 6.93e-06,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.98e-05,
+        "output_cost_per_token_batches": 9.9e-06,
+        "output_cost_per_token_flex": 9.9e-06,
+        "output_cost_per_token_priority": 3.465e-05,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-east-1/index.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_prompt_cache_breakpoint": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "token_count_framing": 64,
+        "token_count_tokenizer": "kimi_k3"
+    },
+    "bedrock_mantle/us-gov-east-1/nvidia.nemotron-nano-12b-v2": {
+        "input_cost_per_token": 2.4e-07,
+        "input_cost_per_token_batches": 1.2e-07,
+        "input_cost_per_token_flex": 1.2e-07,
+        "input_cost_per_token_priority": 4.2e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 7.2e-07,
+        "output_cost_per_token_batches": 3.6e-07,
+        "output_cost_per_token_flex": 3.6e-07,
+        "output_cost_per_token_priority": 1.26e-06,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-east-1/index.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "bedrock_mantle/us-gov-east-1/nvidia.nemotron-nano-3-30b": {
+        "input_cost_per_token": 7.2e-08,
+        "input_cost_per_token_batches": 3.6e-08,
+        "input_cost_per_token_flex": 3.6e-08,
+        "input_cost_per_token_priority": 1.32e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.88e-07,
+        "output_cost_per_token_batches": 1.44e-07,
+        "output_cost_per_token_flex": 1.44e-07,
+        "output_cost_per_token_priority": 5.04e-07,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-east-1/index.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_native_structured_output": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "bedrock_mantle/us-gov-east-1/nvidia.nemotron-nano-9b-v2": {
+        "input_cost_per_token": 7.2e-08,
+        "input_cost_per_token_batches": 3.6e-08,
+        "input_cost_per_token_flex": 3.6e-08,
+        "input_cost_per_token_priority": 1.32e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.76e-07,
+        "output_cost_per_token_batches": 1.44e-07,
+        "output_cost_per_token_flex": 1.44e-07,
+        "output_cost_per_token_priority": 4.8e-07,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-east-1/index.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_vision": false
+    },
+    "bedrock_mantle/us-gov-east-1/nvidia.nemotron-super-3-120b": {
+        "input_cost_per_token": 1.8e-07,
+        "input_cost_per_token_batches": 9e-08,
+        "input_cost_per_token_flex": 9e-08,
+        "input_cost_per_token_priority": 3.15e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 7.8e-07,
+        "output_cost_per_token_batches": 3.9e-07,
+        "output_cost_per_token_flex": 3.9e-07,
+        "output_cost_per_token_priority": 1.365e-06,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-east-1/index.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "bedrock_mantle/us-gov-west-1/moonshotai.kimi-k3": {
+        "cache_creation_input_token_cost": 4.95e-06,
+        "cache_creation_input_token_cost_flex": 2.475e-06,
+        "cache_creation_input_token_cost_priority": 8.6625e-06,
+        "cache_read_input_token_cost": 3.96e-07,
+        "cache_read_input_token_cost_flex": 1.98e-07,
+        "cache_read_input_token_cost_priority": 6.93e-07,
+        "input_cost_per_token": 3.96e-06,
+        "input_cost_per_token_batches": 1.98e-06,
+        "input_cost_per_token_flex": 1.98e-06,
+        "input_cost_per_token_priority": 6.93e-06,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.98e-05,
+        "output_cost_per_token_batches": 9.9e-06,
+        "output_cost_per_token_flex": 9.9e-06,
+        "output_cost_per_token_priority": 3.465e-05,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-west-1/index.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_prompt_cache_breakpoint": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "token_count_framing": 64,
+        "token_count_tokenizer": "kimi_k3"
+    },
+    "bedrock_mantle/us-gov-west-1/nvidia.nemotron-nano-12b-v2": {
+        "input_cost_per_token": 2.4e-07,
+        "input_cost_per_token_batches": 1.2e-07,
+        "input_cost_per_token_flex": 1.2e-07,
+        "input_cost_per_token_priority": 4.2e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 7.2e-07,
+        "output_cost_per_token_batches": 3.6e-07,
+        "output_cost_per_token_flex": 3.6e-07,
+        "output_cost_per_token_priority": 1.26e-06,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-west-1/index.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "bedrock_mantle/us-gov-west-1/nvidia.nemotron-nano-3-30b": {
+        "input_cost_per_token": 7.2e-08,
+        "input_cost_per_token_batches": 3.6e-08,
+        "input_cost_per_token_flex": 3.6e-08,
+        "input_cost_per_token_priority": 1.32e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.88e-07,
+        "output_cost_per_token_batches": 1.44e-07,
+        "output_cost_per_token_flex": 1.44e-07,
+        "output_cost_per_token_priority": 5.04e-07,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-west-1/index.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_native_structured_output": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "bedrock_mantle/us-gov-west-1/nvidia.nemotron-nano-9b-v2": {
+        "input_cost_per_token": 7.2e-08,
+        "input_cost_per_token_batches": 3.6e-08,
+        "input_cost_per_token_flex": 3.6e-08,
+        "input_cost_per_token_priority": 1.32e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 2.76e-07,
+        "output_cost_per_token_batches": 1.44e-07,
+        "output_cost_per_token_flex": 1.44e-07,
+        "output_cost_per_token_priority": 4.8e-07,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-west-1/index.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_vision": false
+    },
+    "bedrock_mantle/us-gov-west-1/nvidia.nemotron-super-3-120b": {
+        "input_cost_per_token": 1.8e-07,
+        "input_cost_per_token_batches": 9e-08,
+        "input_cost_per_token_flex": 9e-08,
+        "input_cost_per_token_priority": 3.15e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 7.8e-07,
+        "output_cost_per_token_batches": 3.9e-07,
+        "output_cost_per_token_flex": 3.9e-07,
+        "output_cost_per_token_priority": 1.365e-06,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-west-1/index.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "gmi/MiniMaxAI/MiniMax-M2": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 196608,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/MiniMaxAI/MiniMax-M2.5": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 196608,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/MiniMaxAI/MiniMax-M2.7": {
+        "cache_read_input_token_cost": 4.2e-08,
+        "input_cost_per_token": 2.1e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 196608,
+        "mode": "chat",
+        "output_cost_per_token": 8.4e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/MiniMaxAI/MiniMax-M3": {
+        "cache_read_input_token_cost": 4.8e-08,
+        "input_cost_per_token": 2.4e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 9.6e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/MiniMaxAI/MiniMax-M3.1-Flash": {
+        "cache_read_input_token_cost": 1.125e-08,
+        "input_cost_per_token": 1.125e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3-235B-A22B-FP8": {
+        "input_cost_per_token": 1.7e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.09e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3-235B-A22B-Instruct-2507-FP8": {
+        "cache_read_input_token_cost": 1.75e-08,
+        "input_cost_per_token": 8.75e-08,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3.5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3-235B-A22B-Thinking-2507-FP8": {
+        "input_cost_per_token": 3.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262141,
+        "mode": "chat",
+        "output_cost_per_token": 4.2e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3-30B-A3B": {
+        "input_cost_per_token": 8e-08,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 40946,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3-32B-FP8": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": {
+        "cache_read_input_token_cost": 1.8e-07,
+        "input_cost_per_token": 9e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262128,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3-Next-80B-A3B-Instruct": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3-Next-80B-A3B-Thinking": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.5-122B-A10B": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3.2e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.5-27B": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.5-35B-A3B": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.5-397B-A17B": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3.6e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.6-35B-A3B": {
+        "input_cost_per_token": 2.48e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.485e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.6-Plus": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.6-Plus-2026-04-02": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.7-Max": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.8-27B": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 4.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 3.2e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.8-Flash": {
+        "cache_read_input_token_cost": 1.6e-08,
+        "input_cost_per_token": 1.6e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 4.7e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.8-Max": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/Qwen/Qwen3.8-Max-0902": {
+        "cache_read_input_token_cost": 2.06e-07,
+        "input_cost_per_token": 1.65e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.951e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/XiaomiMiMo/MiMo-V2.5": {
+        "cache_read_input_token_cost": 2.38e-09,
+        "input_cost_per_token": 1.19e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 2.38e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/XiaomiMiMo/MiMo-V2.5-Pro": {
+        "cache_read_input_token_cost": 2.52e-09,
+        "input_cost_per_token": 3.045e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 6.09e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-Prover-V2-671B": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.18e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-R1": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.18e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-R1-0528": {
+        "cache_read_input_token_cost": 2.3e-07,
+        "input_cost_per_token": 5.7e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.29e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 3.9e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-V3.1": {
+        "input_cost_per_token": 2.7e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-V3.1-Terminus": {
+        "input_cost_per_token": 2.7e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-V3.2-Exp": {
+        "input_cost_per_token": 2.7e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 4.1e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-V3.2-Speciale": {
+        "input_cost_per_token": 2.8e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-V4-Flash": {
+        "cache_read_input_token_cost": 1.82e-08,
+        "input_cost_per_token": 9.1e-08,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 1.82e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-V4-Flash-0731": {
+        "cache_read_input_token_cost": 9.1e-09,
+        "input_cost_per_token": 2.86e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 8.58e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/DeepSeek-V4-Pro-0813": {
+        "cache_read_input_token_cost": 3.52e-08,
+        "input_cost_per_token": 1.056e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 3.168e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/deepseek-v4-flash-vision-exp": {
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 4.4e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/google/gemini-3.1-flash-lite-preview": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/google/gemini-3.1-pro-preview": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/google/gemini-3.5-flash": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 9e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/google/gemini-3.5-flash-lite": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/google/gemini-3.6-flash": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/google/gemini-3.7-flash": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 7.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.75e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/google/gemini-3.8-flash": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 7.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3.75e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/google/gemini-4-argon": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/google/gemma-4-26b-a4b-it": {
+        "input_cost_per_token": 1.3e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/google/gemma-4-31b-it": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/meta-llama/Llama-3.3-70B-Instruct": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 8e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
+        "input_cost_per_token": 8e-08,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/moonshotai/Kimi-K2-Instruct-0905": {
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 5.7e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.29e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/moonshotai/Kimi-K2.5": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/moonshotai/Kimi-K2.6": {
+        "cache_read_input_token_cost": 1.44e-07,
+        "input_cost_per_token": 8.55e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3.6e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/moonshotai/kimi-k2.7-code": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/moonshotai/kimi-k2.7-code-highspeed": {
+        "cache_read_input_token_cost": 3.8e-07,
+        "input_cost_per_token": 1.9e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 8e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/moonshotai/kimi-k3": {
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/moonshotai/kimi-k3.1-pro": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/nvidia/nemotron-3-ultra-550b-a55b": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.6e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-5.4": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-5.4-mini": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 7.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-5.4-nano": {
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "mode": "chat",
+        "output_cost_per_token": 1.25e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-5.4-pro": {
+        "input_cost_per_token": 3e-05,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "mode": "chat",
+        "output_cost_per_token": 0.00018,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-5.5": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-5.6-luna": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-5.6-sol": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-5.6-terra": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-6-astra": {
+        "cache_read_input_token_cost": 1e-06,
+        "input_cost_per_token": 1e-05,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-6-luna": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-6-sol": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-6.1-sol": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/openai/gpt-oss-120b": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/stepfun-ai/Step-3.7-Flash": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 1.15e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/stepfun-ai/Step-5-Preview": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.7e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/tencent/HunyuanOCR": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/tencent/Hy3": {
+        "cache_read_input_token_cost": 3.5e-08,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 5.8e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/tencent/hy3-preview": {
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 1.8e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/tencent/hy4-preview": {
+        "cache_read_input_token_cost": 4.2e-08,
+        "input_cost_per_token": 8.34e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.501e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/x-ai/grok-4.5": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 2000000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/xai/grok4.6": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 2000000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/zai-org/GLM-4.5-Air-FP8": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131076,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/zai-org/GLM-4.5-FP8": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/zai-org/GLM-4.6": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 204800,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/zai-org/GLM-4.7-Flash": {
+        "input_cost_per_token": 7e-08,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 202752,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/zai-org/GLM-5-FP8": {
+        "cache_read_input_token_cost": 1.2e-07,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 202752,
+        "mode": "chat",
+        "output_cost_per_token": 1.92e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/zai-org/GLM-5.1-FP8": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 202752,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/zai-org/GLM-5.2-FP8": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/zai-org/GLM-5.3": {
+        "cache_read_input_token_cost": 1.3e-07,
+        "input_cost_per_token": 7e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/zai-org/GLM-5.3-Flash": {
+        "cache_read_input_token_cost": 1.5e-08,
+        "input_cost_per_token": 7.5e-08,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
     "fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro": {
         "cache_read_input_token_cost": 2e-07,
