@@ -2383,6 +2383,16 @@ class TestPromptCacheOptionsOnResponsesPath:
         }
 
 
+@pytest.mark.parametrize(("temperature", "survives"), ((0.5, False), (1, True)))
+def test_o_series_responses_temperature_follows_the_chat_rule(temperature: float, survives: bool) -> None:
+    mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params={"temperature": temperature},
+        model="o3-mini",
+        drop_params=True,
+    )
+    assert ("temperature" in mapped) is survives
+
+
 class TestResponsesSurfaceSharesTheEffortRule:
     """The Responses API reaches the same gpt-5 models over a different wire, and the default
     /v1/messages bridge for openai models routes through it. It carried its own copy of the
