@@ -649,10 +649,12 @@ def get_logging_payload(
             usage = _usage
 
     # A request that failed mid-stream has no usable response_obj usage, and a stream
-    # continued on a fallback only has the fallback's. combined_usage_object holds the
-    # usage of every call the client's answer took, so it wins in both cases.
+    # continued on a fallback or a success that bills a failed follow-up only has its own.
+    # combined_usage_object holds the usage of every call the row bills, so it wins in each case.
     _combined_usage: Final = kwargs.get("combined_usage_object")
-    if (not usage or "continued_partial_usage" in kwargs) and isinstance(_combined_usage, litellm.Usage):
+    if (
+        not usage or "continued_partial_usage" in kwargs or "failed_attempts_billed_on_success" in kwargs
+    ) and isinstance(_combined_usage, litellm.Usage):
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs, metadata)
