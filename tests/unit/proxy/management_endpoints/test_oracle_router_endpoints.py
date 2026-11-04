@@ -1,5 +1,6 @@
 """POST /oracle_router/feedback and GET /oracle_router/state."""
 
+import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -89,6 +90,28 @@ async def test_feedback_completes_the_program_and_the_router_learns(oracle):
     assert oracle.binding("task-1", "owner-hash") is None
     await oracle.drain()
     assert oracle.maker.updates == [("smart", 1.0)]
+
+
+@pytest.mark.asyncio
+async def test_feedback_is_rejected_with_503_while_the_verification_backlog_is_full():
+    class _Stuck:
+        async def verify(self, outcome):
+            await asyncio.sleep(5.0)
+            return 1.0
+
+    config = OracleRouterConfig(available_models=["smart", "fast"], max_pending_verifications=1)
+    oracle = OracleRouter("oracle", config, _Maker(), _Stuck())
+    for program_id in ("task-1", "task-2"):
+        await _bind(oracle, program_id)
+        oracle.observe_request(program_id, cost=0.2, response_text="done", owner="owner-hash")
+    with patch("litellm.proxy.proxy_server.llm_router", _LLMRouter(oracle)):
+        await submit_oracle_router_feedback(OracleRouterFeedbackRequest(program_id="task-1", score=1.0), OWNER)
+        with pytest.raises(HTTPException) as rejected:
+            await submit_oracle_router_feedback(OracleRouterFeedbackRequest(program_id="task-2", score=1.0), OWNER)
+    assert rejected.value.status_code == 503 and "max_pending_verifications=1" in rejected.value.detail["error"]
+    assert oracle.binding("task-2", "owner-hash") is not None
+    for task in tuple(oracle._tasks):
+        task.cancel()
 
 
 @pytest.mark.asyncio

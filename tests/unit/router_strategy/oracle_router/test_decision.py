@@ -2,6 +2,10 @@
 
 import pytest
 
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    initialize_standard_callback_dynamic_params,
+)
+from litellm.litellm_core_utils.internal_call_metadata import effective_turn_off_message_logging
 from litellm.router_strategy.oracle_router.decision import (
     DecisionMaker,
     FixedDecisionMaker,
@@ -90,6 +94,10 @@ class _FakeStrategy:
 
     async def async_pre_routing_hook(self, model, request_kwargs, messages=None, input=None, specific_deployment=False):
         self.calls.append({"model": model, "messages": messages})
+        self.privacy = (
+            effective_turn_off_message_logging(request_kwargs),
+            initialize_standard_callback_dynamic_params({}).get("turn_off_message_logging"),
+        )
         return None if self.answer is None else PreRoutingHookResponse(model=self.answer, messages=messages)
 
 
@@ -100,6 +108,19 @@ async def test_pre_routing_uses_the_wrapped_strategy_proposal_once_per_program()
     assert await maker.select(_ctx("write a haiku")) == "fast"
     assert strategy.calls == [{"model": "tiered", "messages": [{"role": "user", "content": "write a haiku"}]}]
     assert maker.snapshot()["proposals"] == {"fast": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_routing_forwards_the_program_s_message_logging_opt_out_to_the_wrapped_strategy():
+    strategy = _FakeStrategy("fast")
+    maker = PreRoutingDecisionMaker(MODELS, router_name="tiered", strategy=strategy)
+    private = ProgramContext(
+        program_id="p", prompt="secret", request_type=RequestType.GENERAL, message_logging_off=True
+    )
+    assert await maker.select(private) == "fast"
+    assert strategy.privacy == (True, True)
+    assert await maker.select(_ctx("public")) == "fast"
+    assert strategy.privacy == (None, None)
 
 
 @pytest.mark.asyncio

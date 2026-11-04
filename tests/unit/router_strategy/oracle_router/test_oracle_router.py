@@ -1,6 +1,7 @@
 """OracleRouter: sticky program bindings, program id resolution, delayed feedback, eviction."""
 
 import asyncio
+import math
 
 import pytest
 
@@ -10,7 +11,12 @@ from litellm.router_strategy.oracle_router.config import (
     PROGRAM_ID_METADATA_KEY,
 )
 from litellm.router_strategy.oracle_router.decision import ProgramContext
-from litellm.router_strategy.oracle_router.oracle_router import OracleRouter, first_user_text, resolve_program_id
+from litellm.router_strategy.oracle_router.oracle_router import (
+    OracleRouter,
+    VerificationBacklogFull,
+    first_user_text,
+    resolve_program_id,
+)
 from litellm.router_strategy.oracle_router.verifier import ProgramOutcome, ReportedVerifier
 from litellm.types.router import OracleRouterConfig
 
@@ -182,6 +188,54 @@ async def test_complete_releases_the_slot_now_and_learns_in_verification_order()
 
 
 @pytest.mark.asyncio
+async def test_a_full_verification_backlog_rejects_completion_and_keeps_the_program_bound():
+    router, maker = _router(verifier=_SlowVerifier({"t1": 0.05}), max_pending_verifications=1)
+    for program_id in ("t1", "t2"):
+        await router.async_pre_routing_hook(
+            model="oracle", request_kwargs={"metadata": {"program_id": program_id}}, messages=_messages()
+        )
+        router.observe_request(program_id, cost=0.1, response_text="answer")
+    first = router.complete("t1", score=1.0)
+    with pytest.raises(VerificationBacklogFull, match="max_pending_verifications=1"):
+        router.complete("t2", score=0.0)
+    assert router.binding("t2") is not None and router.pending_verifications == 1
+    assert router.verifications_rejected == 1 and router.programs_completed == 1
+    assert await first == 1.0
+    assert await router.complete("t2", score=0.0) == 0.0
+    assert router.binding("t2") is None and [u[0] for u in maker.updates] == ["t1", "t2"]
+    assert (await router.get_state_snapshot())["verifications_rejected"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_verification_that_outlives_its_timeout_fails_and_teaches_nothing():
+    router, maker = _router(verifier=_SlowVerifier({"t": 5.0}), verification_timeout_seconds=0.01)
+    await router.async_pre_routing_hook(
+        model="oracle", request_kwargs={"metadata": {"program_id": "t"}}, messages=_messages()
+    )
+    router.observe_request("t", cost=0.1, response_text="answer")
+    task = router.complete("t", score=1.0)
+    assert task is not None and math.isnan(await task)
+    assert router.verifications_failed == 1 and maker.updates == []
+    assert router.last_failure is not None and "verification: TimeoutError" in router.last_failure
+    assert router.pending_verifications == 0
+
+
+@pytest.mark.asyncio
+async def test_a_program_s_message_logging_opt_out_is_kept_on_its_context():
+    router, _ = _router()
+    await router.async_pre_routing_hook(
+        model="oracle",
+        request_kwargs={"metadata": {"program_id": "private", "turn_off_message_logging": True}},
+        messages=_messages(),
+    )
+    await router.async_pre_routing_hook(
+        model="oracle", request_kwargs={"metadata": {"program_id": "public"}}, messages=_messages()
+    )
+    assert router.binding("private").context.message_logging_off is True
+    assert router.binding("public").context.message_logging_off is False
+
+
+@pytest.mark.asyncio
 async def test_complete_cost_override_and_payload_reach_the_verifier():
     seen: list[ProgramOutcome] = []
 
@@ -216,7 +270,9 @@ async def test_failed_verification_is_counted_and_does_not_update():
     result = await router.complete("t")
     assert result != result and router.verifications_failed == 1 and maker.updates == []
     snapshot = await router.get_state_snapshot()
-    assert snapshot["last_failure"] == "verification: RuntimeError: sandbox down"  # kept for the state endpoint, not logged
+    assert (
+        snapshot["last_failure"] == "verification: RuntimeError: sandbox down"
+    )  # kept for the state endpoint, not logged
 
 
 @pytest.mark.asyncio

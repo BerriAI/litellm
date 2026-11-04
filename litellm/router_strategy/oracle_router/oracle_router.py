@@ -21,6 +21,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,  # pyright: ignore[reportUnknownVariableType]  # upstream helper returns a bare dict
 )
+from litellm.litellm_core_utils.internal_call_metadata import effective_turn_off_message_logging
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.oracle_router.config import (
     CHOSEN_MODEL_METADATA_KEY,
@@ -166,6 +167,10 @@ def _stamp_internal(
         internal[key] = value
 
 
+class VerificationBacklogFull(RuntimeError):
+    """``max_pending_verifications`` verifications are in flight; the program stays bound for a later retry."""
+
+
 class OracleRouter:
     """One instance per ``auto_router/oracle_router`` deployment."""
 
@@ -195,6 +200,7 @@ class OracleRouter:
         self.programs_evicted: int = 0
         self.stateless_requests: int = 0
         self.verifications_failed: int = 0
+        self.verifications_rejected: int = 0
         self.last_failure: str | None = None
 
     @property
@@ -210,8 +216,13 @@ class OracleRouter:
         """
         self.last_failure = f"{step}: {type(error).__name__}: {error}"
 
-    def context_for(self, program_id: str, prompt: str) -> ProgramContext:
-        return ProgramContext(program_id=program_id, prompt=prompt, request_type=classify_prompt(prompt))
+    def context_for(self, program_id: str, prompt: str, request_kwargs: Mapping[str, object]) -> ProgramContext:
+        return ProgramContext(
+            program_id=program_id,
+            prompt=prompt,
+            request_type=classify_prompt(prompt),
+            message_logging_off=effective_turn_off_message_logging(request_kwargs) is True,
+        )
 
     def binding(self, program_id: str, owner: str | None = None) -> ProgramBinding | None:
         """The program's row as seen by ``owner``, the key that started it (``user_api_key_hash``)."""
@@ -233,7 +244,9 @@ class OracleRouter:
             self._bindings.pop(key, None)
         self.programs_evicted += len(expired) + len(oldest)
 
-    async def bind(self, program_id: str, prompt: str, api_key_hash: str | None) -> ProgramBinding:
+    async def bind(
+        self, program_id: str, prompt: str, api_key_hash: str | None, request_kwargs: Mapping[str, object] = _EMPTY
+    ) -> ProgramBinding:
         """Bind a new program, or return its existing row.
 
         A program is private to the key that started it: the same id under another key starts that key's
@@ -252,16 +265,16 @@ class OracleRouter:
         event: Final = asyncio.Event()
         self._binding_in_flight[key] = event
         try:
-            return await self._bind(key, prompt)
+            return await self._bind(key, prompt, request_kwargs)
         finally:
             self._binding_in_flight.pop(key, None)
             event.set()
 
-    async def _bind(self, key: ProgramKey, prompt: str) -> ProgramBinding:
+    async def _bind(self, key: ProgramKey, prompt: str, request_kwargs: Mapping[str, object]) -> ProgramBinding:
         now: Final = self._clock()
         if len(self._bindings) >= min(PROGRAM_SWEEP_THRESHOLD, self.config.max_programs):
             self._evict_expired(now)
-        context: Final = self.context_for(key.program_id, prompt)
+        context: Final = self.context_for(key.program_id, prompt, request_kwargs)
         model: Final = await self.decision_maker.select(context)
         binding: Final = ProgramBinding(
             program_id=key.program_id, model=model, context=context, api_key_hash=key.owner, bound_at=now
@@ -281,7 +294,7 @@ class OracleRouter:
         """Route the request to its program's model, binding the program on its first request."""
         program_id: Final = resolve_program_id(request_kwargs, self.config.program_id_key)
         prompt: Final = first_user_text(messages)
-        chosen_model, request_type = await self._decide(program_id, prompt, _api_key_hash(request_kwargs))
+        chosen_model, request_type = await self._decide(program_id, prompt, request_kwargs)
         _stamp_internal(request_kwargs, CHOSEN_MODEL_METADATA_KEY, chosen_model)
         _stamp_internal(request_kwargs, PROGRAM_ID_METADATA_KEY, program_id)
         return PreRoutingHookResponse(
@@ -296,12 +309,14 @@ class OracleRouter:
             ),
         )
 
-    async def _decide(self, program_id: str | None, prompt: str, api_key_hash: str | None) -> tuple[str, RequestType]:
+    async def _decide(
+        self, program_id: str | None, prompt: str, request_kwargs: Mapping[str, object]
+    ) -> tuple[str, RequestType]:
         if program_id is None:
             self.stateless_requests += 1
-            context: Final = self.context_for("", prompt)
+            context: Final = self.context_for("", prompt, request_kwargs)
             return await self.decision_maker.select(context), context.request_type
-        binding: Final = await self.bind(program_id, prompt, api_key_hash)
+        binding: Final = await self.bind(program_id, prompt, _api_key_hash(request_kwargs), request_kwargs)
         return binding.model, binding.context.request_type
 
     def observe_request(
@@ -337,6 +352,9 @@ class OracleRouter:
         A program none of whose requests has been observed yet (feedback that raced the last response's
         logging, or a program whose only request failed) keeps its slot and is completed, with these
         arguments, by its next observed response: there is no answer to verify yet, so nothing is learned.
+
+        Raises ``VerificationBacklogFull`` when ``max_pending_verifications`` verifications are already in
+        flight: the program stays bound, so the caller can complete it again once the backlog drains.
         """
         key: Final = ProgramKey(owner, program_id)
         binding: Final = self._bindings.get(key)
@@ -345,6 +363,12 @@ class OracleRouter:
         if binding.requests == 0:
             self._bindings[key] = replace(binding, deferred=DeferredCompletion(score=score, cost=cost, payload=payload))
             return None
+        if len(self._tasks) >= self.config.max_pending_verifications:
+            self.verifications_rejected += 1
+            raise VerificationBacklogFull(
+                f"{len(self._tasks)} verifications are in flight (max_pending_verifications="
+                f"{self.config.max_pending_verifications}); program {program_id!r} stays bound, complete it again later"
+            )
         del self._bindings[key]
         outcome: Final = ProgramOutcome(
             program_id=program_id,
@@ -364,7 +388,9 @@ class OracleRouter:
 
     async def _verify_and_learn(self, binding: ProgramBinding, outcome: ProgramOutcome) -> float:
         try:
-            score: Final = clamp_score(await self.verifier.verify(outcome))
+            score: Final = clamp_score(
+                await asyncio.wait_for(self.verifier.verify(outcome), timeout=self.config.verification_timeout_seconds)
+            )
         except Exception as error:  # noqa: BLE001  # any verifier failure is counted and must not break the feedback loop
             self.verifications_failed += 1
             self.note_failure("verification", error)
@@ -416,6 +442,7 @@ class OracleRouter:
             "stateless_requests": self.stateless_requests,
             "pending_verifications": self.pending_verifications,
             "verifications_failed": self.verifications_failed,
+            "verifications_rejected": self.verifications_rejected,
             "last_failure": self.last_failure,
             "recent_accuracy": self._accuracy_by_model(),
             "recent_feedback": [

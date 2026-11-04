@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Annotated, Final
 
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.router_strategy.oracle_router.oracle_router import VerificationBacklogFull
 from litellm.types.management_endpoints.oracle_router_endpoints import (
     OracleRouterFeedbackRequest,
     OracleRouterFeedbackResponse,
@@ -83,7 +84,12 @@ async def submit_oracle_router_feedback(
             status_code=404, detail={"error": f"Unknown or already completed program {data.program_id!r}."}
         )
     holder, binding = found
-    holder.complete(data.program_id, score=data.score, cost=data.cost, payload=data.payload, owner=binding.api_key_hash)
+    try:
+        holder.complete(
+            data.program_id, score=data.score, cost=data.cost, payload=data.payload, owner=binding.api_key_hash
+        )
+    except VerificationBacklogFull as error:
+        raise HTTPException(status_code=503, detail={"error": str(error)}) from error
     return OracleRouterFeedbackResponse(
         program_id=data.program_id,
         router_name=holder.router_name,

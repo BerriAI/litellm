@@ -56,6 +56,13 @@ whose final response has no text, rather than reading a judge's skip as a pass. 
 (admin) shows bindings, decision-maker state and recent feedback. The response header
 `x-litellm-oracle-router-model` names the bound model.
 
+Verification runs in the background and is bounded: at most `max_pending_verifications` (default 64)
+verifications are in flight per router, and each one is given `verification_timeout_seconds` (default
+120) before it counts as failed. While the backlog is full a completion is refused and the program stays
+bound, so it can be completed again once the backlog drains: the feedback endpoint answers 503 and a
+`program_done` request records the refusal in `last_failure`; `verifications_rejected` in the state
+counts them.
+
 ## Security
 
 A program is private to the API key that started it: the same `program_id` under another key is another
@@ -64,6 +71,10 @@ completes the caller's own program; an admin key may complete any key's. The pos
 requests the Router stamped as routed by this router (`routing_decision`), so ORACLE keys placed in the
 metadata of a request to some other model are ignored, and the router drops any caller-supplied copy of
 its internal metadata keys before stamping its own.
+
+A `pre_routing` decision maker forwards the program's `turn_off_message_logging` opt-out to the strategy
+router it wraps, so a classifier call made on the program's behalf never logs a prompt the caller marked
+private.
 
 `custom` decision makers and verifiers import Python named by the deployment, so they are honoured only
 for deployments in the proxy config file. A model written through the API (`/model/new`, `/model/update`,

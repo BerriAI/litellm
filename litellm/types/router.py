@@ -1597,6 +1597,8 @@ class OracleRouterConfig(BaseModel, frozen=True):
     program_id_key: str = "program_id"
     program_ttl_seconds: int = Field(default=24 * 3600, ge=1)
     max_programs: int = Field(default=10_000, ge=1)
+    max_pending_verifications: int = Field(default=64, ge=1)
+    verification_timeout_seconds: float = Field(default=120.0, gt=0)
 
     @model_validator(mode="after")
     def _fixed_model_is_available(self) -> "OracleRouterConfig":

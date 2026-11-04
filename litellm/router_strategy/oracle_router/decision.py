@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol, runtime_checkable
 
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
 from litellm.router_strategy.adaptive_router.bandit import BanditCell, apply_delta, initial_cell, pick_best
 from litellm.types.router import (
     AdaptiveRouterPreferences,
@@ -31,6 +32,7 @@ class ProgramContext:
     program_id: str
     prompt: str
     request_type: RequestType
+    message_logging_off: bool = False
 
 
 @runtime_checkable
@@ -164,11 +166,12 @@ class PreRoutingDecisionMaker:
         return self._models
 
     async def select(self, context: ProgramContext) -> str:
-        response: Final = await self._strategy.async_pre_routing_hook(
-            model=self._router_name,
-            request_kwargs={"metadata": {}},
-            messages=[{"role": "user", "content": context.prompt}],
-        )
+        with inherit_message_logging_privacy(context.message_logging_off):
+            response: Final = await self._strategy.async_pre_routing_hook(
+                model=self._router_name,
+                request_kwargs={"metadata": {"turn_off_message_logging": True} if context.message_logging_off else {}},
+                messages=[{"role": "user", "content": context.prompt}],
+            )
         proposed: Final = response.model if response is not None and response.model in self._models else None
         if proposed is None:
             self._fallbacks += 1
