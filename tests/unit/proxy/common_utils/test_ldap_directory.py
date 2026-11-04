@@ -1,10 +1,17 @@
-from collections.abc import Mapping, Sequence
+import ssl
+from collections.abc import Iterable, Mapping, Sequence
+from threading import Event
 from typing import Final
 
 import pytest
 from pydantic import ValidationError
 
-from litellm.proxy.common_utils.ldap_directory import DirectoryError, DirectoryGroup, read_directory
+from litellm.proxy.common_utils.ldap_directory import (
+    DirectoryError,
+    DirectoryGroup,
+    open_ldap_connection,
+    read_directory,
+)
 from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 
 SETTINGS: Final = LDAPSyncSettings(
@@ -33,10 +40,11 @@ def user(mail: str, **attributes: object) -> Mapping[str, object]:
 class Connection:
     def __init__(
         self,
-        groups: Sequence[Mapping[str, object]],
+        groups: Iterable[Mapping[str, object]],
         users: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
         result_code: int = 0,
         tls_ok: bool = True,
+        stop_after_search: Event | None = None,
     ) -> None:
         self.groups = groups
         self.users = users or {}
@@ -48,6 +56,7 @@ class Connection:
         self.searches: list[tuple[str, str, str]] = []
         self.closed = False
         self.tls_ok = tls_ok
+        self.stop_after_search = stop_after_search
 
     def open(self) -> None:
         pass
@@ -70,14 +79,25 @@ class Connection:
         search_scope: str,
         attributes: Sequence[str],
         paged_size: int,
+        time_limit: int,
         generator: bool,
     ) -> object:
         return self.groups
 
-    def search(self, *, search_base: str, search_filter: str, search_scope: str, attributes: Sequence[str]) -> bool:
+    def search(
+        self,
+        *,
+        search_base: str,
+        search_filter: str,
+        search_scope: str,
+        attributes: Sequence[str],
+        time_limit: int,
+    ) -> bool:
         self.searches.append((search_base, search_filter, search_scope))
         self.response = self.users.get(search_base if search_scope == "BASE" else search_filter, ())
         self.result = {"result": self.result_code}
+        if self.stop_after_search is not None:
+            self.stop_after_search.set()
         return self.result_code == 0
 
 
@@ -187,3 +207,54 @@ def test_disabled_configuration_needs_no_connection_details():
 def test_invalid_configuration_is_rejected(updates: Mapping[str, object]):
     with pytest.raises(ValidationError):
         LDAPSyncSettings.model_validate({**SETTINGS.model_dump(), **updates})
+
+
+def test_cancelled_reader_stops_before_opening_ldap():
+    cancellation = Event()
+    cancellation.set()
+    connection = Connection([group(member=[])])
+    result = read_directory(SETTINGS, connection, cancellation)
+    assert isinstance(result, DirectoryError)
+    assert not connection.closed
+    assert connection.searches == []
+
+
+def test_cancellation_after_member_read_stops_remaining_lookups_and_closes_connection():
+    cancellation = Event()
+    connection = Connection(
+        [group(member=[ALICE, BOB])],
+        {ALICE: [user("alice@example.org")], BOB: [user("bob@example.org")]},
+        stop_after_search=cancellation,
+    )
+    result = read_directory(SETTINGS, connection, cancellation)
+    assert isinstance(result, DirectoryError)
+    assert len(connection.searches) == 1
+    assert connection.closed
+
+
+def test_cancellation_during_paged_snapshot_discards_results_before_membership_reads():
+    cancellation = Event()
+
+    def pages() -> Iterable[Mapping[str, object]]:
+        cancellation.set()
+        yield group(member=[ALICE])
+        pytest.fail("LDAP snapshot should stop consuming pages after cancellation")
+
+    connection = Connection(pages())
+    result = read_directory(SETTINGS, connection, cancellation)
+    assert isinstance(result, DirectoryError)
+    assert connection.searches == []
+    assert connection.closed
+
+
+@pytest.mark.parametrize(
+    "url, ssl_enabled, port",
+    [("ldaps://directory.example.org", True, 636), ("ldap://directory.example.org:1389", False, 1389)],
+)
+def test_real_ldap_client_constructor_verifies_tls_and_disables_referrals(url: str, ssl_enabled: bool, port: int):
+    pytest.importorskip("ldap3")
+    client = open_ldap_connection(SETTINGS.model_copy(update={"server_url": url}))
+    assert client.server.tls.validate == ssl.CERT_REQUIRED
+    assert client.server.ssl is ssl_enabled
+    assert client.server.port == port
+    assert client.auto_referrals is False

@@ -43,6 +43,7 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
 
 ROSTER_TX_TIMEOUT: Final = timedelta(seconds=60)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_TEAM_DEFAULTS: Final = TypeAdapter(DefaultTeamSSOParams | dict[str, object] | None)
 
 
 def new_team_request_with_defaults(
@@ -60,11 +62,11 @@ def new_team_request_with_defaults(
     members_with_roles: Sequence[Member],
     metadata: Mapping[str, object] | None = None,
 ) -> NewTeamRequest:
-    default_params: Final = litellm.default_team_params
-    defaults: Final[Mapping[str, object]] = (
-        deepcopy(default_params)
-        if isinstance(default_params, dict)
-        else default_params.model_dump(exclude_none=True)
+    default_params: Final = _TEAM_DEFAULTS.validate_python(litellm.default_team_params)
+    defaults: Final = _JSON_OBJECT.validate_python(
+        default_params.model_dump(exclude_none=True)
+        if isinstance(default_params, DefaultTeamSSOParams)
+        else deepcopy(default_params)
         if default_params is not None
         else {}
     )
@@ -75,7 +77,10 @@ def new_team_request_with_defaults(
             "team_id": team_id,
             "team_alias": team_alias,
             "members_with_roles": members_with_roles,
-            "metadata": {**(default_metadata if isinstance(default_metadata, dict) else {}), **(metadata or {})},
+            "metadata": {
+                **(_JSON_OBJECT.validate_python(default_metadata) if isinstance(default_metadata, dict) else {}),
+                **(metadata or {}),
+            },
         }
     )
 

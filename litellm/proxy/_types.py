@@ -2482,7 +2482,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
 
     ldap_sync: LDAPSyncSettings | None = Field(
-        None, description="Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis."
+        None,
+        description="Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis.",
     )
 
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(

@@ -1,8 +1,9 @@
 import importlib
 import ssl
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, Protocol, TypeAlias, cast
+from threading import Event
+from typing import Final, Protocol, TypeAlias, runtime_checkable
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, StrictStr, TypeAdapter
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, StrictStr, TypeAdapter
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 
+_ITEMS: Final = TypeAdapter(Iterable[object])
 _STRINGS: Final = TypeAdapter(tuple[StrictStr, ...])
 _GROUP_CLASSES: Final = frozenset({"group", "groupofnames", "groupofuniquenames", "posixgroup"})
 
@@ -50,6 +52,7 @@ class _PagedSearch(Protocol):
         search_scope: str,
         attributes: Sequence[str],
         paged_size: int,
+        time_limit: int,
         generator: bool,
     ) -> object: ...
 
@@ -73,9 +76,18 @@ class LDAPConnection(Protocol):
     def start_tls(self) -> bool: ...
     def bind(self) -> bool: ...
     def unbind(self) -> bool: ...
-    def search(self, *, search_base: str, search_filter: str, search_scope: str, attributes: Sequence[str]) -> bool: ...
+    def search(
+        self,
+        *,
+        search_base: str,
+        search_filter: str,
+        search_scope: str,
+        attributes: Sequence[str],
+        time_limit: int,
+    ) -> bool: ...
 
 
+@runtime_checkable
 class _LDAPLibrary(Protocol):
     def Tls(self, *, validate: ssl.VerifyMode, ca_certs_file: str | None) -> object: ...
     def Server(self, host: str, *, port: int, use_ssl: bool, tls: object, connect_timeout: int) -> object: ...
@@ -104,9 +116,9 @@ def _secret(value: str | None) -> str | None:
 
 
 def open_ldap_connection(settings: LDAPSyncSettings) -> LDAPConnection:
-    library: Final = cast(  # cast-ok: ldap3 has no types, this protocol describes its public constructors
-        _LDAPLibrary, importlib.import_module("ldap3")
-    )
+    library: Final = importlib.import_module("ldap3")
+    if not isinstance(library, _LDAPLibrary):
+        raise TypeError("ldap3 does not expose the required LDAP constructors")
     parsed: Final = urlsplit(settings.server_url)
     tls: Final = library.Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=settings.ca_cert_path)
     server: Final = library.Server(
@@ -152,7 +164,25 @@ def _escape_filter(value: str) -> str:
     )
 
 
-def _resolve_member(connection: LDAPConnection, settings: LDAPSyncSettings, value: str) -> str | DirectoryError:
+def _check_cancelled(stop: Event) -> None:
+    if stop.is_set():
+        raise InterruptedError("LDAP sync cancelled")
+
+
+def _checked_items(raw: object, stop: Event) -> Iterable[object]:
+    items: Final = iter(_ITEMS.validate_python(raw))
+    while True:
+        _check_cancelled(stop)
+        try:
+            yield next(items)
+        except StopIteration:
+            return
+
+
+def _resolve_member(
+    connection: LDAPConnection, settings: LDAPSyncSettings, value: str, stop: Event
+) -> str | DirectoryError:
+    _check_cancelled(stop)
     usernames: Final = settings.member_attribute.lower() == "memberuid"
     _ = connection.search(
         search_base=settings.user_search_base if usernames else value,
@@ -161,6 +191,7 @@ def _resolve_member(connection: LDAPConnection, settings: LDAPSyncSettings, valu
         else "(objectClass=*)",
         search_scope="SUBTREE" if usernames else "BASE",
         attributes=(settings.user_match_attribute, "objectClass"),
+        time_limit=settings.timeout_seconds,
     )
     if connection.result.get("result") != 0:
         return DirectoryError("LDAP member lookup did not complete successfully")
@@ -177,8 +208,9 @@ def _resolve_member(connection: LDAPConnection, settings: LDAPSyncSettings, valu
 
 
 def _read_group(
-    connection: LDAPConnection, settings: LDAPSyncSettings, entry: _Entry
+    connection: LDAPConnection, settings: LDAPSyncSettings, entry: _Entry, stop: Event
 ) -> DirectoryGroup | DirectoryError:
+    _check_cancelled(stop)
     team_id: Final = _one(entry, settings.group_id_attribute)
     name: Final = _one(entry, settings.group_name_attribute)
     if team_id is None or name is None:
@@ -186,7 +218,7 @@ def _read_group(
     if any(";range=" in key.lower() for key in entry.attributes):
         return DirectoryError("LDAP ranged membership responses are not supported", entry.dn)
     identities: Final = tuple(
-        _resolve_member(connection, settings, value) for value in _values(entry, settings.member_attribute)
+        _resolve_member(connection, settings, value, stop) for value in _values(entry, settings.member_attribute)
     )
     error: Final = next((identity for identity in identities if isinstance(identity, DirectoryError)), None)
     if error is not None:
@@ -194,33 +226,45 @@ def _read_group(
     return DirectoryGroup(team_id, name, tuple(identity for identity in identities if isinstance(identity, str)))
 
 
-def read_directory(settings: LDAPSyncSettings, connection: LDAPConnection | None = None) -> DirectoryResult:
+def read_directory(
+    settings: LDAPSyncSettings, connection: LDAPConnection | None = None, stop: Event | None = None
+) -> DirectoryResult:
+    cancellation: Final = stop if stop is not None else Event()
     try:
+        _check_cancelled(cancellation)
         client: Final = connection if connection is not None else open_ldap_connection(settings)
         try:
             _ = client.open()
+            _check_cancelled(cancellation)
             if settings.start_tls and urlsplit(settings.server_url).scheme == "ldap" and not client.start_tls():
                 return DirectoryError("LDAP TLS negotiation failed")
+            _check_cancelled(cancellation)
             if not client.bind():
                 return DirectoryError("LDAP bind failed")
+            _check_cancelled(cancellation)
             raw: Final = client.extend.standard.paged_search(
                 search_base=settings.group_search_base,
                 search_filter=settings.group_filter,
                 search_scope="SUBTREE",
                 attributes=(settings.group_id_attribute, settings.group_name_attribute, settings.member_attribute),
                 paged_size=500,
-                generator=False,
+                time_limit=settings.timeout_seconds,
+                generator=True,
             )
+            items: Final = tuple(_checked_items(raw, cancellation))
+            _check_cancelled(cancellation)
             if client.result.get("result") != 0:
                 return DirectoryError("LDAP group search did not complete successfully")
-            entries: Final = _entries(raw)
+            entries: Final = _entries(items)
             if isinstance(entries, DirectoryError):
                 return entries
             group_ids: Final = tuple(_one(entry, settings.group_id_attribute) for entry in entries)
             if len(group_ids) != len(frozenset(group_ids)):
                 return DirectoryError("LDAP group IDs are not unique within the selected groups")
-            return tuple(_read_group(client, settings, entry) for entry in entries)
+            groups: Final = tuple(_read_group(client, settings, entry, cancellation) for entry in entries)
+            _check_cancelled(cancellation)
+            return groups
         finally:
             _ = client.unbind()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # SDK errors must abort safely without exposing bind credentials
         return DirectoryError(f"LDAP read failed ({type(exc).__name__})")

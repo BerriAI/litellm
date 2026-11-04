@@ -1,10 +1,10 @@
 import asyncio
 import math
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from threading import Event
+from typing import Final, Protocol
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Request
 from pydantic import TypeAdapter
 
@@ -30,6 +30,21 @@ LDAP_SYNC_JOB_ID: Final = "ldap_team_sync"
 _SETTINGS: Final = TypeAdapter(Mapping[str, object])
 
 
+class LDAPScheduler(Protocol):
+    def add_job(
+        self,
+        func: Callable[[], Awaitable[None]],
+        trigger: str,
+        *,
+        minutes: float,
+        next_run_time: datetime,
+        id: str,
+        replace_existing: bool,
+        max_instances: int,
+        coalesce: bool,
+    ) -> object: ...
+
+
 async def resolve_user_ids(
     users: UserRepository, group: DirectoryGroup, settings: LDAPSyncSettings
 ) -> frozenset[str] | DirectoryError:
@@ -38,9 +53,18 @@ async def resolve_user_ids(
         if settings.litellm_match_field == "user_email"
         else await users.find_many_in(settings.litellm_match_field, group.identities)
     )
-    identities: Final = tuple(getattr(row, settings.litellm_match_field) for row in rows)
+    identities: Final = tuple(
+        row.user_email
+        if settings.litellm_match_field == "user_email"
+        else row.user_id
+        if settings.litellm_match_field == "user_id"
+        else row.sso_user_id
+        for row in rows
+    )
     normalized: Final = tuple(
-        identity.casefold() if settings.litellm_match_field == "user_email" else identity for identity in identities
+        identity.casefold() if settings.litellm_match_field == "user_email" else identity
+        for identity in identities
+        if identity is not None
     )
     if len(normalized) != len(frozenset(normalized)):
         return DirectoryError("Multiple LiteLLM users match one LDAP identity")
@@ -67,6 +91,7 @@ class LDAPSync:
         proxy_logging_obj: ProxyLogging,
     ) -> None:
         self.settings = settings
+        self.lease_seconds = math.ceil(settings.interval_minutes * 60) - 1
         self.prisma_client = prisma_client
         self.pod_lock_manager = pod_lock_manager
         self.user_api_key_cache = user_api_key_cache
@@ -81,7 +106,7 @@ class LDAPSync:
             return
         team: Final = await self.teams.find_by_id(group.team_id, id_field="team_id")
         if self.settings.dry_run:
-            existing: Final = (
+            existing: Final[frozenset[str]] = (
                 frozenset(member.user_id for member in team.members_with_roles if member.user_id is not None)
                 if team is not None
                 else frozenset()
@@ -126,7 +151,14 @@ class LDAPSync:
         )
 
     async def _sync(self) -> None:
-        snapshot: Final = await asyncio.to_thread(read_directory, self.settings)
+        cancellation: Final = Event()
+        directory_settings: Final = self.settings.model_copy(
+            update={"timeout_seconds": min(self.settings.timeout_seconds, max(1, self.lease_seconds // 4))}
+        )
+        try:
+            snapshot: Final = await asyncio.to_thread(read_directory, directory_settings, stop=cancellation)
+        finally:
+            cancellation.set()
         if isinstance(snapshot, DirectoryError):
             verbose_proxy_logger.warning("LDAP sync aborted: %s", snapshot.reason)
             return
@@ -136,30 +168,29 @@ class LDAPSync:
                 continue
             try:
                 await self.sync_group(group)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # isolate failed groups so later groups can still synchronize
                 verbose_proxy_logger.warning(
                     "LDAP sync failed team_id=%s (%s); retrying next interval", group.team_id, type(exc).__name__
                 )
 
     async def run(self) -> None:
-        lease_seconds: Final = math.ceil(self.settings.interval_minutes * 60) - 1
         if (
             await self.pod_lock_manager.acquire_lock(
                 cronjob_id=LDAP_SYNC_JOB_ID,
-                ttl=lease_seconds,
+                ttl=self.lease_seconds,
                 allow_reentrant=False,
             )
             is not True
         ):
             return
         try:
-            await asyncio.wait_for(self._sync(), timeout=min(600, lease_seconds / 2))
+            await asyncio.wait_for(self._sync(), timeout=min(600, self.lease_seconds / 2))
         except asyncio.TimeoutError:
             verbose_proxy_logger.warning("LDAP sync timed out; retrying next interval")
 
 
 def initialize_ldap_sync(
-    scheduler: AsyncIOScheduler,
+    scheduler: LDAPScheduler,
     general_settings: Mapping[str, object],
     prisma_client: PrismaClient | None,
     pod_lock_manager: PodLockManager,
