@@ -69948,35 +69948,6 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
-    "bedrock_mantle/us-gov-west-1/xai.grok-4.7": {
-        "input_cost_per_token": 2.64e-06,
-        "output_cost_per_token": 7.92e-06,
-        "cache_read_input_token_cost": 6.6e-07,
-        "input_cost_per_token_flex": 1.32e-06,
-        "output_cost_per_token_flex": 3.96e-06,
-        "cache_read_input_token_cost_flex": 3.3e-07,
-        "input_cost_per_token_priority": 4.62e-06,
-        "output_cost_per_token_priority": 1.386e-05,
-        "cache_read_input_token_cost_priority": 1.155e-06,
-        "input_cost_per_token_batches": 1.32e-06,
-        "output_cost_per_token_batches": 3.96e-06,
-        "use_openai_responses_path": true,
-        "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 524288,
-        "max_output_tokens": 524288,
-        "mode": "chat",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/responses"
-        ],
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-west-1/index.json"
-    },
     "bedrock_mantle/us-gov-west-1/moonshotai.kimi-k3": {
         "input_cost_per_token": 3.96e-06,
         "output_cost_per_token": 1.98e-05,
@@ -70107,35 +70078,6 @@
             "/v1/chat/completions"
         ],
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-west-1/index.json"
-    },
-    "bedrock_mantle/us-gov-east-1/xai.grok-4.7": {
-        "input_cost_per_token": 2.64e-06,
-        "output_cost_per_token": 7.92e-06,
-        "cache_read_input_token_cost": 6.6e-07,
-        "input_cost_per_token_flex": 1.32e-06,
-        "output_cost_per_token_flex": 3.96e-06,
-        "cache_read_input_token_cost_flex": 3.3e-07,
-        "input_cost_per_token_priority": 4.62e-06,
-        "output_cost_per_token_priority": 1.386e-05,
-        "cache_read_input_token_cost_priority": 1.155e-06,
-        "input_cost_per_token_batches": 1.32e-06,
-        "output_cost_per_token_batches": 3.96e-06,
-        "use_openai_responses_path": true,
-        "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 524288,
-        "max_output_tokens": 524288,
-        "mode": "chat",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/responses"
-        ],
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-east-1/index.json"
     },
     "bedrock_mantle/us-gov-east-1/moonshotai.kimi-k3": {
         "input_cost_per_token": 3.96e-06,
