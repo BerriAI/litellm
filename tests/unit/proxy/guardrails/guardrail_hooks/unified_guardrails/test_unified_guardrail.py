@@ -3293,7 +3293,9 @@ async def test_pass_through_guardrail_text_is_the_client_body_without_the_inject
 
     texts: Final = [call["inputs"]["texts"] for call in guardrail.apply_calls]
     assert [[json.loads(text) for text in call_texts] for call_texts in texts] == [[body]], texts
-    assert data["litellm_metadata"]["user_api_key_user_email"] == "someone@example.com", data["litellm_metadata"]
+    # the key metadata lands in whichever bucket the request resolves to (#45543)
+    bucket: Final = data[get_metadata_variable_name_from_kwargs(data)]
+    assert bucket["user_api_key_user_email"] == "someone@example.com", bucket
 
 
 class TestEnsureLitellmMetadataBucket:
