@@ -716,6 +716,7 @@ qwen_ai_platform_models: Set[str] = set()
 moonshot_models: Set[str] = set()
 publicai_models: Set[str] = set()
 darkbloom_models: Set[str] = set()
+token_kiosk_models: Final[Set[str]] = set()
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
@@ -899,6 +900,7 @@ def _provider_model_sets() -> Mapping[str, set[str]]:  # mutable-ok: live provid
             "moonshot": moonshot_models,
             "publicai": publicai_models,
             "darkbloom": darkbloom_models,
+            "token_kiosk": token_kiosk_models,
             "openinfer": openinfer_models,
             "kyma": kyma_models,
             "streamlake": streamlake_models,
@@ -1208,6 +1210,7 @@ def _known_models() -> frozenset[str]:
         | moonshot_models
         | publicai_models
         | darkbloom_models
+        | token_kiosk_models
         | openinfer_models
         | kyma_models
         | streamlake_models
@@ -1349,6 +1352,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "moonshot": moonshot_models,
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
+        "token_kiosk": token_kiosk_models,
         "openinfer": openinfer_models,
         "kyma": kyma_models,
         "streamlake": streamlake_models,

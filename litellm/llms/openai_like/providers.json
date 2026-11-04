@@ -397,5 +397,14 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "token_kiosk": {
+    "base_url": "https://agent-router.gaib.ai/v1",
+    "api_key_env": "TOKEN_KIOSK_API_KEY",
+    "api_base_env": "TOKEN_KIOSK_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    }
   }
 }
