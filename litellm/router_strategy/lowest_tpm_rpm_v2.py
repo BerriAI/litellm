@@ -274,9 +274,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
-            cache_hit: Final[object] = (
-                standard_logging_object.get("cache_hit")  # pyright: ignore[reportUnknownMemberType]  # may be omitted
-            )
+            cache_hit: Final[object] = standard_logging_object.get("cache_hit")  # pyright: ignore[reportUnknownMemberType]  # may be omitted
             if cache_hit is True:
                 return
             model_group: Final = standard_logging_object.get("model_group")
@@ -330,9 +328,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
-            cache_hit: Final[object] = (
-                standard_logging_object.get("cache_hit")  # pyright: ignore[reportUnknownMemberType]  # may be omitted
-            )
+            cache_hit: Final[object] = standard_logging_object.get("cache_hit")  # pyright: ignore[reportUnknownMemberType]  # may be omitted
             if cache_hit is True:
                 return
             model_group: Final = standard_logging_object.get("model_group")
