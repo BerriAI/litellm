@@ -47,6 +47,10 @@ PRISMA_TO_PG_TABLE: Final[Mapping[DailyActivityTable, str]] = MappingProxyType(
 )
 
 
+_MIN_TIMEZONE_OFFSET_MINUTES: Final = -840  # UTC+14 (e.g. Line Islands)
+_MAX_TIMEZONE_OFFSET_MINUTES: Final = 840   # UTC-14
+
+
 def adjust_dates_for_timezone(
     start_date: str,
     end_date: str,
@@ -54,7 +58,11 @@ def adjust_dates_for_timezone(
     include_current_utc_day: bool = False,
     utc_now: datetime | None = None,
 ) -> tuple[str, str]:
-    if not include_current_utc_day or timezone_offset_minutes is None:
+    if (
+        not include_current_utc_day
+        or timezone_offset_minutes is None
+        or not (_MIN_TIMEZONE_OFFSET_MINUTES <= timezone_offset_minutes <= _MAX_TIMEZONE_OFFSET_MINUTES)
+    ):
         return start_date, end_date
     now: Final = utc_now if utc_now is not None else datetime.now(timezone.utc)
     caller_local_today: Final = (now - timedelta(minutes=timezone_offset_minutes)).date().isoformat()

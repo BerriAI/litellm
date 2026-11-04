@@ -228,6 +228,8 @@ def _user_query(
     ),
     timezone: int | None = Query(
         default=None,
+        ge=-840,
+        le=840,
         description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
         "Matches JavaScript's Date.getTimezoneOffset() convention.",
     ),
@@ -258,7 +260,13 @@ def _team_query(
     model: str | None = None,
     api_key: str | None = None,
     exclude_team_ids: str | None = None,
-    timezone: int | None = None,
+    timezone: int | None = Query(
+        default=None,
+        ge=-840,
+        le=840,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
+    ),
     include_current_utc_day: bool = Query(
         default=True,
         description="When the range ends on the caller's current local day, extend it to "
@@ -285,7 +293,13 @@ def _tag_query(
     model: str | None = None,
     api_key: str | None = None,
     tags: str | None = None,
-    timezone: int | None = None,
+    timezone: int | None = Query(
+        default=None,
+        ge=-840,
+        le=840,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
+    ),
     include_current_utc_day: bool = Query(
         default=True,
         description="When the range ends on the caller's current local day, extend it to "
@@ -313,7 +327,13 @@ def _organization_query(
     model: str | None = None,
     api_key: str | None = None,
     exclude_organization_ids: str | None = None,
-    timezone: int | None = None,
+    timezone: int | None = Query(
+        default=None,
+        ge=-840,
+        le=840,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
+    ),
     include_current_utc_day: bool = Query(
         default=True,
         description="When the range ends on the caller's current local day, extend it to "
@@ -341,7 +361,13 @@ def _customer_query(
     model: str | None = None,
     api_key: str | None = None,
     exclude_end_user_ids: str | None = None,
-    timezone: int | None = None,
+    timezone: int | None = Query(
+        default=None,
+        ge=-840,
+        le=840,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
+    ),
     include_current_utc_day: bool = Query(
         default=True,
         description="When the range ends on the caller's current local day, extend it to "
@@ -369,7 +395,13 @@ def _agent_query(
     model: str | None = None,
     api_key: str | None = None,
     exclude_agent_ids: str | None = None,
-    timezone: int | None = None,
+    timezone: int | None = Query(
+        default=None,
+        ge=-840,
+        le=840,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
+    ),
     include_current_utc_day: bool = Query(
         default=True,
         description="When the range ends on the caller's current local day, extend it to "

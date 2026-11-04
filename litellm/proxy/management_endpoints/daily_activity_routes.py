@@ -41,6 +41,7 @@ from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
 from litellm.repositories.daily_activity_buckets import api_key_bucket
 from litellm.repositories.daily_activity_repository import DailyActivityRepository
+from litellm.repositories.daily_activity_sql import adjust_dates_for_timezone
 from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     CacheLeakageKeysResponse,
@@ -83,12 +84,33 @@ def get_daily_activity_llm_router() -> Router | None:
 
 
 def _date_range_error(query: EntityQuery, *, user_aggregated: bool) -> InvalidDateRange | None:
-    if user_aggregated:
-        date_range: Final = parse_canonical_date_range(query.start_date, query.end_date)
-        return date_range if isinstance(date_range, InvalidDateRange) else None
+    if query.timezone_offset_minutes is not None and not (-840 <= query.timezone_offset_minutes <= 840):
+        return InvalidDateRange(reason="timezone must be between -840 and 840 minutes")
 
-    range_error: Final[str | None] = aggregated_date_range_error(query.start_date, query.end_date)
-    return None if range_error is None else InvalidDateRange(reason=range_error)
+    raw_error: Final = (
+        parse_canonical_date_range(query.start_date, query.end_date)
+        if user_aggregated
+        else aggregated_date_range_error(query.start_date, query.end_date)
+    )
+    if raw_error is not None:
+        return raw_error if isinstance(raw_error, InvalidDateRange) else InvalidDateRange(reason=raw_error)
+
+    if query.start_date is not None and query.end_date is not None:
+        adjusted_start, adjusted_end = adjust_dates_for_timezone(
+            query.start_date,
+            query.end_date,
+            query.timezone_offset_minutes,
+            query.include_current_utc_day,
+        )
+        adjusted_error: Final = (
+            parse_canonical_date_range(adjusted_start, adjusted_end)
+            if user_aggregated
+            else aggregated_date_range_error(adjusted_start, adjusted_end)
+        )
+        if adjusted_error is not None:
+            return adjusted_error if isinstance(adjusted_error, InvalidDateRange) else InvalidDateRange(reason=adjusted_error)
+
+    return None
 
 
 async def _resolved_scope(
