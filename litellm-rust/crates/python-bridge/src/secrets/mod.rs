@@ -23,12 +23,11 @@ use crate::python_settings::missing_module;
 pub(crate) fn source(py: Python<'_>) -> PyResult<Arc<dyn SecretSource>> {
     match PythonSecrets::new(py) {
         Ok(secrets) => Ok(Arc::new(secrets)),
-        Err(error) if missing_module(py, &error, "litellm")? => Ok(Arc::new(
-            EnvironmentSecrets::python_compatible(crate::http::host_client(
-                py,
-                litellm_http::ClientVariant::Provider,
-            )?),
-        )),
+        Err(error) if missing_module(py, &error, "litellm")? => {
+            Ok(Arc::new(EnvironmentSecrets::python_compatible(
+                crate::http::host_client(py, litellm_http::ClientVariant::Provider)?,
+            )))
+        }
         Err(error) => Err(error),
     }
 }

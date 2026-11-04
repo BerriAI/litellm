@@ -46,7 +46,12 @@ impl PythonSecrets {
             PyTuple::new(py, names)
                 .and_then(|names| read_secrets.bind(py).call1((names,)))
                 .and_then(|values| values.extract::<Vec<Option<String>>>())
-                .map(|values| values.into_iter().map(|value| value.map(SecretValue::new)).collect())
+                .map(|values| {
+                    values
+                        .into_iter()
+                        .map(|value| value.map(SecretValue::new))
+                        .collect()
+                })
                 .map_err(|error| external_error(py, error))
         })
         .await
@@ -196,7 +201,10 @@ def read_secrets(names):
             .await
             .unwrap();
 
-        assert_eq!(resolved.get("MISTRAL_API_KEY").as_deref(), Some("vault-key"));
+        assert_eq!(
+            resolved.get("MISTRAL_API_KEY").as_deref(),
+            Some("vault-key")
+        );
         assert_eq!(resolved.get("OTHER"), None);
         assert_eq!(
             resolved.get("MISTRAL_API_BASE").as_deref(),
