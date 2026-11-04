@@ -254,7 +254,9 @@ async def anthropic_response(
             model_id=model_id,
             version=version,
             response_cost=(
-                failure_row_response_cost(base_llm_response_processor.data) if is_agentic_followup_failure(e) else 0
+                failure_row_response_cost(base_llm_response_processor.data)
+                if is_agentic_followup_failure(raised)
+                else 0
             ),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=data,

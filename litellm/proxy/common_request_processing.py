@@ -4405,9 +4405,7 @@ class ProxyBaseLLMRequestProcessing:
         version: str | None = None,
     ) -> Never:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        answered: Final = (
-            with_openai_overload_status(e) if self.route_type in _OPENAI_OVERLOAD_ROUTE_TYPES else e
-        )
+        answered: Final = with_openai_overload_status(e) if self.route_type in _OPENAI_OVERLOAD_ROUTE_TYPES else e
         log_llm_api_exception(answered, self.litellm_call_id)
         billing_logging_obj: Final = _REQUEST_FIELDS.validate_python(self.data).get("litellm_logging_obj")
         failed_in_agentic_follow_up: Final = is_agentic_followup_failure(e)

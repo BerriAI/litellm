@@ -394,7 +394,7 @@ def test_chat_completions_529_answers_503_to_the_sync_sdk(gateway: Gateway) -> N
         assert caught.value.status_code == 503, caught.value.response.text
         _assert_openai_overloaded(caught.value.response)
         _one_post(wire, "/v1/messages")
-        _assert_logged_failure(model, rows=1, error_class="InternalServerError", code="500")
+        _assert_logged_failure(model, rows=1, error_class="InternalServerError", code="503")
 
 
 async def test_chat_completions_stream_529_answers_503_to_the_async_sdk(gateway: Gateway) -> None:
