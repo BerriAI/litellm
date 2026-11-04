@@ -8,6 +8,7 @@ import type {
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getGatewayBaseUrl } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 import { parseUsageCost } from "./usage_cost";
@@ -353,7 +354,7 @@ export async function makeOpenAIResponsesRequest(
   } catch (error) {
     if (signal?.aborted) {
     } else {
-      toast.fromError(`Error occurred while generating model response. Please try again. Error: ${error}`);
+      toast.fromError(i18n.t("llmCalls.responsesApi.requestFailed", { error: String(error) }));
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useTranslation } from "react-i18next";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import Navbar from "@/components/navbar";
@@ -13,6 +14,7 @@ import { isProxyAdminRole } from "@/utils/roles";
 import { uiHref } from "@/utils/uiHref";
 
 function MoyaiPageContent() {
+  const { t } = useTranslation();
   const { accessToken, userRole } = useAuthorized();
   const { data: uiSettings, isLoading, refetch } = useUISettings();
 
@@ -67,9 +69,9 @@ function MoyaiPageContent() {
     } else if (moyaiUrl) {
       content = (
         <div className="flex min-h-[calc(100vh-3.5rem)] flex-col items-center justify-center gap-3 bg-[#04060c] px-6 text-center text-[#e3e3e3]">
-          <p className="m-0 text-lg font-medium text-white">Opening Moyai</p>
+          <p className="m-0 text-lg font-medium text-white">{t("moyai.page.opening")}</p>
           <a href={moyaiUrl} className="text-sm text-[#8b9bff] underline underline-offset-4">
-            Continue to {moyaiUrl}
+            {t("moyai.page.continueTo", { url: moyaiUrl })}
           </a>
         </div>
       );

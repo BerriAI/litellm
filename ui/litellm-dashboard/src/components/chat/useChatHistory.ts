@@ -1,5 +1,6 @@
 import { v4 as uuid } from "uuid";
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AssistantMessageUpdate, ChatMessage, Conversation } from "./types";
 import {
   deleteChatImages,
@@ -75,6 +76,7 @@ export function useChatHistory(
   renameConversation: (id: string, newTitle: string) => void;
   setActiveConversationId: (id: string | null) => void;
 } {
+  const { t } = useTranslation();
   const [conversations, setConversations] = useState<Conversation[]>(
     () => loadFromStorage(storageKeyFor(userId)).conversations,
   );
@@ -191,30 +193,35 @@ export function useChatHistory(
     return id;
   }, []);
 
-  const appendMessage = useCallback((conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => {
-    const newMessage: ChatMessage = {
-      ...message,
-      id: uuid(),
-      timestamp: Date.now(),
-    };
+  const appendMessage = useCallback(
+    (conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => {
+      const newMessage: ChatMessage = {
+        ...message,
+        id: uuid(),
+        timestamp: Date.now(),
+      };
 
-    setConversations((prev) => {
-      const updated = prev.map((conv) => {
-        if (conv.id !== conversationId) return conv;
-        const updatedMessages = [...conv.messages, newMessage];
-        let title = conv.title;
-        if (
-          title === "New conversation" &&
-          newMessage.role === "user" &&
-          conv.messages.filter((m) => m.role === "user").length === 0
-        ) {
-          title = generateTitle(newMessage.content || newMessage.attachments?.[0]?.name || "Image conversation");
-        }
-        return { ...conv, title, messages: updatedMessages, updatedAt: Date.now() };
+      setConversations((prev) => {
+        const updated = prev.map((conv) => {
+          if (conv.id !== conversationId) return conv;
+          const updatedMessages = [...conv.messages, newMessage];
+          let title = conv.title;
+          if (
+            title === "New conversation" &&
+            newMessage.role === "user" &&
+            conv.messages.filter((m) => m.role === "user").length === 0
+          ) {
+            title = generateTitle(
+              newMessage.content || newMessage.attachments?.[0]?.name || t("chat.chatHistory.imageConversation"),
+            );
+          }
+          return { ...conv, title, messages: updatedMessages, updatedAt: Date.now() };
+        });
+        return trimConversations(updated);
       });
-      return trimConversations(updated);
-    });
-  }, []);
+    },
+    [t],
+  );
 
   const updateLastAssistantMessage = useCallback((conversationId: string, updates: AssistantMessageUpdate) => {
     setConversations((prev) => {

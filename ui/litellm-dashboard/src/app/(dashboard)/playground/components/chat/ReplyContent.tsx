@@ -1,6 +1,7 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
+import { useTranslation } from "react-i18next";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import remarkGfm from "remark-gfm";
@@ -67,7 +68,14 @@ export function Markdown({ children }: { children: string }) {
 }
 
 function GeneratedImage({ src }: { src: string }) {
-  return <img src={src} alt="Generated image" className="max-h-[500px] max-w-full rounded-lg border border-border" />;
+  const { t } = useTranslation();
+  return (
+    <img
+      src={src}
+      alt={t("playground.chat.reply.generatedImage")}
+      className="max-h-[500px] max-w-full rounded-lg border border-border"
+    />
+  );
 }
 
 function Embeddings({ value }: { value: string }) {

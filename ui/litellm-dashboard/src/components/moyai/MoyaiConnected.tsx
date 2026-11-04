@@ -2,6 +2,7 @@
 
 import { useTerminology } from "@/contexts/TerminologyContext";
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { ArrowUpRight, Check, ExternalLink } from "lucide-react";
 import moyaiHead from "../../../public/assets/moyai/moyai-head.svg";
 import styles from "./MoyaiLanding.module.css";
@@ -17,10 +18,11 @@ export default function MoyaiConnected({
   models?: number | null;
 }) {
   const term = useTerminology();
+  const { t } = useTranslation();
   const rows = [
-    { label: "Workspace linked", value: moyaiUrl },
-    { label: "Virtual key issued", value: keyAlias },
-    { label: "models available through LiteLLM", value: models != null ? `${models}` : null, prefix: true },
+    { label: t("moyai.connected.workspaceLinked"), value: moyaiUrl },
+    { label: t("moyai.connected.keyIssued"), value: keyAlias },
+    { label: t("moyai.connected.modelsAvailable"), value: models != null ? `${models}` : null, prefix: true },
   ];
 
   return (
@@ -30,13 +32,13 @@ export default function MoyaiConnected({
           className={`${styles.rise} mb-5 inline-flex items-center gap-2 rounded-full bg-white/[0.06] px-3 py-1 text-[11px] uppercase tracking-[0.22em] text-[rgba(220,228,255,0.75)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12)]`}
         >
           <span className="size-1.5 rounded-full bg-[#28c840] shadow-[0_0_8px_#28c840]" />
-          Connected
+          {t("moyai.connected.badge")}
         </div>
         <img src={moyaiHead.src} alt="" className={`${styles.mark} mb-4 h-14 w-auto`} />
-        <h1 className="m-0 text-[clamp(28px,3.5vw,44px)] font-medium tracking-[-0.03em] text-white">Moyai connected</h1>
-        <p className="mb-0 mt-3 max-w-md text-[16px] text-[#c2c6d0]">
-          This deployment is now linked to your LiteLLM gateway.
-        </p>
+        <h1 className="m-0 text-[clamp(28px,3.5vw,44px)] font-medium tracking-[-0.03em] text-white">
+          {t("moyai.connected.title")}
+        </h1>
+        <p className="mb-0 mt-3 max-w-md text-[16px] text-[#c2c6d0]">{t("moyai.connected.description")}</p>
 
         <div className="mt-8 w-full max-w-md space-y-2 text-left">
           {rows.map((row) =>
@@ -68,7 +70,7 @@ export default function MoyaiConnected({
               href={moyaiUrl}
               className={`${styles.cta} group inline-flex items-center gap-3 rounded-full px-7 py-3.5 text-base font-semibold text-[#05070d] transition-transform hover:scale-[1.03]`}
             >
-              Open Moyai
+              {t("moyai.connected.openMoyai")}
               <ArrowUpRight className="size-4" />
             </a>
           )}
@@ -77,7 +79,7 @@ export default function MoyaiConnected({
             className="inline-flex items-center gap-2 rounded-full bg-white/[0.06] px-5 py-3 text-sm font-medium text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)] backdrop-blur transition-colors hover:bg-white/[0.12]"
           >
             <ExternalLink className="size-4" />
-            {term("Back to AI Gateway")}
+            {term(t("moyai.connected.backToGateway"))}
           </a>
         </div>
       </div>

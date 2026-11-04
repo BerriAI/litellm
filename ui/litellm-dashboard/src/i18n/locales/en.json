@@ -4459,6 +4459,1545 @@
       }
     }
   },
+  "chat": {
+    "page": {
+      "attachedFiles": "Attached files",
+      "removeAttachment": "Remove {{name}}",
+      "researchUnavailable": {
+        "noWebSearch": "Choose a reasoning model with web search.",
+        "noBackground": "Enable background chats in Admin Settings to use deep research.",
+        "noStorage": "Allow chat history storage to use deep research."
+      },
+      "errors": {
+        "loadModels": "Could not load models",
+        "removeAttachmentsForImage": "Remove the attached files before switching to image generation.",
+        "tooManyAttachments": "Attach up to {{max}} files per message.",
+        "unreadableFiles": "Could not read these files.",
+        "researchBlocked": "Deep research needs a reasoning model with web search and background chats enabled.",
+        "resendNeedsChatModel": "Choose a chat model before resending this message.",
+        "resendNeedsResearchModel": "Choose a reasoning model with web search and background chats before resending research."
+      },
+      "backgroundHint": {
+        "cancelling": "Requesting cancellation…",
+        "unsaved": "Keep this tab open. This run could not be saved in this browser.",
+        "running": "Running in the background. You can close this tab and return to this chat.",
+        "unavailable": "Keep this tab open. Background runs are not available for this chat."
+      },
+      "placeholder": {
+        "conversation": "Send a message...",
+        "home": "Ask a question, attach a file, or paste something to work on…",
+        "research": "What should I research on the web?",
+        "image": "Describe the image you want to create…"
+      },
+      "submit": {
+        "generateImage": "Generate image",
+        "send": "Send"
+      },
+      "uploadFiles": "Upload files",
+      "attachFiles": "Attach files",
+      "attachFilesHint": "Attach images, PDF, Word (.docx), Excel (.xlsx), text, or code files (up to 4 files, 10 MB each)",
+      "connectTools": "Connect tools",
+      "tools": "Tools",
+      "deepResearch": "Deep research",
+      "turnOffDeepResearch": "Turn off deep research",
+      "imageModeTools": "Create an image from your description",
+      "preparingFiles": "Preparing files…",
+      "fileSupportNote": "File support depends on the selected model and provider.",
+      "noImageModels": "No image-generation models are available. Ask your admin to add one to Model Hub.",
+      "noChatModels": "No chat models are available for your account.",
+      "reconnect": "Reconnect",
+      "cancellationRequested": "Cancellation requested",
+      "composerHint": {
+        "image": "Describe an image · Enter to generate",
+        "chat": "Drop files or paste images · Enter to send"
+      },
+      "storageBanner": "Some chat history or attachments could not be saved or restored.",
+      "scrollToBottom": "Scroll to bottom"
+    },
+    "modelsPage": {
+      "eyebrow": "Model Hub",
+      "title": "Models",
+      "description": "Find the right model. Explore providers, compare pricing, and see what each model can do."
+    },
+    "shell": {
+      "accountFallback": "Account",
+      "workspaceItems": {
+        "credentials": "Credentials",
+        "apiKeys": "API Keys",
+        "logs": "Logs",
+        "usage": "Usage"
+      },
+      "searchChats": "Search chats",
+      "searchChatsShortcut": "Search chats (⌘K)",
+      "openSidebar": "Open sidebar",
+      "closeSidebar": "Close sidebar",
+      "newChat": "New Chat",
+      "workspaceNav": "Chat workspace",
+      "chats": "Chats",
+      "models": "Models",
+      "integrations": "Integrations",
+      "workspace": "Workspace",
+      "shareFeedback": "Share feedback",
+      "organizationLogo": "Organization logo",
+      "settings": "Settings",
+      "signOut": "Sign out",
+      "chatNavigation": "Chat navigation",
+      "openChatNavigation": "Open chat navigation",
+      "sheetTitle": "LiteLLM Chat",
+      "sheetDescription": "Conversations and chat workspace navigation"
+    },
+    "conversationList": {
+      "conversationTitle": "Conversation title",
+      "renameConversation": "Rename {{title}}",
+      "rename": "Rename",
+      "deleteConversation": "Delete {{title}}",
+      "delete": "Delete",
+      "deleteConfirm": {
+        "title": "Delete this conversation?",
+        "description": "This action cannot be undone",
+        "cancel": "Cancel",
+        "confirm": "Delete"
+      },
+      "searchTitle": "Search conversations",
+      "searchLabel": "Search conversations",
+      "noResults": "No conversations found",
+      "searchChats": "Search chats",
+      "recent": "Recent",
+      "empty": "No chats here yet."
+    },
+    "messages": {
+      "imageOmitted": "Image omitted",
+      "imageUnavailable": "<name/> — image unavailable. Start a new chat and attach a saved copy to use it again.",
+      "openImage": "Open image",
+      "editMessage": "Edit message",
+      "cancel": "Cancel",
+      "saveAndSend": "Save & Send",
+      "creatingImage": "Creating your image…",
+      "deepResearch": "Deep research",
+      "webSearches": " · {{searches}} web searches",
+      "sources": "Sources",
+      "stopped": " [stopped]",
+      "copiedMessage": "Copied message",
+      "copyMessage": "Copy message",
+      "copied": "Copied!",
+      "copy": "Copy",
+      "thinking": "Thinking...",
+      "toolCall": "Tool call",
+      "arguments": "Arguments",
+      "result": "Result"
+    },
+    "fileChip": {
+      "attached": "Attached file",
+      "unavailable": "File unavailable — start a new chat and attach it again"
+    },
+    "composer": {
+      "stopRequest": "Stop request",
+      "message": "Message"
+    },
+    "moyaiHome": {
+      "starters": {
+        "review": {
+          "label": "Review code",
+          "detail": "Find the edge cases",
+          "prompt": "Review my changes for bugs and improvements."
+        },
+        "fixBug": {
+          "label": "Fix a bug",
+          "detail": "Trace it to the source",
+          "prompt": "Help me investigate and fix this bug: "
+        },
+        "planFeature": {
+          "label": "Plan a feature",
+          "detail": "Make the next change clear",
+          "prompt": "Help me plan and implement this feature: "
+        }
+      },
+      "headingImage": "What are we creating?",
+      "headingResearch": "What should we <highlight>research?</highlight>",
+      "headingChat": "What are we <highlight>working on?</highlight>",
+      "recentChats": "Recent chats",
+      "noRecentChats": "No recent chats in this browser yet.",
+      "startersLabel": "Start with a prompt",
+      "startersHeading": "Start with a prompt"
+    },
+    "modelPicker": {
+      "chooseModel": "Choose a model",
+      "title": "Model Hub",
+      "subtitle": "Choose a model to try it here.",
+      "searchLabel": "Search models",
+      "searchPlaceholder": "Search models or providers",
+      "modelType": "Model type",
+      "filters": {
+        "all": "All",
+        "chat": "Chat",
+        "images": "Images"
+      },
+      "noModels": "No models found.",
+      "kind": {
+        "image": "Image generation",
+        "chat": "Chat"
+      }
+    },
+    "mcpConnectPicker": {
+      "toolsUnavailable": "Could not load tools for {{serverName}} — it will be excluded from this message.",
+      "noServers": "No MCP servers configured"
+    },
+    "mcpAppsPanel": {
+      "connect": "Connect",
+      "connecting": "Connecting…",
+      "notSupported": "Not supported on this connection",
+      "toolsLoadFailed": "Could not load tools for {{serverName}}",
+      "empty": {
+        "connectMode": "No MCP servers are available to this connection yet. Ask an admin to grant your user or team access.",
+        "noServers": "No MCP servers configured. Add servers in Tools -> MCP Servers.",
+        "noneConnected": "No servers connected yet.",
+        "noMatch": "No servers match your search."
+      },
+      "authorized": "Authorized",
+      "disconnect": "Disconnect",
+      "back": "Back",
+      "defaultDescription": "MCP server",
+      "information": "Information",
+      "info": {
+        "serverId": "Server ID",
+        "transport": "Transport",
+        "status": "Status",
+        "connected": "Connected",
+        "notConnected": "Not connected"
+      },
+      "availableTools": "Available Tools",
+      "noTools": "No tools available",
+      "title": "MCP Servers",
+      "beta": "Beta",
+      "connectModeSubtitle": "Click a server to see its tools and connect",
+      "subtitle": "Browse tools, authenticate once, use in chat",
+      "loadingTools": "Loading tools...",
+      "toolsAvailable_one": "{{count}} tool available",
+      "toolsAvailable_other": "{{count}} tools available",
+      "searchPlaceholder": "Search servers...",
+      "tabs": {
+        "all": "All",
+        "connected": "Connected"
+      }
+    },
+    "connectFlowBanner": {
+      "defaultClient": "the application",
+      "defaultServer": "the requested MCP server",
+      "stale": {
+        "title": "The connection cannot continue",
+        "description": "The gateway could not validate this connection. Cancel to return to {{client}}."
+      },
+      "unscoped": {
+        "title": "Connect your MCP servers to {{client}}",
+        "description": "Authorize the servers you want to use below, then click Finish connecting to return to {{client}}."
+      },
+      "multi": {
+        "title": "Allow {{client}} to use {{servers}}",
+        "ready": "Click Finish connecting to give {{client}} access to {{servers}} as you.",
+        "pending": "Authorize each requested server below to continue, or cancel to send {{client}} away."
+      },
+      "single": {
+        "title": "Allow {{client}} to use {{server}}",
+        "pending": "Authorize {{server}} below to continue, or cancel to send {{client}} away.",
+        "ready": "Click Finish connecting to give {{client}} access to {{server}} as you."
+      },
+      "connectServer": "Connect {{server}}",
+      "finish": "Finish connecting",
+      "cancel": "Cancel",
+      "manualDelivery": "My client is on a remote or SSH machine"
+    },
+    "keysPanel": {
+      "relativeTime": {
+        "justNow": "just now",
+        "minutes": "{{minutes}}m ago",
+        "hours": "{{hours}}h ago",
+        "days": "{{days}}d ago"
+      },
+      "validation": {
+        "duration": "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
+        "expiredNeedsDuration": "Expiration is required for expired keys",
+        "gracePeriod": "Must be a duration like 24h, 2d"
+      },
+      "toast": {
+        "rotated": "Key rotated successfully",
+        "rotateFailed": "Failed to rotate key"
+      },
+      "title": "Your API Keys",
+      "description": "View your virtual keys and spend",
+      "descriptionRotate": ". Rotate keys to generate new credentials while optionally keeping the old key valid during a grace period",
+      "columns": {
+        "key": "Key",
+        "spend": "Spend",
+        "expires": "Expires",
+        "created": "Created"
+      },
+      "noKeys": "No keys found",
+      "never": "Never",
+      "expired": "Expired",
+      "rotateKey": "Rotate key",
+      "rotate": "Rotate",
+      "dialog": {
+        "title": "Rotate Key",
+        "saveWarning": "Save this key now; you will not see it again",
+        "newKey": "New Key",
+        "keyAlias": "Key Alias",
+        "maxBudget": "Max Budget (USD)",
+        "tpmLimit": "TPM Limit",
+        "rpmLimit": "RPM Limit",
+        "expireKey": "Expire Key",
+        "durationPlaceholder": "e.g. 30s, 30h, 30d",
+        "current": "Current: {{expiry}}",
+        "expiredSuffix": " (expired)",
+        "newExpiry": "New: {{expiry}}",
+        "gracePeriod": "Grace Period",
+        "gracePeriodPlaceholder": "e.g. 24h, 2d",
+        "close": "Close",
+        "copied": "Copied",
+        "copyKey": "Copy Key",
+        "cancel": "Cancel",
+        "rotate": "Rotate"
+      }
+    },
+    "mcpCredentialsTab": {
+      "relativeTime": {
+        "justNow": "just now",
+        "minutes": "{{minutes}}m ago",
+        "hours": "{{hours}}h ago",
+        "days": "{{days}}d ago"
+      },
+      "expiry": {
+        "never": "Does not expire",
+        "expired": "Expired",
+        "days": "Expires in {{days}}d",
+        "hours": "Expires in {{hours}}h",
+        "minutes": "Expires in {{minutes}}m"
+      },
+      "revokeFailed": "Failed to revoke connection. Please try again.",
+      "title": "App Credentials",
+      "description": "Your stored OAuth connections; used automatically in chat",
+      "columns": {
+        "app": "App",
+        "connected": "Connected",
+        "status": "Status",
+        "actions": "Actions"
+      },
+      "emptyTitle": "No connections yet",
+      "emptyHint": "Go to <integrations>Integrations</integrations> and click <connect>Connect</connect> to authorize an MCP server",
+      "revokeConnection": "Revoke connection",
+      "revokeConfirm": {
+        "title": "Revoke connection?",
+        "description": "This removes the stored OAuth credential for <server/>. You'll need to reconnect to use it in chat again.",
+        "cancel": "Cancel",
+        "confirm": "Revoke"
+      }
+    },
+    "logsPanel": {
+      "status": {
+        "failure": "Failure",
+        "success": "Success"
+      },
+      "notAvailable": "Not available",
+      "empty": "No logs for this period",
+      "loadFailed": "Failed to load your logs",
+      "retry": "Retry",
+      "columns": {
+        "time": "Time",
+        "model": "Model",
+        "status": "Status",
+        "tokens": "Tokens",
+        "duration": "Duration",
+        "cost": "Cost"
+      },
+      "detail": {
+        "title": "Request details",
+        "model": "Model",
+        "cost": "Cost",
+        "tokens": "Tokens",
+        "tokenBreakdown": "{{total}} ({{prompt}} in / {{completion}} out)",
+        "duration": "Duration",
+        "request": "Request",
+        "response": "Response"
+      },
+      "requestCount_one": "{{total}} request",
+      "requestCount_other": "{{total}} requests",
+      "pageOf": " · Page {{page}} of {{totalPages}}",
+      "previous": "Previous",
+      "next": "Next",
+      "title": "Your Logs",
+      "subtitle": "Request logs for your account only"
+    },
+    "usagePanel": {
+      "totalSpend": "Total Spend",
+      "apiRequests": "API Requests",
+      "tokensUsed": "Tokens Used",
+      "tokenSplit": "{{prompt}} in / {{completion}} out",
+      "successRate": "Success Rate",
+      "notApplicable": "N/A",
+      "failedCount": "{{failed}} failed",
+      "title": "Your Usage",
+      "subtitle": "Spend and request activity",
+      "empty": "No usage data for this period",
+      "dailySpend": "Daily Spend",
+      "dailyRequests": "Daily Requests"
+    },
+    "runChatRequest": {
+      "genericError": "Something went wrong. Please try again.",
+      "fileInputHint": " Try a model that supports file inputs, or paste the relevant text.",
+      "researchNeedsBackground": "Enable background chats before starting deep research."
+    },
+    "backgroundChat": {
+      "failed": "The background run failed.",
+      "incomplete": "The run ended before completing its answer.",
+      "expired": "This saved run is no longer available. Its result may have expired on the server."
+    },
+    "useBackgroundChat": {
+      "connectionLost": "Connection lost. Your run may still be running on the server.",
+      "stopFailed": "Could not stop the run. Reconnect and try Stop again."
+    },
+    "chatHistory": {
+      "imageConversation": "Image conversation"
+    },
+    "imageHelpers": {
+      "generatedImageName": "Generated image {{number}}"
+    }
+  },
+  "moyai": {
+    "landing": {
+      "starOnGithub": "Star Moyai on GitHub",
+      "demoFallback": "Watch the demo on GitHub",
+      "demoAlt": "Moyai demo: picking a harness and model, then running a task",
+      "fullWalkthrough": "Full walkthrough on GitHub",
+      "quickConnect": {
+        "invalidUrl": "Enter a full http or https URL, without credentials",
+        "failed": "Could not start quick connect",
+        "trigger": "Quick connect",
+        "title": "Quick connect Moyai",
+        "urlLabel": "Moyai URL",
+        "hint": "You’ll confirm on your Moyai workspace as an admin, then come straight back",
+        "connecting": "Connecting",
+        "connect": "Connect"
+      },
+      "stats": {
+        "cheaper": "cheaper than our Devin bill",
+        "providers": "providers through LiteLLM",
+        "harnesses": "agent harnesses"
+      },
+      "badge": "Now open source",
+      "tagline": "The open source cloud coding agent",
+      "watchDemo": "Watch the demo",
+      "alreadyDeployed": "Already have Moyai deployed?",
+      "askAdmin": "Already have Moyai deployed? Ask a proxy admin to connect it",
+      "worksWith": "Works with Claude Code and Codex",
+      "selfHosted": "Self-hosted · 100+ providers through LiteLLM",
+      "seeItInAction": "See it in action",
+      "seeItInActionBody": "Give it a task from Slack or the browser. It edits code, runs your tests in its own cloud workspace, and opens a pull request while your laptop is closed.",
+      "anyHarness": "Any harness",
+      "anyHarnessFootnote": "Pick the harness per session. Same workspace, tools and permissions.",
+      "anyModel": "Any model, any provider",
+      "anyModelFootnote": "Routed through your LiteLLM gateway, with spend tracked per teammate.",
+      "runYourOwn": "Run your own cloud agent",
+      "runYourOwnBody": "Deploy it on your own infrastructure and point it at this gateway. Your code and credentials stay in your accounts.",
+      "getOnGithub": "Get Moyai on GitHub",
+      "readLaunchPost": "Read the launch post"
+    },
+    "connected": {
+      "workspaceLinked": "Workspace linked",
+      "keyIssued": "Virtual key issued",
+      "modelsAvailable": "models available through LiteLLM",
+      "badge": "Connected",
+      "title": "Moyai connected",
+      "description": "This deployment is now linked to your LiteLLM gateway.",
+      "openMoyai": "Open Moyai",
+      "backToGateway": "Back to AI Gateway"
+    },
+    "page": {
+      "opening": "Opening Moyai",
+      "continueTo": "Continue to {{url}}"
+    }
+  },
+  "themeToggle": {
+    "switchToLight": "Switch to light mode",
+    "switchToDark": "Switch to dark mode"
+  },
+  "mcpOAuthFlow": {
+    "resumeFailed": "Failed to resume OAuth flow. Please retry.",
+    "connected": "Connected successfully"
+  },
+  "playground": {
+    "page": {
+      "accessDenied": {
+        "title": "Access Denied",
+        "description": "Your role does not have access to the Playground. Ask your proxy admin for access to test models."
+      },
+      "title": "Playground",
+      "description": "Send test requests through the gateway with any model, key, guardrail or tool",
+      "tabs": {
+        "chat": "Chat",
+        "compare": "Compare",
+        "compliance": "Compliance",
+        "decisions": "Decisions",
+        "agentBuilder": "Agent builder"
+      }
+    },
+    "chat": {
+      "inspector": {
+        "routing": {
+          "title": "Routing",
+          "requested": "Requested",
+          "requestedDetail": "Requested model",
+          "modelNameCopy": "model name",
+          "servedBy": "Served by",
+          "servedByDetail": "Model group that answered",
+          "providerModel": "Provider model",
+          "deploymentDetail": "Deployment ID {{deploymentId}}",
+          "providerModelDetail": "Model sent to the provider",
+          "providerModelCopy": "provider model",
+          "apiBase": "API base",
+          "apiBaseDetail": "Provider endpoint",
+          "apiBaseCopy": "API base",
+          "callId": "Call ID",
+          "callIdCopy": "call ID",
+          "responseId": "Response ID",
+          "responseIdCopy": "response ID",
+          "fallbacks": "Fallbacks",
+          "retries": "Retries",
+          "overhead": "Overhead",
+          "notReported": "The gateway did not share routing details with this page. Open the dashboard from the proxy to see them"
+        },
+        "guardrails": {
+          "title": "Guardrails and policies",
+          "noGuardrailsRan": "No guardrails ran on this request",
+          "noneRan": "No guardrails or policies ran on this request",
+          "unsupported": "This endpoint does not report which guardrails or policies ran",
+          "guardrail": "Guardrail",
+          "policy": "Policy",
+          "ran": "Ran",
+          "policiesUnreported": "Policies are only reported when the dashboard is opened from the proxy"
+        },
+        "performance": {
+          "title": "Speed and cost",
+          "firstToken": "First token",
+          "total": "Total",
+          "cost": "Cost",
+          "tokensIn": "Tokens in",
+          "tokensOut": "Tokens out",
+          "cached": "Cached",
+          "reasoning": "Reasoning",
+          "gatewayTime": "Gateway time"
+        },
+        "empty": {
+          "title": "Nothing to inspect yet",
+          "description": "Each reply shows here with the deployment that served it, fallbacks, guardrails, timing and cost"
+        },
+        "code": {
+          "sdk": "SDK",
+          "openai": "OpenAI SDK",
+          "azure": "Azure SDK",
+          "copyLabel": "code",
+          "description": "Send this request from your own app. Replace YOUR_LITELLM_API_KEY with a virtual key"
+        },
+        "tabs": {
+          "trace": "Trace",
+          "code": "Code"
+        }
+      },
+      "conversation": {
+        "servedByAfterFallback": "Served by, after a fallback",
+        "servedBy": "Served by",
+        "requestedModel": "Requested model",
+        "metrics": {
+          "label": "Request metrics",
+          "firstToken": "to first token",
+          "total": "total",
+          "in": "in",
+          "out": "out",
+          "reasoning": "reasoning",
+          "cached": "cached",
+          "cachedResponse": "Cached response"
+        },
+        "calledTool": "Called <tool/>",
+        "modelNameCopy": "model name",
+        "requestFailed": "The request failed",
+        "replyCopy": "reply",
+        "inspectLabel": "Inspect this request",
+        "inspect": "Inspect",
+        "waitingFor": "Waiting for {{target}}",
+        "waitingForReply": "Waiting for a reply",
+        "switchedTo": "Switched to {{model}}",
+        "empty": {
+          "title": "Send a test request",
+          "description": "Pick a model and anything the request should go through, then inspect what the gateway did with it"
+        },
+        "label": "Conversation"
+      },
+      "modelName": {
+        "copied": "{{label}} copied",
+        "copyFailed": "Unable to copy to clipboard",
+        "copy": "Copy {{label}}",
+        "fallback": "Fallback"
+      },
+      "reply": {
+        "generatedImage": "Generated image"
+      },
+      "dispatch": {
+        "toolExecuted": "Tool executed successfully."
+      },
+      "composer": {
+        "stop": "Stop",
+        "send": "Send message",
+        "pickTool": "Pick a server and a tool above to fill in its arguments",
+        "message": "Message",
+        "vectorStores": "Vector stores",
+        "noVectorStores": "No vector stores yet",
+        "guardrails": "Guardrails",
+        "noGuardrails": "No guardrails yet",
+        "codeInterpreter": "Code interpreter"
+      },
+      "controls": {
+        "endpoint": "Endpoint",
+        "voice": "Voice",
+        "voiceValue": "Voice: {{voice}}",
+        "removeFile": "Remove {{name}}"
+      },
+      "pickers": {
+        "useCustom": "<sans>Use</sans> <value/>",
+        "searchChecklist": "Search {{label}}",
+        "nothingMatches": "Nothing matches",
+        "customName": "Custom name",
+        "loading": "Loading {{label}}s",
+        "searchTargets": "Search {{label}}s",
+        "noMatching": "No matching {{label}}"
+      },
+      "settings": {
+        "keySources": {
+          "session": "Current UI session",
+          "custom": "Virtual key",
+          "label": "Send as"
+        },
+        "tags": {
+          "placeholder": "Add a tag",
+          "empty": "No tags yet, type one to add it",
+          "add": "Add {{tag}}",
+          "label": "Tags"
+        },
+        "headers": {
+          "nameLabel": "Header name",
+          "namePlaceholder": "Name",
+          "valueLabel": "Header value",
+          "valuePlaceholder": "Value",
+          "remove": "Remove {{name}}",
+          "fallbackName": "header",
+          "add": "Add header",
+          "label": "Custom headers",
+          "hint": "Sent with every request, like anthropic-beta"
+        },
+        "baseUrl": {
+          "label": "Proxy base URL",
+          "clear": "Clear",
+          "use": "Use {{url}}",
+          "placeholder": "Same as this dashboard",
+          "target": "Requests go to {{url}}"
+        },
+        "sampling": {
+          "temperatureValue": "Temperature value",
+          "default": "Default",
+          "temperature": "Temperature",
+          "maxTokens": "Max tokens"
+        },
+        "trigger": "Settings",
+        "virtualKey": {
+          "label": "Virtual key",
+          "placeholder": "Paste a virtual key",
+          "hint": "Pick a virtual key to test what it can access"
+        },
+        "toggles": {
+          "stream": "Stream response",
+          "simulateFallback": "Simulate a fallback",
+          "sessions": "Keep context on the gateway",
+          "sessionsHint": "Sends previous_response_id instead of the whole history",
+          "lastResponse": "Last response",
+          "responseIdCopy": "response ID"
+        },
+        "advanced": "Advanced"
+      },
+      "mcp": {
+        "useRow": "Use {{label}}",
+        "needsKey": "Needs your key",
+        "allTools": "All {{total}} tools",
+        "someTools": "{{allowed}} of {{total}} tools",
+        "allServers": {
+          "title": "All MCP servers",
+          "description": "Every server this key can reach, with all of its tools"
+        },
+        "toolsetFixed": "A toolset's tools are fixed by whoever created it",
+        "nothingSelected": {
+          "title": "Nothing selected",
+          "description": "Pick a server or toolset on the left"
+        },
+        "replaceKey": "Replace key",
+        "checkServer": "Check this server to choose which of its tools the model can call",
+        "toolsFailed": "Couldn't load this server's tools",
+        "noTools": "This server has no tools",
+        "searchTools": "Search {{name}} tools",
+        "allowAll": "Allow all",
+        "trigger": "MCP",
+        "title": "MCP servers",
+        "description": "Pick the servers the model can use, then limit their tools. A server allows every tool until you uncheck some.",
+        "noServers": {
+          "title": "No MCP servers for this key",
+          "description": "Add one on the <page>MCP servers page</page>, or send as a key that can reach one"
+        },
+        "searchServers": "Search servers",
+        "serversGroup": "MCP servers",
+        "toolsetsGroup": "Toolsets",
+        "done": "Done"
+      },
+      "byok": {
+        "failed": "Failed to connect",
+        "enterKey": "Enter your API key",
+        "connected": "Connected to {{name}}",
+        "replaceTitle": "Replace your {{name}} API key",
+        "connectTitle": "{{name}} needs your API key",
+        "replaceDescription": "The new key replaces the one the gateway uses for {{name}}.",
+        "connectDescription": "The gateway calls {{name}} with your own key. Connect it to list and use its tools.",
+        "keyLabel": "{{name}} API key",
+        "keyPlaceholder": "Paste your API key",
+        "helpLink": "Where to find this key",
+        "save": "Save the key for next time",
+        "connect": "Connect",
+        "cancel": "Cancel",
+        "replaceKey": "Replace key",
+        "connectKey": "Connect key"
+      },
+      "send": {
+        "missingImage": "Please upload at least one image for editing",
+        "missingAudio": "Please upload an audio file for transcription",
+        "missingAgent": "Please select an agent to send a message",
+        "missingModel": "Please select a model before sending a request",
+        "cancelled": "Request cancelled",
+        "missingTool": "Pick an MCP server and a tool to call",
+        "missingParameters": "Please fill in all required parameters",
+        "missingKey": "Please provide a Virtual Key or select Current UI Session",
+        "attachmentFailed": "Failed to process the attachment. Please try again."
+      },
+      "page": {
+        "models": {
+          "failed": "Unable to load models for this key",
+          "needsKey": "Enter a virtual key to load models",
+          "empty": "No models available for this endpoint",
+          "label": "Model",
+          "placeholder": "Select a model"
+        },
+        "newChat": "New chat",
+        "requests_one": "{{count}} request",
+        "requests_other": "{{count}} requests",
+        "historyCleared": "Chat history cleared.",
+        "resetDone": "Chat and settings reset",
+        "agents": {
+          "label": "Agent",
+          "placeholder": "Select an agent",
+          "group": "Agents",
+          "empty": "No agents available for this key"
+        },
+        "servers": {
+          "label": "Server",
+          "placeholder": "Select an MCP server",
+          "group": "MCP servers",
+          "toolsetsGroup": "Toolsets",
+          "empty": "No MCP servers available for this key"
+        },
+        "tools": {
+          "label": "Tool",
+          "placeholder": "Select a tool",
+          "group": "Tools",
+          "failed": "Unable to load tools for this server",
+          "empty": "This server has no tools"
+        },
+        "guardrailsGroup": "Guardrails",
+        "policiesGroup": "Policies",
+        "vectorStoresGroup": "Vector stores",
+        "inspector": "Inspector",
+        "moreActions": "More chat actions",
+        "newChatKeepSettings": "New chat, keep settings",
+        "resetAll": "Reset chat and settings"
+      },
+      "endpointCapabilities": {
+        "placeholders": {
+          "default": "Send a test request",
+          "image": "Describe the image you want to generate",
+          "video": "Describe the video you want to generate",
+          "imageEdits": "Describe how to edit the images",
+          "embeddings": "Text to embed",
+          "speech": "Text to turn into speech",
+          "transcription": "Optional context for the transcription",
+          "agent": "Send a message to the agent"
+        },
+        "attach": {
+          "chat": "Attach an image or PDF",
+          "images": "Add images to edit",
+          "audio": "Attach an audio file"
+        },
+        "suggestions": {
+          "poem": "Write me a poem",
+          "quantum": "Explain quantum computing",
+          "email": "Draft a polite email requesting a meeting",
+          "agentHelp": "What can you help me with?",
+          "agentAbout": "Tell me about yourself",
+          "agentTasks": "What tasks can you perform?"
+        },
+        "codeInterpreterSuggestions": {
+          "salesChart": "Generate sample sales data CSV and create a chart",
+          "providersChart": "Create a PNG bar chart comparing AI gateway providers including LiteLLM",
+          "pricingChart": "Generate a CSV of LLM pricing data and visualize it as a line chart"
+        }
+      }
+    },
+    "compliance": {
+      "library": {
+        "customCategoryDescription": "Custom prompts added this session.",
+        "title": "Test Prompts",
+        "searchPlaceholder": "Search prompts...",
+        "selectAll": "Select All",
+        "clear": "Clear",
+        "add": "Add",
+        "csv": "CSV",
+        "promptCount": "{{total}} prompts",
+        "clearFramework": "Clear",
+        "selectFramework": "All",
+        "clearCategory": "Clear",
+        "selectCategory": "Select all",
+        "deletePrompt": "Delete"
+      },
+      "csv": {
+        "errors": {
+          "notCsv": "Please upload a .csv file.",
+          "tooLarge": "File too large (max 5 MB).",
+          "empty": "CSV file is empty.",
+          "missingColumns": "Missing required columns: {{columns}}. Expected: prompt, expected_result. Optional: framework, category.",
+          "missingPrompt": "Row {{row}}: missing prompt text",
+          "invalidExpected": "Row {{row}}: expected_result must be \"fail\" or \"pass\", got \"{{value}}\"",
+          "moreErrors": "...and {{remaining}} more errors",
+          "noValidPrompts": "No valid prompts found in CSV.",
+          "parseFailed": "Failed to parse CSV file."
+        },
+        "categoryDescription": "Prompts uploaded from CSV — {{category}}.",
+        "title": "Upload CSV Dataset",
+        "downloadTemplate": "Download Template",
+        "requiredColumns": "Required columns:",
+        "expectedHint": "(fail or pass)",
+        "optionalColumns": "Optional columns:",
+        "choose": "Choose CSV file",
+        "cancel": "Cancel"
+      },
+      "quickTest": {
+        "allowedModelResponse": "Allowed — model response received.",
+        "blockedBy": "Blocked — {{reason}}",
+        "contentFilter": "content filter",
+        "allowedClean": "Allowed — no policy or guardrail violations detected.",
+        "error": "Error: {{message}}",
+        "test": "Test",
+        "testTargets": "Test {{targets}}",
+        "testingAgainst": "Testing against:",
+        "noTargets": "No policies or guardrails selected — select above to test against specific rules.",
+        "empty": "Type a prompt below to quickly test it.",
+        "blocked": "Blocked",
+        "allowed": "Allowed",
+        "returned": "Returned: ",
+        "placeholder": "Enter text to test...",
+        "shortcuts": "Press <submit>Enter</submit> to submit · <newline>Shift+Enter</newline> for new line"
+      },
+      "config": {
+        "policyCount_one": "{{count}} policy",
+        "policyCount_other": "{{count}} policies",
+        "guardrailCount_one": "{{count}} guardrail",
+        "guardrailCount_other": "{{count}} guardrails",
+        "title": "Test Configuration",
+        "descriptionWithPolicies": "Select policies, guardrails, or both to test against.",
+        "descriptionGuardrailsOnly": "Select guardrails to test against.",
+        "policies": "Policies",
+        "or": "or",
+        "guardrails": "Guardrails",
+        "selectedCount": "{{selected}} selected",
+        "noneSelected": "None selected",
+        "noGuardrails": "No guardrails available. Create guardrails in the Guardrails page.",
+        "removeGuardrail": "Remove",
+        "stop": "Stop",
+        "simulate": "Simulate ({{selected}})",
+        "running": "Running...",
+        "reset": "Reset"
+      },
+      "addPrompt": {
+        "placeholder": "Enter your test prompt...",
+        "cancel": "Cancel",
+        "add": "Add"
+      },
+      "expected": {
+        "shouldFail": "Should Fail",
+        "shouldPass": "Should Pass"
+      },
+      "tabs": {
+        "quickTest": "Quick Test",
+        "batchResults": "Batch Results"
+      },
+      "results": {
+        "title": "Results",
+        "export": "Export CSV",
+        "falseNegativeHint": "Allowed content that should have been blocked",
+        "falsePositiveHint": "Blocked content that should have been allowed",
+        "falseNegativeShort": "{{value}} FN",
+        "falsePositiveShort": "{{value}} FP",
+        "empty": "Select prompts and click Simulate to run batch compliance tests.",
+        "total": "total",
+        "correct": "correct",
+        "falseNegative": "false negative",
+        "falsePositive": "false positive",
+        "score": "Score",
+        "expectBlock": "Expect Block",
+        "expectAllow": "Expect Allow",
+        "match": "✓ Match",
+        "gap": "✗ Gap",
+        "collapse": "Collapse",
+        "expand": "Expand",
+        "triggeredBy": "Triggered by:",
+        "verdict": "Verdict:",
+        "correctlyHandled": "Correctly handled",
+        "shouldHaveBlocked": "Gap — should have been blocked",
+        "incorrectlyBlocked": "False positive — incorrectly blocked",
+        "llmResponse": "LLM response:"
+      }
+    },
+    "compare": {
+      "selector": {
+        "loading": "Loading {{noun}}s...",
+        "empty": "No {{noun}}s available"
+      },
+      "input": {
+        "placeholder": "Type your message... (Shift+Enter for new line)",
+        "send": "Send message"
+      },
+      "messages": {
+        "assistant": "Assistant",
+        "you": "You",
+        "generating": "Generating response...",
+        "waiting": "Waiting for a response..."
+      },
+      "panel": {
+        "syncSettings": "Sync Settings Across Models",
+        "generalSettings": "General Settings",
+        "tags": "Tags",
+        "vectorStores": "Vector Stores",
+        "guardrails": "Guardrails",
+        "advancedSettings": "Advanced Settings",
+        "useAdvancedParams": "Use Advanced Parameters",
+        "temperature": "Temperature",
+        "maxTokens": "Max Tokens"
+      },
+      "followUps": {
+        "summarize": "Can you summarize the key points?",
+        "assumptions": "What assumptions did you make?",
+        "nextSteps": "What are the next steps?"
+      },
+      "suggestions": {
+        "poem": "Write me a poem",
+        "quantum": "Explain quantum computing",
+        "email": "Draft a polite email requesting a meeting"
+      },
+      "toasts": {
+        "missingKey": "Please provide a Virtual Key or select Current UI Session"
+      },
+      "header": {
+        "keySource": "Virtual Key Source",
+        "virtualKey": "Virtual Key",
+        "currentSession": "Current UI Session",
+        "keyPlaceholder": "Enter Virtual Key",
+        "endpoint": "Endpoint",
+        "clearAll": "Clear All Chats",
+        "addComparison": "Add Comparison",
+        "maxReached": "Compare up to 3 models at a time",
+        "addAnother": "Add another comparison"
+      },
+      "attachment": {
+        "ready": "Attachment ready to send",
+        "preview": "Upload preview",
+        "image": "Image",
+        "remove": "Remove attachment"
+      }
+    },
+    "chatUi": {
+      "a2aMetrics": {
+        "header": "A2A Metadata",
+        "totalLatency": "Total latency",
+        "ttft": "TTFT: {{seconds}}s",
+        "timeToFirstToken": "Time to first token",
+        "copyTaskId": "Copy task ID {{taskId}}",
+        "task": "Task: {{id}}",
+        "clickToCopy": "Click to copy: {{id}}",
+        "copySessionId": "Copy session ID {{sessionId}}",
+        "session": "Session: {{id}}",
+        "details": "Details",
+        "statusMessage": "Status Message:",
+        "taskId": "Task ID:",
+        "sessionId": "Session ID:",
+        "customMetadata": "Custom Metadata:"
+      },
+      "additionalModelSettings": {
+        "streamResponses": "Stream responses",
+        "streamResponsesHelp": "Help: Stream responses",
+        "streamResponsesTooltip": "Streams the answer token by token. Uncheck to send a non-streaming request and render the full response at once.",
+        "useAdvancedParams": "Use Advanced Parameters",
+        "simulateFailure": "Simulate failure to test fallbacks",
+        "simulateFailureHelp": "Help: Simulate failure to test fallbacks",
+        "simulateFailureDescription": "Causes the first request to fail so the router tries fallbacks (if configured). Use this to verify your fallback setup.",
+        "behaviorDiffers": "Behavior can differ when keys, teams, or router settings are configured. <docs>Learn more</docs>",
+        "temperature": "Temperature",
+        "temperatureHelp": "Help: Temperature",
+        "temperatureTooltip": "Controls randomness. Lower values make output more deterministic, higher values more creative.",
+        "temperatureValue": "Temperature value",
+        "maxTokens": "Max Tokens",
+        "maxTokensHelp": "Help: Max Tokens",
+        "maxTokensTooltip": "Maximum number of tokens to generate in the response.",
+        "maxTokensValue": "Max tokens value"
+      },
+      "agentBuilderView": {
+        "proxyBaseUrl": "Proxy base URL",
+        "callYourAgent": "Call your agent (cURL)",
+        "createKeyTitle": "Create a key for this agent",
+        "createKeyDescription": "Create a virtual key that can only call this agent. The key will be scoped to you (user_id) and restricted to the model <model/>.",
+        "createKeyButton": "Create key for this agent",
+        "keyCreationDisabled": "Key creation is disabled for your account.",
+        "keyCreated": "Key created. It is shown in the cURL example above — copy the snippet to use it.",
+        "loadAgentsFailed": "Failed to load agents",
+        "nameAndModelRequired": "Name and underlying model are required",
+        "saveFailed": "Failed to save agent",
+        "updated": "Agent updated successfully",
+        "updateFailed": "Failed to update agent",
+        "virtualKeyCreated": "Virtual key created. Use it in the curl example below.",
+        "keyValueMissing": "Key created but value not returned",
+        "createKeyFailed": "Failed to create key for agent",
+        "deleted": "Agent deleted",
+        "deleteFailed": "Failed to delete agent",
+        "signIn": "Sign in to use Agent Builder.",
+        "title": "Agent Builder",
+        "saveAgent": "Save Agent",
+        "subtitle": "Build Agents that pass your compliance requirements.",
+        "experimentalNotice": "Agent Builder is experimental and may change or be removed without notice. We’d love your feedback—email us at <email>product@berri.ai</email>.",
+        "agents": "Agents",
+        "addAgent": "Add agent",
+        "newAgent": "New agent",
+        "noAgents": "No agents yet. Add an agent to get started.",
+        "missingModelId": "This agent cannot be updated or deleted here (missing model id). Manage it from Models & Endpoints.",
+        "agentName": "Agent name",
+        "agentNamePlaceholder": "My Agent",
+        "systemPrompt": "System prompt",
+        "systemPromptPlaceholder": "You are a helpful assistant...",
+        "underlyingLlm": "Underlying LLM",
+        "selectModel": "Select model",
+        "temperature": "Temperature",
+        "maxTokens": "Max tokens",
+        "mcpServers": "MCP servers",
+        "mcpServersPlaceholder": "Select MCP servers to attach (same format as chat completions API)",
+        "mcpServersSaved_one": "{{count}} MCP server saved. Use the same <field>tools</field> array in chat completions when calling this agent.",
+        "mcpServersSaved_other": "{{count}} MCP servers saved. Use the same <field>tools</field> array in chat completions when calling this agent.",
+        "updateAgent": "Update Agent",
+        "delete": "Delete",
+        "testInChat": "Test in Chat",
+        "saveFirst": "Save an agent first to test in Chat.",
+        "selectForBatch": "Select an agent to run batch tests.",
+        "selectForConnect": "Select an agent to see how to connect.",
+        "tabs": {
+          "configure": "Configure",
+          "chat": "Chat",
+          "batchTest": "Batch Test",
+          "connect": "Connect"
+        },
+        "deleteDialog": {
+          "title": "Delete agent",
+          "description": "Are you sure you want to delete \"{{name}}\"? This cannot be undone.",
+          "cancel": "Cancel",
+          "confirm": "Delete"
+        }
+      },
+      "audioRenderer": {
+        "unsupported": "Your browser does not support the audio element."
+      },
+      "chatImageRenderer": {
+        "pdfAttachment": "PDF attachment",
+        "uploadedImage": "User uploaded image"
+      },
+      "responsesImageRenderer": {
+        "pdfAttachment": "PDF attachment",
+        "uploadedImage": "User uploaded image"
+      },
+      "chatImageUpload": {
+        "attach": "Attach image or PDF"
+      },
+      "responsesImageUpload": {
+        "attach": "Attach image or PDF"
+      },
+      "chatMessageBubble": {
+        "generatedImage": "Generated image"
+      },
+      "uploadValidation": {
+        "tooLarge": "\"{{name}}\" is too large. Maximum size is {{size}}.",
+        "unsupportedAttachment": "\"{{name}}\" is not a supported attachment. Use PNG, JPEG, GIF, WebP, or PDF.",
+        "tooManyImages": "You can upload at most {{max}} images.",
+        "unsupportedImage": "\"{{name}}\" is not a supported image. Use PNG, JPEG, GIF, or WebP.",
+        "unsupportedAudio": "\"{{name}}\" is not a supported audio file. Use MP3, MP4, MPEG, MPGA, M4A, WAV, or WEBM."
+      },
+      "codeInterpreterOutput": {
+        "pythonCodeExecuted": "Python Code Executed",
+        "loadingImage": "Loading image...",
+        "generatedChart": "Generated chart",
+        "download": "Download",
+        "imageNotAvailable": "Image not available"
+      },
+      "codeInterpreterTool": {
+        "openAIOnlyToast": "Code Interpreter is only available for OpenAI models",
+        "title": "Code Interpreter",
+        "about": "About Code Interpreter",
+        "description": "Run Python code to generate files, charts, and analyze data. Container is created automatically.",
+        "enable": "Enable Code Interpreter",
+        "unsupported": "Code Interpreter is currently only supported for OpenAI models. ",
+        "requestSupport": "Request support for other providers"
+      },
+      "endpointSelector": {
+        "placeholder": "Select an endpoint"
+      },
+      "filePreviewCard": {
+        "uploadPreview": "Upload preview",
+        "image": "Image",
+        "remove": "Remove {{name}}"
+      },
+      "searchResultsDisplay": {
+        "hideSources": "Hide sources",
+        "showSources": "Show sources ({{total}})",
+        "query": "Query:",
+        "quotedQuery": "\"{{query}}\"",
+        "resultCount_one": "{{count}} result",
+        "resultCount_other": "{{count}} results",
+        "resultFallback": "Result {{number}}",
+        "metadata": "Metadata:"
+      },
+      "sessionManagement": {
+        "copied": "Response ID copied to clipboard!",
+        "copyFailed": "Unable to copy response ID",
+        "apiReady": "API Session: Ready",
+        "uiReady": "UI Session: Ready",
+        "responseIdPrefix": "Response ID",
+        "uiSessionPrefix": "UI Session",
+        "apiPending": "LiteLLM will manage session using previous_response_id",
+        "uiPending": "UI will manage session using chat history",
+        "apiActive": "LiteLLM API session active - context maintained server-side",
+        "uiActive": "UI session active - context maintained client-side",
+        "title": "Session Management",
+        "about": "About session management",
+        "description": "Choose between LiteLLM API session management (using previous_response_id) or UI-based session management (using chat history)",
+        "uiLabel": "UI",
+        "toggle": "Use API session management",
+        "apiLabel": "API",
+        "copyResponseId": "Copy response ID",
+        "copyToContinue": "Copy response ID to continue session:"
+      },
+      "realtimePlayground": {
+        "selectModelFirst": "Please select a model first",
+        "connectedStatus": "Connected to realtime API",
+        "errorStatus": "Error: {{message}}",
+        "websocketError": "WebSocket error",
+        "disconnectedStatus": "Disconnected",
+        "connectionFailed": "Connection failed: {{message}}",
+        "listeningStatus": "🎙️ Listening...",
+        "microphoneError": "Microphone error: {{message}}",
+        "title": "Realtime Voice Chat",
+        "connected": "Connected",
+        "connecting": "Connecting...",
+        "disconnected": "Disconnected",
+        "voice": "Voice",
+        "connect": "Connect",
+        "disconnect": "Disconnect",
+        "emptyTitle": "Realtime Voice Playground",
+        "emptyIntro": "Click <action>Connect</action> to start a realtime session. You can speak using your microphone or type messages.",
+        "emptyResponds": "The AI will respond with voice and text.",
+        "you": "You",
+        "ai": "AI",
+        "stopRecording": "Stop recording",
+        "startRecording": "Start recording",
+        "inputPlaceholder": "Type a message or use the mic...",
+        "send": "Send",
+        "listeningHint": "Listening — speak into your microphone. Server VAD will detect when you stop."
+      },
+      "chatUi": {
+        "requestCancelled": "Request cancelled",
+        "allMcpServers": "All MCP Servers",
+        "allMcpServersDescription": "Use all available MCP servers",
+        "selectEndpoint": "Please select an endpoint before sending a request",
+        "uploadImageForEdit": "Please upload at least one image for editing",
+        "uploadAudio": "Please upload an audio file for transcription",
+        "selectAgentToSend": "Please select an agent to send a message",
+        "selectMcpServer": "Please select an MCP server to test",
+        "selectMcpTool": "Please select an MCP tool to call",
+        "waitForSchema": "Please wait for tool schema to load",
+        "fillRequiredParams": "Please fill in all required parameters",
+        "selectModelToSend": "Please select a model before sending a request",
+        "provideKey": "Please provide a Virtual Key or select Current UI Session",
+        "processImageFailed": "Failed to process image. Please try again.",
+        "toolExecuted": "Tool executed successfully.",
+        "historyCleared": "Chat history cleared.",
+        "noModelsForKey": "No models available for this key",
+        "modelsLoadFailed": "Unable to load models for this key",
+        "enterKeyForModels": "Enter a Virtual Key to load models",
+        "noModelsForEndpoint": "No models available for this endpoint",
+        "configurations": "Configurations",
+        "keySource": "Virtual Key Source",
+        "virtualKey": "Virtual Key",
+        "currentSession": "Current UI Session",
+        "customKeyPlaceholder": "Enter custom Virtual Key",
+        "customProxyBaseUrl": "Custom Proxy Base URL",
+        "fill": "Fill",
+        "clear": "Clear",
+        "customProxyPlaceholder": "Optional: Enter custom proxy URL (e.g., http://localhost:5000)",
+        "endpointType": "Endpoint Type",
+        "voice": "Voice",
+        "selectModel": "Select Model",
+        "modelSettings": "Model Settings",
+        "modelSettingsUnavailable": "Model Settings unavailable",
+        "advancedParamsChatOnly": "Advanced parameters are only supported for chat models currently",
+        "loadingModels": "Loading models...",
+        "selectAModel": "Select a Model",
+        "customModelOption": "Enter custom model",
+        "customModelPlaceholder": "Enter custom model name",
+        "selectAgent": "Select Agent",
+        "selectAnAgent": "Select an Agent",
+        "noAgents": "No agents found. Create agents via /v1/agents endpoint.",
+        "tags": "Tags",
+        "customHeaders": "Custom Headers",
+        "customHeadersHint": "Sent with every playground request, e.g. provider-specific headers like anthropic-beta.",
+        "mcpServer": "MCP Server",
+        "mcpServers": "MCP Servers",
+        "aboutMcp": "About MCP servers and toolsets",
+        "mcpDirectHint": "Select an MCP server or toolset to test tools directly.",
+        "mcpChatHint": "Select MCP servers or toolsets to use in your conversation.",
+        "selectMcpServerPlaceholder": "Select MCP server",
+        "loading": "Loading...",
+        "noMcpServers": "No MCP servers",
+        "selectMcpServersPlaceholder": "Select MCP servers",
+        "selectTool": "Select Tool",
+        "selectToolPlaceholder": "Select a tool to call",
+        "allToolsDefault": "All tools (default)",
+        "connected": "Connected",
+        "reconnect": "Reconnect",
+        "connect": "Connect",
+        "vectorStore": "Vector Store",
+        "aboutVectorStores": "About vector stores",
+        "guardrails": "Guardrails",
+        "aboutGuardrails": "About guardrails",
+        "policies": "Policies",
+        "aboutPolicies": "About policies",
+        "chatTitle": "Chat",
+        "testKeyTitle": "Test Key",
+        "clearChat": "Clear Chat",
+        "getCode": "Get Code",
+        "emptyState": "Start a conversation, generate an image, or handle audio",
+        "assistant": "Assistant",
+        "loadingLabel": "Loading",
+        "jumpToBottom": "Jump to bottom",
+        "imageDropzone": "Click or drag images to upload",
+        "imageDropzoneHint": "Support for PNG, JPG, JPEG, GIF, WebP. Multiple images supported.",
+        "addMore": "Add more",
+        "audioDropzone": "Click or drag audio file to upload",
+        "audioDropzoneHint": "Support for MP3, MP4, MPEG, MPGA, M4A, WAV, WEBM formats. Max file size: 25 MB.",
+        "remove": "Remove",
+        "runningPython": "Running Python code...",
+        "codeInterpreterActive": "Code Interpreter Active",
+        "disable": "Disable",
+        "codeInterpreterEnabled": "Code Interpreter enabled!",
+        "loadingToolSchema": "Loading tool schema...",
+        "generatedCode": "Generated Code",
+        "sdkType": "SDK Type",
+        "copied": "Copied to clipboard!",
+        "copyFailed": "Unable to copy to clipboard",
+        "copyToClipboard": "Copy to Clipboard",
+        "close": "Close",
+        "toolsetDescription": "Toolset ({{tools}} tools)",
+        "apiCallsSentTo": "API calls will be sent to: {{url}}",
+        "modeSublabel": "Mode: {{mode}}",
+        "limitToolsFor": "Limit tools for {{server}}:",
+        "byokRequired": "{{server}} requires your API key",
+        "vectorStoreHint": "Select vector store(s) to use for this LLM API call. You can set up your vector store <page>here</page>.",
+        "guardrailsHint": "Select guardrail(s) to use for this LLM API call. You can set up your guardrails <page>here</page>.",
+        "policiesHint": "Select policy/policies to apply to this LLM API call. Policies define which guardrails are applied based on conditions. You can set up your policies <page>here</page>.",
+        "uploadPreview": "Upload preview {{number}}",
+        "removeFile": "Remove {{name}}",
+        "audioSize": "({{size}} MB)",
+        "placeholders": {
+          "chat": "Type your message... (Shift+Enter for new line)",
+          "a2a": "Send a message to the A2A agent...",
+          "imageEdits": "Describe how you want to edit the image...",
+          "speech": "Enter text to convert to speech...",
+          "transcription": "Optional: Add context or prompt for transcription...",
+          "image": "Describe the image you want to generate..."
+        },
+        "codeInterpreterPrompts": {
+          "salesChart": "Generate sample sales data CSV and create a chart",
+          "gatewayChart": "Create a PNG bar chart comparing AI gateway providers including LiteLLM",
+          "pricingChart": "Generate a CSV of LLM pricing data and visualize it as a line chart"
+        },
+        "suggestions": {
+          "a2aHelp": "What can you help me with?",
+          "a2aAbout": "Tell me about yourself",
+          "a2aTasks": "What tasks can you perform?",
+          "poem": "Write me a poem",
+          "quantum": "Explain quantum computing",
+          "email": "Draft a polite email requesting a meeting"
+        },
+        "toolsetsInfo": {
+          "title": "How Toolsets Work",
+          "howToUse": "How to use a toolset:",
+          "stepPicker": "The tool picker will show only the tools included in that toolset.",
+          "stepFill": "Select a tool and fill in its parameters, then send.",
+          "stepRouted": "The tool call is routed to the correct underlying MCP server automatically.",
+          "creating": "Creating toolsets:",
+          "intro": "<term>Toolsets</term> are named collections of specific tools from one or more MCP servers. Instead of exposing all tools from a server, a toolset gives an agent exactly the tools it needs.",
+          "stepSelect": "Select a <badge>Toolset</badge> (purple badge) from the MCP Servers dropdown.",
+          "example": "<label>Example:</label> A \"GitHub Read-only\" toolset might include only <tool>list_repos</tool> and <tool>get_file</tool> from a GitHub MCP server, preventing agents from making writes.",
+          "creatingDescription": "Admins can create and manage toolsets from the <place>MCP</place> page → <place>Toolsets</place> tab. Toolsets can then be assigned to keys and teams to scope their tool access."
+        }
+      },
+      "voices": {
+        "alloy": "Alloy - Professional and confident",
+        "ash": "Ash - Casual and relaxed",
+        "ballad": "Ballad - Smooth and melodic",
+        "coral": "Coral - Warm and engaging",
+        "echo": "Echo - Friendly and conversational",
+        "fable": "Fable - Wise and measured",
+        "nova": "Nova - Friendly and conversational",
+        "onyx": "Onyx - Deep and authoritative",
+        "sage": "Sage - Wise and measured",
+        "shimmer": "Shimmer - Bright and cheerful"
+      }
+    },
+    "systemOne": {
+      "curlPreview": {
+        "title": "cURL request",
+        "fixIssues_one": "Fix {{count}} issue on the Form tab before copying",
+        "fixIssues_other": "Fix {{count}} issues on the Form tab before copying",
+        "replaceKey": "Replace $LITELLM_API_KEY with a virtual key",
+        "copy": "Copy cURL"
+      },
+      "decisionFormControls": {
+        "question": "Question {{number}}"
+      },
+      "openAIDecisionsForm": {
+        "choices": "Choices",
+        "choiceValueType": "Choice {{number}} value type",
+        "choiceValue": "Choice {{number}} value",
+        "removeChoice": "Remove choice {{number}}",
+        "choiceDescription": "Choice {{number}} description",
+        "optionalDescription": "Optional description",
+        "addChoice": "Add choice",
+        "levels": "Levels, lowest first",
+        "levelLabel": "Level {{number}} label",
+        "labelPlaceholder": "Label",
+        "levelDescription": "Level {{number}} description",
+        "removeLevel": "Remove level {{number}}",
+        "addLevel": "Add level",
+        "question": "Question {{number}}",
+        "removeQuestion": "Remove question {{number}}",
+        "name": "Name",
+        "questionName": "Question name",
+        "questionNamePlaceholder": "Optional question name",
+        "answerType": "Answer type",
+        "instructions": "Instructions",
+        "instructionsPlaceholder": "What should the model decide?",
+        "unreadable": "This request has a shape the form can't show.",
+        "resetToExample": "Reset to example",
+        "inputMessages": "Input contains messages. Form edits keep them unchanged.",
+        "input": "Input",
+        "inputPlaceholder": "Paste the text the model should decide about",
+        "addQuestion": "Add question",
+        "safetyIdentifier": "Safety identifier",
+        "safetyIdentifierPlaceholder": "Optional",
+        "types": {
+          "predicate": "Predicate",
+          "choice": "Choice",
+          "score": "Score"
+        },
+        "valueTypes": {
+          "text": "Text",
+          "true": "true (boolean)",
+          "false": "false (boolean)"
+        }
+      },
+      "systemOneForm": {
+        "enterName": "Enter a name",
+        "nameTaken": "\"{{name}}\" is already used",
+        "options": "Options",
+        "optionLabel": "Option label",
+        "optionDescription": "Description of {{label}}",
+        "optionalDescription": "Optional description",
+        "removeOption": "Remove option {{label}}",
+        "addOption": "Add option",
+        "yesMeans": "Yes means",
+        "noMeans": "No means",
+        "optional": "Optional",
+        "levels": "Levels, lowest first",
+        "level": "Level {{number}}",
+        "levelPlaceholder": "What this score means",
+        "removeLevel": "Remove level {{number}}",
+        "addLevel": "Add level",
+        "question": "Question {{title}}",
+        "removeQuestion": "Remove question {{title}}",
+        "name": "Name",
+        "questionName": "Question name",
+        "questionNamePlaceholder": "e.g. area",
+        "answerType": "Answer type",
+        "instructions": "Instructions",
+        "instructionsPlaceholder": "What should the model decide?",
+        "unreadable": "This request has a shape the form can't show.",
+        "resetToExample": "Reset to example",
+        "input": "Input",
+        "inputHint": "The text the model reads before it answers, such as a support ticket or a chat message.",
+        "inputPlaceholder": "Paste the text the model should decide about",
+        "addQuestion": "Add question",
+        "types": {
+          "choice": "Choice",
+          "noul": "Yes / no",
+          "score": "Score"
+        },
+        "typeHelp": {
+          "noul": "The model returns the probability that the answer is yes"
+        }
+      },
+      "responseView": {
+        "probability": "{{label}} probability",
+        "percentSelected": "{{percentage}}%, selected",
+        "percentYes": "{{percentage}}% yes",
+        "yes": "Yes",
+        "selectedChoice": "Selected choice",
+        "confidence": "{{percentage}}% confidence",
+        "score": "Score",
+        "refused": "Model refused to answer",
+        "rawJson": "Decisions response JSON",
+        "question": "Question {{number}}",
+        "loading": "Calculating calibrated probabilities",
+        "failed": "Decisions request failed",
+        "response": "Response",
+        "empty": "Send a request to see answers here",
+        "responseJson": "Response JSON",
+        "latency": "{{ms}} ms",
+        "usage": "{{input}} in / {{output}} out",
+        "rawResponse": "Raw response"
+      },
+      "systemOneUi": {
+        "loadExample": "Load example",
+        "editorRegion": "Decisions request editor",
+        "endpoint": "Endpoint",
+        "endpointLabel": "Decision endpoint",
+        "model": "Model",
+        "modelLabel": "Decision model",
+        "pickModel": "Pick a decision model",
+        "noModelsYet": "No decision models yet",
+        "noModelsFound": "No decision models found",
+        "addModel": "Add a decision model",
+        "apiKey": "API key",
+        "keySource": "Virtual Key Source",
+        "virtualKey": "Virtual Key",
+        "currentSession": "Current UI Session",
+        "virtualKeyPlaceholder": "Enter Virtual Key",
+        "requestEditor": "Request editor",
+        "requestEditorView": "Request editor view",
+        "formTab": "Form",
+        "clearForm": "Clear form",
+        "docs": "How to call /v1/decisions and /v1/systemone",
+        "requestActions": "Request actions",
+        "cancelRequest": "Cancel request",
+        "send": "Send",
+        "results": "Decisions results"
+      },
+      "validationFeedback": {
+        "issueCount_one": "{{count}} issue",
+        "issueCount_other": "{{count}} issues",
+        "valid": "Valid payload",
+        "ready": "Ready to send",
+        "issuesToFix_one": "{{count}} issue to fix",
+        "issuesToFix_other": "{{count}} issues to fix",
+        "issuesList": "Payload validation issues"
+      },
+      "issueLabel": {
+        "input": "Input",
+        "model": "Model",
+        "questions": "Questions",
+        "safetyIdentifier": "Safety identifier",
+        "request": "Request",
+        "question": "Question {{number}}",
+        "namedQuestion": "Question \"{{name}}\"",
+        "fields": {
+          "name": "name",
+          "type": "answer type",
+          "instructions": "instructions",
+          "criteria": "options"
+        }
+      },
+      "validatePayload": {
+        "nameEveryQuestion": "Give every question a name.",
+        "tooManyLevels": "More than {{max}} score levels may reduce result quality.",
+        "empty": "Payload cannot be empty.",
+        "invalidJson": "Invalid JSON syntax: {{message}}",
+        "missingContext": "Add the text the model should decide about."
+      }
+    },
+    "llmCalls": {
+      "anthropicMessages": {
+        "requestFailed": "Error occurred while generating model response. Please try again. Error: {{error}}"
+      },
+      "audioSpeech": {
+        "requestFailed": "Error occurred while generating speech. Please try again. Error: {{error}}"
+      },
+      "audioTranscriptions": {
+        "success": "Audio transcribed successfully",
+        "defaultError": "Failed to transcribe audio",
+        "failed": "Audio transcription failed: {{message}}"
+      },
+      "embeddingsApi": {
+        "requestFailed": "Error occurred while making embeddings request. Please try again. Error: {{error}}"
+      },
+      "imageEdits": {
+        "success": "Successfully processed {{total}} images",
+        "defaultError": "Failed to edit image(s)",
+        "failed": "Image edit failed: {{message}}"
+      },
+      "imageGeneration": {
+        "requestFailed": "Error occurred while generating image. Please try again. Error: {{error}}"
+      },
+      "interactionsApi": {
+        "requestFailed": "Error occurred while making Interactions API request. Error: {{error}}"
+      }
+    }
+  },
+  "llmCalls": {
+    "responsesApi": {
+      "requestFailed": "Error occurred while generating model response. Please try again. Error: {{error}}"
+    }
+  },
+  "mcpToolArguments": {
+    "stringSchemaRequired": "Please enter input for this tool",
+    "enterJsonObject": "Please enter a JSON object",
+    "enterJsonArray": "Please enter a JSON array",
+    "invalidJson": "Invalid JSON",
+    "pleaseEnter": "Please enter {{key}}",
+    "selectValid": "Please select a valid {{key}}",
+    "stringSchemaDescription": "Input for this tool",
+    "input": "Input",
+    "inputPlaceholder": "Enter input for this tool",
+    "noParameters": "No parameters required for this tool.",
+    "selectKey": "Select {{key}}",
+    "emptyString": "Empty string",
+    "enterKey": "Enter {{key}}",
+    "enterJsonObjectFor": "Enter JSON object for {{key}}",
+    "enterJsonArrayFor": "Enter JSON array for {{key}}"
+  },
+  "tagSelector": {
+    "placeholder": "Select or create tags"
+  },
   "guardrails": {
     "garden": {
       "searchPlaceholder": "Search guardrails",
