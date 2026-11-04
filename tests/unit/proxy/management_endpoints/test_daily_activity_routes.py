@@ -1499,6 +1499,20 @@ def test_user_aggregate_keeps_current_day_query_semantics(
     assert scope.include_current_utc_day is True
 
 
+def test_aggregate_routes_default_include_current_utc_day_to_true(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    for route in ("/user/daily/activity/aggregated", "/team/daily/activity/aggregated"):
+        response: Final = client.get(
+            route,
+            params={**_DATE_PARAMS, "timezone": 480},
+        )
+        assert response.status_code == 200, response.text
+        scope: Final = repository.aggregated.call_args.args[0]
+        assert scope.include_current_utc_day is True
+
+
 @pytest.mark.parametrize(
     ("start_date", "end_date", "message"),
     (

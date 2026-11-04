@@ -109,7 +109,13 @@ async def get_gateway_daily_activity(
     default_start, default_end = _default_range()
     selected_start: Final = start_date or default_start
     selected_end: Final = end_date or default_end
-    activity_rows: Final = await activity.get_activity(selected_start, selected_end)
+    utc_today: Final = datetime.now(timezone.utc).date().isoformat()
+    query_end: Final = (
+        max(selected_end, utc_today)
+        if selected_end >= (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+        else selected_end
+    )
+    activity_rows: Final = await activity.get_activity(selected_start, query_end)
     rows: Final = tuple(row for row in activity_rows if isinstance(row, GatewayRouteActivity))
     status_code_rows: Final = tuple(row for row in activity_rows if isinstance(row, GatewayStatusCodeActivity))
     verbose_proxy_logger.debug("/gateway/daily/activity - aggregated %d rows", len(rows))

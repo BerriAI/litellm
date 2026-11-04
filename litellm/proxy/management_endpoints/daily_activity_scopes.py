@@ -232,7 +232,7 @@ def _user_query(
         "Matches JavaScript's Date.getTimezoneOffset() convention.",
     ),
     include_current_utc_day: bool = Query(
-        default=False,
+        default=True,
         description="When the range ends on the caller's current local day, extend it to "
         "today's UTC bucket so spend written after the caller's local midnight (in UTC "
         "terms) is included. Requires the timezone parameter. Historical ranges are "
@@ -259,6 +259,13 @@ def _team_query(
     api_key: str | None = None,
     exclude_team_ids: str | None = None,
     timezone: int | None = None,
+    include_current_utc_day: bool = Query(
+        default=True,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(team_ids),
@@ -268,7 +275,7 @@ def _team_query(
         end_date=end_date,
         model=model,
         timezone_offset_minutes=timezone,
-        include_current_utc_day=False,
+        include_current_utc_day=include_current_utc_day,
     )
 
 
@@ -279,6 +286,13 @@ def _tag_query(
     api_key: str | None = None,
     tags: str | None = None,
     timezone: int | None = None,
+    include_current_utc_day: bool = Query(
+        default=True,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(tags),
@@ -288,7 +302,7 @@ def _tag_query(
         end_date=end_date,
         model=model,
         timezone_offset_minutes=timezone,
-        include_current_utc_day=False,
+        include_current_utc_day=include_current_utc_day,
     )
 
 
@@ -300,6 +314,13 @@ def _organization_query(
     api_key: str | None = None,
     exclude_organization_ids: str | None = None,
     timezone: int | None = None,
+    include_current_utc_day: bool = Query(
+        default=True,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(organization_ids),
@@ -309,7 +330,7 @@ def _organization_query(
         end_date=end_date,
         model=model,
         timezone_offset_minutes=timezone,
-        include_current_utc_day=False,
+        include_current_utc_day=include_current_utc_day,
     )
 
 
@@ -321,6 +342,13 @@ def _customer_query(
     api_key: str | None = None,
     exclude_end_user_ids: str | None = None,
     timezone: int | None = None,
+    include_current_utc_day: bool = Query(
+        default=True,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(end_user_ids),
@@ -330,7 +358,7 @@ def _customer_query(
         end_date=end_date,
         model=model,
         timezone_offset_minutes=timezone,
-        include_current_utc_day=False,
+        include_current_utc_day=include_current_utc_day,
     )
 
 
@@ -342,6 +370,13 @@ def _agent_query(
     api_key: str | None = None,
     exclude_agent_ids: str | None = None,
     timezone: int | None = None,
+    include_current_utc_day: bool = Query(
+        default=True,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(agent_ids),
@@ -351,7 +386,7 @@ def _agent_query(
         end_date=end_date,
         model=model,
         timezone_offset_minutes=timezone,
-        include_current_utc_day=False,
+        include_current_utc_day=include_current_utc_day,
     )
 
 
