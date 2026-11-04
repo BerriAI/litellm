@@ -638,3 +638,21 @@ async def test_rolling_a_window_row_renders_a_postgres_update_span(
         new_window_start=WINDOW_B,
     )
     assert await postgres_span_names() == ("postgres.update LiteLLM_BudgetWindowSpend",)
+
+
+@pytest.mark.asyncio
+async def test_window_reads_inside_an_enclosing_transaction_use_its_connection():
+    client_db = _FakeDB()
+    transaction = _FakeDB(existing_rows=[])
+
+    await commit_window_spend_updates(
+        prisma_client=_FakePrismaClient(client_db),
+        transactions=(
+            build_window_spend_transaction("key", "k1", "30d", WINDOW_A, 1.0, started_at=BATCH_STARTED_AT),
+        ),
+        outer_transaction=transaction,
+    )
+
+    assert client_db.query_raw_calls == []
+    assert len(transaction.query_raw_calls) == 2
+    assert len(transaction.batcher.calls) == 1

@@ -14,12 +14,13 @@ interval of increments queued elsewhere: the same lag the SpendLogs aggregate
 it replaces (and every other spend column) already has.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, Protocol
 
+from pydantic import TypeAdapter
 from typing_extensions import LiteralString, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -121,6 +122,10 @@ class _ExistingKeyRow(TypedDict):
     window_duration: ReadOnly[str]
 
 
+_SEED_TOTALS_ROWS: Final = TypeAdapter(tuple[_SeedTotalsRow, ...])
+_EXISTING_KEY_ROWS: Final = TypeAdapter(tuple[_ExistingKeyRow, ...])
+
+
 class _SeedTotalsQuery(Protocol):
     async def __call__(self, query: LiteralString, *args: object) -> Sequence[_SeedTotalsRow]: ...
 
@@ -141,6 +146,8 @@ class _UpsertBatchManager(Protocol):
 
 class _UpsertTransaction(Protocol):
     def batch_(self) -> _UpsertBatchManager: ...
+
+    async def query_raw(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 class _UpsertTransactionManager(Protocol):
@@ -185,6 +192,7 @@ class WindowSpendLogsAggregate(Protocol):
         entity_id: str,
         window_start: datetime,
         batch_started_at: datetime | None,
+        query: _SeedTotalsQuery | None = None,
     ) -> WindowSeedTotals | None: ...
 
 
@@ -194,6 +202,7 @@ async def spend_logs_seed_totals(
     entity_id: str,
     window_start: datetime,
     batch_started_at: datetime | None,
+    query: _SeedTotalsQuery | None = None,
 ) -> WindowSeedTotals | None:
     """LiteLLM_SpendLogs spend for one entity since window_start, both in full
     and up to the start of the batch being flushed, in one scan.
@@ -217,11 +226,12 @@ async def spend_logs_seed_totals(
         bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_TEAM_SQL, _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL
     else:
         return None
+    read: Final = query or _seed_totals_query(prisma_client)
     async with db_span("seed_window_spend", "LiteLLM_SpendLogs"):
         rows: Final = (
-            await _seed_totals_query(prisma_client)(unbounded_sql, entity_id, window_start)
+            await read(unbounded_sql, entity_id, window_start)
             if batch_started_at is None
-            else await _seed_totals_query(prisma_client)(
+            else await read(
                 bounded_sql,
                 entity_id,
                 window_start,
@@ -253,9 +263,10 @@ def _primary_key(transaction: WindowSpendTransaction) -> tuple[str, str, str]:
 async def _existing_primary_keys(
     prisma_client: "PrismaClient",
     transactions: tuple[WindowSpendTransaction, ...],
+    query: _ExistingKeysQuery | None = None,
 ) -> frozenset[tuple[str, str, str]]:
     async with db_span("select_window_spend_rows", "LiteLLM_BudgetWindowSpend"):
-        rows: Final = await _existing_keys_query(prisma_client)(
+        rows: Final = await (query or _existing_keys_query(prisma_client))(
             _SELECT_EXISTING_ROWS_SQL,
             tuple(transaction["entity_type"] for transaction in transactions),
             tuple(transaction["entity_id"] for transaction in transactions),
@@ -269,6 +280,7 @@ async def _seed_base_for_missing_row(
     transaction: WindowSpendTransaction,
     existing_primary_keys: frozenset[tuple[str, str, str]],
     spend_logs_aggregate: WindowSpendLogsAggregate,
+    query: _SeedTotalsQuery | None = None,
 ) -> float:
     """Spend already recorded for a window that has no row yet.
 
@@ -279,12 +291,24 @@ async def _seed_base_for_missing_row(
     """
     if _primary_key(transaction) in existing_primary_keys:
         return 0.0
-    totals: Final = await spend_logs_aggregate(
-        prisma_client=prisma_client,
-        entity_type=transaction["entity_type"],
-        entity_id=transaction["entity_id"],
-        window_start=datetime.fromisoformat(transaction["window_start"]).replace(tzinfo=timezone.utc),
-        batch_started_at=_transaction_started_at(transaction),
+    window_start: Final = datetime.fromisoformat(transaction["window_start"]).replace(tzinfo=timezone.utc)
+    totals: Final = (
+        await spend_logs_aggregate(
+            prisma_client=prisma_client,
+            entity_type=transaction["entity_type"],
+            entity_id=transaction["entity_id"],
+            window_start=window_start,
+            batch_started_at=_transaction_started_at(transaction),
+        )
+        if query is None
+        else await spend_logs_aggregate(
+            prisma_client=prisma_client,
+            entity_type=transaction["entity_type"],
+            entity_id=transaction["entity_id"],
+            window_start=window_start,
+            batch_started_at=_transaction_started_at(transaction),
+            query=query,
+        )
     )
     if totals is None:
         return 0.0
@@ -331,6 +355,18 @@ def _upsert_params(
     )
 
 
+def _transaction_reads(transaction: _UpsertTransaction) -> tuple[_ExistingKeysQuery, _SeedTotalsQuery]:
+    """Reads made inside an enclosing transaction share its connection, so they cannot wait on it."""
+
+    async def existing_keys(query: LiteralString, *args: object) -> Sequence[_ExistingKeyRow]:
+        return _EXISTING_KEY_ROWS.validate_python(await transaction.query_raw(query, *args))
+
+    async def seed_totals(query: LiteralString, *args: object) -> Sequence[_SeedTotalsRow]:
+        return _SEED_TOTALS_ROWS.validate_python(await transaction.query_raw(query, *args))
+
+    return existing_keys, seed_totals
+
+
 async def commit_window_spend_updates(
     prisma_client: "PrismaClient",
     transactions: Sequence[WindowSpendTransaction],
@@ -351,9 +387,11 @@ async def commit_window_spend_updates(
         return
 
     ordered: Final = tuple(sorted(transactions, key=window_spend_group_key))
+    reads: Final = _transaction_reads(outer_transaction) if outer_transaction is not None else (None, None)
     existing_primary_keys: Final = await _existing_primary_keys(
         prisma_client=prisma_client,
         transactions=ordered,
+        query=reads[0],
     )
     seed_bases: Final = tuple(
         [
@@ -362,6 +400,7 @@ async def commit_window_spend_updates(
                 transaction=transaction,
                 existing_primary_keys=existing_primary_keys,
                 spend_logs_aggregate=spend_logs_aggregate,
+                query=reads[1],
             )
             for transaction in ordered
         ]
