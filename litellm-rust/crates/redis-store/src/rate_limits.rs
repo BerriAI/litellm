@@ -16,6 +16,7 @@ pub use self::scripts::{
     AcquireReply, Applied, AtomicCounter, AtomicReply, Gauge, GuardedIncrement, GuardedReply,
     Pending, WindowCount,
 };
+use self::scripts::Route;
 use crate::{Number, RequestRedis, codec::python_value};
 
 /// A rate-limit descriptor, `{descriptor:value}`, the hash tag every key of its window shares.
@@ -460,14 +461,17 @@ impl RateLimits {
         Ok(total)
     }
 
-    fn pre(&self, request: Option<&RequestRedis>) -> Result<RedisBatch, Error> {
+    fn pre(&self, request: Option<&RequestRedis>) -> Result<Route, Error> {
         let redis = self.redis.as_ref().ok_or(Error::NoRedis)?;
-        Ok(request.map_or_else(|| redis.batch(), |request| request.pre(redis)))
+        Ok(request.map_or_else(
+            || Route::Direct(redis.clone()),
+            |request| Route::Batch(request.pre(redis)),
+        ))
     }
 
-    fn post(&self, request: &RequestRedis) -> Result<RedisBatch, Error> {
+    fn post(&self, request: &RequestRedis) -> Result<Route, Error> {
         let redis = self.redis.as_ref().ok_or(Error::NoRedis)?;
-        Ok(request.post(redis))
+        Ok(Route::Batch(request.post(redis)))
     }
 }
 

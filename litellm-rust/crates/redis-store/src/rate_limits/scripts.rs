@@ -1,7 +1,8 @@
 use std::{sync::LazyLock, time::Duration};
 
 use litellm_python_compat::repr::float_repr;
-use litellm_redis_client::{Declared, RedisBatch, Script, Value};
+use futures_util::future::BoxFuture;
+use litellm_redis_client::{Declared, RedisBatch, RedisClient, Script, Value};
 
 use super::{Counter, Error, Increment, Scope, lua};
 use crate::Number;
@@ -19,26 +20,46 @@ static PARALLEL_RELEASE: LazyLock<Script> = LazyLock::new(|| Script::new(lua::PA
 static PARALLEL_COUNT: LazyLock<Script> = LazyLock::new(|| Script::new(lua::PARALLEL_COUNT));
 static TOKEN_INCREMENT: LazyLock<Script> = LazyLock::new(|| Script::new(lua::TOKEN_INCREMENT));
 
-/// One script call declared on a batch, decoded into its typed reply once the batch has run.
+/// Where a script call goes: a batch's pipeline, or alone like a redis-py `Script` called outside
+/// one, which answers `NOSCRIPT` with `SCRIPT LOAD` and `EVALSHA`.
+pub(super) enum Route {
+    Batch(RedisBatch),
+    Direct(RedisClient),
+}
+
+enum Reply {
+    Declared(Declared<Value>),
+    Direct(BoxFuture<'static, Result<Value, litellm_redis_client::Error>>),
+}
+
+/// One script call, decoded into its typed reply once it has run.
 #[must_use]
 pub struct Pending<T> {
-    reply: Declared<Value>,
+    reply: Reply,
     decode: fn(Value) -> Result<T, Error>,
 }
 
 impl<T> Pending<T> {
-    fn new(reply: Declared<Value>, decode: fn(Value) -> Result<T, Error>) -> Self {
+    fn new(reply: Reply, decode: fn(Value) -> Result<T, Error>) -> Self {
         Self { reply, decode }
     }
 
     /// Flushes the batch when this op has not gone out yet.
     pub async fn resolve(self) -> Result<T, Error> {
-        (self.decode)(self.reply.resolve().await?)
+        let reply = match self.reply {
+            Reply::Declared(declared) => declared.resolve().await?,
+            Reply::Direct(call) => call.await?,
+        };
+        (self.decode)(reply)
     }
 
     /// Waits for whoever flushes the batch.
     pub async fn settled(self) -> Result<T, Error> {
-        (self.decode)(self.reply.settled().await?)
+        let reply = match self.reply {
+            Reply::Declared(declared) => declared.settled().await?,
+            Reply::Direct(call) => call.await?,
+        };
+        (self.decode)(reply)
     }
 }
 
@@ -108,7 +129,7 @@ pub enum AcquireReply {
 }
 
 pub(super) fn sliding_window(
-    batch: &RedisBatch,
+    route: &Route,
     counters: &[Counter],
     now: i64,
     window_size: i64,
@@ -119,7 +140,7 @@ pub(super) fn sliding_window(
         .collect::<Vec<_>>();
     Pending::new(
         eval(
-            batch,
+            route,
             &BATCH_RATE_LIMITER,
             &keys,
             vec![now.to_string(), window_size.to_string()],
@@ -130,7 +151,7 @@ pub(super) fn sliding_window(
 
 /// `BATCH_COUNTER_READ_SCRIPT` over each counter's window and counter keys, in that order.
 pub(super) fn read_counters(
-    batch: &RedisBatch,
+    route: &Route,
     counters: &[Counter],
 ) -> Pending<Vec<Option<String>>> {
     let keys = counters
@@ -138,13 +159,13 @@ pub(super) fn read_counters(
         .flat_map(|counter| [counter.scope.window_key(), counter.key()])
         .collect::<Vec<_>>();
     Pending::new(
-        eval(batch, &BATCH_COUNTER_READ, &keys, Vec::new()),
+        eval(route, &BATCH_COUNTER_READ, &keys, Vec::new()),
         optional_texts,
     )
 }
 
 pub(super) fn check_and_increment(
-    batch: &RedisBatch,
+    route: &Route,
     counters: &[AtomicCounter],
 ) -> Pending<AtomicReply> {
     let keys = counters
@@ -164,13 +185,13 @@ pub(super) fn check_and_increment(
         })
         .collect();
     Pending::new(
-        eval(batch, &CHECK_AND_INCREMENT_BY_N, &keys, args),
+        eval(route, &CHECK_AND_INCREMENT_BY_N, &keys, args),
         atomic_reply,
     )
 }
 
 pub(super) fn guarded_increment(
-    batch: &RedisBatch,
+    route: &Route,
     increment: &GuardedIncrement,
 ) -> Pending<GuardedReply> {
     let keys = [
@@ -183,13 +204,13 @@ pub(super) fn guarded_increment(
         ttl_arg(increment.ttl),
     ];
     Pending::new(
-        eval(batch, &WINDOW_GUARDED_TOKEN_INCREMENT, &keys, args),
+        eval(route, &WINDOW_GUARDED_TOKEN_INCREMENT, &keys, args),
         guarded_reply,
     )
 }
 
 pub(super) fn parallel_acquire(
-    batch: &RedisBatch,
+    route: &Route,
     gauges: &[Gauge],
     slot_ttl: Duration,
     slot_id: &str,
@@ -208,21 +229,21 @@ pub(super) fn parallel_acquire(
             ]
         })
         .collect();
-    Pending::new(eval(batch, &PARALLEL_ACQUIRE, &keys, args), acquire_reply)
+    Pending::new(eval(route, &PARALLEL_ACQUIRE, &keys, args), acquire_reply)
 }
 
 pub(super) fn parallel_release(
-    batch: &RedisBatch,
+    route: &Route,
     gauges: &[Scope],
     slot_id: &str,
 ) -> Pending<Vec<i64>> {
     let keys = gauges.iter().map(Scope::gauge_key).collect::<Vec<_>>();
     let args = gauges.iter().map(|_| slot_id.to_owned()).collect();
-    Pending::new(eval(batch, &PARALLEL_RELEASE, &keys, args), integers)
+    Pending::new(eval(route, &PARALLEL_RELEASE, &keys, args), integers)
 }
 
 pub(super) fn parallel_count(
-    batch: &RedisBatch,
+    route: &Route,
     gauges: &[Scope],
     slot_ttl: Duration,
 ) -> Pending<Vec<i64>> {
@@ -231,10 +252,10 @@ pub(super) fn parallel_count(
         .iter()
         .map(|_| slot_ttl.as_secs().to_string())
         .collect();
-    Pending::new(eval(batch, &PARALLEL_COUNT, &keys, args), integers)
+    Pending::new(eval(route, &PARALLEL_COUNT, &keys, args), integers)
 }
 
-pub(super) fn token_increment(batch: &RedisBatch, increments: &[Increment]) -> Pending<Vec<f64>> {
+pub(super) fn token_increment(route: &Route, increments: &[Increment]) -> Pending<Vec<f64>> {
     let keys = increments
         .iter()
         .map(|increment| increment.counter.key())
@@ -243,7 +264,7 @@ pub(super) fn token_increment(batch: &RedisBatch, increments: &[Increment]) -> P
         .iter()
         .flat_map(|increment| [python_arg(increment.amount), ttl_arg(increment.ttl)])
         .collect();
-    Pending::new(eval(batch, &TOKEN_INCREMENT, &keys, args), floats)
+    Pending::new(eval(route, &TOKEN_INCREMENT, &keys, args), floats)
 }
 
 /// `RedisBatch`'s `_Increment`: `INCRBYFLOAT`, then `EXPIRE` when the increment carries a TTL.
@@ -255,14 +276,20 @@ pub(super) fn counter_increment(batch: &RedisBatch, increment: &Increment) -> De
     )
 }
 
-fn eval(
-    batch: &RedisBatch,
-    script: &Script,
-    keys: &[String],
-    args: Vec<String>,
-) -> Declared<Value> {
-    let keys = keys.iter().map(String::as_str).collect::<Vec<_>>();
-    batch.eval(script, &keys, args)
+fn eval(route: &Route, script: &Script, keys: &[String], args: Vec<String>) -> Reply {
+    match route {
+        Route::Batch(batch) => {
+            let keys = keys.iter().map(String::as_str).collect::<Vec<_>>();
+            Reply::Declared(batch.eval(script, &keys, args))
+        }
+        Route::Direct(client) => {
+            let (client, script, keys) = (client.clone(), script.clone(), keys.to_vec());
+            Reply::Direct(Box::pin(async move {
+                let keys = keys.iter().map(String::as_str).collect::<Vec<_>>();
+                client.eval(&script, &keys, args).await
+            }))
+        }
+    }
 }
 
 /// The bytes redis-py sends for a Python `int` or `float` argument.

@@ -900,3 +900,44 @@ async fn an_increment_without_a_ttl_takes_the_redis_default_like_async_increment
         0
     );
 }
+
+async fn command_calls(deployment: &RedisDeployment, command: &str) -> u64 {
+    let prefix = format!("cmdstat_{command}:calls=");
+    cli(deployment, &["INFO", "commandstats"])
+        .await
+        .iter()
+        .flat_map(|reply| reply.lines())
+        .filter_map(|line| line.strip_prefix(prefix.as_str()))
+        .map(|stats| stats.split(',').next().unwrap().parse::<u64>().unwrap())
+        .sum()
+}
+
+// A redis-py Script called on its own answers NOSCRIPT with SCRIPT LOAD and EVALSHA; inside a
+// RedisBatch pipeline the NOSCRIPT reply is retried through that same Script call
+#[rstest]
+#[case::direct(false, 2)]
+#[case::request_batch(true, 3)]
+#[tokio::test]
+async fn a_cold_script_cache_costs_the_evalshas_redis_py_sends(
+    #[case] on_request: bool,
+    #[case] evalshas: u64,
+) {
+    let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let limits = store(&deployment);
+    let request = RequestRedis::new(Handle::current(), Duration::from_secs(60));
+    let gauges = [Gauge {
+        scope: scope("api_key", "k1"),
+        limit: 5,
+    }];
+
+    let reply = limits
+        .parallel_acquire(on_request.then_some(&request), &gauges, SLOT_TTL, "slot-1")
+        .unwrap()
+        .resolve()
+        .await
+        .unwrap();
+
+    assert_eq!(reply, AcquireReply::Acquired(vec![1]));
+    assert_eq!(command_calls(&deployment, "evalsha").await, evalshas);
+    assert_eq!(command_calls(&deployment, "script|load").await, 1);
+}
