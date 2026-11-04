@@ -305,10 +305,14 @@ async def test_a_refill_that_lands_after_the_first_eviction_is_evicted_again_bef
 async def test_a_listing_that_fails_does_not_validate_the_digest(cache: UserApiKeyCache) -> None:
     marks: Final = ValidatedPolicyMarks()
     client: Final = database(fingerprint_row("v1"), fingerprint_row("v1"), fingerprint_row("v1"))
-    with pytest.raises(RuntimeError):
+
+    async def failing_listing() -> None:
         async with validated_listing():
             assert not await is_current(client, cache, marks)
             raise RuntimeError("upstream failed")
+
+    with pytest.raises(RuntimeError):
+        await failing_listing()
     async with validated_listing():
         assert not await is_current(client, cache, marks)
 
