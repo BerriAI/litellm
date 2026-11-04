@@ -110,6 +110,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     replace_complexity_router_headers,
     response_total_token_count,
 )
+from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.batch_utils import (
     batch_create_routing,
@@ -4044,6 +4045,8 @@ class PythonCore(DeprecatedRouterMembers):
                         if continuation_output is not None
                         else None
                     )
+                    if cut_partial is not None:
+                        model_response.logging_obj.mark_stash_billed_by_continuation()
                     if continue_after_content:
                         emitted_tokens: Final = int(
                             getattr(complete_response_object_usage, "completion_tokens", 0) or 0
@@ -7373,6 +7376,8 @@ class PythonCore(DeprecatedRouterMembers):
         last_error = e  # rebind-ok: the newest failure is what the fallback chain and the caller see
         for attempt in range(attempted_retries_for_request(initial_kwargs), budget):
             trigger = _mid_stream_retry_trigger(last_error)
+            if is_agentic_followup_failure(trigger):
+                return _StreamRetriesExhausted(last_error)
             if not policy_applies and not self._stream_should_retry(
                 trigger, healthy_deployments, all_deployments, initial_kwargs
             ):
@@ -9602,7 +9607,7 @@ class PythonCore(DeprecatedRouterMembers):
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
-            if is_guardrail_intervention(e):
+            if is_guardrail_intervention(e) or is_agentic_followup_failure(e):
                 raise
             current_attempt = None
             original_exception = e
@@ -9697,6 +9702,7 @@ class PythonCore(DeprecatedRouterMembers):
                     # Update retry tracking metadata before each retry attempt
                     _metadata["attempted_retries"] = current_attempt + 1
                     _metadata["max_retries"] = num_retries
+                    carry_superseded_attempt_usage(kwargs)
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await self.make_call(original_function, *args, **kwargs)
                     if coroutine_checker.is_async_callable(response):  # async errors are often returned as coroutines
@@ -9710,6 +9716,8 @@ class PythonCore(DeprecatedRouterMembers):
                     return response
 
                 except Exception as e:
+                    if is_agentic_followup_failure(e):
+                        raise
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
