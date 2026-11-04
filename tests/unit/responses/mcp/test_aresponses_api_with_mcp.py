@@ -1789,6 +1789,29 @@ def _assert_one_row_bills_both_rounds(logged: tuple[StandardLoggingPayload, ...]
 
 
 @pytest.mark.asyncio
+async def test_aresponses_api_with_mcp_records_each_round_in_the_metadata_the_caller_passed(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    caller_metadata: Final[Mapping[str, object]] = {"run": "nightly"}
+
+    with _echo_tool_served("PING"):
+        response: Final = await litellm.aresponses_api_with_mcp(
+            input="Call echo with PING",
+            model="openai/gpt-5.6",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            metadata=caller_metadata,
+            api_key="sk-mcp-rounds",
+            api_base="https://mcp-rounds.example.com/v1",
+        )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    timing_windows: Final = caller_metadata.get("llm_api_timing_windows")
+    assert caller_metadata.get("run") == "nightly"
+    assert isinstance(timing_windows, Sequence) and len(timing_windows) == 2
+
+
+@pytest.mark.asyncio
 async def test_non_stream_auto_execute_logs_the_client_response_billed_for_both_rounds(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
@@ -4390,12 +4413,29 @@ def _converse_conversation(body: Mapping[str, object]) -> tuple[tuple[object, tu
     )
 
 
+def _stored_turn(
+    response_id: str, logged: StandardLoggingPayload, request: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {
+        "request_id": response_id,
+        "session_id": f"{response_id}-session",
+        "custom_llm_provider": logged["custom_llm_provider"],
+        "model": logged["model"],
+        "api_base": logged["api_base"],
+        "proxy_server_request": dict(request),
+        "response": logged["response"],
+    }
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("replayed_from", ["stored_turn", "input"])
+@pytest.mark.parametrize("replayed_from", ["stored_turn", "input", "stored_turn_without_tools"])
 async def test_a_follow_up_to_a_claimed_round_with_thinking_on_both_sides_of_its_call_keeps_each_thought_in_place(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, replayed_from: str
 ):
     _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    without_tools: Final = replayed_from == "stored_turn_without_tools"
+    monkeypatch.setattr(litellm, "bedrock_neutralize_orphaned_tool_blocks", not without_tools)
+    monkeypatch.setattr(litellm, "modify_params", without_tools)
     provider: Final = _serve_responses(
         respx_mock,
         monkeypatch,
@@ -4426,29 +4466,24 @@ async def test_a_follow_up_to_a_claimed_round_with_thinking_on_both_sides_of_its
     assert _output_types(first.output) == ("mcp_list_tools", "reasoning", "mcp_call", "reasoning", "message")
     await _settle(lambda: len(recorder.logged) > 0)
 
-    if replayed_from == "stored_turn":
-        stored_turn: Final = {
-            "request_id": first.id,
-            "session_id": "thinking-around-call-session",
-            "proxy_server_request": {"input": "Ask DeepWiki what LiteLLM is"},
-            "response": recorder.logged[0]["response"],
-        }
-        _proxy_database(monkeypatch, SimpleNamespace(db=_SpendLogs((stored_turn,))))
+    stored_request: Final = {"input": "Ask DeepWiki what LiteLLM is", "tools": [dict(_GITMCP_TOOL)]}
+    stored: Final = _stored_turn(first.id, recorder.logged[0], stored_request)
+    _proxy_database(monkeypatch, SimpleNamespace(db=_SpendLogs((stored,))))
     continued: Final = (
-        {"previous_response_id": first.id, "input": "Who maintains it?"}
-        if replayed_from == "stored_turn"
-        else {
+        {
             "input": [
                 {"type": "message", "role": "user", "content": "Ask DeepWiki what LiteLLM is"},
                 *(_item(item) for item in first.output),
                 {"type": "message", "role": "user", "content": "Who maintains it?"},
             ]
         }
+        if replayed_from == "input"
+        else {"previous_response_id": first.id, "input": "Who maintains it?"}
     )
     with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
         follow_up: Final = await litellm.aresponses(
             model=_BEDROCK_MODEL,
-            tools=[dict(_GITMCP_TOOL)],
+            tools=[] if without_tools else [dict(_GITMCP_TOOL)],
             reasoning={"effort": "low"},
             **continued,
             **_ROUTE_KWARGS[_BEDROCK_MODEL],
@@ -4467,6 +4502,209 @@ async def test_a_follow_up_to_a_claimed_round_with_thinking_on_both_sides_of_its
         ("user", (("text", "Who maintains it?"),)),
     )
     assert [call.name for call in server.calls] == ["ask_question"]
+
+
+def _ran_call(call_id: str, server_label: str, output: str = _ASK_OUTPUT) -> Mapping[str, object]:
+    return {
+        "type": "mcp_call",
+        "id": call_id,
+        "server_label": server_label,
+        "name": "ask_question",
+        "arguments": json.dumps(_ASK_ARGUMENTS),
+        "output": output,
+        "status": "completed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_resent_mcp_call_whose_tool_the_request_does_not_run_stays_out_of_a_bedrock_conversation(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    provider: Final = _serve_responses(respx_mock, monkeypatch, (_answer_round(_BEDROCK_MODEL),), _BEDROCK_URL)
+
+    response: Final = await litellm.aresponses(
+        model=_BEDROCK_MODEL,
+        input=[
+            {"type": "message", "role": "user", "content": "Ask DeepWiki what LiteLLM is"},
+            _ran_call("mcp_resent", "gitmcp"),
+            {"type": "message", "role": "assistant", "content": _ASK_ANSWER},
+            {"type": "message", "role": "user", "content": "Who maintains it?"},
+        ],
+        **_ROUTE_KWARGS[_BEDROCK_MODEL],
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert _converse_conversation(_sent_body(provider, 0)) == (
+        ("user", (("text", "Ask DeepWiki what LiteLLM is"),)),
+        ("assistant", (("text", _ASK_ANSWER),)),
+        ("user", (("text", "Who maintains it?"),)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_without_tools_to_a_stored_gateway_reference_stream_replays_none_of_its_calls(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_responses(respx_mock, monkeypatch, (_streamed(_ROUND_ONE_BODY), _streamed(_ROUND_TWO_BODY)))
+    recorder: Final = _RoundRecorder()
+    first: Final = _final_response(await _stream_auto_execute(_rounds_logging_obj(recorder, "legacy-stream-follow-up")))
+    await _settle(lambda: len(recorder.logged) > 0)
+    assert "mcp_call" in _output_types(recorder.logged[0]["response"]["output"])
+    stored_request: Final = {"input": "Call echo with PING", "tools": [dict(_ECHO_MCP_TOOL)]}
+    stored: Final = _stored_turn(first.id, recorder.logged[0], stored_request)
+    _proxy_database(monkeypatch, SimpleNamespace(db=_SpendLogs((stored,))))
+    provider: Final = _serve_responses(respx_mock, monkeypatch, (_answer_round(_BEDROCK_MODEL),), _BEDROCK_URL)
+
+    follow_up: Final = await litellm.aresponses(
+        model=_BEDROCK_MODEL,
+        input="Who maintains it?",
+        previous_response_id=first.id,
+        **_ROUTE_KWARGS[_BEDROCK_MODEL],
+    )
+
+    assert isinstance(follow_up, ResponsesAPIResponse)
+    assert _converse_conversation(_sent_body(provider, 0)) == (
+        ("user", (("text", "Call echo with PING"),)),
+        ("assistant", (("text", "PING"),)),
+        ("user", (("text", "Who maintains it?"),)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_without_tools_to_a_turn_a_native_provider_ran_its_hosted_tool_in_replays_none_of_its_calls(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    native_turn: Final = _openai_response(
+        "resp_native_gitmcp",
+        "completed",
+        (
+            {"type": "mcp_list_tools", "id": "mcpl_native", "server_label": "gitmcp", "tools": []},
+            _ran_call("mcp_native", "gitmcp"),
+            {
+                "type": "message",
+                "id": "msg_native",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": _ASK_ANSWER, "annotations": []}],
+            },
+        ),
+    )
+    _serve_responses(
+        respx_mock, monkeypatch, (httpx.Response(200, json=native_turn),), _NATIVE_ROUTES["openai/gpt-5.6"][0]
+    )
+    server: Final = _ScriptedMCPServer()
+    recorder: Final = _RoundRecorder()
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        first: Final = await litellm.aresponses(
+            model="openai/gpt-5.6",
+            input="Ask DeepWiki what LiteLLM is",
+            tools=[dict(_GITMCP_TOOL)],
+            api_key="sk-native",
+            api_base="https://gateway-mcp.example.com/v1",
+            litellm_logging_obj=_rounds_logging_obj(recorder, "native-direct-tool"),
+        )
+    assert isinstance(first, ResponsesAPIResponse)
+    await _settle(lambda: len(recorder.logged) > 0)
+    stored_request: Final = {"input": "Ask DeepWiki what LiteLLM is", "tools": [dict(_GITMCP_TOOL)]}
+    stored: Final = _stored_turn(first.id, recorder.logged[0], stored_request)
+    _proxy_database(monkeypatch, SimpleNamespace(db=_SpendLogs((stored,))))
+    provider: Final = _serve_responses(respx_mock, monkeypatch, (_answer_round(_BEDROCK_MODEL),), _BEDROCK_URL)
+
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        follow_up: Final = await litellm.aresponses(
+            model=_BEDROCK_MODEL,
+            input="Who maintains it?",
+            previous_response_id=first.id,
+            **_ROUTE_KWARGS[_BEDROCK_MODEL],
+        )
+
+    assert isinstance(follow_up, ResponsesAPIResponse)
+    assert _converse_conversation(_sent_body(provider, 0)) == (
+        ("user", (("text", "Ask DeepWiki what LiteLLM is"),)),
+        ("assistant", (("text", _ASK_ANSWER),)),
+        ("user", (("text", "Who maintains it?"),)),
+    )
+    assert server.opened == ()
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_without_tools_to_a_round_that_ran_a_url_and_a_gateway_reference_replays_only_the_url_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    provider: Final = _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_round_calling_both_servers(False), _answer_round(_DEEPSEEK_MODEL), _answer_round(_DEEPSEEK_MODEL)),
+        _DEEPSEEK_URL,
+    )
+    server: Final = _ScriptedMCPServer()
+    recorder: Final = _RoundRecorder()
+    tools: Final = [dict(_GITMCP_TOOL), dict(_deepwiki_reference("never"))]
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        first: Final = await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input="Ask both servers",
+            tools=tools,
+            litellm_metadata={"user_api_key_auth": _key_holding("srv-deepwiki")},
+            litellm_logging_obj=_rounds_logging_obj(recorder, "url-and-reference"),
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
+    assert isinstance(first, ResponsesAPIResponse)
+    calls: Final = tuple(_item(item) for item in first.output if _item(item)["type"] == "mcp_call")
+    ran: Final = {call["server_label"]: call["id"] for call in calls}
+    assert set(ran) == {"gitmcp", "deepwiki"}
+    assert mcp_client.call_tool.await_count == 1
+    await _settle(lambda: len(recorder.logged) > 0)
+    stored: Final = _stored_turn(first.id, recorder.logged[0], {"input": "Ask both servers", "tools": tools})
+    _proxy_database(monkeypatch, SimpleNamespace(db=_SpendLogs((stored,))))
+
+    follow_up: Final = await litellm.aresponses(
+        model=_DEEPSEEK_MODEL,
+        input="Who maintains it?",
+        previous_response_id=first.id,
+        **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+    )
+
+    assert isinstance(follow_up, ResponsesAPIResponse)
+    replayed: Final = _sent_body(provider, 2)["messages"]
+    assert [_message_shape(message)[2] for message in replayed] == [(), ("gitmcp-ask_question",), (), (), ()]
+    assert [(message["tool_call_id"], message["content"]) for message in replayed if message["role"] == "tool"] == [
+        (ran["gitmcp"], _ASK_OUTPUT)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_resent_mcp_call_next_to_one_the_request_runs_stays_out_while_the_run_one_keeps_its_pair(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("gitmcp.io",))
+    provider: Final = _serve_responses(respx_mock, monkeypatch, (_answer_round(_DEEPSEEK_MODEL),), _DEEPSEEK_URL)
+    server: Final = _ScriptedMCPServer()
+
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        response: Final = await litellm.aresponses(
+            model=_DEEPSEEK_MODEL,
+            input=[
+                {"type": "message", "role": "user", "content": "Ask both servers"},
+                _ran_call("mcp_git", "gitmcp"),
+                _ran_call("mcp_other", "other-docs", "Other docs say it is a proxy"),
+                {"type": "message", "role": "assistant", "content": _ASK_ANSWER},
+                {"type": "message", "role": "user", "content": "Who maintains it?"},
+            ],
+            tools=[dict(_GITMCP_TOOL)],
+            **_ROUTE_KWARGS[_DEEPSEEK_MODEL],
+        )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    sent: Final = _sent_body(provider, 0)["messages"]
+    assert [_message_shape(message)[2] for message in sent] == [(), ("gitmcp-ask_question",), (), (), ()]
+    assert [(message["tool_call_id"], message["content"]) for message in sent if message["role"] == "tool"] == [
+        ("mcp_git", _ASK_OUTPUT)
+    ]
+    assert server.calls == ()
 
 
 _DOCS_TOOL: Final = MappingProxyType({**_GITMCP_TOOL, "server_label": "react-docs"})

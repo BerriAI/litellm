@@ -10,7 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -316,6 +316,47 @@ def _latest_replayable_instructions(proxy_server_requests: Sequence[Mapping[str,
     return None if latest == REDACTED_BY_LITELLM else latest
 
 
+def mcp_call_key(item: Mapping[str, object]) -> tuple[str, str]:
+    return (str(item.get("server_label") or ""), str(item.get("name") or ""))
+
+
+def _mappings(values: Iterable[object]) -> tuple[Mapping[str, object], ...]:
+    candidates: Final = tuple(map(as_str_mapping, values))
+    return tuple(candidate for candidate in candidates if candidate is not None)
+
+
+def _row_text(row: Mapping[str, object], key: str) -> str | None:
+    value: Final = row.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _served_through_chat_bridge(spend_log: Mapping[str, object]) -> bool:
+    from litellm.utils import ProviderConfigManager
+
+    provider: Final = _row_text(spend_log, "custom_llm_provider")
+    if provider is None:
+        return False
+    return (
+        ProviderConfigManager.get_provider_responses_api_config(
+            provider=provider, model=_row_text(spend_log, "model"), api_base=_row_text(spend_log, "api_base")
+        )
+        is None
+    )
+
+
+def _gateway_names_of_turn(
+    spend_log: Mapping[str, object], request: Mapping[str, object] | None, items: Iterable[object]
+) -> McpCallNames:
+    from litellm.responses.mcp.direct_url_claims import direct_mcp_labels, direct_tool_name
+
+    tools: Final = as_object_list(None if request is None else request.get("tools")) or ()
+    labels: Final = direct_mcp_labels(_mappings(tools))
+    if not labels or not _served_through_chat_bridge(spend_log):
+        return NO_MCP_CALL_NAMES
+    calls: Final = frozenset(mcp_call_key(item) for item in _mappings(items) if item.get("type") == "mcp_call")
+    return MappingProxyType({call: direct_tool_name(*call) for call in calls if call[0] in labels})
+
+
 class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
@@ -509,6 +550,19 @@ class ResponsesSessionHandler:
                     [_response_input_param],
                 )
 
+        _response_output: Final = _stored_response(spend_log)
+        responses_api_output: Final = _stored_responses_api_output(_response_output)
+        turn_mcp_call_names: Final = MappingProxyType(
+            {
+                **_gateway_names_of_turn(
+                    spend_log,
+                    proxy_server_request_dict,
+                    chain(as_object_list(response_input_param) or (), responses_api_output or ()),
+                ),
+                **mcp_call_names,
+            }
+        )
+
         if response_input_param:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
@@ -518,15 +572,14 @@ class ResponsesSessionHandler:
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
-                    mcp_call_names=mcp_call_names,
+                    mcp_call_names=turn_mcp_call_names,
                 )
             )
 
         ############################################################
         # Add Output messages for this Spend Log
         ############################################################
-        _response_output: Final = _stored_response(spend_log)
-        if (responses_api_output := _stored_responses_api_output(_response_output)) is not None:
+        if responses_api_output is not None:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                     input=bridge_client_tool_search(responses_api_output, None).input,
@@ -535,7 +588,7 @@ class ResponsesSessionHandler:
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
-                    mcp_call_names=mcp_call_names,
+                    mcp_call_names=turn_mcp_call_names,
                 )
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:

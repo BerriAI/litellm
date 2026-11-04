@@ -1,4 +1,4 @@
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
@@ -214,6 +214,20 @@ def _registered_claim(
     return _RegisteredClaim(tool=tool, server=named[0], label=label) if len(named) == 1 else _Unclaimed(tool=tool)
 
 
+def _names_a_reachable_url(tool: Mapping[str, object]) -> bool:
+    server_url: Final = _text_field(tool, "server_url")
+    return (
+        tool.get("type") == "mcp"
+        and server_url is not None
+        and not server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL)
+        and normalized_mcp_url(server_url) is not None
+    )
+
+
+def direct_mcp_labels(tools: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    return frozenset(_text_field(tool, "server_label") or "unlabeled" for tool in tools if _names_a_reachable_url(tool))
+
+
 def _claim(tool: Mapping[str, object], servers: Collection[MCPServer], allowed_hosts: Sequence[str]) -> _Claim:
     server_url: Final = _text_field(tool, "server_url")
     url: Final = None if server_url is None else normalized_mcp_url(server_url)
@@ -324,12 +338,15 @@ async def _server_tools(server: DirectMCPServer, client: DirectMCPClient) -> tup
     return tuple(tool for tool in listed if server.allowed_tools is None or tool.name in server.allowed_tools)
 
 
+def direct_tool_name(server_label: str, tool_name: str) -> str:
+    return add_server_prefix_to_name(tool_name, server_label)
+
+
 def _named_tools(
     server: DirectMCPServer, client: DirectMCPClient, tools: tuple[MCPTool, ...]
 ) -> tuple[tuple[str, MCPTool, DirectTool], ...]:
     return tuple(
-        (add_server_prefix_to_name(tool.name, server.server_label), tool, DirectTool(server, tool, client))
-        for tool in tools
+        (direct_tool_name(server.server_label, tool.name), tool, DirectTool(server, tool, client)) for tool in tools
     )
 
 

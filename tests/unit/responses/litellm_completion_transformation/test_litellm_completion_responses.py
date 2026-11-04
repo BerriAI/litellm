@@ -7485,11 +7485,15 @@ def test_a_follow_up_tool_output_for_a_call_the_stored_turn_holds_sends_that_cal
 
 
 @pytest.mark.parametrize(
-    "ran_call_id, tool_call_ids",
-    [("mcp_docs", ["call_weather", "mcp_docs"]), (None, ["call_weather"])],
+    "ran_call_id, runs_its_tool, tool_call_ids",
+    [
+        ("mcp_docs", True, ["call_weather", "mcp_docs"]),
+        (None, True, ["call_weather"]),
+        ("mcp_docs", False, ["call_weather"]),
+    ],
 )
-def test_a_ran_mcp_call_beside_a_handed_back_call_is_replayed_only_when_it_has_an_id(
-    ran_call_id: str | None, tool_call_ids: list[str]
+def test_a_ran_mcp_call_beside_a_handed_back_call_is_replayed_only_when_the_request_runs_its_tool_and_it_has_an_id(
+    ran_call_id: str | None, runs_its_tool: bool, tool_call_ids: list[str]
 ):
     ran_call: Final = {
         "type": "mcp_call",
@@ -7510,6 +7514,7 @@ def test_a_ran_mcp_call_beside_a_handed_back_call_is_replayed_only_when_it_has_a
             ],
         ),
         responses_api_request=ResponsesAPIOptionalRequestParams(),
+        mcp_call_names=MappingProxyType({("gitmcp", "ask_question"): "gitmcp-ask_question"} if runs_its_tool else {}),
     )
 
     messages: Final = [dict(message) for message in chat_request["messages"]]

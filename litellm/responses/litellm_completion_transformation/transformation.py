@@ -85,6 +85,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     McpCallNames,
     ResponsesSessionHandler,
     StoredTurns,
+    mcp_call_key,
 )
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
 from litellm.types.llms.base import CachedTokensDetails
@@ -575,16 +576,20 @@ def _ran_call_result(item: Mapping[str, object]) -> object:
     return item.get("error") if output is None else output
 
 
-def _is_ran_call(item: Mapping[str, object]) -> bool:
-    return item.get("type") == "mcp_call" and bool(item.get("id")) and _ran_call_result(item) is not None
+def _replays_as_tool_call(item: Mapping[str, object], names: McpCallNames) -> bool:
+    return (
+        item.get("type") == "mcp_call"
+        and bool(item.get("id"))
+        and _ran_call_result(item) is not None
+        and mcp_call_key(item) in names
+    )
 
 
 def _ran_call_as_function_call(item: Mapping[str, object], names: McpCallNames) -> Mapping[str, object]:
-    name: Final = str(item.get("name") or "")
     return {
         "type": "function_call",
         "call_id": str(item["id"]),
-        "name": names.get((str(item.get("server_label") or ""), name), name),
+        "name": names[mcp_call_key(item)],
         "arguments": str(item.get("arguments") or "{}"),
     }
 
@@ -594,11 +599,11 @@ def _ran_call_output(item: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _call_run_items(run: tuple[Mapping[str, object], ...], names: McpCallNames) -> tuple[Mapping[str, object], ...]:
-    ran_calls: Final = tuple(item for item in run if _is_ran_call(item))
+    ran_calls: Final = tuple(item for item in run if _replays_as_tool_call(item, names))
     if not ran_calls:
         return run
     return (
-        *(_ran_call_as_function_call(item, names) if _is_ran_call(item) else item for item in run),
+        *(_ran_call_as_function_call(item, names) if _replays_as_tool_call(item, names) else item for item in run),
         *(_ran_call_output(item) for item in ran_calls),
     )
 
@@ -606,10 +611,10 @@ def _call_run_items(run: tuple[Mapping[str, object], ...], names: McpCallNames) 
 def _with_ran_calls_as_tool_calls(
     input_items: Sequence[Mapping[str, object]], names: McpCallNames
 ) -> tuple[Mapping[str, object], ...]:
-    """Each mcp_call that ran, with the id its result pairs on and a result, goes to the model as one of its turn's tool
-    calls followed by that result, so the reasoning on either side of it stays on its own assistant message, the way
-    the provider signed it. The call takes the name the request's tools give that server's tool, and keeps its own
-    name when no tool of the request matches. An mcp_call that never ran stays out of the conversation."""
+    """Each mcp_call that ran, with the id its result pairs on and a result, and whose server and tool ``names`` maps to
+    the name the model knew the tool by, goes to the model as one of its turn's tool calls under that name followed by
+    that result, so the reasoning on either side of it stays on its own assistant message, the way the provider signed
+    it. Any other mcp_call stays out of the conversation."""
     return tuple(
         chain.from_iterable(
             _call_run_items(tuple(run), names) if is_call else tuple(run)
@@ -1435,8 +1440,9 @@ class LiteLLMCompletionResponsesConfig:
         sent to a model: prior-turn ``reasoning`` items are then rebuilt as
         assistant ``reasoning_content`` and signed ``thinking_blocks`` so the
         provider gets its own chain-of-thought back instead of reading it as
-        visible text, and an ``mcp_call`` that ran goes back as the tool call and
-        result it was, named through ``mcp_call_names``. ``item_cache_control`` belongs to the same callers, when
+        visible text, and an ``mcp_call`` that ran under a name ``mcp_call_names``
+        holds goes back as the tool call and result it was, under that name.
+        ``item_cache_control`` belongs to the same callers, when
         the target keeps an input item's ``cache_control`` on the message, and
         ``tool_call_provider_fields`` when the target reads a function call's
         thought signature from ``provider_specific_fields`` instead of its id.
