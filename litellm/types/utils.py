@@ -4748,6 +4748,7 @@ class LlmProviders(str, Enum):
     LANGFLOW = "langflow"
     MICROSOFT_365_COPILOT = "microsoft_365_copilot"
     MINIMAX = "minimax"
+    FORTYTWO = "fortytwo"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"
     NANOGPT = "nano-gpt"
