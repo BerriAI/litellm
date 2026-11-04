@@ -5337,7 +5337,7 @@ async def _lower_statement_timeout(transaction: _RawReadTransaction, timeout_ms:
     rows: Final = await transaction.query_raw(
         "SELECT setting::int AS ms FROM pg_settings WHERE name = 'statement_timeout'"
     )
-    current_ms: Final = _STATEMENT_TIMEOUT_MS.validate_python(next(iter(rows), {}).get("ms", 0))
+    current_ms: Final = _STATEMENT_TIMEOUT_MS.validate_python(rows[0].get("ms", 0) if rows else 0)
     if 0 < current_ms <= timeout_ms:
         return current_ms
     await transaction.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
