@@ -630,7 +630,7 @@ class TestMixpanelCallbackValidation:
             with pytest.raises(HTTPException) as exc:
                 raise_on_invalid_key_logging_config(self._key_metadata({"mixpanel_region": "eu"}))
             assert "mixpanel_project_token must be" in str(exc.value.detail)
-            for unsendable in ("", "   ", "None", "***REDACTED***"):
+            for unsendable in ("", "   ", "None", " None ", "***REDACTED***", " ***REDACTED*** "):
                 with pytest.raises(HTTPException) as exc:
                     _validate_team_callback(self._team_data({"mixpanel_project_token": unsendable}))
                 assert "mixpanel_project_token must be" in str(exc.value.detail)

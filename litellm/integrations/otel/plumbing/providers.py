@@ -500,13 +500,14 @@ def _is_litellm_span(span: ReadableSpan) -> bool:
 def with_request_user_id(span: ReadableSpan) -> ReadableSpan:
     """``span`` carrying the id the request's caller named, for a backend that drops a span without one.
 
-    Called as the span ends, on the request's own task. A held span must already have
-    been through here, since a tree can be released on another request's task.
+    That id replaces a ``user.id`` already on the span, such as what a mapper wrote for another backend,
+    so the whole request names one caller. Called as the span ends, on the request's own task. A held span
+    must already have been through here, since a tree can be released on another request's task.
     """
     user_id: Final = request_user_id()
-    attributes: Final = span.attributes or _NO_ATTRIBUTES
-    if user_id is None or User.ID in attributes:
+    if user_id is None:
         return span
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
     return _CountedSpanView(span, MappingProxyType({**attributes, User.ID: user_id}))
 
 

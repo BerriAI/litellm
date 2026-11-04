@@ -504,8 +504,8 @@ def _mixpanel_config_error(callback_vars: Mapping[str, str]) -> str | None:
             f"Supported regions: {', '.join(sorted(MIXPANEL_OTLP_ENDPOINT_BY_REGION))}."
         )
 
-    token: Final = callback_vars.get("mixpanel_project_token")
-    if not token or not token.strip() or token in _UNSENDABLE_MIXPANEL_TOKENS:
+    token: Final = (callback_vars.get("mixpanel_project_token") or "").strip()
+    if not token or token in _UNSENDABLE_MIXPANEL_TOKENS:
         return "mixpanel_project_token must be the project's own token, sent in full on every create or update."
     unknown: Final = tuple(
         key for key in callback_vars if key.startswith(_MIXPANEL_VAR_PREFIX) and key not in _MIXPANEL_VARS

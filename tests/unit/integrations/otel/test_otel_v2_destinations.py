@@ -5977,7 +5977,7 @@ class TestMixpanelGetsTheCallersId:
         assert "session.id" not in by_name(mixpanel)["chat gpt-4o"].attributes
         assert "user.id" not in by_name(other)["chat gpt-4o"].attributes
 
-    def test_the_id_the_mapper_wrote_wins_over_the_id_read_at_auth(self) -> None:
+    def test_the_id_read_at_auth_replaces_the_id_a_mapper_wrote(self) -> None:
         provider, mixpanel, _ = self._fan_out()
 
         self._request(
@@ -5986,8 +5986,21 @@ class TestMixpanelGetsTheCallersId:
             model_call_attributes={"gen_ai.operation.name": "chat", "user.id": "from-mapper"},
         )
 
-        assert by_name(mixpanel)["chat gpt-4o"].attributes.get("user.id") == "from-mapper"
+        assert by_name(mixpanel)["chat gpt-4o"].attributes.get("user.id") == "caller-1"
         assert by_name(mixpanel)["POST /v1/chat/completions"].attributes.get("user.id") == "caller-1"
+
+    def test_a_span_from_other_code_names_the_caller_only_for_mixpanel(self) -> None:
+        provider, mixpanel, other = self._fan_out()
+
+        def run() -> None:
+            set_request_destinations((self.MIXPANEL, self.ARIZE))
+            set_request_user_id("caller-1")
+            get_tracer(provider, "application").start_span("checkout", attributes={"user.id": "its-own"}).end()
+
+        in_fresh_context(run)
+
+        assert by_name(mixpanel)["checkout"].attributes.get("user.id") == "caller-1"
+        assert by_name(other)["checkout"].attributes.get("user.id") == "its-own"
 
     def test_a_request_without_an_id_adds_nothing(self) -> None:
         provider, mixpanel, _ = self._fan_out()

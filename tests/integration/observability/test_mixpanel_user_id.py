@@ -525,7 +525,9 @@ def test_every_request_on_a_long_lived_key_names_its_own_caller(
         )
         settled: Final = tuple((caller, _settled_trace(mixpanel.control_url, trace_id)) for caller, trace_id in traces)
 
-    assert [(caller, _without_the_id(_reached(mixpanel, spans, host), caller)) for caller, spans in settled] == [
+    at_project: Final = tuple((caller, _reached(mixpanel, spans, host)) for caller, spans in settled)
+    assert [caller for caller, spans in at_project if not spans] == []
+    assert [(caller, _without_the_id(spans, caller)) for caller, spans in at_project] == [
         (caller, []) for caller in callers
     ]
 
@@ -685,8 +687,8 @@ def test_a_collector_never_gets_the_id_only_a_team_project_asked_for(
 
 @pytest.mark.parametrize(
     "token",
-    ["", "   ", None, "None", "***REDACTED***"],
-    ids=["empty", "whitespace", "null", "none-string", "masked"],
+    ["", "   ", None, "None", " None ", "***REDACTED***", " ***REDACTED*** "],
+    ids=["empty", "whitespace", "null", "none-string", "padded-none-string", "masked", "padded-masked"],
 )
 def test_a_team_or_key_callback_refuses_a_token_it_could_never_send(
     token: JsonValue, operator_setup: OwnedProxy, mixpanel: ConnectSink
@@ -764,6 +766,55 @@ def test_mixpanel_listed_with_another_callback_gets_one_labeled_copy_of_the_mode
         span["name"] for span in at_mixpanel
     ]
     assert _sent_to(_exports_of(mixpanel, at_mixpanel)) == {(OPERATOR_HOST, _authorization(OPERATOR_TOKEN))}
+
+
+def test_the_operators_project_names_one_caller_when_a_request_also_sends_a_trace_user_id(
+    combined_setup: tuple[OwnedProxy, tuple[str, ...]], provider: Wire, mixpanel: ConnectSink, audit_sinks: SpanSinks
+) -> None:
+    owned, callbacks = combined_setup
+    proxy: Final = owned.gateway
+    caller: Final = f"caller-{uuid.uuid4().hex}"
+    traced_as: Final = f"traced-as-{uuid.uuid4().hex}"
+    with proxy.scenario() as scenario:
+        model: Final = scenario.model(api_base=provider.url + "/v1")
+        key: Final = scenario.key(key_alias=f"mixpanel-two-ids-{uuid.uuid4().hex}")
+        trace_id: Final = _traced_call(
+            proxy,
+            key,
+            {"model": model, **_chat_call("hi"), "metadata": {"user.id": caller, "trace_user_id": traced_as}},
+        )
+        at_mixpanel: Final = _settled_trace(mixpanel.control_url, trace_id, _has_model_call)
+        at_other: Final = _settled_trace(audit_sinks.operator, trace_id, _has_model_call)
+
+    assert _without_the_id(_outside_auth(at_mixpanel), caller) == []
+    assert {span["attributes"].get(USER_ID) for span in at_other if OPERATION in span["attributes"]} == (
+        {traced_as} if "langfuse_otel" in callbacks else {None}
+    )
+
+
+def test_a_team_project_names_one_caller_when_a_request_also_sends_a_trace_user_id(
+    combined_setup: tuple[OwnedProxy, tuple[str, ...]], provider: Wire, mixpanel: ConnectSink
+) -> None:
+    owned, _ = combined_setup
+    proxy: Final = owned.gateway
+    caller: Final = f"caller-{uuid.uuid4().hex}"
+    with proxy.scenario() as scenario:
+        model: Final = scenario.model(api_base=provider.url + "/v1")
+        key, host, _token = _team_or_key(scenario, "team")
+        trace_id: Final = _traced_call(
+            proxy,
+            key,
+            {
+                "model": model,
+                **_chat_call("hi"),
+                "metadata": {"user.id": caller, "trace_user_id": f"traced-as-{uuid.uuid4().hex}"},
+            },
+        )
+        spans: Final = _settled_trace(mixpanel.control_url, trace_id, _has_model_call)
+
+    at_project: Final = _reached(mixpanel, spans, host)
+    assert [span for span in at_project if OPERATION in span["attributes"]], at_project
+    assert _without_the_id(at_project, caller) == []
 
 
 @pytest.mark.parametrize("entry", ["mcp", "rest"])
