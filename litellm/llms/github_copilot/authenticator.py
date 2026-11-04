@@ -1,7 +1,7 @@
+import hashlib
 import json
 import os
 import time
-from functools import lru_cache
 from typing import Final
 
 import httpx
@@ -9,6 +9,8 @@ from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import GITHUB_COPILOT_USER_SESSION_TTL_SECONDS
 from litellm.litellm_core_utils.asyncify import can_block_current_thread
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
@@ -46,10 +48,18 @@ class _AccessTokenPoll(TypedDict):
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _DEVICE_CODE: Final = TypeAdapter(_DeviceCode)
 _ACCESS_TOKEN_POLL: Final = TypeAdapter(_AccessTokenPoll)
+_COPILOT_API_BASE_CACHE: Final = InMemoryCache(
+    max_size_in_memory=1000,
+    default_ttl=GITHUB_COPILOT_USER_SESSION_TTL_SECONDS,
+)
 
 
-@lru_cache(maxsize=1000)
 def _copilot_api_base_for_token(access_token: str) -> str | None:
+    cache_key: Final = hashlib.sha256(access_token.encode()).hexdigest()
+    cached_api_base: Final[object] = _COPILOT_API_BASE_CACHE.get_cache(cache_key)
+    if isinstance(cached_api_base, str):
+        return cached_api_base
+
     try:
         response: Final = get_httpx_client().get(
             DEFAULT_GITHUB_COPILOT_USER_URL,
@@ -68,7 +78,10 @@ def _copilot_api_base_for_token(access_token: str) -> str | None:
         from .per_user_auth import validated_copilot_api_base
 
         validated: Final = validated_copilot_api_base(api_base, github_host_endpoints("github.com"))
-        return validated if validated == api_base.rstrip("/") else None
+        if validated != api_base.rstrip("/"):
+            return None
+        _COPILOT_API_BASE_CACHE.set_cache(cache_key, validated)
+        return validated
     except Exception:
         return None
 

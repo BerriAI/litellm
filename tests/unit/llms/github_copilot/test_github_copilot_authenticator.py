@@ -71,6 +71,19 @@ def test_get_api_base_returns_none_when_user_lookup_fails(
         assert Authenticator().get_api_base() is None
 
 
+def test_get_api_base_retries_after_failed_user_lookup(logged_in_token_dir: tuple[Path, str]) -> None:
+    auth: Final = Authenticator()
+    with respx.mock(assert_all_called=True) as router:
+        failed_lookup: Final = router.get(COPILOT_USER_URL).respond(status_code=503)
+        assert auth.get_api_base() is None
+    assert failed_lookup.call_count == 1
+
+    with respx.mock(assert_all_called=True) as router:
+        successful_lookup: Final = router.get(COPILOT_USER_URL).respond(json={"endpoints": {"api": TENANT_API}})
+        assert auth.get_api_base() == TENANT_API
+    assert successful_lookup.call_count == 1
+
+
 def test_get_api_base_returns_none_when_user_lookup_response_has_no_endpoint(
     logged_in_token_dir: tuple[Path, str],
 ) -> None:
