@@ -109,3 +109,8 @@ Validation: 80 focused tests, production TypeScript, make check and outgoing sec
 
 ![header-worker-after-mobile-light.jpg](header-worker-after-mobile-light.jpg)
 
+## Transparent workspace trigger in dark mode
+
+Source ea4a6e6088e49dab45f69d8a9382281faf5569e3. The resting background is transparent; border, hover and focus remain. Browser computed background is rgba(0, 0, 0, 0)
+
+![workspace-transparent-dark.jpg](workspace-transparent-dark.jpg)
