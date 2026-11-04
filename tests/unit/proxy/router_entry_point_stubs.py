@@ -123,6 +123,8 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
             return router.get_configured_display_name(name)
         if field == "service_tiers":
             return router.get_configured_service_tiers(name, **_given(team_id=team_id))
+        if field == "max_input_tokens":
+            return router.get_configured_max_input_tokens(name, **_given(team_id=team_id))
         if field == "listing_info":
             return router.get_model_listing_info(name)
         if field == "mode":

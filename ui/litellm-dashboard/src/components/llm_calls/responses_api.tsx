@@ -7,11 +7,12 @@ import type {
 } from "openai/resources/responses/responses";
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
-import { getGatewayBaseUrl, getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 import { parseUsageCost } from "./usage_cost";
 import { buildPlaygroundHeaders, type CustomHeaders } from "./request_headers";
+import { buildMcpToolBlocks, type BuildMcpToolBlocksArgs } from "./mcp_tool_blocks";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import {
@@ -132,7 +133,6 @@ export async function makeOpenAIResponsesRequest(
   }
 
   const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
-  const mcpBaseUrl = customBaseUrl || getProxyBaseUrl();
   const headers = buildPlaygroundHeaders(tags, customHeaders);
 
   const client = new openai.OpenAI({
@@ -178,53 +178,13 @@ export async function makeOpenAIResponsesRequest(
     });
 
     // Build tools array
-    const tools: any[] = [];
-
-    // Add MCP servers if selected
-    if (selectedMCPServers && selectedMCPServers.length > 0) {
-      if (selectedMCPServers.includes("__all__")) {
-        // All MCP Servers selected
-        const allServersTool = {
-          type: "mcp",
-          server_label: "litellm",
-          server_url: `${mcpBaseUrl}/mcp`,
-          require_approval: "never",
-        };
-        tools.push(allServersTool);
-      } else {
-        // Individual servers/toolsets selected - create one entry per item
-        selectedMCPServers.forEach((serverId) => {
-          if (serverId.startsWith("toolset:")) {
-            // Toolset: same /{name}/mcp pattern as individual servers
-            const toolsetId = serverId.slice("toolset:".length);
-            const toolset = mcpToolsets?.find((t) => t.toolset_id === toolsetId);
-            const toolsetName = toolset?.toolset_name || toolsetId;
-            const toolsetTool = {
-              type: "mcp",
-              server_label: toolsetName,
-              server_url: `${mcpBaseUrl}/mcp/${encodeURIComponent(toolsetName)}`,
-              require_approval: "never",
-            };
-            tools.push(toolsetTool);
-          } else {
-            const server = mcpServers?.find((s) => s.server_id === serverId);
-            // Use server_name for both routing and labelling. server_name is the
-            // unique registered identifier; aliases can collide across servers.
-            const routeName = server?.server_name || serverId;
-            const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
-
-            const serverTool = {
-              type: "mcp",
-              server_label: routeName, // unique per request — collisions cause silent tool-routing failures
-              server_url: `${mcpBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
-              require_approval: "never",
-              ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
-            };
-            tools.push(serverTool);
-          }
-        });
-      }
-    }
+    const mcpSelection: BuildMcpToolBlocksArgs = {
+      selectedMCPServers,
+      mcpServers,
+      mcpToolsets,
+      mcpServerToolRestrictions,
+    };
+    const tools: any[] = buildMcpToolBlocks(mcpSelection);
 
     // Add code_interpreter tool if enabled (OpenAI auto-creates container)
     if (codeInterpreterEnabled) {

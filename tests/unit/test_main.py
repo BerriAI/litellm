@@ -553,6 +553,63 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     assert sent_tool["function"]["name"] == "write_file"
 
 
+_ALLOWED_TOOLS_TOOL_CHOICE: Final = {
+    "type": "allowed_tools",
+    "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+}
+_TWO_TOOLS: Final = [
+    {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}},
+]
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.5", "azure/my-gpt-deployment"])
+def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat(
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str
+):
+    mock_route: Final = respx_mock.post(url__regex=r"http://localhost:12346/.*chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=_TWO_TOOLS,
+        tool_choice=_ALLOWED_TOOLS_TOOL_CHOICE,
+        api_base="http://localhost:12346/v1",
+        api_key="fake_api_key",
+        api_version="2025-04-01-preview",
+    )
+
+    assert mock_route.called
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["tool_choice"] == _ALLOWED_TOOLS_TOOL_CHOICE
+    assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_time", "get_weather"]
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "bedrock/converse/x"])
+def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot_enforce_it(
+    respx_mock: respx.MockRouter, model: str, drop_params: bool
+):
+    with pytest.raises(
+        litellm.BadRequestError, match=r"allowed_tools.*only supported for azure, litellm_proxy, openai"
+    ) as exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What time is it?"}],
+            tools=_TWO_TOOLS,
+            tool_choice=_ALLOWED_TOOLS_TOOL_CHOICE,
+            drop_params=drop_params,
+            api_key="fake_api_key",
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+    assert exc.value.status_code == 400
+    assert not respx_mock.calls
+
+
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
     "id": "srvtoolu_01search",
     "type": "function",
@@ -6125,6 +6182,79 @@ async def test_groq_atranscription_honors_base_url_alias(respx_mock: respx.MockR
 
     assert route.called
     assert response.text == "hello"
+
+
+def test_transcription_keeps_the_prompt_passed_by_position(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    litellm.transcription(
+        "groq/whisper-large-v3", GROQ_WAV_FILE, "en", "Four score", base_url=GROQ_INTERNAL_BASE, api_key="fake-key"
+    )
+
+    sent: Final = route.calls.last.request.content
+    assert b'name="language"\r\n\r\nen\r\n' in sent
+    assert b'name="prompt"\r\n\r\nFour score\r\n' in sent
+
+
+@pytest.mark.parametrize(
+    "provider_body,expected_upload_measurements",
+    [({"text": "hello", "duration": 2.5}, 0), ({"text": "hello"}, 1)],
+    ids=["provider_reports_duration", "provider_omits_duration"],
+)
+def test_transcription_measures_the_upload_only_when_the_provider_omits_the_duration(
+    respx_mock: respx.MockRouter, provider_body: Mapping[str, object], expected_upload_measurements: int
+):
+    respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json=provider_body)
+    )
+
+    with patch.object(
+        litellm_main, "calculate_request_duration", wraps=litellm_main.calculate_request_duration
+    ) as measure_upload:
+        response: Final = litellm.transcription(
+            model="groq/whisper-large-v3", file=GROQ_WAV_FILE, base_url=GROQ_INTERNAL_BASE, api_key="fake-key"
+        )
+
+    assert response.text == "hello"
+    assert measure_upload.call_count == expected_upload_measurements
+
+
+@pytest.mark.parametrize("model_name", ("whisper-1", "gpt-4o-transcribe", "gpt-transcribe"))
+def test_openai_compatible_transcription_with_an_openai_model_name_reaches_the_server(
+    respx_mock: respx.MockRouter, model_name: str
+):
+    route: Final = respx_mock.post("https://vllm.internal/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "served by vllm"})
+    )
+
+    response: Final = litellm.transcription(
+        model=f"hosted_vllm/{model_name}",
+        file=GROQ_WAV_FILE,
+        api_base="https://vllm.internal/v1",
+        api_key="fake-key",
+        response_format="verbose_json",
+    )
+
+    assert route.called
+    assert response.text == "served by vllm"
+
+
+def test_openai_gpt_transcribe_still_rejects_non_json_response_formats(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "should not be sent"})
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="only supports response_format 'json' or 'text'"):
+        litellm.transcription(
+            model="openai/gpt-transcribe",
+            file=GROQ_WAV_FILE,
+            api_key="fake-key",
+            response_format="srt",
+        )
+
+    assert not route.called
 
 
 def test_groq_speech_honors_base_url_alias(respx_mock: respx.MockRouter):
