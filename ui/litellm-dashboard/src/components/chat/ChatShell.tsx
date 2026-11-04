@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
-import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  Menu,
   Plus,
   MessageSquare,
   Network,
@@ -12,14 +12,10 @@ import {
   Lock,
   BarChart3,
   ScrollText,
-  PanelLeftClose,
-  PanelLeftOpen,
   Search,
   Settings2,
   ChevronDown,
   Info,
-  Settings,
-  LogOut,
 } from "lucide-react";
 import { useMediaQuery } from "usehooks-ts";
 import { Button } from "@/components/ui/button";
@@ -31,11 +27,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
+import { Sidebar, SidebarContent, SidebarFooter, SidebarMenuButton } from "@/components/shared/Sidebar";
+import { SidebarBrand } from "@/components/shared/SidebarBrand";
+import ChatAccountMenu from "./ChatAccountMenu";
+import { Kbd } from "@/components/ui/kbd";
+import { useShortcutLabel } from "@/components/CommandPalette/useShortcutLabel";
+import { useHotkeys } from "react-hotkeys-hook";
+import { DashboardHeader } from "@/components/DashboardHeader";
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { uiHref } from "@/utils/uiHref";
 import { useChatShell } from "@/contexts/ChatShellContext";
-import { useTheme } from "@/contexts/ThemeContext";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
 import ConversationList from "./ConversationList";
 
@@ -61,47 +63,50 @@ interface NavItemProps {
   label: string;
   onClick: () => void;
   active?: boolean;
+  shortcut?: string;
 }
 
-function NavItem({ icon, label, onClick, active = false }: NavItemProps) {
+function NavItem({ icon, label, onClick, active = false, shortcut }: NavItemProps) {
   return (
-    <Button
+    <SidebarMenuButton
       onClick={onClick}
-      variant="ghost"
+      isActive={active}
+      aria-label={label}
+      title={label}
       aria-current={active ? "page" : undefined}
-      className={`chat-nav-item moyai-chat-rail-button w-full justify-start ${active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground"}`}
     >
       {icon}
-      <span className="flex-1 text-left">{label}</span>
-    </Button>
+      <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{label}</span>
+      {shortcut && (
+        <Kbd className="bg-transparent text-muted-foreground group-data-[collapsed=true]/sidebar:hidden">
+          {shortcut}
+        </Kbd>
+      )}
+    </SidebarMenuButton>
   );
 }
 
 const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const pathname = stripTrailingSlash(usePathname() ?? "");
-  const {
-    accessToken,
-    userEmail,
-    userId,
-    conversations,
-    activeConversationId,
-    deleteConversation,
-    renameConversation,
-  } = useChatShell();
+  const { accessToken, conversations, activeConversationId, deleteConversation, renameConversation } = useChatShell();
   const handleLogout = useLogout(accessToken);
-  const isDesktop = useMediaQuery("(min-width: 601px)", { initializeWithValue: false });
+  const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   if (isDesktop && sidebarOpen) setSidebarOpen(false);
   const collapsed = isDesktop && sidebarCollapsed;
-  const { logoUrl, logoUrlDark } = useTheme();
-  const lightLogo = logoUrl || logoUrlDark;
-  const darkLogo = logoUrlDark || logoUrl;
+  const [mobileNavigationHandle] = useState(() => DialogPrimitive.createHandle());
+  const shortcut = useShortcutLabel();
+  const openSearch = () => {
+    setSidebarCollapsed(false);
+    if (!isDesktop) setSidebarOpen(true);
+    setSearchOpen(true);
+  };
+  useHotkeys("mod+k", openSearch, { enableOnFormTags: true, preventDefault: true, useKey: true });
   const routes = getChatRoutes();
   const isChatsRoute = pathname === routes.chats;
-  const accountName = userEmail?.split("@")[0] || userId || "Account";
   const workspaceItems = [
     { label: "Credentials", route: routes.credentials, Icon: KeyRound },
     { label: "API Keys", route: routes.apiKeys, Icon: Lock },
@@ -117,37 +122,18 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   const sidebar = (
     <>
-      <div className="moyai-chat-brand-row">
-        <ViewSwitcher className="moyai-chat-workspace-switcher" contentClassName="chat-theme min-w-60" />
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="moyai-chat-search"
-          aria-label="Search chats"
-          title="Search chats (⌘K)"
-          onClick={() => setSearchOpen(true)}
-        >
-          <Search className="size-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={collapsed ? "Open sidebar" : "Close sidebar"}
-          aria-expanded={!collapsed}
-          onClick={() => (isDesktop ? setSidebarCollapsed(!sidebarCollapsed) : setSidebarOpen(false))}
-        >
-          {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
-        </Button>
+      <SidebarBrand
+        accessToken={accessToken}
+        homeHref={routes.chats}
+        homeLabel="Chat home"
+        collapsed={collapsed}
+        onToggleCollapsed={() => (isDesktop ? setSidebarCollapsed(!sidebarCollapsed) : setSidebarOpen(false))}
+      />
+      <div className="space-y-1 px-3 pt-3 pb-2">
+        <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden" />
+        <NavItem icon={<Plus />} label="New Chat" onClick={() => navigate(routes.chats)} />
       </div>
-      <Button
-        variant="ghost"
-        onClick={() => navigate(routes.chats)}
-        className="chat-new-conversation moyai-chat-rail-button w-full justify-start"
-      >
-        <Plus className="size-4" />
-        New Chat
-      </Button>
-      <nav aria-label="Chat workspace" className="moyai-chat-destinations">
+      <SidebarContent aria-label="Chat workspace" className="flex-none">
         <NavItem
           icon={<MessageSquare className="size-4" />}
           label="Chats"
@@ -169,18 +155,19 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <Button
-                variant="ghost"
-                className={`chat-nav-item moyai-chat-rail-button w-full justify-start ${workspaceActive ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground"}`}
+              <SidebarMenuButton
+                isActive={workspaceActive}
+                aria-label="Workspace"
+                title="Workspace"
                 aria-current={workspaceActive ? "page" : undefined}
               />
             }
           >
             <Settings2 className="size-4" />
-            <span className="flex-1 text-left">Workspace</span>
-            <ChevronDown className="size-3.5" />
+            <span className="flex-1 text-left group-data-[collapsed=true]/sidebar:hidden">Workspace</span>
+            <ChevronDown className="size-3.5 group-data-[collapsed=true]/sidebar:hidden" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent side="right" align="start" className="chat-theme min-w-44">
+          <DropdownMenuContent side="right" align="start" className="min-w-44">
             {workspaceItems.map(({ label, route, Icon }) => (
               <DropdownMenuItem
                 key={route}
@@ -202,8 +189,9 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </nav>
-      <div className="moyai-chat-history flex min-h-0 flex-1 flex-col overflow-hidden">
+        <NavItem icon={<Search />} label="Search chats" shortcut={shortcut} onClick={openSearch} />
+      </SidebarContent>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-3 group-data-[collapsed=true]/sidebar:hidden">
         <ConversationList
           conversations={conversations}
           activeConversationId={activeConversationId}
@@ -216,82 +204,70 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           searchOpen={searchOpen}
           onSearchOpenChange={setSearchOpen}
           hideSearchButton
+          enableSearchShortcut={false}
         />
       </div>
-      {lightLogo && darkLogo && (
-        <div className="flex h-12 shrink-0 items-center px-1 pb-2" role="img" aria-label="Organization logo">
-          <Image
-            src={lightLogo}
-            alt=""
-            width={160}
-            height={32}
-            unoptimized
-            className="h-8 max-w-full object-contain object-left dark:hidden"
-          />
-          <Image
-            src={darkLogo}
-            alt=""
-            width={160}
-            height={32}
-            unoptimized
-            className="hidden h-8 max-w-full object-contain object-left dark:block"
-          />
-        </div>
-      )}
-      <footer className="moyai-chat-account">
-        <span className="min-w-0 flex-1 truncate text-[13px]" title={userEmail || userId}>
-          {accountName}
-        </span>
-        <ThemeToggle />
-        <Button variant="ghost" size="icon-sm" aria-label="Settings" onClick={() => navigate(routes.credentials)}>
-          <Settings className="size-4" />
-        </Button>
-        <Button variant="ghost" size="icon-sm" aria-label="Sign out" onClick={handleLogout}>
-          <LogOut className="size-4" />
-        </Button>
-      </footer>
+      <SidebarFooter>
+        <ChatAccountMenu
+          onLogout={handleLogout}
+          collapsed={collapsed}
+          onSettings={() => navigate(routes.credentials)}
+        />
+      </SidebarFooter>
     </>
   );
 
+  const titles = [
+    { route: routes.chats, label: "Chat" },
+    { route: routes.models, label: "Models" },
+    { route: routes.integrations, label: "Integrations" },
+    ...workspaceItems,
+  ];
+  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+  const title =
+    isChatsRoute && activeConversation?.messages.length
+      ? activeConversation.title
+      : titles.find((item) => item.route === pathname)?.label ?? "Chat";
+
   return (
-    <div
-      className={`chat-theme chat-workspace moyai-chat-shell flex h-full w-full overflow-hidden text-foreground ${collapsed ? "moyai-chat-collapsed" : ""}`}
-    >
-      {isDesktop ? (
-        <aside aria-label="Chat navigation" className="chat-glass-sidebar moyai-chat-sidebar">
+    <div className="chat-theme flex h-full w-full overflow-hidden bg-background text-foreground">
+      {isDesktop && (
+        <Sidebar aria-label="Chat navigation" collapsed={collapsed}>
           {sidebar}
-        </aside>
-      ) : (
-        <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-          <div className="moyai-chat-mobile-header z-chrome flex h-16 shrink-0 items-center gap-2 px-3">
+        </Sidebar>
+      )}
+      <Sheet handle={mobileNavigationHandle} open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <SheetContent
+          side="left"
+          initialFocus={searchOpen ? false : undefined}
+          showCloseButton={false}
+          className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
+        >
+          <SheetHeader className="sr-only">
+            <SheetTitle>LiteLLM Chat</SheetTitle>
+            <SheetDescription>Conversations and chat workspace navigation</SheetDescription>
+          </SheetHeader>
+          <Sidebar>{sidebar}</Sidebar>
+        </SheetContent>
+      </Sheet>
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <DashboardHeader
+          accessToken={accessToken}
+          title={title}
+          workspace="chat"
+          navigationTrigger={
             <SheetTrigger
+              handle={mobileNavigationHandle}
               render={
-                <Button
-                  variant="ghost"
-                  size="icon-lg"
-                  className="moyai-chat-mobile-trigger"
-                  aria-label="Open chat navigation"
-                />
+                <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open chat navigation" />
               }
             >
-              <PanelLeftOpen className="size-5" />
+              <Menu />
             </SheetTrigger>
-            <ViewSwitcher className="moyai-chat-workspace-switcher" contentClassName="chat-theme min-w-60" />
-          </div>
-          <SheetContent
-            side="left"
-            showCloseButton={false}
-            className="chat-theme chat-mobile-sidebar moyai-chat-sidebar"
-          >
-            <SheetHeader className="sr-only">
-              <SheetTitle>LiteLLM Chat</SheetTitle>
-              <SheetDescription>Conversations and chat workspace navigation</SheetDescription>
-            </SheetHeader>
-            {sidebar}
-          </SheetContent>
-        </Sheet>
-      )}
-      <main className="chat-glass-pane relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</main>
+          }
+        />
+        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</main>
+      </div>
     </div>
   );
 };

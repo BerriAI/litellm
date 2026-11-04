@@ -1,34 +1,14 @@
 /* Adapted from BerriAI/moyai 1118ab0, native/web/home.css. MIT license in LICENSE.txt. */
-@font-face {
-  font-family: "Moyai Geist";
-  src: url("./geist-variable.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
-.chat-theme {
-  --font-moyai-chat: "General Sans", "Moyai Geist", ui-sans-serif, system-ui, sans-serif;
-  font-family: var(--font-moyai-chat);
-}
 .moyai-models-page {
   height: 100%;
   min-height: 0;
   overflow: auto;
-  padding: 52px 48px;
+  padding: 32px;
 }
 .moyai-models-content {
   width: 100%;
   max-width: 1200px;
   margin: 0 auto;
-}
-.moyai-models-header {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 36px;
-}
-.moyai-models-header h1 {
-  font: 500 clamp(28px, 3vw, 38px) / 1.15 var(--font-moyai-chat, sans-serif);
-  letter-spacing: -0.04em;
 }
 .chat-model-hub-catalog {
   min-width: 0;
@@ -38,10 +18,8 @@
   gap: 20px;
   padding: 24px;
   border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--chat-glass-surface);
-  background-image: var(--chat-glass-sheen);
-  box-shadow: var(--chat-glass-shadow);
+  border-radius: 12px;
+  background: var(--background);
 }
 .chat-model-hub-catalog .chat-model-hub-filters {
   gap: 12px;
@@ -168,10 +146,7 @@
 }
 @media (max-width: 767px) {
   .moyai-models-page {
-    padding: 64px 16px 28px;
-  }
-  .moyai-models-header {
-    margin-bottom: 24px;
+    padding: 24px 16px;
   }
   .chat-model-hub-card {
     padding: 16px;
@@ -196,12 +171,12 @@
   position: relative;
   isolation: isolate;
   display: flex;
-  padding: 88px 48px 56px;
+  padding: 48px 32px;
 }
 .moyai-chat-home-content {
   position: relative;
   width: 100%;
-  max-width: 720px;
+  max-width: 760px;
   margin: auto;
   text-align: left;
 }
@@ -210,8 +185,8 @@
 }
 .moyai-chat-home-header h1 {
   margin: 0;
-  font: 500 clamp(32px, 3.4vw, 46px) / 1.13 var(--font-moyai-chat, sans-serif);
-  letter-spacing: -0.045em;
+  font: 600 clamp(28px, 3vw, 36px) / 1.13 var(--font-sans);
+  letter-spacing: -0.035em;
   text-wrap: balance;
 }
 .moyai-chat-home-form {
@@ -226,13 +201,9 @@
   font-size: 12px;
 }
 .moyai-chat-home-composer {
-  background: var(--chat-glass-surface);
-  background-image: var(--chat-glass-sheen);
-  -webkit-backdrop-filter: var(--chat-glass-blur);
-  backdrop-filter: var(--chat-glass-blur);
+  background: var(--background);
   border: 1px solid var(--chat-home-editor-border);
-  border-radius: 10px;
-  box-shadow: var(--chat-glass-shadow);
+  border-radius: 16px;
   overflow: hidden;
 }
 .moyai-chat-home-composer:focus-within {
@@ -243,27 +214,26 @@
   position: relative;
 }
 .moyai-chat-home .moyai-chat-home-composer .skill-editor {
-  min-height: 132px;
+  min-height: 112px;
   padding: 21px 22px;
-  font: 14px/1.8 var(--font-moyai-chat, sans-serif);
+  font: 14px/1.8 var(--font-sans);
 }
 .moyai-chat-home .moyai-chat-home-composer .skill-editor-placeholder {
   top: 21px;
   left: 22px;
   right: 22px;
-  font: 14px/1.8 var(--font-moyai-chat, sans-serif);
+  font: 14px/1.8 var(--font-sans);
   color: var(--muted-foreground);
 }
 .moyai-chat-home-composer textarea {
-  min-height: 132px;
+  min-height: 112px;
   padding: 22px;
   font-size: 15px;
   resize: none;
 }
 .moyai-chat-home-composer .moyai-chat-composer-actions {
   padding: 8px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--chat-glass-chrome);
+  background: var(--background);
 }
 .moyai-chat-home-composer-tools {
   display: flex;
@@ -300,121 +270,27 @@
   font: 10px/1.5 var(--ui-font-mono);
   color: var(--foreground);
 }
-.moyai-chat-home-composer-hint {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 1.5;
-  margin: 10px 0 0;
-}
-.moyai-chat-home-composer-hint [role="status"] {
-  margin-right: auto;
-}
-.moyai-chat-home-recent {
-  margin-top: 24px;
-}
-.moyai-chat-home-recent-header {
-  min-height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.moyai-chat-home-recent h2 {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 500;
-}
-.moyai-chat-home-recent-header button,
-.moyai-chat-home-recent > p {
-  font-size: 11px;
-}
-.moyai-chat-home-recent ul {
-  list-style: none;
-  padding: 0;
-  margin: 4px 0 0;
-}
-.moyai-chat-home-recent .moyai-chat-home-recent-link {
-  display: flex;
-  justify-content: flex-start;
-  width: 100%;
-  min-width: 0;
-  height: 36px;
-  gap: 12px;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 400;
-}
-.moyai-chat-home-recent-link span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.moyai-chat-home-recent-link svg:last-child {
-  margin-left: auto;
-}
 .moyai-chat-home-starters {
-  display: grid;
-  gap: 2px;
-  margin-top: 30px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
 }
 .moyai-chat-home-starters[aria-hidden="true"] {
   visibility: hidden;
 }
-.moyai-chat-home-starters-heading {
-  margin: 0 0 8px;
-  color: var(--foreground);
-  font-size: 11px;
-  line-height: 1.5;
-}
 .moyai-chat-home-starters > button {
-  display: flex;
-  justify-content: flex-start;
-  height: 36px;
-  min-height: 36px;
-  padding: 6px 10px;
-  gap: 12px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--foreground);
-  font-size: 12px;
+  border-radius: 999px;
+  color: var(--muted-foreground);
   font-weight: 400;
-}
-.moyai-chat-home-starters > button:hover {
-  background: var(--muted);
-  border-color: var(--border);
-  color: var(--foreground);
-}
-.moyai-chat-home-starters > button:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 1px;
-}
-.moyai-chat-home-starters > button > svg {
-  width: 14px;
-  height: 14px;
-  color: var(--foreground);
-}
-.moyai-chat-home-starter-label {
-  color: var(--foreground);
-}
-.moyai-chat-home-starter-detail {
-  margin-left: auto;
-  font-size: 11px;
-  line-height: 1.5;
-}
-.moyai-chat-home-starters > button > .moyai-chat-home-starter-arrow {
-  color: var(--foreground);
-  width: 12px;
+  box-shadow: none;
 }
 @media (max-width: 1000px) {
   .moyai-chat-home {
     padding-inline: 28px;
   }
   .moyai-chat-home-header h1 {
-    font-size: 36px;
+    font-size: 30px;
   }
 }
 @media (max-width: 600px) {
@@ -428,7 +304,7 @@
     margin-bottom: 24px;
   }
   .moyai-chat-home-header h1 {
-    font-size: 36px;
+    font-size: 30px;
   }
   .moyai-chat-home .moyai-chat-home-composer .skill-editor {
     min-height: 148px;
@@ -453,26 +329,6 @@
     max-width: 160px;
     font-size: 12px !important;
   }
-  .moyai-chat-home-composer-hint {
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-  .moyai-chat-home-recent .moyai-chat-home-recent-link {
-    min-height: 44px;
-  }
-  .moyai-chat-home-starters {
-    margin-top: 24px;
-  }
-  .moyai-chat-home-starters > button {
-    min-height: 44px;
-    gap: 8px;
-  }
-  .moyai-chat-home-starter-detail {
-    display: none;
-  }
-  .moyai-chat-home-starter-arrow {
-    margin-left: auto;
-  }
 }
 
 .moyai-chat-composer-actions {
@@ -489,7 +345,7 @@
   margin-left: auto;
 }
 .chat-theme .moyai-chat-editor {
-  min-height: 132px;
+  min-height: 112px;
   max-height: 240px;
   width: 100%;
   border: 0;
@@ -498,40 +354,16 @@
   outline: none;
   resize: none;
   background: transparent;
-  font: 14px/1.8 var(--font-moyai-chat, sans-serif);
+  font: 14px/1.8 var(--font-sans);
   padding: 21px 22px;
 }
 .chat-theme .moyai-chat-editor:focus-visible {
   box-shadow: none;
   outline: none;
 }
-.moyai-chat-space-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image: radial-gradient(var(--moyai-home-dot) 1px, transparent 1px),
-    linear-gradient(var(--moyai-home-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--moyai-home-grid) 1px, transparent 1px);
-  background-size:
-    48px 48px,
-    192px 192px,
-    192px 192px;
-  background-position:
-    0 0,
-    24px 24px,
-    24px 24px;
-  mask-image: linear-gradient(#000, #0009);
-}
 .moyai-chat-home {
-  --moyai-home-dot: #5b60602b;
-  --moyai-home-grid: #5b606008;
   min-height: 0;
   flex: 1;
-}
-.dark .moyai-chat-home {
-  --moyai-home-dot: #aeb0b52e;
-  --moyai-home-grid: #aeb0b508;
 }
 @media (max-width: 600px) {
   .chat-theme .moyai-chat-editor {
@@ -551,14 +383,14 @@
   background: transparent;
   border: 0;
   box-shadow: none;
-  font: 10px/1.5 var(--font-moyai-mono, ui-monospace, monospace);
+  font: 13px/1.5 var(--font-sans);
   color: var(--foreground);
 }
 .chat-theme .moyai-chat-editor::placeholder {
   color: var(--chat-prompt-muted);
 }
 .chat-theme .moyai-chat-home-composer-tools button {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 400;
 }
 @media (max-width: 600px) {
@@ -569,16 +401,6 @@
   }
 }
 
-@font-face {
-  font-family: "Moyai Geist Mono";
-  src: url("./geist-mono-variable.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
-.chat-theme {
-  --font-moyai-mono: "Moyai Geist Mono", ui-monospace, monospace;
-}
 .moyai-chat-home-composer .moyai-chat-send-actions > button {
   width: 28px;
   height: 28px;
@@ -591,20 +413,6 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-}
-.moyai-chat-conversation-header {
-  padding: 16px 28px;
-  min-height: 76px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-}
-.moyai-chat-conversation-header h1 {
-  font-size: 18px;
-  font-weight: 500;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 .moyai-chat-transcript-layout {
   --chat-gutter: clamp(20px, 2.2vw, 32px);
@@ -636,10 +444,7 @@
   position: relative;
   border: 1px solid var(--chat-home-editor-border);
   border-radius: 8px;
-  background: var(--chat-glass-surface);
-  background-image: var(--chat-glass-sheen);
-  backdrop-filter: var(--chat-glass-blur);
-  box-shadow: var(--chat-glass-shadow);
+  background: var(--background);
 }
 .moyai-chat-conversation-composer .moyai-chat-composer-entry:focus-within {
   border-color: var(--chat-focus-border);
@@ -693,10 +498,6 @@
   line-height: 1.7;
 }
 @media (max-width: 600px) {
-  .moyai-chat-conversation-header {
-    min-height: 52px;
-    padding: 12px 20px;
-  }
   .moyai-chat-transcript-layout {
     --chat-gutter: 16px;
   }

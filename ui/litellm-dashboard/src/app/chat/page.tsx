@@ -499,15 +499,13 @@ export default function ChatConversationPage() {
     if (background.pending && storageUnavailable)
       return "Keep this tab open. This run could not be saved in this browser.";
     if (background.pending) return "Running in the background. You can close this tab and return to this chat.";
-    if (useBackground) return null;
+    if (useBackground || (!isStreaming && !isRequestInFlight)) return null;
     return "Keep this tab open. Background runs are not available for this chat.";
   };
 
   const inputBar = (inConversation: boolean) => {
     const hint = mode === "chat" || background.pending ? backgroundHint() : null;
-    const defaultPlaceholder = inConversation
-      ? "Send a message..."
-      : "Ask a question, attach a file, or paste something to work on…";
+    const defaultPlaceholder = inConversation ? "Send a message..." : "Ask anything…";
     const chatPlaceholder = research ? "What should I research on the web?" : defaultPlaceholder;
     const preparing = isLoadingModels || isReadingAttachments;
     const researchBlocked = research && !canResearch;
@@ -692,9 +690,6 @@ export default function ChatConversationPage() {
             {hint}
           </p>
         )}
-        <p className="moyai-chat-home-composer-hint">
-          {mode === "image" ? "Describe an image · Enter to generate" : "Drop files or paste images · Enter to send"}
-        </p>
       </div>
     );
   };
@@ -722,19 +717,12 @@ export default function ChatConversationPage() {
             researchMode={research}
             draft={inputText}
             busy={isStreaming}
-            conversations={conversations}
-            onSelectConversation={(id) => {
-              void setConversationIdInUrl(id);
-            }}
             onPrompt={setInputText}
           >
             {inputBar(false)}
           </MoyaiChatHome>
         ) : (
           <div className="moyai-chat-conversation">
-            <header className="moyai-chat-conversation-header">
-              <h1>{activeConversation!.title}</h1>
-            </header>
             <div className="moyai-chat-transcript-layout">
               <div ref={messagesScrollRef} className="moyai-chat-transcript" style={{ overflowAnchor: "none" }}>
                 <ChatMessages

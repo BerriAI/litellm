@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import type { ReactElement } from "react";
@@ -8,8 +8,9 @@ import ChatShell from "./ChatShell";
 
 const render = (ui: ReactElement) => renderWithProviders(<ThemeProvider>{ui}</ThemeProvider>);
 
-const { mockPush, mockUsePathname, mockUseChatShell, mockUseMediaQuery } = vi.hoisted(() => ({
+const { mockPush, mockUsePathname, mockUseChatShell, mockUseMediaQuery, mockLogout } = vi.hoisted(() => ({
   mockPush: vi.fn(),
+  mockLogout: vi.fn(),
   mockUsePathname: vi.fn(() => "/ui/chat"),
   mockUseMediaQuery: vi.fn(() => true),
   mockUseChatShell: vi.fn(() => ({
@@ -26,16 +27,19 @@ const { mockPush, mockUsePathname, mockUseChatShell, mockUseMediaQuery } = vi.ho
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
   usePathname: mockUsePathname,
+  useSearchParams: () => new URLSearchParams(),
 }));
 // Deterministic hrefs so navigation/active-state assertions don't depend on server_root_path.
-vi.mock("@/utils/uiHref", () => ({ uiHref: (seg: string) => `/ui/${seg}`.replace(/\/$/, "") || "/ui" }));
+vi.mock("@/utils/uiHref", () => ({
+  uiHref: (seg: string) => `/ui/${seg}`.replace(/\/$/, "") || "/ui",
+  routeSegmentForPathname: (path: string) => path.replace(/^\/ui\//, "").split("/")[0],
+}));
 vi.mock("@/contexts/ChatShellContext", () => ({ useChatShell: mockUseChatShell }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: () => ({ data: { values: { enable_chat_ui: true } } }),
 }));
-vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({ useLogout: () => vi.fn() }));
+vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({ useLogout: () => mockLogout }));
 vi.mock("usehooks-ts", () => ({ useMediaQuery: mockUseMediaQuery }));
-vi.mock("./ConversationList", () => ({ default: () => <div data-testid="conversation-list" /> }));
 
 describe("ChatShell", () => {
   beforeEach(() => {
@@ -61,10 +65,9 @@ describe("ChatShell", () => {
     expect(screen.getByRole("button", { name: "Chats" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "Models" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: "Workspace" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Account menu/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Switch workspace, current: Chat" })).toBeInTheDocument();
-    expect(screen.getByTestId("conversation-list")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Search chats" })).toBeInTheDocument();
   });
 
   it("should mark Models active on its route and tolerate a trailing slash", () => {
@@ -89,7 +92,7 @@ describe("ChatShell", () => {
     );
     expect(screen.getByRole("button", { name: "Workspace" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "Chats" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByTestId("conversation-list")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Search chats" })).toBeInTheDocument();
   });
 
   it("should navigate through the workspace menu and retain all chat destinations", async () => {
@@ -136,13 +139,13 @@ describe("ChatShell", () => {
         <div />
       </ChatShell>,
     );
-    await user.click(screen.getByRole("button", { name: "Close sidebar" }));
-    expect(screen.getByRole("button", { name: "Open sidebar" })).toHaveAttribute("aria-expanded", "false");
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    expect(screen.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute("aria-expanded", "false");
     await user.click(screen.getByRole("button", { name: "Switch workspace, current: Chat" }));
     expect(await screen.findByRole("menuitem", { name: "AI Gateway", exact: true })).toBeInTheDocument();
     await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Open sidebar" }));
-    expect(screen.getByRole("button", { name: "Close sidebar" })).toHaveAttribute("aria-expanded", "true");
+    await user.click(screen.getByRole("button", { name: "Expand sidebar" }));
+    expect(screen.getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
   });
 
   it("should open mobile navigation and close it after selecting Models", async () => {
@@ -155,7 +158,6 @@ describe("ChatShell", () => {
     );
 
     expect(screen.queryByRole("navigation", { name: "Chat workspace" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Switch workspace, current: Chat" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
     expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Models" }));
@@ -181,5 +183,49 @@ describe("ChatShell", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+  it("should keep search scoped to conversations when the sidebar is collapsed", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatShell>
+        <div />
+      </ChatShell>,
+    );
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    fireEvent.keyDown(document, { key: "k", code: "KeyK", ctrlKey: true });
+    expect(await screen.findByRole("dialog", { name: "Search conversations" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(await screen.findByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("should focus conversation search when the mobile sidebar starts closed", async () => {
+    mockUseMediaQuery.mockReturnValue(false);
+    const user = userEvent.setup();
+    render(
+      <ChatShell>
+        <div />
+      </ChatShell>,
+    );
+    fireEvent.keyDown(document, { key: "k", code: "KeyK", ctrlKey: true });
+    const search = await screen.findByRole("textbox", { name: "Search conversations" });
+    await waitFor(() => expect(search).toHaveFocus());
+    await user.type(search, "release notes");
+    expect(search).toHaveValue("release notes");
+  });
+
+  it("should preserve the Chat settings route and sign-out action in the account menu", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatShell>
+        <div />
+      </ChatShell>,
+    );
+    await user.click(screen.getByRole("button", { name: /Account menu/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Settings" }));
+    expect(mockPush).toHaveBeenCalledWith("/ui/chat/credentials");
+    await user.click(screen.getByRole("button", { name: /Account menu/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+    expect(mockLogout).toHaveBeenCalledOnce();
   });
 });
