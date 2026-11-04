@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     get_litellm_gateway_api_key,
     is_cli_token_fresh,
     load_cli_token,
+    load_cli_token_left_in_keychain,
     save_cli_token,
 )
 
@@ -907,6 +908,7 @@ class TestClearCliToken:
 
         assert load_cli_token(vault=vault) is None
         assert get_litellm_gateway_api_key(vault=vault) is None
+        assert load_cli_token_left_in_keychain(vault=vault) is None
         assert clear_cli_token(vault=vault) == SecretErased()
         assert vault.blob is None
 

@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     get_cli_token_file_path,
     is_cli_token_fresh,
     load_cli_token,
+    load_cli_token_left_in_keychain,
     save_cli_token,
 )
 
@@ -232,6 +233,15 @@ def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] |
     """
     record: Final = load_cli_token(vault=vault)
     return None if record is None else record.model_dump(exclude_none=True)
+
+
+def _credential_to_revoke(vault: SecretVault) -> Mapping[str, object] | None:
+    """The login this logout ends, or the one an earlier logout left in a keychain it could not reach"""
+    current: Final = load_token(vault=vault)
+    if current is not None:
+        return current
+    left: Final = load_cli_token_left_in_keychain(vault=vault)
+    return None if left is None else left.model_dump(exclude_none=True)
 
 
 def save_token(record: CliTokenData, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:
@@ -992,7 +1002,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
 def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
     vault: Final = context_secret_vault(ctx)
-    token_data: Final = load_token(vault=vault)
+    token_data: Final = _credential_to_revoke(vault)
     revocation: Final = revoke_stored_credential(token_data, requests.Session()) if token_data is not None else None
     match revocation:
         case RevocationUnavailable(reason=reason):

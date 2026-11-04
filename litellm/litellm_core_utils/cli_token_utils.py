@@ -225,16 +225,17 @@ def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretClear:
 
     The token file goes whatever the keychain answers, so nothing left on disk reads as a login. A
     keychain that could not be checked, or that would not give up its entry, may still hold a
-    credential of ours, so a logout that had something to end leaves a secret-free note beside the
-    file, and the next logout warns again instead of reading the missing file as a clean keychain.
-    Only a keychain that confirms the erase takes the note away. A file that will not go has its
-    secret taken out where it lies instead.
+    credential of ours, so a logout that had something to end leaves a note beside the file holding
+    that login's record without its secret. The next logout warns again instead of reading the
+    missing file as a clean keychain, and once the keychain answers it pairs the note with the entry
+    to revoke that login at the proxy. Only a keychain that confirms the erase takes the note away. A
+    file that will not go has its secret taken out where it lies instead.
     """
     outcome: Final = vault.erase()
     record: Final = _read_token_file()
     settled: Final = _nothing_left_behind(outcome, record)
     left_on_disk: Final = _end_the_local_login(record)
-    _note_what_the_keychain_answered(outcome, settled)
+    _note_what_the_keychain_answered(outcome, settled, record)
     if left_on_disk is not None:
         return left_on_disk
     return SecretErased() if settled else outcome
@@ -259,7 +260,34 @@ def _keychain_not_cleared_note_path() -> Path:
     return Path(get_cli_token_file_path()).with_name("keychain_not_cleared")
 
 
-def _note_what_the_keychain_answered(outcome: SecretErase, settled: bool) -> None:
+def load_cli_token_left_in_keychain(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | None:
+    """The login an earlier logout could not erase from the keychain, once the keychain answers again.
+
+    The token file went with that logout, so its note is the only record of the login, and the
+    refresh token that revokes it is only in the keychain. A keychain entry from any other sign-in
+    is never paired with the note, since the endpoints it names belong to that one login.
+    """
+    note: Final = _read_keychain_not_cleared_note()
+    if note is None:
+        return None
+    secret: Final = _stored_secret(note.base_url, vault)
+    if secret is None or secret.timestamp != note.timestamp:
+        return None
+    return note.model_copy(
+        update=MappingProxyType(
+            {"key": secret.key, "jwt_token": secret.jwt_token, "refresh_token": secret.refresh_token}
+        )
+    )
+
+
+def _read_keychain_not_cleared_note() -> CliTokenRecord | None:
+    try:
+        return CliTokenRecord.model_validate_json(_keychain_not_cleared_note_path().read_bytes())
+    except (OSError, ValidationError):
+        return None
+
+
+def _note_what_the_keychain_answered(outcome: SecretErase, settled: bool, record: CliTokenRecord | None) -> None:
     """Keep the note that a logout left the keychain uncleared for exactly as long as that is true.
 
     The secret is off disk by the time this runs, so a note that will not be written or removed is
@@ -272,8 +300,18 @@ def _note_what_the_keychain_answered(outcome: SecretErase, settled: bool) -> Non
                 note.unlink(missing_ok=True)
             case SecretStranded() | KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
                 if not settled:
-                    ensure_private_dir(note.parent)
-                    write_private_bytes(str(note), b"")
+                    _write_keychain_not_cleared_note(note, record)
+
+
+def _write_keychain_not_cleared_note(note: Path, record: CliTokenRecord | None) -> None:
+    """Record the login whose entry may still be in the keychain, or keep the note that already does"""
+    if record is None and note.exists():
+        return
+    ensure_private_dir(note.parent)
+    if record is None:
+        write_private_bytes(str(note), b"")
+        return
+    write_private_json(str(note), _without_secret(record).model_dump(exclude_none=True))
 
 
 def _nothing_left_behind(outcome: SecretErase, record: CliTokenRecord | None) -> bool:
