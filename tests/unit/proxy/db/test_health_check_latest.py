@@ -1,6 +1,7 @@
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -164,3 +165,36 @@ def test_latest_by_model_name_lets_a_newer_name_probe_speak_for_the_group():
     )
 
     assert latest_by_model_name((per_deployment, name_probe))["gpt-4"] is name_probe
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("retired_status,active_status", [("unhealthy", "healthy"), ("healthy", "unhealthy")])
+def test_active_deployment_selection_excludes_retired_rows(
+    reverse: bool, retired_status: str, active_status: str
+) -> None:
+    active: Final = _latest_row(model_id="active", status=active_status, checked_at="2026-10-16T11:10:00+00:00")
+    retired: Final = _latest_row(model_id="retired", status=retired_status, checked_at="2026-10-16T12:00:00+00:00")
+    rows: Final = (active, retired)
+
+    latest: Final = latest_by_model_name(rows[::-1] if reverse else rows, {"gpt-4": frozenset({"active"})})
+
+    assert latest == {"gpt-4": active}
+
+
+def test_active_deployment_selection_does_not_reuse_an_id_from_another_group() -> None:
+    retired: Final = _latest_row(model_id="reused", status="unhealthy")
+
+    assert latest_by_model_name((retired,), {"gpt-4": frozenset(), "claude": frozenset({"reused"})}) == {}
+
+
+def test_active_deployment_selection_keeps_legacy_name_probes() -> None:
+    name_probe: Final = _latest_row(model_id=None)
+
+    assert latest_by_model_name((name_probe,), {"gpt-4": frozenset({"active"})}) == {"gpt-4": name_probe}
+
+
+def test_active_deployment_selection_keeps_the_newest_active_provider() -> None:
+    older: Final = _latest_row(model_id="provider-a", status="unhealthy", checked_at="2026-10-16T11:10:00+00:00")
+    newer: Final = _latest_row(model_id="provider-b", checked_at="2026-10-16T12:00:00+00:00")
+
+    assert latest_by_model_name((newer, older), {"gpt-4": frozenset({"provider-a", "provider-b"})}) == {"gpt-4": newer}
