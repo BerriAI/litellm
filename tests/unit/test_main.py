@@ -11572,3 +11572,137 @@ def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch: pyt
         )
 
     assert captured["logging_obj"].litellm_params.get("data_residency") is None
+
+
+_CONFIG_DEFAULT_REPLY: Final = {
+    "id": "chatcmpl-config-default",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5.4-mini",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "config_defaults", "call_params", "expected"),
+    [
+        pytest.param(
+            "gpt-5.4-mini",
+            {"max_tokens": 200},
+            {},
+            {"max_tokens": None, "max_completion_tokens": 200, "stop": None},
+            id="gpt-5-default-renamed",
+        ),
+        pytest.param(
+            "gpt-5.4-mini",
+            {"max_tokens": 200},
+            {"max_tokens": 10},
+            {"max_tokens": None, "max_completion_tokens": 10, "stop": None},
+            id="gpt-5-caller-max-tokens-wins",
+        ),
+        pytest.param(
+            "gpt-5.4-mini",
+            {"stop": ["END"]},
+            {"drop_params": True},
+            {"max_tokens": None, "max_completion_tokens": None, "stop": None},
+            id="gpt-5-unsupported-default-dropped-under-drop-params",
+        ),
+        pytest.param(
+            "gpt-5.4-mini",
+            {"stop": ["END"]},
+            {},
+            {"max_tokens": None, "max_completion_tokens": None, "stop": ["END"]},
+            id="gpt-5-unsupported-default-forwarded-without-drop-params",
+        ),
+        pytest.param(
+            "gpt-4o",
+            {"max_tokens": 200},
+            {},
+            {"max_tokens": 200, "max_completion_tokens": None, "stop": None},
+            id="gpt-4o-default-kept",
+        ),
+        pytest.param(
+            "gpt-5-in-house",
+            {"max_tokens": 200},
+            {"reasoning_effort": "xhigh", "model_info": {"reasoning_effort_levels": ["xhigh"]}},
+            {"max_tokens": None, "max_completion_tokens": 200, "reasoning_effort": "xhigh"},
+            id="gpt-5-default-beside-a-declared-effort-level",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("provider", "config_class"),
+    [pytest.param("openai", litellm.OpenAIConfig, id="openai"), pytest.param("azure", litellm.AzureOpenAIConfig, id="azure")],
+)
+def test_a_provider_config_default_reaches_the_wire_the_way_the_same_call_param_would(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    config_class: type,
+    model: str,
+    config_defaults: Mapping[str, object],
+    call_params: Mapping[str, object],
+    expected: Mapping[str, object],
+):
+    sent: Final = _sent_with_provider_config_defaults(
+        respx_mock, monkeypatch, provider, config_class, model, config_defaults, call_params
+    )
+    assert {key: sent.get(key) for key in expected} == expected
+
+
+@pytest.mark.parametrize(
+    ("provider", "config_class"),
+    [
+        pytest.param("openai", litellm.OpenAIConfig, id="openai"),
+        pytest.param("azure", litellm.AzureOpenAIO1Config, id="azure"),
+    ],
+)
+def test_an_o_series_config_default_max_tokens_is_sent_as_max_completion_tokens(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, provider: str, config_class: type
+):
+    sent: Final = _sent_with_provider_config_defaults(
+        respx_mock, monkeypatch, provider, config_class, "o4-mini", {"max_tokens": 200}, {}
+    )
+    assert (sent.get("max_tokens"), sent.get("max_completion_tokens")) == (None, 200)
+
+
+def test_an_openai_config_default_reaches_a_provider_without_a_chat_config_unchanged(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    sent: Final = _sent_with_provider_config_defaults(
+        respx_mock, monkeypatch, "aiml", litellm.OpenAIConfig, "some-model", {"max_tokens": 200}, {}
+    )
+    assert (sent.get("max_tokens"), sent.get("max_completion_tokens")) == (200, None)
+
+
+def _sent_with_provider_config_defaults(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    config_class: type,
+    model: str,
+    config_defaults: Mapping[str, object],
+    call_params: Mapping[str, object],
+) -> Mapping[str, object]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    for key in config_defaults:
+        monkeypatch.setattr(config_class, key, None, raising=False)
+    config_class(**config_defaults)
+    endpoint: Final = respx_mock.post(
+        url__regex=r"https://(api\.openai\.com/v1|litellm-qa\.openai\.azure\.com/openai/deployments/[^/]+)/chat/completions.*"
+    ).respond(json=_CONFIG_DEFAULT_REPLY)
+    connection: Final = (
+        {"api_base": "https://litellm-qa.openai.azure.com", "api_version": "2025-04-01-preview"}
+        if provider == "azure"
+        else {"api_base": "https://api.openai.com/v1"}
+    )
+
+    litellm.completion(
+        model=f"{provider}/{model}",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        **connection,
+        **call_params,
+    )
+
+    return json.loads(endpoint.calls[0].request.content)

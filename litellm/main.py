@@ -19,14 +19,14 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
 
 from litellm._logging import redact_string
 from litellm._uuid import uuid
@@ -123,6 +123,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.reasoning_effort_capability import (
+    deployment_reasoning_effort_levels,
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
     resolve_chat_reasoning,
@@ -1431,6 +1432,90 @@ def _provider_config_items(config: Mapping[str, object]) -> Iterable[tuple[str, 
     return config.items()
 
 
+_ChatParams: TypeAlias = dict[str, object]
+
+
+class _ChatParamsMapper(Protocol):
+    def get_supported_openai_params(self, model: str) -> Sequence[str]: ...
+
+    def map_openai_params(
+        self, non_default_params: _ChatParams, optional_params: _ChatParams, model: str, drop_params: bool
+    ) -> Mapping[str, object]: ...
+
+
+class _ReasoningChatParamsMapper(Protocol):
+    def map_openai_params(
+        self,
+        non_default_params: _ChatParams,
+        optional_params: _ChatParams,
+        model: str,
+        drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] | None = None,
+    ) -> Mapping[str, object]: ...
+
+
+def _provider_config_defaults(
+    config: Mapping[str, object],
+    provider_config: _ChatParamsMapper | None,
+    model: str,
+    optional_params: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+) -> Mapping[str, object]:
+    unset: Final = MappingProxyType({k: v for k, v in config.items() if k not in optional_params})
+    if provider_config is None or not unset:
+        return unset
+    drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
+    supported: Final = frozenset(provider_config.get_supported_openai_params(model=model))
+    unsupported: Final = MappingProxyType({} if drop_params else {k: v for k, v in unset.items() if k not in supported})
+    to_map: Final = MappingProxyType({k: v for k, v in unset.items() if k in supported})
+    if not to_map:
+        return unsupported
+    mapped: Final = _map_provider_config_defaults(
+        provider_config, to_map, optional_params, model, drop_params, deployment_model_info(litellm_params)
+    )
+    return MappingProxyType({**unsupported, **{k: v for k, v in mapped.items() if k not in optional_params}})
+
+
+def _map_provider_config_defaults(
+    provider_config: _ChatParamsMapper,
+    defaults: Mapping[str, object],
+    optional_params: Mapping[str, object],
+    model: str,
+    drop_params: bool,
+    model_info: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    match provider_config:
+        case OpenAIGPT5Config():
+            return _map_reasoning_config_defaults(
+                provider_config, defaults, optional_params, model, drop_params, model_info
+            )
+        case _:
+            return provider_config.map_openai_params(
+                non_default_params={**defaults},
+                optional_params={**optional_params},
+                model=model,
+                drop_params=drop_params,
+            )
+
+
+def _map_reasoning_config_defaults(
+    provider_config: _ReasoningChatParamsMapper,
+    defaults: Mapping[str, object],
+    optional_params: Mapping[str, object],
+    model: str,
+    drop_params: bool,
+    model_info: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    return provider_config.map_openai_params(
+        non_default_params={**defaults},
+        optional_params={**optional_params},
+        model=model,
+        drop_params=drop_params,
+        declared_reasoning_efforts=deployment_reasoning_effort_levels(model_info) or (),
+    )
+
+
 def _locals_snapshot(values: Mapping[str, object]) -> Mapping[str, object]:
     return values
 
@@ -1522,12 +1607,14 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
 
     if litellm.AzureOpenAIO1Config().is_o_series_model(model=_azure_detection_model):
         ## LOAD CONFIG - if set
-        config = litellm.AzureOpenAIO1Config.get_config()
-        for k, v in _provider_config_items(config):
-            if (
-                k not in optional_params
-            ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
-                optional_params[k] = v
+        for key, value in _provider_config_defaults(
+            litellm.AzureOpenAIO1Config.get_config(),
+            ctx.provider_config,
+            _azure_detection_model,
+            _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params),
+            litellm_params,
+        ).items():
+            optional_params[key] = value
 
         response = azure_o1_chat_completions.completion(
             model=model,
@@ -1551,12 +1638,14 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
         )
     else:
         ## LOAD CONFIG - if set
-        config = litellm.AzureOpenAIConfig.get_config()
-        for k, v in _provider_config_items(config):
-            if (
-                k not in optional_params
-            ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
-                optional_params[k] = v
+        for key, value in _provider_config_defaults(
+            litellm.AzureOpenAIConfig.get_config(),
+            ctx.provider_config,
+            _azure_detection_model,
+            _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params),
+            litellm_params,
+        ).items():
+            optional_params[key] = value
 
         ## COMPLETION CALL
         response = azure_chat_completions.completion(
@@ -2847,12 +2936,14 @@ def _complete_custom_openai(
             optional_params["metadata"] = openai_metadata
 
     ## LOAD CONFIG - if set
-    config: Final = litellm.OpenAIConfig.get_config()
-    for k, v in _provider_config_items(config):
-        if (
-            k not in optional_params
-        ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
-            optional_params[k] = v
+    for key, value in _provider_config_defaults(
+        litellm.OpenAIConfig.get_config(),
+        provider_config,
+        model,
+        _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params),
+        litellm_params,
+    ).items():
+        optional_params[key] = value
 
     ## COMPLETION CALL
     try:
