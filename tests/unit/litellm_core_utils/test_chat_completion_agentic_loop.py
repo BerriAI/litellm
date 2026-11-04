@@ -30,6 +30,7 @@ import pytest
 from openai._legacy_response import LegacyAPIResponse
 
 import litellm
+from litellm.caching.caching import Cache
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
 )
@@ -742,6 +743,55 @@ async def test_acompletion_bills_the_first_call_on_the_failure_log_when_the_foll
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(
         5 * price["input_cost_per_token"] + 3 * price["output_cost_per_token"]
     )
+
+
+async def _agentic_turn_with_follow_up(
+    logger: _PlanRecordingLogger, monkeypatch: pytest.MonkeyPatch
+) -> tuple[ModelResponse, Logging]:
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    mock_client: Final = MagicMock()
+    mock_client.post = AsyncMock(return_value=_raw_response_for(_tool_call_model_response()))
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        api_key="sk-test",
+        client=mock_client,
+        num_retries=0,
+    )
+    assert isinstance(response, ModelResponse)
+    (logging_obj,) = logger.logging_objs
+    return response, logging_obj
+
+
+def _follow_up_logger() -> _PlanRecordingLogger:
+    return _PlanRecordingLogger(
+        plan=AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(messages=_patched_messages(), kwargs={"mock_response": "42"}),
+        ),
+        tool_calls={"tool_calls": [{"id": "call_abc"}]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_records_the_cost_breakdown_of_a_successful_follow_up(monkeypatch):
+    response, logging_obj = await _agentic_turn_with_follow_up(_follow_up_logger(), monkeypatch)
+
+    response_cost: Final = response._hidden_params["response_cost"]
+    assert response_cost > 0
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["total_cost"] == pytest.approx(response_cost)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_keeps_a_cached_follow_up_free(monkeypatch):
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    await litellm.acompletion(model="openai/gpt-4o-mini", messages=_patched_messages(), mock_response="42")
+
+    response, _ = await _agentic_turn_with_follow_up(_follow_up_logger(), monkeypatch)
+
+    assert response._hidden_params["cache_hit"] is True
+    assert response._hidden_params["response_cost"] == 0
 
 
 def _tool_call_turn(call_id: str, usage: Usage) -> ModelResponse:

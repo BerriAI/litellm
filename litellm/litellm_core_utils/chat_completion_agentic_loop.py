@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.core_helpers import qualify_agentic_followup_model
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict, object_items
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
@@ -267,6 +268,12 @@ def _filter_followup_kwargs(source: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _leave_pricing_to_the_request(response: object) -> None:
+    hidden_params: Final = get_hidden_params(response)
+    if hidden_params is not None and not served_from_cache(response):
+        hidden_params.pop("response_cost", None)
+
+
 async def _execute_chat_completion_agentic_plan(
     *,
     plan: AgenticLoopPlan,
@@ -329,6 +336,7 @@ async def _execute_chat_completion_agentic_plan(
                     model,
                     str(e),
                 )
+        _leave_pricing_to_the_request(response_followup)
         replay: Final = _converted_stream_replay(
             response_followup,
             kwargs=kwargs,
