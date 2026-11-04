@@ -88,14 +88,14 @@ def _internal_call_origin(metadata: str) -> object:
     return decoded.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
 
 
-def _date_from_start_time(start_time: datetime | str) -> str | None:
+def date_from_start_time(start_time: datetime | str) -> str | None:
     if isinstance(start_time, datetime):
         return start_time.date().isoformat()
     return start_time[:10] if len(start_time) >= 10 else None
 
 
 def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransaction | None:
-    date: Final = _date_from_start_time(payload["startTime"])
+    date: Final = date_from_start_time(payload["startTime"])
     origin: Final = _internal_call_origin(payload["metadata"])
     if date is None or (origin and origin != BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN):
         return None

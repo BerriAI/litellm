@@ -15,6 +15,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import GuardrailCostByUnitEntry
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
+from litellm.proxy.db.model_usage_rollup import date_from_start_time
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
@@ -57,9 +58,7 @@ def _tags(row: Mapping[str, object]) -> tuple[str, ...]:
 
 def _date(row: Mapping[str, object]) -> str | None:
     start: Final = row.get("startTime")
-    if isinstance(start, datetime):
-        return start.date().isoformat()
-    return start.split("T")[0] if isinstance(start, str) else None
+    return date_from_start_time(start) if isinstance(start, (datetime, str)) else None
 
 
 def _spend(table: str, key: tuple[tuple[str, str], ...], spend: float) -> Contribution:

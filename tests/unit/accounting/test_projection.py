@@ -357,3 +357,24 @@ def test_daily_organization_uses_frozen_charged_identity(organization_id: str | 
         assert len(daily) == 1
         assert dict(daily[0].key)["organization_id"] == organization_id
         assert dict(daily[0].increments)["spend"] == 0.25
+
+
+@pytest.mark.parametrize("start", [_NOW, "2026-11-02T12:00:00+00:00", "2026-11-02 12:00:00+00:00"])
+def test_every_daily_row_uses_the_calendar_date_of_the_request(start: object) -> None:
+    row: Final[Mapping[str, object]] = {
+        "request_id": "dated",
+        "startTime": start,
+        "api_key": "key",
+        "user": "user",
+        "team_id": "team",
+        "model": "unpriced-projection-test",
+        "model_group": "group",
+        "custom_llm_provider": "openai",
+        "spend": 0.5,
+        "metadata": "{}",
+    }
+    dates: Final = {
+        item.table: dict(item.key)["date"] for item in project(row) if item.table.startswith("LiteLLM_Daily")
+    }
+    assert {"LiteLLM_DailyUserSpend", "LiteLLM_DailyModelUsage"} <= dates.keys()
+    assert set(dates.values()) == {"2026-11-02"}
