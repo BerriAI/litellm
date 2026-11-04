@@ -59,6 +59,33 @@ beforeAll(() => {
   });
 });
 
+const teamsOnlyCallbacksResponse = {
+  callbacks: [],
+  available_callbacks: [],
+  alerts: [
+    { name: "email", variables: { EMAIL_ADDRESS: null } },
+    { name: "ms_teams", variables: { MS_TEAMS_WEBHOOK_URL: null } },
+  ],
+  active_alerting_destinations: ["ms_teams"],
+  alert_types: ["llm_exceptions", "spend_reports"],
+};
+
+const slackCallbacksResponseWithoutTopLevelAlertTypes = {
+  callbacks: [],
+  available_callbacks: [],
+  alerts: [
+    {
+      name: "slack",
+      active_alerts: ["llm_exceptions"],
+      variables: { SLACK_WEBHOOK_URL: null },
+      alerts_to_webhook: { model_deprecation_warnings: "https://hooks.example.com/dep" },
+    },
+    { name: "email", variables: { EMAIL_ADDRESS: null } },
+    { name: "ms_teams", variables: { MS_TEAMS_WEBHOOK_URL: null } },
+  ],
+  active_alerting_destinations: ["slack"],
+};
+
 describe("Settings", () => {
   const defaultProps = {
     accessToken: "token",
@@ -518,15 +545,55 @@ describe("Settings", () => {
     });
   });
 
-  it("should allow alert types to be enabled when Slack alerting is not configured", async () => {
-    mockGetCallbacksCall.mockResolvedValue({
-      callbacks: [],
-      available_callbacks: [],
-      alerts: [
-        { name: "email", variables: { EMAIL_ADDRESS: null } },
-        { name: "ms_teams", variables: { MS_TEAMS_WEBHOOK_URL: null } },
-      ],
+  it("should start alert type switches from the proxy's alert types and keep them on save when Slack is not configured", async () => {
+    mockGetCallbacksCall.mockResolvedValue(teamsOnlyCallbacksResponse);
+
+    const user = userEvent.setup();
+    render(<Settings {...defaultProps} />);
+    await user.click(await screen.findByRole("tab", { name: "Alerting Types" }));
+
+    const llmExceptionsRow = screen.getByRole("row", { name: "LLM Exceptions" });
+    const llmExceptionsSwitch = within(llmExceptionsRow).getByRole("switch");
+    expect(llmExceptionsSwitch).toBeChecked();
+
+    const deprecationWarningsRow = screen.getByRole("row", { name: "Model Deprecation Warnings" });
+    const deprecationWarningsSwitch = within(deprecationWarningsRow).getByRole("switch");
+    expect(deprecationWarningsSwitch).not.toBeChecked();
+    await user.click(deprecationWarningsSwitch);
+    await user.click(llmExceptionsSwitch);
+
+    expect(deprecationWarningsSwitch).toBeChecked();
+    expect(llmExceptionsSwitch).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          general_settings: expect.objectContaining({
+            alert_types: ["spend_reports", "model_deprecation_warnings"],
+          }),
+        }),
+      );
     });
+
+    await user.click(deprecationWarningsSwitch);
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenLastCalledWith(
+        "token",
+        expect.objectContaining({
+          general_settings: expect.objectContaining({
+            alert_types: ["spend_reports"],
+          }),
+        }),
+      );
+    });
+  });
+
+  it("should leave the proxy's alert types unset when only webhooks change on save", async () => {
+    mockGetCallbacksCall.mockResolvedValue(teamsOnlyCallbacksResponse);
 
     const user = userEvent.setup();
     render(<Settings {...defaultProps} />);
@@ -535,36 +602,19 @@ describe("Settings", () => {
     const deprecationWarningsRow = screen.getByRole("row", { name: "Model Deprecation Warnings" });
     const deprecationWarningsSwitch = within(deprecationWarningsRow).getByRole("switch");
     await user.click(deprecationWarningsSwitch);
-
-    expect(deprecationWarningsSwitch).toBeChecked();
+    await user.click(deprecationWarningsSwitch);
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
-      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
-        "token",
-        expect.objectContaining({
-          general_settings: expect.objectContaining({
-            alert_types: ["model_deprecation_warnings"],
-          }),
-        }),
-      );
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledTimes(1);
     });
+    const savedSettings = vi.mocked(setCallbacksCall).mock.calls[0][1].general_settings;
+    expect(savedSettings).toHaveProperty("alert_to_webhook_url");
+    expect(savedSettings).not.toHaveProperty("alert_types");
   });
 
   it("should load alert types and webhook values from the Slack callback row", async () => {
-    mockGetCallbacksCall.mockResolvedValue({
-      callbacks: [],
-      available_callbacks: [],
-      alerts: [
-        { name: "email", variables: { EMAIL_ADDRESS: null } },
-        {
-          name: "slack",
-          active_alerts: ["llm_exceptions"],
-          variables: { SLACK_WEBHOOK_URL: null },
-          alerts_to_webhook: { model_deprecation_warnings: "https://hooks.example.com/dep" },
-        },
-      ],
-    });
+    mockGetCallbacksCall.mockResolvedValue(slackCallbacksResponseWithoutTopLevelAlertTypes);
 
     const user = userEvent.setup();
     render(<Settings {...defaultProps} />);
