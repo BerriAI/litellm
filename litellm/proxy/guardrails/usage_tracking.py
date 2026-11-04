@@ -432,7 +432,7 @@ async def process_spend_logs_guardrail_usage(
     metrics_rows: Final = _merged_metric_rows(pending_metrics, evaluated_metrics)
     unit_rows: Final = _merged_unit_rows(
         pending_units,
-        _sum_usage_unit_increments(tuple(row for row in logs_to_process if row.get("accounting_path") != "ledger")),
+        _sum_usage_unit_increments(tuple(row for row in logs_to_process if "accounting_payload" not in row)),
     )
 
     if not metrics_rows and not index_rows and not unit_rows:

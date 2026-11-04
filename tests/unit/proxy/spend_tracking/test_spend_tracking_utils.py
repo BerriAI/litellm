@@ -7717,8 +7717,7 @@ def test_spend_payload_preserves_unknown_completion_start(completion_start: str 
     )
 
 
-@pytest.mark.parametrize("path", ["legacy", "ledger"])
-def test_spend_log_metadata_retention_is_independent_of_accounting_path(path: str) -> None:
+def test_spend_log_metadata_retention_drops_accounting_inputs_it_was_not_told_to_keep() -> None:
     metadata: Final = {
         "status": "success",
         "accounting_savings": {
@@ -7741,7 +7740,6 @@ def test_spend_log_metadata_retention_is_independent_of_accounting_path(path: st
     }
     row: Final = {
         "request_id": "retained-accounting",
-        "accounting_path": path,
         "spend": 0.5,
         "startTime": "2026-11-02T12:00:00",
         "endTime": "2026-11-02T12:00:01",
@@ -7758,5 +7756,4 @@ def test_spend_log_metadata_retention_is_independent_of_accounting_path(path: st
     stored: Final = spend_log_row_with_retained_metadata(row, SpendLogsMetadataFields(include=("usage_object",)))
     parsed: Final = json.loads(str(stored["metadata"]))
     assert "user_api_key_alias" not in parsed
-    assert stored["accounting_path"] == path
     assert parsed == {"usage_object": metadata["usage_object"], "status": metadata["status"]}

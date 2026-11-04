@@ -76,6 +76,8 @@ _OPEN_WINDOW_SPEND_SQL: Final = (
     "WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')"
 )
 
+_HAS_DELIVERY: Final = 'EXISTS (SELECT 1 FROM "LiteLLM_SpendLogDelivery" delivery WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id)'
+
 _SETTLED_SPEND_LOG_FILTER: Final = (
     ' AND NOT EXISTS (SELECT 1 FROM "LiteLLM_SpendLogDelivery" delivery '
     'WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id '
@@ -84,14 +86,20 @@ _SETTLED_SPEND_LOG_FILTER: Final = (
 
 _SEED_FROM_SPEND_LOGS_KEY_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, "
-    "COALESCE(SUM(spend) FILTER (WHERE accounting_path = 'ledger' OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
+    "COALESCE(SUM(spend) FILTER (WHERE "
+    + _HAS_DELIVERY
+    + " OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) "
+    "AS before_batch "
     'FROM "LiteLLM_SpendLogs" '
     "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
 _SEED_FROM_SPEND_LOGS_TEAM_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, "
-    "COALESCE(SUM(spend) FILTER (WHERE accounting_path = 'ledger' OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
+    "COALESCE(SUM(spend) FILTER (WHERE "
+    + _HAS_DELIVERY
+    + " OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) "
+    "AS before_batch "
     'FROM "LiteLLM_SpendLogs" '
     "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )

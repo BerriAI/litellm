@@ -46,7 +46,6 @@ _COLUMNS: Final[tuple[LiteralString, ...]] = (
     "litellm_call_id",
     "created_at",
     "updated_at",
-    "accounting_path",
 )
 _JSON_COLUMNS: Final = frozenset({"metadata", "request_tags", "messages", "response", "proxy_server_request"})
 
@@ -80,26 +79,3 @@ def spend_log_insert_statement(rows: Sequence[Mapping[str, object]]) -> tuple[Li
         "ON CONFLICT DO NOTHING RETURNING request_id"
     )
     return sql, safe_dumps(values, non_finite_as_null=True)
-
-
-def spend_log_takeover_statement(row: Mapping[str, object]) -> tuple[LiteralString, str]:
-    if not frozenset(row).issubset(_COLUMNS):
-        raise ValueError("Batch takeover requires known SpendLogs columns")
-    columns: Final[tuple[LiteralString, ...]] = tuple(
-        column
-        for column in _COLUMNS
-        if column in row and column not in {"request_id", "accounting_path", "created_at", "updated_at"}
-    )
-    assignments: Final[LiteralString] = ", ".join(
-        '"' + column + '" = replacement."' + column + '"' for column in columns
-    )
-    sql: Final = (
-        'UPDATE "LiteLLM_SpendLogs" AS stored SET '
-        + assignments
-        + ', updated_at = CURRENT_TIMESTAMP FROM jsonb_populate_record(NULL::"LiteLLM_SpendLogs", $1::jsonb) replacement '
-        "WHERE stored.request_id = replacement.request_id AND stored.call_type = 'aretrieve_batch' "
-        "AND stored.status = 'success' AND stored.spend = 0 RETURNING stored.request_id"
-    )
-    return sql, safe_dumps(
-        {column: _json_value(column, value) for column, value in row.items()}, non_finite_as_null=True
-    )

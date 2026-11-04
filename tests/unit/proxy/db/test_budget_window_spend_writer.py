@@ -562,7 +562,9 @@ async def test_seed_aggregate_sql_splits_the_window_at_the_batch_start(entity_ty
     normalized = " ".join(query.split())
     assert expected_column in normalized
     assert (
-        "FILTER (WHERE accounting_path = 'ledger' OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))"
+        'FILTER (WHERE EXISTS (SELECT 1 FROM "LiteLLM_SpendLogDelivery" delivery '
+        'WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id) '
+        "OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))"
         in normalized
     )
     assert 'FROM "LiteLLM_SpendLogs"' in normalized

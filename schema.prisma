@@ -718,7 +718,6 @@ model LiteLLM_Config {
 
 // View spend, model, api_key per request
 model LiteLLM_SpendLogs {
-  accounting_path     String?
   request_id          String @id
   call_type           String
   api_key             String  @default ("") // Hashed API Token. Not the actual Virtual Key. Equivalent to 'token' column in LiteLLM_VerificationToken

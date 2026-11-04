@@ -8663,7 +8663,7 @@ async def _commit_export_accounting(
     if base_url is None:
         return
     await SpendLogsRepository(prisma_client).insert_with_deliveries(
-        tuple(row for row in rows if row.get("accounting_path") == "ledger"), write_spend_logs=False
+        tuple(row for row in rows if "accounting_payload" in row), write_spend_logs=False
     )
 
 
@@ -9153,13 +9153,11 @@ def _is_transient_spend_log_write_error(e: Exception) -> bool:
     )
 
 
-_ACCOUNTING_ONLY_KEYS: Final = frozenset(
-    {"request_id", "call_type", "accounting_path", "accounting_payload", "accounting_delivery_id"}
-)
+_ACCOUNTING_ONLY_KEYS: Final = frozenset({"request_id", "call_type", "accounting_payload", "accounting_delivery_id"})
 
 
 def _carries_a_charge(row: Mapping[str, object]) -> bool:
-    return row.get("accounting_path") == "ledger"
+    return "accounting_payload" in row
 
 
 def accounting_only_spend_log(row: Mapping[str, object]) -> Mapping[str, object]:

@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from litellm.repositories.spend_log_insert import spend_log_insert_statement, spend_log_takeover_statement
+from litellm.repositories.spend_log_insert import spend_log_insert_statement
 
 
 @pytest.mark.parametrize(
@@ -13,11 +13,6 @@ from litellm.repositories.spend_log_insert import spend_log_insert_statement, sp
 def test_insert_rejects_empty_unknown_or_inconsistent_columns(rows):
     with pytest.raises(ValueError, match="Spend log insert requires"):
         spend_log_insert_statement(rows)
-
-
-def test_takeover_rejects_unknown_columns():
-    with pytest.raises(ValueError, match="Batch takeover requires known SpendLogs columns"):
-        spend_log_takeover_statement({"request_id": "request", "untrusted_column": "value"})
 
 
 def test_insert_keeps_json_and_timestamps_in_bound_data():

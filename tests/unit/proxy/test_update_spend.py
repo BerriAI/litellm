@@ -423,7 +423,7 @@ async def test_a_transient_failure_while_keeping_a_dropped_rows_charge_is_retrie
 
     outage = _raw_query_error("40P01")
     repo = _RescueFailsRepository(outage)
-    rows = [{"request_id": "rejected", "accounting_path": "ledger", "accounting_payload": {"spend": 1.0}}]
+    rows = [{"request_id": "rejected", "accounting_payload": {"spend": 1.0}}]
 
     with pytest.raises(type(outage)):
         await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
@@ -434,6 +434,6 @@ async def test_a_rejected_charge_rescue_is_logged_and_the_flush_continues():
     from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
 
     repo = _RescueFailsRepository(_raw_query_error("22P02"))
-    rows = [{"request_id": "rejected", "accounting_path": "ledger", "accounting_payload": {"spend": 1.0}}]
+    rows = [{"request_id": "rejected", "accounting_payload": {"spend": 1.0}}]
 
     assert await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10) == 9

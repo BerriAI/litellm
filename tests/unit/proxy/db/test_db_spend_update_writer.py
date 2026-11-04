@@ -68,19 +68,25 @@ async def test_window_recovery_failure_does_not_fail_the_request(monkeypatch):
     assert writer.window_spend_update_queue.update_queue.empty()
 
 
-@pytest.mark.parametrize("queued,stored_path,expected", [(False, None, (0.25,)), (True, "legacy", (0.25,)), (False, "ledger", ())])
+@pytest.mark.parametrize(("use_ledger", "expected"), [(False, (0.25,)), (True, ())])
 @pytest.mark.asyncio
-async def test_legacy_failure_recovery_does_not_replay_queued_or_ledger_window_charges(queued, stored_path, expected):
+async def test_failed_spend_write_queues_model_windows_only_for_legacy_requests(monkeypatch, use_ledger, expected):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.hooks.model_budget_shared_windows import CapturedModelWindows
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": use_ledger})
+    monkeypatch.setattr(proxy_server, "accounting_window_keys", AsyncMock(return_value=()))
     writer = DBSpendUpdateWriter()
+    monkeypatch.setattr(writer, "_record_spend_log", AsyncMock(side_effect=RuntimeError("spend log write failed")))
+    now = datetime(2026, 11, 2, tzinfo=timezone.utc)
     window = build_window_spend_transaction(
-        entity_type="model_max_budget", entity_id="key:model:1d", window_duration="1d",
-        window_start=datetime(2026, 11, 2, tzinfo=timezone.utc), spend=0.25,
+        entity_type="model_max_budget", entity_id="key:model:1d", window_duration="1d", window_start=now, spend=0.25,
     )
-    if queued:
-        await writer.window_spend_update_queue.add_update(window)
-    await writer._restore_legacy_model_windows(
-        (window,), accounting_path="legacy", payload=None if stored_path is None else {"accounting_path": stored_path}, queued=queued,
-    )
+    assert await writer.update_database(
+        token="key", user_id=None, end_user_id=None, team_id=None, org_id=None,
+        kwargs={"accounting_model_windows": CapturedModelWindows((window,)), "standard_logging_object": {}},
+        completion_response=None, start_time=now, end_time=now, response_cost=0.25,
+    ) is True
     charges = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
     assert tuple(charge["spend"] for charge in charges) == expected
 
@@ -4665,7 +4671,7 @@ async def test_update_database_writes_no_ordinary_spend_row_with_spend_logs_disa
     assert db_writer._batch_database_updates.await_count == 1
 
 
-_BATCH_CLAIM_FIELDS = {"request_id", "call_type", "status", "spend", "startTime", "endTime", "accounting_path"}
+_BATCH_CLAIM_FIELDS = {"request_id", "call_type", "status", "spend", "startTime", "endTime"}
 
 
 def _logged_batch_cost_payload() -> dict:

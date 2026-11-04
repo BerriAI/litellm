@@ -1,16 +1,4 @@
 SET LOCAL lock_timeout = '10s';
-ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN IF NOT EXISTS "accounting_path" TEXT;
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conrelid = '"LiteLLM_SpendLogs"'::regclass
-          AND conname = 'LiteLLM_SpendLogs_accounting_path_check'
-    ) THEN
-        ALTER TABLE "LiteLLM_SpendLogs" ADD CONSTRAINT "LiteLLM_SpendLogs_accounting_path_check"
-            CHECK (accounting_path IS NULL OR accounting_path IN ('legacy', 'ledger'));
-    END IF;
-END $$;
 CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogDelivery" (
     "delivery_id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     "request_id" TEXT NOT NULL,

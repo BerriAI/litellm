@@ -3807,7 +3807,6 @@ class SpendLogsMetadata(TypedDict):
 class SpendLogsPayload(TypedDict):
     accounting_payload: NotRequired[Mapping[str, object]]  # writable-ok: capture before buffering
     accounting_log_disabled: NotRequired[bool]  # writable-ok: capture logging mode before buffering
-    accounting_path: NotRequired[Literal["legacy", "ledger"]]  # writable-ok: adopt stored stamp
     accounting_delivery_id: NotRequired[str]  # writable-ok: assigned once before buffering
     request_id: str
     call_type: str

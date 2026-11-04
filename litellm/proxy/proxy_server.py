@@ -3618,7 +3618,7 @@ async def increment_spend_counters(
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
-    accounting_path: str = "legacy",
+    windows_from_ledger: bool = False,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3655,7 +3655,7 @@ async def increment_spend_counters(
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
             project_id=project_id,
-            accounting_path=accounting_path,
+            windows_from_ledger=windows_from_ledger,
         )
 
 
@@ -3770,7 +3770,7 @@ async def _increment_spend_counters_batched(
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None = None,
-    accounting_path: str = "legacy",
+    windows_from_ledger: bool = False,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
@@ -3812,7 +3812,7 @@ async def _increment_spend_counters_batched(
             if window_counter not in reserved_counter_keys
             else None
         )
-        if accounting_path != "ledger":
+        if not windows_from_ledger:
             await _enqueue_window_spend_row_update(
                 entity_type=entity_type,
                 entity_id=entity_id,

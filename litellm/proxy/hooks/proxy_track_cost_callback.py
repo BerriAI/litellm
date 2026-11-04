@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -38,6 +38,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import (
+    ACCOUNTING_LEDGER_KWARG,
     DBSpendUpdateWriter,
     debitable_model_access_groups,
     get_llm_router,
@@ -755,7 +756,7 @@ class _ProxyDBLogger(CustomLogger):
                     router=get_llm_router(),
                 ),
                 project_id=user_api_key_dict.project_id,
-                **_accounting_counter_options(row_kwargs.get("accounting_path")),
+                **_ledger_counter_options(row_kwargs.get(ACCOUNTING_LEDGER_KWARG)),
             )
         except Exception:  # noqa: BLE001  # one row's counter failure must not keep the other rows' counters from landing
             verbose_proxy_logger.exception("Failed to raise spend counters for a failure spend row")
@@ -1204,12 +1205,12 @@ def _get_request_tags_for_cost_tracking(
     return None
 
 
-class _AccountingCounterOptions(TypedDict):
-    accounting_path: ReadOnly[NotRequired[Literal["ledger"]]]
+class _LedgerCounterOptions(TypedDict):
+    windows_from_ledger: ReadOnly[NotRequired[bool]]
 
 
-def _accounting_counter_options(path: object) -> _AccountingCounterOptions:
-    return {"accounting_path": "ledger"} if path == "ledger" else {}
+def _ledger_counter_options(ledger: object) -> _LedgerCounterOptions:
+    return {"windows_from_ledger": True} if ledger is True else {}
 
 
 class _IncrementSpendCounters(Protocol):
@@ -1228,7 +1229,7 @@ class _IncrementSpendCounters(Protocol):
         request_started_at: datetime | None = None,
         model_access_groups: Sequence[str] | None = None,
         project_id: str | None = None,
-        accounting_path: str = "legacy",
+        windows_from_ledger: bool = False,
     ) -> None: ...
 
 
@@ -1366,7 +1367,7 @@ async def _update_database_and_spend_counters_in_batch(
             request_started_at=start_time,
             model_access_groups=model_access_groups,
             project_id=project_id,
-            **_accounting_counter_options(_BATCH_CALLBACK_FIELDS.validate_python(kwargs).get("accounting_path")),
+            **_ledger_counter_options(_BATCH_CALLBACK_FIELDS.validate_python(kwargs).get(ACCOUNTING_LEDGER_KWARG)),
         )
     except Exception:
         if budget_reservation is not None:
