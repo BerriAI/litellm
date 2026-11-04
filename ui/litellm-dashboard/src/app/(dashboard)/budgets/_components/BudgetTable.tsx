@@ -2,6 +2,7 @@
 
 import { Inbox, ShieldAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   BUDGET_DURATION_FILTER_OPTIONS,
@@ -21,6 +22,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import i18n from "@/i18n/i18n";
 import { ApiError } from "@/lib/http/client";
 
 import { BUDGET_TABLE_HIDDEN_COLUMNS, getBudgetTableColumns } from "./BudgetTableColumns";
@@ -49,11 +51,19 @@ const formatFilterValue = (columnId: string, value: unknown): string => {
   }
   if (columnId === "max_budget") {
     const { min, max, unlimitedOnly } = (value ?? {}) as MaxBudgetFilterValue;
-    return unlimitedOnly === true ? "Unlimited only" : `${min ? `$${min}` : "any"} to ${max ? `$${max}` : "any"}`;
+    return unlimitedOnly === true
+      ? i18n.t("budgets.table.filterChips.unlimitedOnly")
+      : i18n.t("budgets.table.filterChips.maxBudgetRange", {
+          min: min ? `$${min}` : i18n.t("budgets.table.filterChips.any"),
+          max: max ? `$${max}` : i18n.t("budgets.table.filterChips.any"),
+        });
   }
   if (columnId === "created_at") {
     const { from, to } = (value ?? {}) as CreatedAtFilterValue;
-    return `${from || "any"} to ${to || "any"}`;
+    return i18n.t("budgets.table.filterChips.createdRange", {
+      from: from || i18n.t("budgets.table.filterChips.any"),
+      to: to || i18n.t("budgets.table.filterChips.any"),
+    });
   }
   return String(value);
 };
@@ -81,22 +91,24 @@ const normalizeCreatedAt = (draft: CreatedAtFilterValue): CreatedAtFilterValue |
 };
 
 function EmptyState({ hasQuery }: { hasQuery: boolean }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <Inbox className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">{hasQuery ? "No matching budgets" : "No budgets yet"}</div>
+      <div className="text-sm font-medium text-foreground">
+        {hasQuery ? t("budgets.table.emptyState.noMatchTitle") : t("budgets.table.emptyState.title")}
+      </div>
       <div className="text-sm text-muted-foreground">
-        {hasQuery
-          ? "No budget matches your search or filters."
-          : "Create a budget to set spend, TPM and RPM limits for customers."}
+        {hasQuery ? t("budgets.table.emptyState.noMatchDescription") : t("budgets.table.emptyState.description")}
       </div>
     </div>
   );
 }
 
 function ErrorState({ error }: { error: Error }) {
+  const { t } = useTranslation();
   const forbidden = error instanceof ApiError && error.status === 403;
   return (
     <div className="flex flex-col items-center gap-1 py-6">
@@ -104,10 +116,10 @@ function ErrorState({ error }: { error: Error }) {
         <ShieldAlert className="size-5 text-muted-foreground" />
       </div>
       <div className="text-sm font-medium text-foreground">
-        {forbidden ? "You do not have access to budgets" : "Could not load budgets"}
+        {forbidden ? t("budgets.table.errorState.forbiddenTitle") : t("budgets.table.errorState.title")}
       </div>
       <div className="text-sm text-muted-foreground">
-        {forbidden ? "Ask a proxy admin to grant you the admin viewer role." : error.message}
+        {forbidden ? t("budgets.table.errorState.forbiddenDescription") : error.message}
       </div>
     </div>
   );
@@ -141,19 +153,20 @@ function DurationFilter({ selected, onChange }: { selected: string[]; onChange: 
 }
 
 function BudgetFilterFields({ get, set }: FilterDraft) {
+  const { t } = useTranslation();
   const maxBudget = (get("max_budget") as MaxBudgetFilterValue | undefined) ?? {};
   const created = (get("created_at") as CreatedAtFilterValue | undefined) ?? {};
   const unlimitedOnly = maxBudget.unlimitedOnly === true;
 
   return (
     <>
-      <DataTableFilterField label="Reset">
+      <DataTableFilterField label={t("budgets.table.filters.reset")}>
         <DurationFilter
           selected={(get("budget_duration") as string[] | undefined) ?? []}
           onChange={(selected) => set("budget_duration", selected)}
         />
       </DataTableFilterField>
-      <DataTableFilterField label="Max Budget (USD)">
+      <DataTableFilterField label={t("budgets.table.filters.maxBudget")}>
         <div className="flex items-center gap-2">
           <Input
             type="number"
@@ -162,8 +175,8 @@ function BudgetFilterFields({ get, set }: FilterDraft) {
             value={maxBudget.min ?? ""}
             disabled={unlimitedOnly}
             onChange={(event) => set("max_budget", normalizeMaxBudget({ ...maxBudget, min: event.target.value }))}
-            placeholder="Min"
-            aria-label="Minimum max budget"
+            placeholder={t("budgets.table.filters.min")}
+            aria-label={t("budgets.table.filters.minAriaLabel")}
             data-testid="budget-filter-max-budget-min"
           />
           <Input
@@ -173,8 +186,8 @@ function BudgetFilterFields({ get, set }: FilterDraft) {
             value={maxBudget.max ?? ""}
             disabled={unlimitedOnly}
             onChange={(event) => set("max_budget", normalizeMaxBudget({ ...maxBudget, max: event.target.value }))}
-            placeholder="Max"
-            aria-label="Maximum max budget"
+            placeholder={t("budgets.table.filters.max")}
+            aria-label={t("budgets.table.filters.maxAriaLabel")}
             data-testid="budget-filter-max-budget-max"
           />
         </div>
@@ -184,23 +197,23 @@ function BudgetFilterFields({ get, set }: FilterDraft) {
             onCheckedChange={(checked) => set("max_budget", normalizeMaxBudget({ unlimitedOnly: checked === true }))}
             data-testid="budget-filter-max-budget-unlimited"
           />
-          Unlimited only
+          {t("budgets.table.filters.unlimitedOnly")}
         </Label>
       </DataTableFilterField>
-      <DataTableFilterField label="Created">
+      <DataTableFilterField label={t("budgets.table.filters.created")}>
         <div className="flex items-center gap-2">
           <Input
             type="date"
             value={created.from ?? ""}
             onChange={(event) => set("created_at", normalizeCreatedAt({ ...created, from: event.target.value }))}
-            aria-label="Created from"
+            aria-label={t("budgets.table.filters.createdFrom")}
             data-testid="budget-filter-created-from"
           />
           <Input
             type="date"
             value={created.to ?? ""}
             onChange={(event) => set("created_at", normalizeCreatedAt({ ...created, to: event.target.value }))}
-            aria-label="Created to"
+            aria-label={t("budgets.table.filters.createdTo")}
             data-testid="budget-filter-created-to"
           />
         </div>
@@ -210,11 +223,12 @@ function BudgetFilterFields({ get, set }: FilterDraft) {
 }
 
 const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick, onDeleteClick }) => {
+  const { t } = useTranslation();
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const columns = useMemo(
-    () => getBudgetTableColumns({ canModify, onEditClick, onDeleteClick }),
-    [canModify, onEditClick, onDeleteClick],
+    () => getBudgetTableColumns({ canModify, onEditClick, onDeleteClick }, t),
+    [canModify, onEditClick, onDeleteClick, t],
   );
 
   const hasQuery = list.searchValue.trim() !== "" || list.columnFilters.length > 0;
@@ -239,7 +253,7 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick,
       columnFilters={list.columnFilters}
       onColumnFiltersChange={list.onColumnFiltersChange}
       isLoading={list.isLoading}
-      loadingMessage="Loading budgets…"
+      loadingMessage={t("budgets.table.loading")}
       noDataMessage={emptyMessage}
       size="compact"
       toolbar={(table) => (
@@ -248,7 +262,7 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick,
             table={table}
             searchValue={list.searchValue}
             onSearchChange={list.onSearchChange}
-            searchPlaceholder="Search by budget ID…"
+            searchPlaceholder={t("budgets.table.searchPlaceholder")}
             onOpenFilters={() => setFiltersOpen(true)}
             onRefresh={list.refetch}
             isRefreshing={list.isFetching}
@@ -259,8 +273,8 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick,
             table={table}
             open={filtersOpen}
             onOpenChange={setFiltersOpen}
-            title="Filters"
-            description="Narrow down your budgets"
+            title={t("budgets.table.filters.title")}
+            description={t("budgets.table.filters.description")}
           >
             {(draft) => <BudgetFilterFields {...draft} />}
           </DataTableFilterDrawer>
