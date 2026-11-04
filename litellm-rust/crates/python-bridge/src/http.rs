@@ -131,6 +131,14 @@ pub(crate) fn host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<Cl
     pool().client(&config, variant).map_err(client_error)
 }
 
+/// `host_client` built fresh and never pooled, for a fetch on a runtime that ends with it
+pub(crate) fn unpooled_host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<Client> {
+    let config = call_config(py, &PyDict::new(py), true)?;
+    pool()
+        .unpooled_client(&config, variant)
+        .map_err(client_error)
+}
+
 pub(crate) fn client_error(error: litellm_http::Error) -> PyErr {
     match error.tls_source() {
         Some(TlsSource::ClientIdentity) => PyValueError::new_err(

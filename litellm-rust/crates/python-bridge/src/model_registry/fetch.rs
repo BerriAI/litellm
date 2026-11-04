@@ -62,16 +62,40 @@ impl PyRefresh {
         on_retry: Py<PyAny>,
         sleep: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
-        Ok(Self {
-            run: Run {
-                source: source(py, url)?,
-                request: request(timeout),
-                max_attempts,
-            },
+        let http = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        Ok(Self::with_client(
+            http,
+            url,
+            timeout,
+            max_attempts,
             rng,
             on_retry,
             sleep,
-        })
+        ))
+    }
+
+    /// The refresh `import litellm` starts, for `run_detached`. Its client is built fresh and never pooled, so its
+    /// connections end with its runtime and a fork mid-fetch leaves no shared lock or socket in the child
+    #[staticmethod]
+    #[pyo3(signature = (url, *, timeout, max_attempts, rng, on_retry))]
+    fn at_import(
+        py: Python<'_>,
+        url: &str,
+        timeout: f64,
+        max_attempts: i64,
+        rng: Py<PyAny>,
+        on_retry: Py<PyAny>,
+    ) -> PyResult<Self> {
+        let http = crate::http::unpooled_host_client(py, ClientVariant::NoRedirect)?;
+        Ok(Self::with_client(
+            http,
+            url,
+            timeout,
+            max_attempts,
+            rng,
+            on_retry,
+            None,
+        ))
     }
 
     /// Attempt 1 alone, which `get_model_cost_map` makes before deciding to retry in the background
@@ -123,6 +147,30 @@ impl PyRefresh {
 }
 
 impl PyRefresh {
+    fn with_client(
+        http: litellm_http::Client,
+        url: &str,
+        timeout: f64,
+        max_attempts: i64,
+        rng: Py<PyAny>,
+        on_retry: Py<PyAny>,
+        sleep: Option<Py<PyAny>>,
+    ) -> Self {
+        let env = |name: &str| std::env::var(name).ok();
+        let source = SourceFetch::new(url, SourceClients { http, env: &env })
+            .map_err(|error| refused(url, &error));
+        Self {
+            run: Run {
+                source,
+                request: request(timeout),
+                max_attempts,
+            },
+            rng,
+            on_retry,
+            sleep,
+        }
+    }
+
     fn pause(&self, py: Python<'_>, asynchronous: bool) -> PythonPause {
         PythonPause::new(
             self.rng.clone_ref(py),
@@ -152,14 +200,6 @@ impl Run {
             None => refresh(&fetch, &self.request, self.max_attempts, pause).await,
         }
     }
-}
-
-/// The fetch for `url`, or the final failure main reports for a location it cannot fetch
-fn source(py: Python<'_>, url: &str) -> PyResult<Result<SourceFetch, Attempt>> {
-    let http = crate::http::host_client(py, ClientVariant::NoRedirect)?;
-    let env = |name: &str| std::env::var(name).ok();
-    Ok(SourceFetch::new(url, SourceClients { http, env: &env })
-        .map_err(|error| refused(url, &error)))
 }
 
 fn request(timeout: f64) -> FetchRequest {

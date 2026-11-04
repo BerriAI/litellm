@@ -1,5 +1,11 @@
+import json
 import os
 import textwrap
+import threading
+import time
+from collections.abc import Callable, Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
 from typing import Final
 
 import pytest
@@ -224,3 +230,110 @@ assert os.waitpid(pid, 0)[1] == 0
     )
 
     assert result.returncode == 0, result.stderr
+
+
+_IMPORT_REFRESH_CONTRACT = textwrap.dedent(
+    """
+    import asyncio, os, time
+    import litellm
+    from litellm.rust_bridge import _native
+
+    def native_route_error():
+        async def call():
+            await _native.ResponsesWebSocketConnection.connect("ws://127.0.0.1:1", {}, 0.2)
+
+        try:
+            asyncio.run(call())
+        except Exception as error:
+            return f"{type(error).__name__}: {error}"
+        return ""
+
+    def adopted(deadline):
+        while "fork-remote-only-model" not in litellm.model_cost and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return "fork-remote-only-model" in litellm.model_cost
+
+    assert _native.process_state_started() is False, "import litellm started the native runtime"
+    assert "fork-remote-only-model" not in litellm.model_cost
+    time.sleep(float(os.environ["FORK_AFTER_SECONDS"]))
+    pid = os.fork()
+    if pid == 0:
+        child_adopted = adopted(time.monotonic() + 30)
+        error = native_route_error()
+        native = _native.process_state_started() and "reserved" not in error and "forked" not in error
+        os._exit(0 if child_adopted and native else 1)
+    assert os.waitpid(pid, 0)[1] == 0, "the forked child did not end up with the remote map or could not run natively"
+    """
+)
+
+
+class _ScriptedCostMap(BaseHTTPRequestHandler):
+    """Answers request n with ``statuses[n]``, the last one repeating, each after ``delay`` seconds"""
+
+    body: bytes = b""
+    statuses: tuple[int, ...] = (200,)
+    delay: float = 0.0
+    requests: list[str] = []  # mutable-ok: the server thread records each fetch
+
+    def do_GET(self) -> None:
+        handler: Final = type(self)
+        handler.requests.append(self.path)
+        time.sleep(handler.delay)
+        status: Final = handler.statuses[min(len(handler.requests), len(handler.statuses)) - 1]
+        body: Final = handler.body if status == 200 else b""
+        self.send_response(status)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def cost_map_server() -> Iterator[Callable[[tuple[int, ...], float], tuple[str, type[_ScriptedCostMap]]]]:
+    remote: Final = json.loads(files("litellm").joinpath("model_prices_and_context_window_backup.json").read_bytes())
+    remote["fork-remote-only-model"] = {"litellm_provider": "openai", "mode": "chat"}
+    servers: Final[list[ThreadingHTTPServer]] = []  # mutable-ok: shut down after the test
+
+    def serve(statuses: tuple[int, ...], delay: float) -> tuple[str, type[_ScriptedCostMap]]:
+        attributes: Final = {"body": json.dumps(remote).encode(), "statuses": statuses, "delay": delay, "requests": []}
+        handler: Final = type("Handler", (_ScriptedCostMap,), attributes)
+        server: Final = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return f"http://127.0.0.1:{server.server_address[1]}/model_prices.json", handler
+
+    yield serve
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork only")
+@pytest.mark.parametrize(
+    ("statuses", "delay", "fork_after", "fetches"),
+    [
+        pytest.param((200,), 2.0, 0.0, 1, id="a_fork_mid_refresh_waits_and_the_child_inherits_the_map"),
+        pytest.param((404, 200), 0.0, 1.0, 2, id="a_child_of_a_parent_whose_refresh_failed_fetches_its_own"),
+    ],
+)
+def test_import_starts_no_runtime_and_a_forked_child_ends_up_with_the_remote_map(
+    cost_map_server: Callable[[tuple[int, ...], float], tuple[str, type[_ScriptedCostMap]]],
+    statuses: tuple[int, ...],
+    delay: float,
+    fork_after: float,
+    fetches: int,
+) -> None:
+    url, handler = cost_map_server(statuses, delay)
+    env: Final = {
+        **{name: value for name, value in os.environ.items() if name != "LITELLM_LOCAL_MODEL_COST_MAP"},
+        "LITELLM_MODEL_COST_MAP_URL": url,
+        "FORK_AFTER_SECONDS": str(fork_after),
+        "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES",
+    }
+
+    result: Final = run_child_interpreter(_IMPORT_REFRESH_CONTRACT, env=env, timeout=120)
+
+    assert result.returncode == 0, result.stderr
+    assert handler.requests == ["/model_prices.json"] * fetches

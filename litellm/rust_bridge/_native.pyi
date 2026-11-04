@@ -88,6 +88,10 @@ class ModelCostMapRefresh:
         on_retry: _ModelCostMapRetryReport,
         sleep: Callable[[float], object] | None = None,
     ) -> ModelCostMapRefresh: ...
+    @staticmethod
+    def at_import(
+        url: str, *, timeout: float, max_attempts: int, rng: random.Random, on_retry: _ModelCostMapRetryReport
+    ) -> ModelCostMapRefresh: ...
     def attempt(
         self,
     ) -> (

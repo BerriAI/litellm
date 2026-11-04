@@ -586,7 +586,10 @@ def _retry_remote_fetch_in_background(
         verbose_logger.warning("LiteLLM: Background model cost map retry failed: %s", e)
 
 
-_import_refresh_finished: Final = threading.Event()
+_import_refresh_adopted: Final = threading.Event()
+_import_refresh_idle: Final = threading.Event()
+_import_refresh_idle.set()
+_FORK_WAIT_SECONDS: Final = 5.0
 
 
 def _refresh_in_background(refresh: ModelCostMapRefresh, url: str) -> None:
@@ -599,7 +602,7 @@ def _refresh_in_background(refresh: ModelCostMapRefresh, url: str) -> None:
     except Exception as e:  # noqa: BLE001  # a failed background refresh must not kill the thread; the bundled map stays
         verbose_logger.warning("LiteLLM: Background model cost map refresh failed: %s", e)
     finally:
-        _import_refresh_finished.set()
+        _import_refresh_idle.set()
 
 
 def _adopt_import_refresh(result: ModelCostMapReloadResult, url: str) -> None:
@@ -622,16 +625,18 @@ def _adopt_import_refresh(result: ModelCostMapReloadResult, url: str) -> None:
         _keep_bundled_after(url, "Remote data failed integrity validation")
         return
     adopt_model_cost_map(_install_remote(result, url).model_cost_map)
+    _import_refresh_adopted.set()
 
 
 def _start_import_refresh(url: str) -> None:
-    refresh: Final = ModelCostMapRefresh(
+    refresh: Final = ModelCostMapRefresh.at_import(
         url,
         timeout=5,
         max_attempts=MODEL_COST_MAP_FETCH_MAX_ATTEMPTS,
         rng=random.Random(),
         on_retry=_warn_retrying,
     )
+    _import_refresh_idle.clear()
     threading.Thread(
         target=_refresh_in_background,
         args=(refresh, url),
@@ -640,9 +645,15 @@ def _start_import_refresh(url: str) -> None:
     ).start()
 
 
-def _restart_unfinished_import_refresh(url: str) -> None:
-    """A worker forked before the refresh finished has no refresh thread, so it starts its own"""
-    if _litellm_import_complete.is_set() and not _import_refresh_finished.is_set():
+def _let_the_import_refresh_finish_before_fork() -> None:
+    """A fork while the refresh thread is inside the system resolver leaves the child's resolver broken (macOS
+    segfaults on the child's next lookup), so a fork waits up to one attempt's timeout for the refresh to finish"""
+    _import_refresh_idle.wait(timeout=_FORK_WAIT_SECONDS)
+
+
+def _restart_import_refresh_in_child(url: str) -> None:
+    """A worker forked before its parent adopted the remote map, as gunicorn and granian fork theirs, fetches it itself"""
+    if _litellm_import_complete.is_set() and not _import_refresh_adopted.is_set():
         _start_import_refresh(url)
 
 
@@ -657,7 +668,10 @@ def load_model_cost_map_at_import(url: str) -> dict:
     if _uses_bundled_map_only() or _is_cli_process():
         return _install_bundled(attempted_url=None, fallback_reason=None, is_env_forced=True)
     bundled: Final = _install_bundled(attempted_url=url, fallback_reason=None)
-    os.register_at_fork(after_in_child=functools.partial(_restart_unfinished_import_refresh, url))
+    os.register_at_fork(
+        before=_let_the_import_refresh_finish_before_fork,
+        after_in_child=functools.partial(_restart_import_refresh_in_child, url),
+    )
     if _litellm_import_complete.is_set():
         _start_import_refresh(url)
     else:
