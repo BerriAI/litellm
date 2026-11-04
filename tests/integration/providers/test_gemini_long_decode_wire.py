@@ -380,7 +380,9 @@ def test_cut_chat_stream_hands_its_token_on_a_chunk_with_empty_vertex_ai_lists_a
         chunks: Final = payloads(post(gateway, "chat", request_body("chat", model, True)).text, True)
         carriers: Final = [chunk for chunk in chunks if "continuation_token" in json.dumps(chunk)]
         assert [_vertex_lists(chunk) for chunk in carriers] == [dict(_EMPTY_VERTEX_LISTS)], chunks
-        assert [_vertex_lists(chunk) for chunk in chunks if chunk not in carriers] == [{}] * (len(chunks) - 1), chunks
+        assert [_vertex_lists(chunk) for chunk in chunks] == [
+            dict(_EMPTY_VERTEX_LISTS) if at(chunk, "choices", 0, "delta", "content") else {} for chunk in chunks
+        ], chunks
         metered: Final = [chunk for chunk in chunks if isinstance(chunk.get("usage"), dict)]
         assert [at(chunk, "usage", "completion_tokens_details") for chunk in metered] == [
             {"text_tokens": CUT.output_tokens}

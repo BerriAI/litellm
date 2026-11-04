@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
@@ -585,7 +586,10 @@ def test_should_not_pollute_shared_key_with_custom_nonzero_pricing():
     )
 
 
-@pytest.mark.parametrize("flag", ["supports_regex_lookaround", "supports_assistant_prefill", "supports_sampling_params"])
+@pytest.mark.parametrize(
+    "flag",
+    ["supports_regex_lookaround", "supports_assistant_prefill", "supports_sampling_params", "supports_continuation"],
+)
 def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
     """A deployment's capability override must not land on the shared
     ``{provider}/{model}`` key, or every sibling deployment of that model would inherit it."""
@@ -672,7 +676,7 @@ def test_pdf_opt_out_on_one_deployment_does_not_block_its_sibling(respx_mock: re
 
 
 def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
-    """A deployment's ``token_count_model`` and ``token_count_framing`` must not land on
+    """A deployment's ``token_count_model`` and framing settings must not land on
     the shared ``{provider}/{model}`` key, or a sibling deployment of that model would count with them."""
     from litellm.proxy.common_utils.token_count_settings import cost_map_entry
 
@@ -681,6 +685,9 @@ def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
     configured: Final = {
         "token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-west-2"},
         "token_count_framing": 7,
+        "token_count_tool_framing": 3,
+        "token_count_responses_framing": 5,
+        "token_count_responses_tool_framing": 2,
     }
     builtin: Final = {field: cost_map_entry(backend_model).get(field) for field in configured}
     assert all(builtin[field] != value for field, value in configured.items()), builtin
@@ -2158,6 +2165,155 @@ def test_capability_flags_propagate_from_deployment_model_info_to_shared_key():
         _restore_model_cost_entries(model_keys)
 
 
+@pytest.mark.parametrize("override_first", [True, False], ids=["override-first", "override-last"])
+def test_token_limits_stay_on_the_deployment_that_set_them(override_first: bool) -> None:
+    backend_model: Final = "openai/gpt-4o-mini"
+    shared_keys: Final = ("gpt-4o-mini", backend_model)
+    token_fields: Final = ("max_input_tokens", "max_output_tokens", "max_tokens")
+    catalog_limits: Final = {
+        key: {field: litellm.get_model_info(model=key).get(field) for field in token_fields} for key in shared_keys
+    }
+    catalog_cost_map_limits: Final = {
+        key: {field: (litellm.model_cost.get(key) or {}).get(field) for field in token_fields} for key in shared_keys
+    }
+    override_id: Final = "token-limit-override-deployment"
+    plain_id: Final = "token-limit-plain-deployment"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (*shared_keys, override_id, plain_id)
+    }
+    expected_cost_map_limits: Final = {
+        key: {
+            **catalog_cost_map_limits[key],
+            "max_tokens": catalog_cost_map_limits[key]["max_tokens"]
+            or catalog_cost_map_limits[key]["max_output_tokens"],
+        }
+        for key in shared_keys
+    }
+    plain_deployment: Final = {
+        "model_name": "plain-gpt-4o-mini",
+        "litellm_params": {"model": backend_model},
+        "model_info": {"id": plain_id},
+    }
+    override_deployment: Final = {
+        "model_name": "overridden-gpt-4o-mini",
+        "litellm_params": {"model": backend_model},
+        "model_info": {
+            "id": override_id,
+            "max_input_tokens": 4321,
+            "max_output_tokens": 987,
+            "max_tokens": 987,
+        },
+    }
+    try:
+        router: Final = Router(
+            model_list=[override_deployment, plain_deployment]
+            if override_first
+            else [plain_deployment, override_deployment]
+        )
+        litellm.get_model_info.cache_clear()
+
+        for key in shared_keys:
+            assert {
+                field: (litellm.model_cost.get(key) or {}).get(field) for field in token_fields
+            } == expected_cost_map_limits[key]
+            assert {
+                field: litellm.get_model_info(model=key).get(field) for field in token_fields
+            } == catalog_limits[key]
+
+        assert {
+            field: litellm.get_model_info(model=override_id).get(field) for field in token_fields
+        } == {"max_input_tokens": 4321, "max_output_tokens": 987, "max_tokens": 987}
+
+        plain_listing: Final = create_model_info_response(
+            model_id="plain-gpt-4o-mini", provider="openai", llm_router=router
+        )
+        override_listing: Final = create_model_info_response(
+            model_id="overridden-gpt-4o-mini", provider="openai", llm_router=router
+        )
+        assert (plain_listing["max_input_tokens"], plain_listing["max_output_tokens"]) == (
+            catalog_limits[backend_model]["max_input_tokens"],
+            catalog_limits[backend_model]["max_output_tokens"],
+        )
+        assert (override_listing["max_input_tokens"], override_listing["max_output_tokens"]) == (4321, 987)
+    finally:
+        _restore_model_cost_entries(model_keys)
+        litellm.get_model_info.cache_clear()
+
+
+def test_unknown_backend_token_limits_still_fill_the_shared_key() -> None:
+    backend_model: Final = "hosted_vllm/somelab.lit4544-unmapped-token-limits"
+    first_id: Final = "unknown-token-limit-first-deployment"
+    second_id: Final = "unknown-token-limit-second-deployment"
+    token_fields: Final = ("max_input_tokens", "max_output_tokens", "max_tokens")
+    first_limits: Final = {"max_input_tokens": 4321, "max_output_tokens": 987, "max_tokens": 987}
+    second_limits: Final = {"max_input_tokens": 1234, "max_output_tokens": 456, "max_tokens": 456}
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (backend_model, first_id, second_id)
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "unknown-token-limit-first",
+                    "litellm_params": {"model": backend_model, "api_key": "fake-key"},
+                    "model_info": {"id": first_id, **first_limits},
+                },
+                {
+                    "model_name": "unknown-token-limit-second",
+                    "litellm_params": {"model": backend_model, "api_key": "fake-key"},
+                    "model_info": {"id": second_id, **second_limits},
+                },
+            ]
+        )
+
+        assert {
+            field: (litellm.model_cost.get(backend_model) or {}).get(field) for field in token_fields
+        } == second_limits
+        assert {field: litellm.get_model_info(first_id).get(field) for field in token_fields} == first_limits
+        assert {field: litellm.get_model_info(second_id).get(field) for field in token_fields} == second_limits
+    finally:
+        _restore_model_cost_entries(model_keys)
+        litellm.get_model_info.cache_clear()
+
+
+def test_unknown_backend_token_limit_updates_when_deployment_is_upserted() -> None:
+    backend_model: Final = "hosted_vllm/somelab.lit4544-token-limit-update"
+    model_id: Final = "unknown-token-limit-updated-deployment"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (backend_model, model_id)
+    }
+    try:
+        deployment: Final = Deployment(
+            model_name="unknown-token-limit-update",
+            litellm_params=LiteLLM_Params(
+                model=backend_model,
+                api_base="https://unknown-model.test/v1",
+                api_key="fake-key",
+            ),
+            model_info=ModelInfo(id=model_id, max_output_tokens=999),
+        )
+        router: Final = Router(model_list=[deployment.to_json()])
+        assert (litellm.model_cost.get(backend_model) or {}).get("max_output_tokens") == 999
+
+        router.upsert_deployment(
+            Deployment(
+                model_name="unknown-token-limit-update",
+                litellm_params=LiteLLM_Params(
+                    model=backend_model,
+                    api_base="https://unknown-model.test/v1",
+                    api_key="fake-key",
+                ),
+                model_info=ModelInfo(id=model_id, max_output_tokens=1500),
+            )
+        )
+
+        assert (litellm.model_cost.get(backend_model) or {}).get("max_output_tokens") == 1500
+    finally:
+        _restore_model_cost_entries(model_keys)
+        litellm.get_model_info.cache_clear()
+
+
 def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
     """LIT-3991 end to end: a proxy has a named text-embedding-3-small
     deployment relying on built-in pricing plus an ``openai/*`` wildcard with
@@ -3061,7 +3217,11 @@ def test_register_deployment_in_model_cost_writes_both_key_families():
     try:
         Router._register_deployment_in_model_cost(
             model_id="both-families-id",
-            model_info={"id": "both-families-id", "max_input_tokens": 999, "litellm_provider": "hosted_vllm"},
+            model_info={
+                "id": "both-families-id",
+                "max_input_tokens": 999,
+                "litellm_provider": "hosted_vllm",
+            },
             model="hosted_vllm/both-families-backend",
             custom_llm_provider=None,
         )

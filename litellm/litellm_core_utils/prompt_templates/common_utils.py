@@ -21,14 +21,17 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.batch_utils import InMemoryFile
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAudioObject,
+    ChatCompletionCachedContent,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
+    ChatCompletionPromptCacheBreakpoint,
     ChatCompletionReasoningItem,
     ChatCompletionReasoningSummaryTextBlock,
     ChatCompletionRedactedThinkingBlock,
@@ -394,6 +397,74 @@ def _tpm_input_media(value: object) -> _TPMMediaProjection:
 def split_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, object], ...]]:
     projection: Final = _tpm_media_list(value, _tpm_input_media)
     return projection.content, projection.media
+
+
+_TPM_EMBEDDING_FILE_MIME_PREFIXES: Final = ("application/pdf", "video/")
+
+
+def _tpm_embedding_file(data_uri: str) -> tuple[Mapping[str, object], ...]:
+    from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
+
+    mime: Final = (parse_mime_type(data_uri[:256]) or "").strip().lower()
+    if not mime.startswith(_TPM_EMBEDDING_FILE_MIME_PREFIXES):
+        return ()
+    return ({"type": "file", "file": {"file_data": data_uri, "format": mime}},)
+
+
+_BASE64_PAYLOAD: Final = re.compile(r"[A-Za-z0-9+/]*={0,2}")
+
+
+def _is_base64_data_uri(value: str) -> bool:
+    header_end: Final = value.find(",", 0, 256)
+    if header_end < 0 or not value[:header_end].endswith(";base64"):
+        return False
+    payload_start: Final = header_end + 1
+    if (len(value) - payload_start) % 4 or _BASE64_PAYLOAD.fullmatch(value, payload_start) is None:
+        return False
+    last_quantum: Final = value[max(payload_start, len(value) - 4) :]
+    return base64.b64encode(base64.b64decode(last_quantum)).decode("ascii") == last_quantum
+
+
+def _tpm_embedding_file_block(part: Mapping[str, object]) -> _TPMMediaProjection:
+    projection: Final = _tpm_file_media(part)
+    fields: Final = as_str_mapping(part.get("file"))
+    data: Final = fields.get("file_data") if fields is not None else None
+    if projection.media or fields is None or not isinstance(data, str) or not _is_base64_data_uri(data):
+        return projection
+    media: Final = _tpm_embedding_file(data)
+    return _TPMMediaProjection({**part, "file": _tpm_blank_fields(fields, ("file_data",))} if media else part, media)
+
+
+def _tpm_embedding_leaf(value: object) -> _TPMMediaProjection:
+    part: Final = as_str_mapping(value)
+    if part is not None and part.get("type") == "file":
+        return _tpm_embedding_file_block(part)
+    if not isinstance(value, str) or not value.startswith("data:"):
+        return _tpm_media_leaf(value)
+    if not _is_base64_data_uri(value):
+        return _TPMMediaProjection(value)
+    media: Final = _tpm_file_media({"file_data": value}).media or _tpm_embedding_file(value)
+    return _TPMMediaProjection("" if media else value, media)
+
+
+def _is_json_array(value: object) -> bool:
+    return isinstance(value, (list, tuple))
+
+
+def _tpm_embedding_item(value: object) -> _TPMMediaProjection:
+    return _tpm_media_list(value, _tpm_embedding_leaf) if _is_json_array(value) else _tpm_embedding_leaf(value)
+
+
+def split_embedding_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, object], ...]]:
+    projection: Final = (
+        _tpm_media_list(value, _tpm_embedding_item) if _is_json_array(value) else _tpm_embedding_leaf(value)
+    )
+    return projection.content, projection.media
+
+
+def embedding_input_is_all_media(value: object) -> bool:
+    items: Final = cast(Sequence[object], value) if _is_json_array(value) else (value,)  # cast-ok: JSON input array
+    return all(_tpm_embedding_leaf(item).media for item in items)
 
 
 def _content_parts_contain_image(parts: Sequence[object]) -> bool:
@@ -2182,6 +2253,9 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
 
 
 _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
+PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT: Final = (
+    "set `drop_params: true` on the request or in litellm_settings (`litellm.drop_params = True` in the SDK)"
+)
 
 
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
@@ -2193,16 +2267,62 @@ def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
 
 
 _PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
+_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(ChatCompletionPromptCacheBreakpoint)
+_AcceptedBreakpointT: Final = TypeVar("_AcceptedBreakpointT", bound=Mapping[str, object])
+
+
+def _accepted_prompt_cache_breakpoint(
+    accepted: TypeAdapter[_AcceptedBreakpointT], marker: object
+) -> _AcceptedBreakpointT | None:
+    try:
+        return accepted.validate_python(marker)
+    except ValidationError:
+        return None
+
+
+def prompt_cache_breakpoint_within(
+    accepted: TypeAdapter[_AcceptedBreakpointT], marker: object
+) -> _AcceptedBreakpointT | None:
+    """The client's marker cut down to the ``accepted`` shape: an unsupported ttl is dropped and the mode kept,
+    and a marker whose mode the target cannot read is dropped whole."""
+    whole: Final = _accepted_prompt_cache_breakpoint(accepted, marker)
+    if whole is not None:
+        return whole
+    fields: Final = _breakpoint_fields_or_none(marker)
+    without_ttl: Final = (
+        None
+        if fields is None
+        else _accepted_prompt_cache_breakpoint(accepted, {key: item for key, item in fields.items() if key != "ttl"})
+    )
+    verbose_logger.debug(
+        "Dropping malformed prompt_cache_breakpoint %r under drop_params"
+        if without_ttl is None
+        else "Dropping the unsupported ttl of prompt_cache_breakpoint %r under drop_params",
+        marker,
+    )
+    return without_ttl
 
 
 def prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
     if marker is None or not drop_params:
         return marker
-    try:
-        return _PROMPT_CACHE_BREAKPOINT.validate_python(marker)
-    except ValidationError:
-        verbose_logger.debug("Dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
-        return None
+    return prompt_cache_breakpoint_within(_PROMPT_CACHE_BREAKPOINT, marker)
+
+
+def prompt_cache_breakpoint_with_readable_mode(marker: object, drop_params: bool) -> object:
+    """The client's marker as written, or None under drop_params when no target could read its mode, so the
+    target's own config decides which ttl and keys it keeps."""
+    return None if prompt_cache_breakpoint_for_wire(marker, drop_params) is None else marker
+
+
+def whole_prompt_cache_breakpoint_or_none(marker: object) -> PromptCacheBreakpoint | None:
+    return _accepted_prompt_cache_breakpoint(_PROMPT_CACHE_BREAKPOINT, marker)
+
+
+def chat_completion_prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
+    if marker is None or not drop_params:
+        return marker
+    return prompt_cache_breakpoint_within(_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT, marker)
 
 
 def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
@@ -2215,9 +2335,61 @@ def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
     )
 
 
+def prompt_cache_breakpoint_as_cache_control(block: _MarkedT, drop_params: bool) -> _MarkedT:
+    """OpenAI's ``prompt_cache_breakpoint`` mark rewritten as Anthropic's ``cache_control`` on the same block.
+    A ``cache_control`` the client already wrote on the block wins, TTL included."""
+    marker: Final = block.get("prompt_cache_breakpoint")
+    if marker is None:
+        return block
+    unmarked: Final = {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
+    control: Final = (
+        None
+        if block.get("cache_control") is not None
+        else _cache_control_for_prompt_cache_breakpoint(marker, drop_params)
+    )
+    marked: Final = unmarked if control is None else {**unmarked, "cache_control": control}
+    return cast(_MarkedT, marked)  # cast-ok: same block shape as the input with the marker key renamed
+
+
+def _cache_control_for_prompt_cache_breakpoint(marker: object, drop_params: bool) -> ChatCompletionCachedContent | None:
+    try:
+        breakpoint_mark: Final = _PROMPT_CACHE_BREAKPOINT.validate_python(marker)
+    except ValidationError:
+        if not drop_params:
+            raise UnsupportedParamsError(
+                message=(
+                    f"prompt_cache_breakpoint must be {{'mode': 'explicit'}} with an optional ttl of '30m' or '12h', got "
+                    f"{marker!r}. Fix the marker, or "
+                    f"{PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to drop it."
+                ),
+                status_code=400,
+            )
+        verbose_logger.debug("Dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
+        return None
+    ttl: Final = breakpoint_mark.get("ttl")
+    if ttl is not None and not drop_params:
+        raise UnsupportedParamsError(
+            message=(
+                f"This model's prompt cache lasts 5m, or 1h where it offers one, so prompt_cache_breakpoint "
+                f"ttl={ttl!r} has no equivalent. Remove the ttl, {PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to send "
+                "a 5m breakpoint instead, or send cache_control {'type': 'ephemeral', 'ttl': '1h'} on the block "
+                "where the model offers a 1h cache."
+            ),
+            status_code=400,
+        )
+    return ChatCompletionCachedContent(type="ephemeral")
+
+
 _BREAKPOINT_BLOCK_LIST_KEYS: Final = frozenset({"content", "tool_calls"})
 _BREAKPOINT_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _BREAKPOINT_BLOCKS: Final = TypeAdapter(list[object])
+
+
+def _breakpoint_fields_or_none(value: object) -> Mapping[str, object] | None:
+    try:
+        return _BREAKPOINT_FIELDS.validate_python(value)
+    except ValidationError:
+        return None
 
 
 def _without_prompt_cache_breakpoint(value: object) -> object:
@@ -2240,6 +2412,27 @@ def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
         key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
     }
     return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
+
+
+def _part_with_chat_completion_prompt_cache_breakpoint(part: object) -> object:
+    if not isinstance(part, Mapping):
+        return part
+    fields: Final = _BREAKPOINT_FIELDS.validate_python(part)
+    marker: Final = fields.get("prompt_cache_breakpoint")
+    if marker is None:
+        return fields
+    unmarked: Final = {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
+    return with_prompt_cache_breakpoint(unmarked, chat_completion_prompt_cache_breakpoint_for_wire(marker, True))
+
+
+def chat_completion_prompt_cache_breakpoints_for_wire(message: _MarkedT, drop_params: bool) -> _MarkedT:
+    content: Final = message.get("content")
+    if not drop_params or not isinstance(content, list):
+        return message
+    parts: Final = [
+        _part_with_chat_completion_prompt_cache_breakpoint(part) for part in _BREAKPOINT_BLOCKS.validate_python(content)
+    ]
+    return cast(_MarkedT, {**message, "content": parts})  # cast-ok: same message shape with its parts' markers trimmed
 
 
 LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(
