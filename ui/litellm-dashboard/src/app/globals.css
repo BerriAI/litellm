@@ -435,10 +435,12 @@
 
   /* Same plugin, resting state: it also gives every bare input a border, a white fill, 0.5rem/0.75rem
      padding and 1rem text. shadcn primitives style themselves and only break where a base class omits
-     those, which today is `combobox-chip-input` alone (audited against every input-rendering file in
-     components/ui). These values restore Tailwind's own preflight, and `[data-slot]` outweighs the
-     plugin's zero-specificity `input:where(:not([type]))`. Delete along with the plugin. */
-  [data-slot="combobox-chip-input"] {
+     those, which today is `combobox-chip-input` and `command-input` (audited against every
+     input-rendering file in components/ui). These values restore Tailwind's own preflight, and
+     `[data-slot]` outweighs the plugin's zero-specificity `input:where(:not([type]))`. Delete along
+     with the plugin. */
+  [data-slot="combobox-chip-input"],
+  [data-slot="command-input"] {
     border-width: 0;
     background-color: transparent;
     padding: 0;
@@ -449,7 +451,12 @@
   /* Same plugin's white fill, on the hand-rolled controls outside components/ui that the audit
      above did not cover. Tracks --background so light mode keeps the white it already painted.
      Delete along with the plugin. */
-  :is(input, textarea, select):not([type="checkbox"], [type="radio"], [data-slot="combobox-chip-input"]) {
+  :is(input, textarea, select):not(
+      [type="checkbox"],
+      [type="radio"],
+      [data-slot="combobox-chip-input"],
+      [data-slot="command-input"]
+    ) {
     background-color: var(--color-background);
   }
 

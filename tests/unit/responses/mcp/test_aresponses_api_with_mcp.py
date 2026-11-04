@@ -540,13 +540,9 @@ async def test_mcp_allowed_tools_filtering():
     ]
 
     # First filter by allowed tools
-    filtered_tools_with_duplicates = (
-        LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-            mcp_tools=mock_mcp_tools_with_duplicates,
-            mcp_tools_with_litellm_proxy=cast(
-                List[ToolParam], mcp_tool_config_with_duplicates
-            ),
-        )
+    filtered_tools_with_duplicates = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_with_duplicates,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], mcp_tool_config_with_duplicates),
     )
 
     # Then deduplicate the filtered tools
@@ -605,11 +601,9 @@ async def test_mcp_allowed_tools_filtering():
         },
     ]
 
-    filtered_tools_multiple = (
-        LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-            mcp_tools=mock_mcp_tools_from_server,
-            mcp_tools_with_litellm_proxy=cast(List[ToolParam], multiple_mcp_configs),
-        )
+    filtered_tools_multiple = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_from_server,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], multiple_mcp_configs),
     )
 
     # Should return union of all allowed tools (3 unique tools)

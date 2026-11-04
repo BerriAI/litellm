@@ -37,6 +37,8 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
+from openai import AsyncStream, Stream
+from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never, overload
 
@@ -70,17 +72,22 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    raise_if_allowed_tools_tool_choice_unsupported,
+)
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    bill_first_round_on_failure,
     maybe_run_chat_completion_agentic_loop,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
+    AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
@@ -106,6 +113,7 @@ from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
 )
+from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response as get_content_from_model_response,  # noqa: PLC0414  # public re-export
 )
@@ -162,7 +170,6 @@ from litellm.types.router import GenericLiteLLMParams, validate_litellm_params_s
 from litellm.types.utils import (
     AgenticLoopParams,
     BaseUrlRoutingHint,
-    CustomPricingLiteLLMParams,
     ModelResponseStream,
     ProviderRoutingHints,
     RawRequestTypedDict,
@@ -263,7 +270,7 @@ from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from .llms.custom_llm import CustomLLM, custom_chat_llm_router
+from .llms.custom_llm import custom_chat_llm_router
 from .llms.databricks.common_utils import DatabricksBase
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha
@@ -750,6 +757,7 @@ async def acompletion(
 
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
+        routed_model_info,
     )
     from litellm.types.llms.openai import AllMessageValues
 
@@ -761,6 +769,7 @@ async def acompletion(
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=base_url or kwargs.get("api_base"),
+        model_info=routed_model_info(caller_kwargs.get("model_info")),
     )
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))  # cast-ok: read from untyped kwargs
@@ -947,26 +956,31 @@ async def acompletion(
         # no equivalent: every provider already funnels through one shared
         # handler where the loop is dispatched.
         if isinstance(response, litellm.ModelResponse):
-            looped: Final = await maybe_run_chat_completion_agentic_loop(
-                response=response,
-                model=model,
-                messages=messages,
-                optional_params={
-                    k: v
-                    for k, v in completion_kwargs.items()
-                    if v is not None
-                    and k
-                    not in (
-                        "model",
-                        "messages",
-                        "stream",
-                        "acompletion",
-                        "deployment_id",
-                    )
-                },
-                kwargs=kwargs,
+            looped: Final = await bill_first_round_on_failure(
+                maybe_run_chat_completion_agentic_loop(
+                    response=response,
+                    model=model,
+                    messages=messages,
+                    optional_params={
+                        k: v
+                        for k, v in completion_kwargs.items()
+                        if v is not None
+                        and k
+                        not in (
+                            "model",
+                            "messages",
+                            "stream",
+                            "acompletion",
+                            "deployment_id",
+                        )
+                    },
+                    kwargs=kwargs,
+                    logging_obj=kwargs.get("litellm_logging_obj"),
+                    custom_llm_provider=custom_llm_provider,
+                    stream=bool(stream),
+                ),
                 logging_obj=kwargs.get("litellm_logging_obj"),
-                custom_llm_provider=custom_llm_provider,
+                response=response,
                 stream=bool(stream),
             )
             if looped is not None:
@@ -998,7 +1012,7 @@ def _model_response_from_cached_dict(cached_response_dict: Mapping[str, object])
 
 
 def _transcription_response_from_cached_dict(cached_response_dict: Mapping[str, object]) -> TranscriptionResponse:
-    return TranscriptionResponse(**cached_response_dict)
+    return TranscriptionResponse.model_validate(cached_response_dict)
 
 
 def _text_completion_response_from_cached_dict(cached_response_dict: Mapping[str, object]) -> TextCompletionResponse:
@@ -1316,7 +1330,6 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
-    keep_registered_mode,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -1422,46 +1435,6 @@ def _locals_snapshot(values: Mapping[str, object]) -> Mapping[str, object]:
     return values
 
 
-def _build_custom_pricing_entry(
-    custom_llm_provider: str,
-    kwargs: dict,
-    model_info: dict | None = None,
-) -> dict:
-    """Build a complete model cost entry from kwargs and model_info.
-
-    Collects all CustomPricingLiteLLMParams fields present in kwargs and
-    merges metadata from model_info (mode, supports_prompt_caching, max_tokens)
-    so that register_model() receives the full pricing configuration.
-    """
-    entry: Final[dict] = {"litellm_provider": custom_llm_provider}
-
-    for field_name in CustomPricingLiteLLMParams.model_fields:
-        value = kwargs.get(field_name)
-        if value is not None:
-            entry[field_name] = value
-
-    if model_info and isinstance(model_info, dict):
-        for key in ("mode", "supports_prompt_caching", "max_tokens"):
-            if key in model_info and model_info[key] is not None:
-                entry.setdefault(key, model_info[key])
-
-    return entry
-
-
-def _get_router_deployment_id(kwargs: dict) -> str | None:
-    for metadata_key in ("litellm_metadata", "metadata"):
-        metadata = kwargs.get(metadata_key) or {}
-        if not isinstance(metadata, dict):
-            continue
-        deployment_model_info = metadata.get("model_info") or {}
-        if not isinstance(deployment_model_info, dict):
-            continue
-        deployment_id = deployment_model_info.get("id")
-        if deployment_id is not None:
-            return str(deployment_id)
-    return None
-
-
 def _record_agentic_loop_params(
     logging_obj: object, requested_model: str, custom_llm_provider: str, owns_agentic_loop: bool
 ) -> None:
@@ -1469,53 +1442,6 @@ def _record_agentic_loop_params(
         return
     logging_obj.record_agentic_loop_params(
         AgenticLoopParams(model=requested_model, custom_llm_provider=custom_llm_provider)
-    )
-
-
-def _register_custom_pricing_for_request(
-    model: str,
-    custom_llm_provider: str,
-    kwargs: dict,
-    model_info: dict | None,
-) -> None:
-    """Register per-request custom pricing in litellm.model_cost.
-
-    Router-originated requests (identified by the deployment id the router puts
-    in metadata) get their full pricing registered under that unique id only;
-    the shared ``{provider}/{model}`` key receives the entry with pricing fields
-    stripped, mirroring Router._create_deployment. This keeps one deployment's
-    pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
-    pricing used by sibling deployments of the same backend model. Direct SDK
-    calls keep the legacy behavior of registering the shared key with pricing.
-    Either way the shared key's ``mode`` follows ``keep_registered_mode``, as on
-    deployment registration, since a call routes by its own ``model_info``.
-    """
-    entry: Final = _build_custom_pricing_entry(
-        custom_llm_provider=custom_llm_provider,
-        kwargs=kwargs,
-        model_info=model_info,
-    )
-    shared_key: Final = f"{custom_llm_provider}/{model}"
-    deployment_id: Final = _get_router_deployment_id(kwargs)
-    if deployment_id is None:
-        litellm.register_model({shared_key: keep_registered_mode(shared_key, entry)}, persist_across_reloads=False)
-        return
-    shared_entry: Final = keep_registered_mode(
-        shared_key, CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)
-    )
-    litellm.register_model(
-        {deployment_id: entry},
-        persist_across_reloads=False,
-        warning_display_name=shared_key,
-        custom_llm_provider=custom_llm_provider,
-        add_to_provider_model_sets=False,
-    )
-    litellm.register_model(
-        {shared_key: shared_entry},
-        persist_across_reloads=False,
-        warning_display_name=shared_key,
-        custom_llm_provider=custom_llm_provider,
-        add_to_provider_model_sets=False,
     )
 
 
@@ -5334,10 +5260,7 @@ def _complete_custom_providers(
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    custom_handler: CustomLLM | None = None
-    for item in litellm.custom_provider_map:
-        if item["provider"] == custom_llm_provider:
-            custom_handler = item["custom_handler"]
+    custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
 
     if custom_handler is None:
         raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -5783,9 +5706,9 @@ def completion(
     ### CUSTOM MODEL COST ###
     input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
     output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
-    cost_per_second: Final = kwargs.get("cost_per_second", None)
     input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
     output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
+    cost_per_second: Final = kwargs.get("cost_per_second", None)
     ### CUSTOM PROMPT TEMPLATE ###
     initial_prompt_value: Final = kwargs.get("initial_prompt_value", None)
     roles: Final = kwargs.get("roles", None)
@@ -5825,6 +5748,7 @@ def completion(
 
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
+        routed_model_info,
     )
     from litellm.types.llms.openai import AllMessageValues
 
@@ -5836,6 +5760,7 @@ def completion(
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=base_url or kwargs.get("api_base"),
+        model_info=routed_model_info(cast(object, model_info)),  # cast-ok: untyped kwargs
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
@@ -5956,6 +5881,14 @@ def completion(
         if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
+        raise_if_allowed_tools_tool_choice_unsupported(
+            tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                object, tool_choice
+            ),
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+        )
+
         if provider_specific_header is not None:
             headers.update(
                 ProviderSpecificHeaderUtils.get_provider_specific_headers(
@@ -5973,19 +5906,7 @@ def completion(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
 
-        ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-        if (
-            (input_cost_per_token is not None and output_cost_per_token is not None)
-            or input_cost_per_second is not None
-            or output_cost_per_second is not None
-            or cost_per_second is not None
-        ):
-            _register_custom_pricing_for_request(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                kwargs=kwargs,
-                model_info=model_info,
-            )
+        logging.set_per_call_pricing(per_call_model_info(model, custom_llm_provider, kwargs, "chat"))
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
         custom_prompt_dict = {}
         if initial_prompt_value or roles or final_prompt_value or bos_token or eos_token:
@@ -6255,6 +6176,7 @@ def completion(
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
+                    *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
                     "github_copilot_auth_type",
                     "github_copilot_host",
                     "github_copilot_user_session",
@@ -6992,12 +6914,6 @@ def embedding(
             headers.update(proxy_headers)
         except Exception as e:
             verbose_logger.warning("Failed to get proxy auth headers: %s", e)
-    ### CUSTOM MODEL COST ###
-    input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
-    output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
-    cost_per_second: Final = kwargs.get("cost_per_second", None)
-    input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
-    output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
     openai_params: Final = [
         "user",
         "dimensions",
@@ -7044,21 +6960,8 @@ def embedding(
         **non_default_params,
     )
 
-    ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-    if (
-        (input_cost_per_token is not None and output_cost_per_token is not None)
-        or input_cost_per_second is not None
-        or output_cost_per_second is not None
-        or cost_per_second is not None
-    ):
-        _register_custom_pricing_for_request(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            kwargs=kwargs,
-            model_info=kwargs.get("model_info"),
-        )
-
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
+    logging.set_per_call_pricing(per_call_model_info(model, custom_llm_provider, kwargs, "embedding"))
     logging.update_environment_variables(
         model=model,
         user=user,
@@ -7392,6 +7295,7 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
                 headers=headers,
+                timeout=timeout,
             )
         elif custom_llm_provider == "bedrock":
             if isinstance(input, str):
@@ -7900,10 +7804,7 @@ def embedding(
                 litellm_params={},
             )
         elif custom_llm_provider in litellm._custom_providers:
-            custom_handler: CustomLLM | None = None
-            for item in litellm.custom_provider_map:
-                if item["provider"] == custom_llm_provider:
-                    custom_handler = item["custom_handler"]
+            custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
 
             if custom_handler is None:
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -8495,7 +8396,10 @@ async def amoderation(
 
 
 @client
-async def atranscription(*args, **kwargs) -> TranscriptionResponse:
+async def atranscription(
+    *args,  # noqa: ANN002  # public SDK wrapper preserves positional call compatibility
+    **kwargs,  # noqa: ANN003  # kwargs-ok: public SDK wrapper preserves keyword call compatibility
+) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:
     """
     Calls openai + azure whisper endpoints.
 
@@ -8539,6 +8443,14 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
+        if isinstance(response, AsyncStream):
+            if file is not None:
+                calculated_duration = calculate_request_duration(file)
+                if calculated_duration is not None:
+                    response._litellm_audio_duration = (  # pyright: ignore[reportAttributeAccessIssue]  # SDK omits it
+                        calculated_duration
+                    )
+            return response
         if not isinstance(response, TranscriptionResponse):
             raise ValueError(
                 f"Invalid response from transcription provider, expected TranscriptionResponse, but got {type(response)}"
@@ -8551,9 +8463,9 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         if response is not None and not isinstance(response, Coroutine) and file is not None:
             existing_duration: Final = getattr(response, "duration", None)
             if existing_duration is None:
-                calculated_duration: Final = calculate_request_duration(file)
-                if calculated_duration is not None:
-                    response.hidden_params["audio_transcription_duration"] = calculated_duration
+                sync_calculated_duration: Final = calculate_request_duration(file)
+                if sync_calculated_duration is not None:
+                    response.set_audio_transcription_duration(sync_calculated_duration)
 
         return response
     except Exception as e:
@@ -8565,6 +8477,42 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
             completion_kwargs=args,
             extra_kwargs=kwargs,
         )
+
+
+def _validate_gpt_transcription_request(
+    model: str,
+    pricing_model: str,
+    custom_llm_provider: str,
+    response_format: str | None,
+    drop_params: object,
+) -> str | None:
+    model_cost_key: Final = next(
+        (
+            key
+            for key in (f"{custom_llm_provider}/{pricing_model}", pricing_model)
+            if (as_str_mapping(litellm.model_cost.get(key)) or {}).get("litellm_provider") == custom_llm_provider
+        ),
+        None,
+    )
+    model_info: Final = (
+        get_model_info(model=pricing_model, custom_llm_provider=custom_llm_provider)
+        if model_cost_key is not None
+        else None
+    )
+    provider_specific_entry: Final = model_info.get("provider_specific_entry") if model_info is not None else None
+    if (
+        provider_specific_entry is None
+        or provider_specific_entry.get("transcription_json_or_text_only") != 1
+        or response_format in (None, "json", "text")
+    ):
+        return response_format
+    if litellm.drop_params is True or normalize_drop_params(drop_params) is True:
+        return None
+    raise litellm.UnsupportedParamsError(
+        message=f"{model} only supports response_format 'json' or 'text'",
+        model=model,
+        llm_provider=custom_llm_provider,
+    )
 
 
 @client
@@ -8586,8 +8534,15 @@ def transcription(
     max_retries: int | None = None,
     custom_llm_provider=None,
     base_url: str | None = None,
+    languages: Sequence[str] | None = None,
+    keywords: Sequence[str] | None = None,
+    stream: bool | None = None,
     **kwargs,
-) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
+) -> (
+    TranscriptionResponse
+    | Stream[TranscriptionStreamEvent]
+    | Coroutine[Any, Any, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+):
     """
     Calls openai + azure whisper endpoints.
 
@@ -8625,18 +8580,35 @@ def transcription(
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    configured_base_model: Final = litellm_params_dict.get("base_model")
+    pricing_model: Final = (
+        configured_base_model.removeprefix(f"{custom_llm_provider}/")
+        if isinstance(configured_base_model, str)
+        else model
+    )
+
+    supported_response_format: Final = _validate_gpt_transcription_request(
+        model=model,
+        pricing_model=pricing_model,
+        custom_llm_provider=custom_llm_provider,
+        response_format=response_format,
+        drop_params=kwargs.get("drop_params"),
+    )
+
     optional_params: Final = get_optional_params_transcription(
         model=model,
         language=language,
+        languages=languages,
+        keywords=keywords,
         prompt=prompt,
-        response_format=response_format,
+        response_format=supported_response_format,
         timestamp_granularities=timestamp_granularities,
         temperature=temperature,
+        stream=stream,
         custom_llm_provider=custom_llm_provider,
         **non_default_params,
     )
-
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     litellm_logging_obj.update_environment_variables(
         model=model,
@@ -8654,11 +8626,17 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]
+    response: (
+        TranscriptionResponse
+        | Stream[TranscriptionStreamEvent]
+        | AsyncStream[TranscriptionStreamEvent]
+        | Coroutine[Any, Any, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+    )
 
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model,
         provider=LlmProviders(custom_llm_provider),
+        base_model=pricing_model,
     )
 
     uses_openai_transport: Final = custom_llm_provider in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS and not (
@@ -8669,7 +8647,7 @@ def transcription(
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-        api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+        azure_api_version: Final = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
 
         azure_ad_token: Final = kwargs.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
 
@@ -8688,7 +8666,7 @@ def transcription(
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
-            api_version=api_version,
+            api_version=azure_api_version,
             azure_ad_token=azure_ad_token,
             max_retries=max_retries,
             litellm_params=litellm_params_dict,
@@ -8825,15 +8803,17 @@ def transcription(
 
     # Store duration in _hidden_params for cost calculation without
     # exposing it in the response body (see sync path comment above).
-    if not isinstance(response, Coroutine):
-        existing_duration: Final = getattr(response, "duration", None)
-        if existing_duration is None:
-            calculated_duration: Final = calculate_request_duration(file)
+    if not isinstance(response, Coroutine) and (
+        isinstance(response, (Stream, AsyncStream)) or getattr(response, "duration", None) is None
+    ):
+        calculated_duration: Final = calculate_request_duration(file)
+        if isinstance(response, (Stream, AsyncStream)):
             if calculated_duration is not None:
-                response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
-                    dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+                response._litellm_audio_duration = (  # pyright: ignore[reportAttributeAccessIssue]  # SDK omits it
+                    calculated_duration
                 )
-                response_hidden_params["audio_transcription_duration"] = calculated_duration
+        elif calculated_duration is not None:
+            response.set_audio_transcription_duration(calculated_duration)
 
     return response
 

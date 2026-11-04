@@ -25,9 +25,16 @@ _GEO: Final = f"au.{_ROW}"
 _FINETUNE: Final = "ft:gpt-audit-reload-2025-01-01"
 _CLAUDE: Final = "claude-audit-reload-sonnet"
 _MINI: Final = "gpt-audit-reload-mini"
+_FREE: Final = "gpt-audit-reload-free"
+_RULE_FREE: Final = "gpt-audit-rule-free"
+_FILL_FREE: Final = "gpt-audit-fill-free"
+_RULE_UNPRICED: Final = "gpt-audit-rule-unpriced"
+_REPORTED_FREE: Final = "gpt-audit-reported-free"
 _USAGE: Final = re.compile(r"bill (\d+) (\d+) (\d+)")
 _CUSTOM: Final = MappingProxyType({"input_cost_per_token": 1.1e-06, "output_cost_per_token": 2.3e-06})
-_COST_MAP_LIMITS: Final = MappingProxyType({"MODEL_COST_MAP_MIN_MODEL_COUNT": "1", "MODEL_COST_MAP_MAX_SHRINK_RATIO": "0"})
+_COST_MAP_LIMITS: Final = MappingProxyType(
+    {"MODEL_COST_MAP_MIN_MODEL_COUNT": "1", "MODEL_COST_MAP_MAX_SHRINK_RATIO": "0"}
+)
 _PUBLISHED_SCALE: Final = 2.0
 _CATALOG: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingProxyType(
     {
@@ -59,6 +66,13 @@ _CATALOG: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingProxyType(
             "input_cost_per_token": 3e-06,
             "output_cost_per_token": 1.5e-05,
             "cache_read_input_token_cost": 3e-07,
+        },
+        _FILL_FREE: {"litellm_provider": "openai", "mode": "chat"},
+        _FREE: {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
         },
         _MINI: {
             "litellm_provider": "openai",
@@ -99,6 +113,8 @@ class _Deployment:
     prices: Mapping[str, float]
     usage: _Usage
     rates: Callable[[float], _Rates | None]
+    reported_cost: float | None = None
+    listed_rates: Callable[[float], _Rates | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,10 +123,23 @@ class _Charge:
     expected: float
 
 
-def _catalog(scale: float) -> dict[str, dict[str, JsonValue]]:
+def _catalog(scale: float) -> dict[str, JsonValue]:
     return {
-        model: {name: value * scale if isinstance(value, float) else value for name, value in row.items()}
-        for model, row in _CATALOG.items()
+        **{
+            model: {name: value * scale if isinstance(value, float) else value for name, value in row.items()}
+            for model, row in _CATALOG.items()
+        },
+        "fallback_generalizations": {
+            "rules": [
+                {
+                    "name": "free-pricing",
+                    "pattern": f"({_RULE_FREE}|{_FILL_FREE})",
+                    "fill_missing_for_providers": ["openai"],
+                    "model_info": {"mode": "chat", "input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+                },
+                {"name": "unpriced-capabilities", "pattern": _RULE_UNPRICED, "model_info": {"mode": "chat"}},
+            ]
+        },
     }
 
 
@@ -240,6 +269,7 @@ def _reply(request: Request) -> Reply:
                     "completion_tokens": usage.completion,
                     "total_tokens": usage.prompt + usage.completion,
                     "prompt_tokens_details": {"cached_tokens": usage.cached},
+                    **({"cost": 0.0} if object_value(json.loads(request.body))["model"] == _REPORTED_FREE else {}),
                 },
             }
         ).encode()
@@ -281,10 +311,16 @@ def _billed(client: httpx.Client, key: str, deployment: _Deployment) -> tuple[st
 
 def _charged_as_listed(proxy: Gateway, deployment: _Deployment, scale: float) -> _Charge:
     rates: Final = deployment.rates(scale)
-    assert _listed_rates(proxy, deployment.name) == _expected_listing(rates), deployment.name
+    assert _listed_rates(proxy, deployment.name) == _expected_listing(
+        deployment.listed_rates(scale) if deployment.listed_rates is not None else rates
+    ), deployment.name
     request_id, charged = _billed(proxy.client, proxy.key, deployment)
-    expected: Final = _expected_cost(rates, deployment.usage)
-    assert charged == (None if rates is None else pytest.approx(expected, rel=1e-6)), deployment.name
+    expected: Final = (
+        deployment.reported_cost if deployment.reported_cost is not None else _expected_cost(rates, deployment.usage)
+    )
+    assert charged == (
+        None if rates is None and deployment.reported_cost is None else pytest.approx(expected, rel=1e-6)
+    ), deployment.name
     return _Charge(request_id=request_id, expected=expected)
 
 
@@ -352,8 +388,31 @@ def test_price_data_reload_reprices_catalog_deployments_and_keeps_custom_prices(
             _Usage(2000, 1000, 1000),
             _catalog_rates(_FINETUNE),
         ),
-        _Deployment("finetune-custom", f"openai/{_FINETUNE}:org:suffix:z", _CUSTOM, _Usage(2000, 0, 1000), _custom_rates),
+        _Deployment(
+            "finetune-custom", f"openai/{_FINETUNE}:org:suffix:z", _CUSTOM, _Usage(2000, 0, 1000), _custom_rates
+        ),
         _Deployment("cross-provider-unpriced", f"azure/{_CLAUDE}", {}, _Usage(2000, 1000, 1000), _unpriced),
+        _Deployment("catalog-free", f"openai/{_FREE}", {}, _Usage(2000, 1000, 1000), _catalog_rates(_FREE)),
+        _Deployment("rule-free", f"openai/{_RULE_FREE}", {}, _Usage(2000, 1000, 1000), _catalog_rates(_FREE)),
+        _Deployment(
+            "fill-rule-free",
+            f"openai/{_FILL_FREE}",
+            {},
+            _Usage(2000, 1000, 1000),
+            _catalog_rates(_FREE),
+            listed_rates=_unpriced,
+        ),
+        _Deployment("rule-unpriced", f"openai/{_RULE_UNPRICED}", {}, _Usage(2000, 1000, 1000), _unpriced),
+        _Deployment(
+            "provider-reported-free", f"openrouter/{_REPORTED_FREE}", {}, _Usage(2000, 1000, 1000), _unpriced, 0.0
+        ),
+        _Deployment(
+            "cross-provider-free",
+            f"azure/{_CLAUDE}",
+            {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+            _Usage(2000, 1000, 1000),
+            _catalog_rates(_FREE),
+        ),
         _Deployment(
             "region-custom-above-threshold",
             f"bedrock/ap-northeast-1.{_ROW}",
