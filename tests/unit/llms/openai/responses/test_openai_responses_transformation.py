@@ -2383,14 +2383,31 @@ class TestPromptCacheOptionsOnResponsesPath:
         }
 
 
-@pytest.mark.parametrize(("temperature", "survives"), ((0.5, False), (1, True)))
-def test_o_series_responses_temperature_follows_the_chat_rule(temperature: float, survives: bool) -> None:
+@pytest.mark.parametrize(
+    ("model", "temperature", "drop_params", "global_drop_params", "expected"),
+    (
+        ("o3-mini", 0.5, True, False, {"max_output_tokens": 128}),
+        ("o3-mini", 1, True, False, {"temperature": 1, "max_output_tokens": 128}),
+        ("o3-mini", 0.5, False, True, {"max_output_tokens": 128}),
+        ("o3-mini", 0.5, False, False, {"temperature": 0.5, "max_output_tokens": 128}),
+        ("gpt-4o", 0.5, True, False, {"temperature": 0.5, "max_output_tokens": 128}),
+    ),
+)
+def test_o_series_responses_drops_only_unsupported_temperature_when_enabled(
+    model: str,
+    temperature: float,
+    drop_params: bool,
+    global_drop_params: bool,
+    expected: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
     mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
-        response_api_optional_params={"temperature": temperature},
-        model="o3-mini",
-        drop_params=True,
+        response_api_optional_params={"temperature": temperature, "max_output_tokens": 128},
+        model=model,
+        drop_params=drop_params,
     )
-    assert ("temperature" in mapped) is survives
+    assert mapped == expected
 
 
 class TestResponsesSurfaceSharesTheEffortRule:
