@@ -1015,7 +1015,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 8
+        timeout-minutes: 5
         env:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
         run: |
