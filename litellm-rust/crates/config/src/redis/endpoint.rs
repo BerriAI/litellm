@@ -1,5 +1,5 @@
 use litellm_redis_types::{
-    ClusterEndpoint, ClusterNode, Endpoint, HostEndpoint, RedisAuth, SentinelEndpoint, TlsOptions,
+    Auth, Cluster, Node, RedisUrl, Sentinel, Standalone, StaticAuth, Target, TlsOptions,
 };
 use litellm_secret_value::SecretValue;
 
@@ -12,27 +12,27 @@ use super::{
 use crate::Value;
 
 /// The target, first match wins like `get_redis_client`: cluster, url, Sentinel, then host.
-pub(super) fn endpoint(options: &Options, auth: &RedisAuth) -> Result<Endpoint, RedisError> {
+pub(super) fn target(options: &Options, auth: &Auth) -> Result<Target, RedisError> {
     if let Some(nodes) = cluster_nodes(options.startup_nodes.as_ref())? {
         reject_cluster_db(options.db.as_ref())?;
-        return Ok(Endpoint::Cluster(ClusterEndpoint {
+        return Ok(Target::Cluster(Cluster {
             nodes,
             tls: tls_for(options, auth)?,
         }));
     }
     if let Some(url) = text(options.url.as_ref()) {
-        return Ok(Endpoint::Url {
+        return Ok(Target::Url(RedisUrl {
             tls: tls::url_tls(&url)?,
             url: SecretValue::new(match auth {
-                RedisAuth::Static { .. } => url,
+                Auth::Static(_) => url,
                 _ => without_userinfo(&url),
             }),
-        });
+        }));
     }
     if let Some(sentinels) = options.sentinel.nodes.as_ref() {
-        return sentinel(options, auth, sentinels).map(Endpoint::Sentinel);
+        return sentinel(options, auth, sentinels).map(Target::Sentinel);
     }
-    Ok(Endpoint::Host(HostEndpoint {
+    Ok(Target::Standalone(Standalone {
         host: text(options.host.as_ref()).ok_or(RedisError::NoTarget)?,
         port: integer(options.port.as_ref())?.unwrap_or(6379),
         tls: tls_for(options, auth)?,
@@ -40,12 +40,12 @@ pub(super) fn endpoint(options: &Options, auth: &RedisAuth) -> Result<Endpoint, 
     }))
 }
 
-fn tls_for(options: &Options, auth: &RedisAuth) -> Result<Option<TlsOptions>, RedisError> {
+fn tls_for(options: &Options, auth: &Auth) -> Result<Option<TlsOptions>, RedisError> {
     if !flag(options.ssl.as_ref())? {
         return Ok(None);
     }
     let gcp_ca_certs = match auth {
-        RedisAuth::GcpIam { .. } => options.gcp.ssl_ca_certs.as_ref(),
+        Auth::GcpIam { .. } => options.gcp.ssl_ca_certs.as_ref(),
         _ => None,
     };
     tls::tls_options(&options.tls, gcp_ca_certs).map(Some)
@@ -55,12 +55,8 @@ fn db(options: &Options) -> Result<i64, RedisError> {
     integer(options.db.as_ref()).map(|db| db.unwrap_or(0))
 }
 
-fn sentinel(
-    options: &Options,
-    auth: &RedisAuth,
-    sentinels: &Entry,
-) -> Result<SentinelEndpoint, RedisError> {
-    let nodes = sentinel_nodes(&sentinels.value)
+fn sentinel(options: &Options, auth: &Auth, sentinels: &Entry) -> Result<Sentinel, RedisError> {
+    let monitors = sentinel_nodes(&sentinels.value)
         .ok_or_else(|| invalid(&sentinels.source, Expected::SentinelNodes))?;
     let service_name =
         text(options.sentinel.service_name.as_ref()).ok_or(RedisError::NoSentinelService)?;
@@ -71,16 +67,30 @@ fn sentinel(
             setting: entry.source.clone(),
         });
     }
-    Ok(SentinelEndpoint {
-        sentinels: nodes,
+    Ok(Sentinel {
+        monitors,
         service_name,
-        sentinel_password: secret(options.sentinel.password.as_ref()),
+        monitor_auth: monitor_auth(options, auth),
         tls: tls_for(options, auth)?,
         db: db(options)?,
     })
 }
 
-fn cluster_nodes(entry: Option<&Entry>) -> Result<Option<Vec<ClusterNode>>, RedisError> {
+// _sentinel_auth_kwargs gives the monitors the data node's connection kwargs with sentinel_password as the
+// password, so a static username reaches them too
+fn monitor_auth(options: &Options, auth: &Auth) -> Option<StaticAuth> {
+    let password = secret(options.sentinel.password.as_ref())?;
+    let username = match auth {
+        Auth::Static(StaticAuth { username, .. }) => username.clone(),
+        _ => None,
+    };
+    Some(StaticAuth {
+        username,
+        password: Some(password),
+    })
+}
+
+fn cluster_nodes(entry: Option<&Entry>) -> Result<Option<Vec<Node>>, RedisError> {
     let Some(entry) = entry else {
         return Ok(None);
     };
@@ -94,7 +104,7 @@ fn cluster_nodes(entry: Option<&Entry>) -> Result<Option<Vec<ClusterNode>>, Redi
     Ok((!nodes.is_empty()).then_some(nodes))
 }
 
-fn sentinel_nodes(value: &Value) -> Option<Vec<ClusterNode>> {
+fn sentinel_nodes(value: &Value) -> Option<Vec<Node>> {
     let nodes = nodes(value, |pair| match pair {
         Value::Sequence(pair) if pair.len() == 2 => {
             node_address(as_text(&pair[0]), as_text(&pair[1]))
@@ -104,7 +114,7 @@ fn sentinel_nodes(value: &Value) -> Option<Vec<ClusterNode>> {
     (!nodes.is_empty()).then_some(nodes)
 }
 
-fn nodes(value: &Value, parse: impl Fn(&Value) -> Option<ClusterNode>) -> Option<Vec<ClusterNode>> {
+fn nodes(value: &Value, parse: impl Fn(&Value) -> Option<Node>) -> Option<Vec<Node>> {
     match value {
         Value::String(json) => serde_json::from_str::<Vec<Value>>(json)
             .ok()?
@@ -116,8 +126,8 @@ fn nodes(value: &Value, parse: impl Fn(&Value) -> Option<ClusterNode>) -> Option
     }
 }
 
-fn node_address(host: Option<String>, port: Option<String>) -> Option<ClusterNode> {
-    Some(ClusterNode {
+fn node_address(host: Option<String>, port: Option<String>) -> Option<Node> {
+    Some(Node {
         host: host?,
         port: port?.parse().ok()?,
     })

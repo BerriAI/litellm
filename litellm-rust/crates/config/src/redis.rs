@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use litellm_core_utils::settings::Lookup;
-use litellm_redis_types::{Endpoint, RedisAuth, ResolvedRedis};
+use litellm_redis_types::{Auth, ProviderHandle, Resolution, StaticAuth, Target};
 use serde::{Deserialize, Deserializer, de::Error as _};
 use veil::Redact;
 
@@ -71,6 +71,7 @@ pub struct ConfiguredRedis {
     #[redact(with = "[REDACTED]")]
     fields: BTreeMap<String, Value>,
     nulls: Nulls,
+    credential_provider: Option<ProviderHandle>,
 }
 
 /// Whether a null setting reaches redis-py as an explicit `None`, which outranks its `REDIS_*` value.
@@ -82,14 +83,6 @@ enum Nulls {
     KeptUnlessNamedByCache,
     /// `RedisCache.redis_kwargs` already holds only the nulls redis-py receives.
     Kept,
-}
-
-/// A resolved connection, plus the settings it was given that Rust accepts without honoring.
-#[derive(Debug)]
-pub struct Resolution {
-    pub redis: ResolvedRedis,
-    /// Where each ignored setting came from: its key, or the environment variable that set it.
-    pub ignored: Vec<String>,
 }
 
 impl RedisSettings {
@@ -108,6 +101,7 @@ impl RedisSettings {
         Ok(ConfiguredRedis {
             fields: self.fields.clone(),
             nulls: Nulls::Dropped,
+            credential_provider: None,
         })
     }
 
@@ -130,6 +124,7 @@ impl RedisSettings {
         ConfiguredRedis {
             fields,
             nulls: Nulls::KeptUnlessNamedByCache,
+            credential_provider: None,
         }
     }
 }
@@ -141,6 +136,15 @@ impl ConfiguredRedis {
         Self {
             fields,
             nulls: Nulls::Kept,
+            credential_provider: None,
+        }
+    }
+
+    /// The handle the host holds for the `credential_provider` object in these settings.
+    pub fn with_credential_provider(self, handle: ProviderHandle) -> Self {
+        Self {
+            credential_provider: Some(handle),
+            ..self
         }
     }
 
@@ -149,6 +153,7 @@ impl ConfiguredRedis {
         Self {
             fields: BTreeMap::new(),
             nulls: Nulls::Dropped,
+            credential_provider: None,
         }
     }
 
@@ -158,25 +163,27 @@ impl ConfiguredRedis {
         environment: &dyn Lookup,
     ) -> Result<Resolution, RedisError> {
         let kwargs = layers::merged(self, secrets);
-        let (options, ignored) = Options::read(kwargs, secrets)?;
-        let auth = auth::redis_auth(&options, environment)?;
-        let endpoint = endpoint::endpoint(&options, &auth)?;
-        let auth = match (&endpoint, auth) {
-            (Endpoint::Url { .. }, RedisAuth::Static { username, .. }) => RedisAuth::Static {
-                username,
-                password: None,
-            },
+        let (options, unmodeled) = Options::read(kwargs, secrets)?;
+        let auth = auth::redis_auth(&options, self.credential_provider, environment)?;
+        let target = endpoint::target(&options, &auth)?;
+        let auth = match (&target, auth) {
+            (Target::Url(_), Auth::Static(StaticAuth { username, .. })) => {
+                Auth::Static(StaticAuth {
+                    username,
+                    password: None,
+                })
+            }
             (_, auth) => auth,
         };
         Ok(Resolution {
-            redis: ResolvedRedis {
-                endpoint,
-                auth,
-                namespace: options::text(options.namespace.as_ref()),
-                timeout: options::seconds(options.socket_timeout.as_ref())?,
-                connect_timeout: options::seconds(options.socket_connect_timeout.as_ref())?,
-            },
-            ignored,
+            target,
+            auth,
+            namespace: options::text(options.namespace.as_ref()),
+            timeout: options::seconds(options.socket_timeout.as_ref())?,
+            connect_timeout: options::seconds(options.socket_connect_timeout.as_ref())?,
+            passthrough: unmodeled.passthrough,
+            host_objects: unmodeled.host_objects,
+            ignored: unmodeled.ignored,
         })
     }
 }

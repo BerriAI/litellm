@@ -2,17 +2,17 @@ use std::time::Duration;
 
 use litellm_circuit_breaker::{Breaker, Config as BreakerConfig, State};
 use litellm_config::{
-    CacheSettings, Config, ConfiguredRedis, Expected, RedisError, RedisSettings, Resolution,
-    SecretSnapshot, Value, environment_has_target,
+    CacheSettings, Config, ConfiguredRedis, Expected, RedisError, RedisSettings, SecretSnapshot,
+    Value, environment_has_target,
 };
 use litellm_core_utils::settings::Lookup;
 use litellm_redis_client::RedisClient;
-use litellm_redis_types::ResolvedRedis;
+use litellm_redis_types::Resolution;
 
 use crate::Error;
 
 const ENVIRONMENT_PING_TIMEOUT: Duration = Duration::from_secs(2);
-type Params = ResolvedRedis;
+type Params = Resolution;
 
 pub struct RedisClients {
     pub coordination: Option<RedisClient>,
@@ -108,11 +108,11 @@ fn redis_cache_params(config: &Config) -> Option<&RedisSettings> {
 
 fn resolve(configured: &ConfiguredRedis, lookup: &dyn Lookup) -> Result<Params, RedisError> {
     let secrets = SecretSnapshot::read(configured.secret_names(), lookup);
-    let Resolution { redis, ignored } = configured.resolve(&secrets, lookup)?;
-    for setting in ignored {
+    let resolution = configured.resolve(&secrets, lookup)?;
+    for setting in &resolution.ignored {
         tracing::warn!(%setting, "Redis setting is accepted but ignored");
     }
-    Ok(redis)
+    Ok(resolution)
 }
 
 fn environment(lookup: &dyn Lookup) -> Result<Option<Params>, Error> {
@@ -241,9 +241,9 @@ mod tests {
     use std::{collections::HashMap, time::Duration};
 
     use litellm_config::{Config, RedisError};
-    use litellm_redis_client::{Endpoint, HostEndpoint};
+    use litellm_redis_client::{Standalone, StaticAuth};
     use litellm_redis_testing::RedisServer;
-    use litellm_redis_types::RedisAuth;
+    use litellm_redis_types::{Auth, Passthrough};
     use rstest::rstest;
 
     use super::{Params, Plan, Target, connect, plan};
@@ -251,19 +251,19 @@ mod tests {
 
     fn host(name: &str, port: u16) -> Params {
         Params {
-            endpoint: Endpoint::Host(HostEndpoint {
+            target: litellm_redis_client::Target::Standalone(Standalone {
                 host: name.to_owned(),
                 port,
                 tls: None,
                 db: 0,
             }),
-            auth: RedisAuth::Static {
-                username: None,
-                password: None,
-            },
+            auth: Auth::Static(StaticAuth::default()),
             namespace: None,
             timeout: None,
             connect_timeout: None,
+            passthrough: Passthrough::default(),
+            host_objects: Default::default(),
+            ignored: Vec::new(),
         }
     }
 
@@ -431,7 +431,7 @@ mod tests {
             | (None, Some(params)) => params,
             (None, None) => panic!("expected a Redis target"),
         };
-        assert_eq!(target.endpoint, host("env", 6379).endpoint);
+        assert_eq!(target.target, host("env", 6379).target);
     }
 
     #[rstest]

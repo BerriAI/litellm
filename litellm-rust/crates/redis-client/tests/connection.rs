@@ -8,8 +8,8 @@ use litellm_redis_testing::{
 use rstest::rstest;
 
 use litellm_redis_client::{
-    ClusterNode, Credentials, Endpoint, Error, HostEndpoint, Namespace, RedisClient, RedisConfig,
-    SentinelEndpoint, Timeouts,
+    Credentials, Error, Namespace, Node, RedisClient, RedisConfig, Sentinel, Standalone, Target,
+    Timeouts,
 };
 use litellm_secret_value::SecretValue;
 use support::connect_as;
@@ -20,7 +20,7 @@ async fn an_out_of_range_database_is_a_server_rejection() {
     let server = RedisServer::start().await.unwrap();
     let port = server.url().rsplit(':').next().unwrap().parse().unwrap();
     let client = RedisClient::new(RedisConfig {
-        endpoint: Endpoint::Host(HostEndpoint {
+        target: Target::Standalone(Standalone {
             host: "127.0.0.1".into(),
             port,
             tls: None,
@@ -64,13 +64,13 @@ async fn a_rejected_credential_is_a_transport_failure() {
 fn sentinel_client(sentinel: &RedisSentinel) -> RedisClient {
     let (host, port) = sentinel.sentinel();
     RedisClient::new(RedisConfig {
-        endpoint: Endpoint::Sentinel(SentinelEndpoint {
-            sentinels: vec![ClusterNode {
+        target: Target::Sentinel(Sentinel {
+            monitors: vec![Node {
                 host: host.to_owned(),
                 port,
             }],
             service_name: SERVICE_NAME.to_owned(),
-            sentinel_password: None,
+            monitor_auth: None,
             tls: None,
             db: 0,
         }),

@@ -9,13 +9,13 @@ use litellm_circuit_breaker::Breaker;
 use litellm_secret_value::SecretValue;
 
 use crate::{ConnectError, Namespace, RedisEvents};
-use litellm_redis_types::{ClusterEndpoint, Endpoint, TlsOptions};
+use litellm_redis_types::{Cluster, Target, TlsOptions};
 
 // litellm/constants.py REDIS_SOCKET_TIMEOUT, which _coerce_redis_kwargs_types sets when socket_timeout is unset
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct RedisConfig {
-    pub endpoint: Endpoint,
+    pub target: Target,
     pub credentials: Credentials,
     pub namespace: Namespace,
     pub timeouts: Timeouts,
@@ -140,27 +140,25 @@ pub(crate) fn addr(host: &str, port: u16, tls: Option<&TlsOptions>) -> Connectio
     }
 }
 
-pub(crate) fn cluster_addrs(
-    endpoint: &ClusterEndpoint,
-) -> impl Iterator<Item = ConnectionAddr> + '_ {
-    endpoint
+pub(crate) fn cluster_addrs(cluster: &Cluster) -> impl Iterator<Item = ConnectionAddr> + '_ {
+    cluster
         .nodes
         .iter()
-        .map(|node| addr(&node.host, node.port, endpoint.tls.as_ref()))
+        .map(|node| addr(&node.host, node.port, cluster.tls.as_ref()))
 }
 
 pub(crate) fn connection_info(
-    endpoint: &Endpoint,
+    target: &Target,
     credentials: &Credentials,
 ) -> Result<ConnectionInfo, ConnectError> {
-    let (info, tls) = match endpoint {
-        Endpoint::Url { url, tls } => (url.expose().into_connection_info()?, Some(tls)),
-        Endpoint::Host(host) => {
+    let (info, tls) = match target {
+        Target::Url(url) => (url.url.expose().into_connection_info()?, url.tls.as_ref()),
+        Target::Standalone(host) => {
             let info = addr(&host.host, host.port, host.tls.as_ref()).into_connection_info()?;
             let settings = info.redis_settings().clone().set_db(host.db);
             (info.set_redis_settings(settings), host.tls.as_ref())
         }
-        Endpoint::Cluster(_) | Endpoint::Sentinel(_) => {
+        Target::Cluster(_) | Target::Sentinel(_) => {
             unreachable!("cluster and sentinel endpoints build their own connection info")
         }
     };

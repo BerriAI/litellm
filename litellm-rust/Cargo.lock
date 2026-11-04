@@ -4414,6 +4414,8 @@ name = "litellm-redis-types"
 version = "0.1.0"
 dependencies = [
  "litellm-secret-value",
+ "serde_json",
+ "veil",
 ]
 
 [[package]]

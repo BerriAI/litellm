@@ -4,24 +4,24 @@ use std::time::Duration;
 
 use litellm_circuit_breaker::Breaker;
 use litellm_redis_client::{
-    ClusterEndpoint, ClusterNode, Credentials, Endpoint, Expiry, Namespace, RedisClient,
-    RedisConfig, Timeouts, TlsOptions,
+    Cluster, Credentials, Expiry, Namespace, Node, RedisClient, RedisConfig, RedisUrl, Target,
+    Timeouts,
 };
 use litellm_redis_testing::{ClientConnection, RedisDeployment};
 use litellm_secret_value::SecretValue;
 
 pub const KEEP: Expiry = Expiry::KeepExisting(Duration::from_secs(60));
 
-pub fn endpoint(deployment: &RedisDeployment) -> Endpoint {
+pub fn endpoint(deployment: &RedisDeployment) -> Target {
     match deployment {
-        RedisDeployment::Standalone(server) => Endpoint::Url {
+        RedisDeployment::Standalone(server) => Target::Url(RedisUrl {
             url: SecretValue::new(server.url()),
-            tls: TlsOptions::verified(),
-        },
-        RedisDeployment::Cluster(cluster) => Endpoint::Cluster(ClusterEndpoint {
+            tls: None,
+        }),
+        RedisDeployment::Cluster(cluster) => Target::Cluster(Cluster {
             nodes: cluster
                 .nodes()
-                .map(|(host, port)| ClusterNode {
+                .map(|(host, port)| Node {
                     host: host.to_owned(),
                     port,
                 })
@@ -42,7 +42,7 @@ pub fn connect_guarded(
     breaker: Option<Breaker>,
 ) -> RedisClient {
     RedisClient::new(RedisConfig {
-        endpoint: endpoint(deployment),
+        target: endpoint(deployment),
         credentials: Credentials::NONE,
         namespace: Namespace::new(namespace),
         timeouts: Timeouts::new(timeout, None),
@@ -54,7 +54,7 @@ pub fn connect_guarded(
 
 pub fn connect_as(deployment: &RedisDeployment, credentials: Credentials) -> RedisClient {
     RedisClient::new(RedisConfig {
-        endpoint: endpoint(deployment),
+        target: endpoint(deployment),
         credentials,
         namespace: Namespace::default(),
         timeouts: Timeouts::new(Duration::from_secs(2), None),

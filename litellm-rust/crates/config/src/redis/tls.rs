@@ -40,9 +40,9 @@ fn verify_certificate(cert_reqs: Option<&Entry>) -> Result<bool, RedisError> {
     .map(|verify| verify.unwrap_or(true))
 }
 
-pub(super) fn url_tls(url: &str) -> Result<TlsOptions, RedisError> {
+pub(super) fn url_tls(url: &str) -> Result<Option<TlsOptions>, RedisError> {
     let Ok(parsed) = url::Url::parse(url) else {
-        return Ok(TlsOptions::verified());
+        return Ok(None);
     };
     let tls_scheme = parsed.scheme().eq_ignore_ascii_case("rediss");
     let query: Vec<(String, Entry)> = parsed
@@ -65,6 +65,9 @@ pub(super) fn url_tls(url: &str) -> Result<TlsOptions, RedisError> {
             setting: entry.source.clone(),
         });
     }
+    if !tls_scheme {
+        return Ok(None);
+    }
     let get = |key: &str| {
         query
             .iter()
@@ -72,14 +75,14 @@ pub(super) fn url_tls(url: &str) -> Result<TlsOptions, RedisError> {
             .find(|(name, _)| name == key)
             .map(|(_, entry)| entry.clone())
     };
-    Ok(TlsOptions {
+    Ok(Some(TlsOptions {
         ca_certs: text(get("ssl_ca_certs").as_ref()).map(Into::into),
         certfile: text(get("ssl_certfile").as_ref()).map(Into::into),
         keyfile: text(get("ssl_keyfile").as_ref()).map(Into::into),
         verify_certificate: verify_certificate(get("ssl_cert_reqs").as_ref())?,
         check_hostname: text(get("ssl_check_hostname").as_ref())
             .is_some_and(|text| url_bool(&text)),
-    })
+    }))
 }
 
 // redis-py's to_bool: only 0, F, FALSE, N and NO (any case) are false
