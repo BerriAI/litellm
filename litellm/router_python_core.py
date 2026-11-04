@@ -479,11 +479,13 @@ from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     COST_MAP_LOOKUP_KEY,
+    DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
     LlmProviders,
+    LlmProvidersSet,
     ModelInfo,
     ModelResponseStream,
     StandardLoggingPayload,
@@ -506,9 +508,11 @@ from litellm.utils import (
     TextCompletionResponse,
     _restore_correlation_context_if_supported,  # pyright: ignore[reportPrivateUsage]  # same task-local cleanup as the SDK wrapper
     aresolve_api_key_secret_reference,
+    catalog_with_runtime_registrations,
     function_setup,
     get_llm_provider,
     get_non_default_completion_params,
+    get_potential_model_names,
     get_secret,
     get_utc_datetime,
     is_generalized_model_info,
@@ -12159,6 +12163,25 @@ class PythonCore(DeprecatedRouterMembers):
         return (backend_key,)
 
     @staticmethod
+    def _catalog_entry_has_token_limit(catalog_entry: Mapping[str, object], field: str) -> bool:
+        return catalog_entry.get(field) is not None or (
+            field == "max_tokens" and catalog_entry.get("max_output_tokens") is not None
+        )
+
+    @staticmethod
+    def _shared_backend_model_info_for_keys(
+        catalog: Mapping[str, Mapping[str, object]],
+        backend_keys: tuple[str, ...],
+        shared_model_info: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        catalog_token_limit_fields: Final = frozenset(
+            field
+            for field in DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS
+            if any(PythonCore._catalog_entry_has_token_limit(catalog.get(key) or {}, field) for key in backend_keys)
+        )
+        return {field: value for field, value in shared_model_info.items() if field not in catalog_token_limit_fields}
+
+    @staticmethod
     def _deployment_model_cost_payload(deployment: Deployment) -> dict[str, object]:  # mutable-ok: cost-map entry
         """The ``model_info`` a deployment contributes to ``litellm.model_cost``.
 
@@ -12270,6 +12293,31 @@ class PythonCore(DeprecatedRouterMembers):
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
         backend_keys: Final = PythonCore._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
+        model_provider_prefix: Final = model.partition("/")[0]
+        catalog_provider: Final = (
+            custom_llm_provider
+            if custom_llm_provider is not None
+            else model_provider_prefix
+            if model_provider_prefix in LlmProvidersSet
+            else None
+        )
+        potential_names: Final = (
+            get_potential_model_names(model, catalog_provider) if catalog_provider is not None else None
+        )
+        catalog_backend_keys: Final = (
+            (
+                *backend_keys,
+                model,
+                potential_names["split_model"],
+                potential_names["stripped_model_name"],
+                potential_names["combined_model_name"],
+                potential_names["combined_stripped_model_name"],
+                potential_names["provider_prefixed_model_name"],
+                potential_names["region_free_combined_model_name"],
+            )
+            if potential_names is not None
+            else (*backend_keys, model)
+        )
 
         # For the shared backend key, keep only cost-map schema fields
         # (minus custom pricing) so that one deployment's pricing overrides
@@ -12277,7 +12325,12 @@ class PythonCore(DeprecatedRouterMembers):
         # don't pollute another deployment sharing the same backend model
         # name. Each deployment's full model_info is already stored under
         # its unique model_id above.
-        shared_model_info: Final = shared_backend_model_info(model_info)
+        catalog: Final = catalog_with_runtime_registrations()
+        shared_model_info: Final = PythonCore._shared_backend_model_info_for_keys(
+            catalog=catalog,
+            backend_keys=catalog_backend_keys,
+            shared_model_info=shared_backend_model_info(model_info),
+        )
         python_host.invoke("register_model")(
             model_cost={_key: keep_registered_mode(_key, shared_model_info) for _key in backend_keys},
             persist_across_reloads=False,
