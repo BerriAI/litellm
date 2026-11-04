@@ -3,13 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../../tests/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import BaseSSOSettingsForm, {
+  buildSSOSettingsPatch,
   emptySSOSettingsFormValues,
+  pickMountedSSOValues,
   renderProviderFields,
   ssoProviderConfigs,
   submitMountedSSOValues,
   useSSOSettingsForm,
 } from "./BaseSSOSettingsForm";
 import { expectControlBesideLabel } from "../../../../../../tests/fieldOrientation";
+import { processSSOSettingsPayload } from "../utils";
 
 const user = () => userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -434,5 +437,95 @@ describe("renderProviderFields", () => {
     });
 
     expect(await screen.findByLabelText("Default Role")).toHaveTextContent("Internal User");
+  });
+});
+
+describe("buildSSOSettingsPatch", () => {
+  const seeded = {
+    ...emptySSOSettingsFormValues,
+    sso_provider: "generic",
+    generic_client_id: "client-id",
+    generic_client_secret: "kc-s****6e0d",
+    generic_authorization_endpoint: "https://idp.example.com/authorize",
+    generic_token_endpoint: "https://idp.example.com/token",
+    generic_userinfo_endpoint: "https://idp.example.com/userinfo",
+    generic_scope: "openid email profile groups",
+    saml_idp_metadata_url: "https://idp.example.com/saml/metadata",
+    saml_sp_entity_id: "litellm-sp",
+    microsoft_client_id: "ms-client-id",
+    microsoft_tenant: "ms-tenant",
+    user_email: "admin@example.com",
+    proxy_base_url: "https://gateway.example.com",
+    use_role_mappings: true,
+    group_claim: "groups",
+    default_role: "internal_user",
+    proxy_admin_teams: "admins",
+  };
+  const submit = (values: typeof seeded) => pickMountedSSOValues(values, "sso-settings");
+  const patch = (submitted: typeof seeded) =>
+    buildSSOSettingsPatch(seeded, submit(submitted), "sso-settings", processSSOSettingsPayload);
+
+  it("sends only the edited field, leaving SAML and another provider's settings the form never showed", () => {
+    expect(patch({ ...seeded, user_email: "new@example.com" })).toEqual({ user_email: "new@example.com" });
+  });
+
+  it("sends null for a shown field the admin emptied", () => {
+    expect(patch({ ...seeded, generic_scope: "" })).toEqual({ generic_scope: null });
+  });
+
+  it("clears role mappings when the admin unchecks them", () => {
+    expect(patch({ ...seeded, use_role_mappings: false })).toEqual({ role_mappings: null });
+  });
+
+  it("clears the previous provider's credentials when the admin switches provider", () => {
+    const google = { sso_provider: "google", google_client_id: "g-id", google_client_secret: "g-secret" };
+    const clearedGeneric = {
+      generic_client_id: null,
+      generic_client_secret: null,
+      generic_authorization_endpoint: null,
+      generic_token_endpoint: null,
+      generic_userinfo_endpoint: null,
+      generic_scope: null,
+    };
+    const clearedOthers = {
+      microsoft_client_id: null,
+      microsoft_tenant: null,
+      saml_idp_metadata_url: null,
+      saml_sp_entity_id: null,
+    };
+    expect(patch({ ...seeded, ...google })).toEqual({ ...google, ...clearedGeneric, ...clearedOthers });
+  });
+
+  it("clears a stored provider that would outrank the new one at sign-in, not only the one the form showed", () => {
+    const googleAndMicrosoft = {
+      ...emptySSOSettingsFormValues,
+      sso_provider: "google",
+      google_client_id: "g-id",
+      microsoft_client_id: "ms-id",
+      user_email: "admin@example.com",
+      proxy_base_url: "https://gateway.example.com",
+    };
+    const generic = {
+      ...googleAndMicrosoft,
+      sso_provider: "generic",
+      generic_client_id: "client-id",
+      generic_client_secret: "secret",
+      generic_authorization_endpoint: "https://idp.example.com/authorize",
+      generic_token_endpoint: "https://idp.example.com/token",
+      generic_userinfo_endpoint: "https://idp.example.com/userinfo",
+    };
+    const result = buildSSOSettingsPatch(
+      googleAndMicrosoft,
+      pickMountedSSOValues(generic, "sso-settings"),
+      "sso-settings",
+      processSSOSettingsPayload,
+    );
+    expect(result).toMatchObject({ google_client_id: null, microsoft_client_id: null, generic_client_id: "client-id" });
+  });
+
+  it("keeps the shared generic credentials when the admin switches between okta and generic", () => {
+    const result = patch({ ...seeded, sso_provider: "okta" });
+    expect(result.sso_provider).toBe("okta");
+    expect(Object.keys(result).filter((key) => key.startsWith("generic_"))).toEqual([]);
   });
 });

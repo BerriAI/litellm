@@ -544,6 +544,32 @@ async def test_failed_attempt_keeps_its_usage_without_claiming_the_callers_succe
     assert successful["included_attempt_ids"] == []
     assert successful["usage"]["total_tokens"] == 3
     assert successful["charge_eligible"] is True
+
+
+@pytest.mark.asyncio
+async def test_success_that_bills_a_failed_follow_up_names_that_attempt_as_included() -> None:
+    from litellm.litellm_core_utils.hidden_params import set_hidden_param
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.types.utils import ModelResponse, Usage
+
+    database: Final = StoredUsage()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.insert, UsageCaptureSettings())
+    logger: Final = _logger()
+    fallback: Final = ModelResponse(id="fallback", usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4))
+    set_hidden_param(fallback, "response_cost", 0.1)
+    try:
+        logger.record_served_rounds_for_failure(((Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.4),))
+        logger.carry_failed_attempt_usage()
+        logger.prepare_response_cost(fallback, NOW)
+        logger.capture_usage_before_logging(fallback, NOW, NOW)
+    finally:
+        await runtime.stop(1)
+    envelopes: Final = {row.event.event_id: json.loads(row.envelope) for row in database.rows}
+    assert envelopes["caller-attempt-0"]["usage"]["total_tokens"] == 7
+    assert envelopes["caller-attempt-0"]["charge_eligible"] is True
+    assert envelopes["fallback"]["usage"]["total_tokens"] == 4 + 7
+    assert envelopes["fallback"]["included_attempt_ids"] == ["caller-attempt-0"]
     assert database.rows[2].event.outcome is Outcome.SUCCEEDED
 
 

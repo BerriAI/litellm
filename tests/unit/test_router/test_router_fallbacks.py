@@ -1207,3 +1207,156 @@ def test_context_stream_fallback_preserves_other_errors_for_existing_continuatio
         message="provider unavailable", model="primary", llm_provider="openai", generated_content="already visible"
     )
     assert _context_window_stream_fallback_error(error, "primary", "openai", True) is error
+
+
+def _context_fallback_precedence_router(context_key: str | None, ordered: bool) -> Router:
+    deployments: Final = (
+        ("primary", "primary", 1),
+        ("primary" if ordered else "unused", "ordered", 2),
+        ("generic", "generic", 1),
+        ("context", "context", 1),
+    )
+    return Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": f"openai/{model}",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                    "order": order,
+                },
+            }
+            for group, model, order in deployments
+        ],
+        fallbacks=[{"primary": ["generic"]}],
+        context_window_fallbacks=None if context_key is None else [{context_key: ["context"]}],
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+
+
+@pytest.mark.parametrize("sync_mode", (False, True))
+@pytest.mark.parametrize(
+    ("context_key", "ordered", "flat_fallbacks", "expected_model"),
+    (
+        (None, True, False, "ordered"),
+        ("unrelated", True, False, "ordered"),
+        ("unrelated", False, False, "generic"),
+        ("primary", True, False, "context"),
+        ("*", True, False, "context"),
+        ("primary", True, True, "context"),
+        ("primary", False, True, "context"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_context_fallback_precedence_is_specific_to_the_requested_group(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    context_key: str | None,
+    ordered: bool,
+    flat_fallbacks: bool,
+    expected_model: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _context_fallback_precedence_router(context_key, ordered)
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "This model's maximum context length is 10 tokens",
+                        "type": "invalid_request_error",
+                        "code": "context_length_exceeded",
+                    }
+                },
+            ),
+            _fallback_chat_response(expected_model, f"served by {expected_model}"),
+        )
+    )
+
+    response: Final = (
+        router.completion(
+            model="primary",
+            messages=[{"role": "user", "content": "long prompt"}],
+            fallbacks=["generic"] if flat_fallbacks else [{"primary": ["generic"]}],
+        )
+        if sync_mode
+        else await router.acompletion(
+            model="primary",
+            messages=[{"role": "user", "content": "long prompt"}],
+            fallbacks=["generic"] if flat_fallbacks else [{"primary": ["generic"]}],
+        )
+    )
+
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", expected_model)
+    assert response.choices[0].message.content == f"served by {expected_model}"
+
+
+@pytest.mark.parametrize("matching_context", (False, True))
+@pytest.mark.asyncio
+async def test_context_fallback_exhaustion_preserves_the_selected_chain(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    matching_context: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _context_fallback_precedence_router("primary" if matching_context else "unrelated", True)
+    refusal: Final = httpx.Response(
+        400,
+        json={"error": {"message": "This model's maximum context length is 10 tokens"}},
+    )
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(refusal, refusal, _fallback_chat_response("generic", "generic answer"))
+    )
+
+    if matching_context:
+        with pytest.raises(litellm.ContextWindowExceededError):
+            await router.acompletion(model="primary", messages=[{"role": "user", "content": "long prompt"}])
+        assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "context")
+        return
+
+    response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "long prompt"}])
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "ordered", "generic")
+    assert response.choices[0].message.content == "generic answer"
+
+
+@pytest.mark.parametrize("sync_mode", (False, True))
+@pytest.mark.parametrize("context_error", (False, True))
+@pytest.mark.parametrize("backup_status", (429, 503))
+@pytest.mark.asyncio
+async def test_ordered_fallback_failures_preserve_the_original_context_error(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    context_error: bool,
+    backup_status: int,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _context_fallback_precedence_router("unrelated", True)
+    original_message: Final = (
+        "This model's maximum context length is 10 tokens" if context_error else "primary unavailable"
+    )
+    backup_error: Final = litellm.RateLimitError if backup_status == 429 else litellm.ServiceUnavailableError
+    expected_error: Final = litellm.ContextWindowExceededError if context_error else backup_error
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(400 if context_error else 503, json={"error": {"message": original_message}}),
+            httpx.Response(backup_status, json={"error": {"message": "ordered deployment unavailable"}}),
+            httpx.Response(backup_status, json={"error": {"message": "generic deployment unavailable"}}),
+        )
+    )
+
+    request: Final = (
+        asyncio.to_thread(router.completion, model="primary", messages=[{"role": "user", "content": "long prompt"}])
+        if sync_mode
+        else router.acompletion(model="primary", messages=[{"role": "user", "content": "long prompt"}])
+    )
+    with pytest.raises(expected_error) as raised:
+        await request
+
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "ordered", "generic")
+    assert raised.value.status_code == (400 if context_error else backup_status)
+    assert (original_message if context_error else "generic deployment unavailable") in str(raised.value)

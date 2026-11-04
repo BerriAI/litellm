@@ -30,6 +30,7 @@ import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
@@ -54,6 +55,7 @@ from litellm.constants import (
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
     bug_report_notice,
@@ -131,6 +133,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
     endpoint_unsupported_by_model,
@@ -170,7 +173,9 @@ ProxyRouteType: TypeAlias = Literal[
     "_arealtime",
     "_aresponses_websocket",
     "acreate_realtime_client_secret",
+    "acreate_realtime_translation_client_secret",
     "arealtime_calls",
+    "arealtime_translation_calls",
     "aget_responses",
     "adelete_responses",
     "acancel_responses",
@@ -269,6 +274,7 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
+from litellm.proxy.anthropic_endpoints.answered_status import with_answered_status
 from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
     AnthropicStreamModelRestamper,
 )
@@ -780,7 +786,7 @@ def resolve_counted_tool_fields(
     return resolved
 
 
-def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:
+def proxy_exception_from_http_exception(exc: StarletteHTTPException, headers: dict[str, str]) -> ProxyException:
     raw_detail: Final = attribute_of(exc, "detail", str(exc))
     message, structured_fields = serialize_http_exception_detail(raw_detail)
     existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
@@ -1269,6 +1275,21 @@ def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
     return f"data: {json.dumps({'error': error_obj}, default=str)}\n\n", "data: [DONE]\n\n"
 
 
+def _openai_late_failure_frames(exc: Exception) -> tuple[str, ...]:
+    _, error_obj = sse_error_payload(exc)
+    return _sse_error_frames(error_obj)
+
+
+def _anthropic_late_failure_frames(exc: Exception) -> tuple[str, ...]:
+    answered: Final = proxy_exception_from_route_error(with_answered_status(exc))
+    return (
+        anthropic_error_sse_frame(
+            status_code=error_status_code(answered, status.HTTP_500_INTERNAL_SERVER_ERROR),
+            raw_message=answered.message,
+        ),
+    )
+
+
 def _sse_stream_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     """`headers` plus the two that stop reverse proxies from buffering SSE (issue #28384)."""
     return MappingProxyType({**headers, **_TTFT_KEEPALIVE_HEADERS})
@@ -1517,6 +1538,7 @@ async def open_sse_before_first_byte(
     ping_interval_seconds: float | str | None,
     media_type: str = "text/event-stream",
     on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
+    late_failure_frames: Callable[[Exception], tuple[str, ...]] = _openai_late_failure_frames,
 ) -> _LateResponseT | StreamingResponse:
     """Write SSE keepalive comments while the upstream LLM call is still in flight.
 
@@ -1562,8 +1584,7 @@ async def open_sse_before_first_byte(
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                _, error_obj = sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
-                for frame in _sse_error_frames(error_obj):
+                for frame in late_failure_frames(await _sanitized_late_failure(exc, on_late_failure)):
                     yield frame.encode()
                 return
             async for chunk in _relay_late_response(produced):
@@ -1884,6 +1905,13 @@ def _response_cost_header_value(hidden_params: Mapping[str, object]) -> float | 
 def cost_headers(
     response_cost: float | str | None, litellm_logging_obj: LiteLLMLoggingObj | None
 ) -> Mapping[str, str | None]:
+    if (
+        response_cost == 0
+        and litellm_logging_obj is not None
+        and litellm_logging_obj.prepared_cost is not None
+        and not litellm_logging_obj.prepared_cost.price_known
+    ):
+        return {}
     cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
         litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
     )
@@ -2972,13 +3000,14 @@ class ProxyBaseLLMRequestProcessing:
         idle. See ``open_sse_before_first_byte``; unwrapped unless an operator sets
         ``litellm_settings.sse_keepalive_ping_interval_seconds``.
         """
+        answers_as_anthropic: Final = route_type == "anthropic_messages"
 
         async def _audit_late_failure(exc: Exception) -> HTTPException | None:
             # Once a keepalive is on the wire this can no longer raise, so the
             # caller's `except` never runs its own post_call_failure_hook.
             return await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
-                original_exception=exc,
+                original_exception=with_answered_status(exc) if answers_as_anthropic else exc,
                 request_data=self.data,
                 dispatched_call_type=self.route_type,
             )
@@ -3007,6 +3036,7 @@ class ProxyBaseLLMRequestProcessing:
             ),
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
+            late_failure_frames=_anthropic_late_failure_frames if answers_as_anthropic else _openai_late_failure_frames,
         )
 
     async def _process_llm_request(
@@ -4374,6 +4404,7 @@ class ProxyBaseLLMRequestProcessing:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         log_llm_api_exception(e, self.litellm_call_id)
         billing_logging_obj: Final = _REQUEST_FIELDS.validate_python(self.data).get("litellm_logging_obj")
+        failed_in_agentic_follow_up: Final = is_agentic_followup_failure(e)
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -4410,7 +4441,9 @@ class ProxyBaseLLMRequestProcessing:
             model_id=model_id,
             version=version,
             response_cost=(
-                _litellm_logging_obj.finalized_cost.amount
+                failure_row_response_cost(self.data)
+                if failed_in_agentic_follow_up
+                else _litellm_logging_obj.finalized_cost.amount
                 if isinstance(_litellm_logging_obj, LiteLLMLoggingObj)
                 and _litellm_logging_obj.finalized_cost is not None
                 else 0
@@ -4631,6 +4664,7 @@ class ProxyBaseLLMRequestProcessing:
         request: Request | None = None,
         flush_tail: Callable[[], bytes] | None = None,
         seal_open_frame: Callable[[bytes], str] | None = None,
+        answer_status: Callable[[Exception], Exception] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
@@ -4646,6 +4680,9 @@ class ProxyBaseLLMRequestProcessing:
         relays raw upstream bytes, so an upstream that hangs up mid-frame leaves the
         client inside an open frame, where an error frame would be swallowed or
         misparsed instead of raised.
+
+        ``answer_status`` gives a failure the status the route answers it with
+        before the failure hook records it.
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
@@ -4742,6 +4779,7 @@ class ProxyBaseLLMRequestProcessing:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
             )
+            answered: Final = e if answer_status is None else answer_status(e)
             already_reported: Final = (
                 isinstance(stream_logging_obj, LiteLLMLoggingObj)
                 and not stream_logging_obj.claim_stream_failure_report()
@@ -4751,24 +4789,25 @@ class ProxyBaseLLMRequestProcessing:
                 if already_reported
                 else await proxy_logging_obj.post_call_failure_hook(
                     user_api_key_dict=user_api_key_dict,
-                    original_exception=e,
+                    original_exception=answered,
                     request_data=request_data,
                 )
             )
-            if transformed_exception is not None:
-                e = transformed_exception
+            failure: Final = answered if transformed_exception is None else transformed_exception
             verbose_proxy_logger.debug(
                 "An error occurred: %s",
-                e,
+                failure,
             )
 
-            if isinstance(e, HTTPException):
-                raise e
-            stream_error_status: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            if isinstance(failure, HTTPException):
+                if failure is e:
+                    raise
+                raise failure from e
+            stream_error_status: Final = error_status_code(failure, status.HTTP_500_INTERNAL_SERVER_ERROR)
             proxy_exception: Final = ProxyException(
-                message=redact_internal_details_from_client_message(getattr(e, "message", str(e))),
-                type=openai_error_type(e, stream_error_status),
-                param=openai_error_param(e),
+                message=redact_internal_details_from_client_message(getattr(failure, "message", str(failure))),
+                type=openai_error_type(failure, stream_error_status),
+                param=openai_error_param(failure),
                 code=stream_error_status,
             )
             stream_completed = True
@@ -4824,6 +4863,7 @@ class ProxyBaseLLMRequestProcessing:
             request=request,
             flush_tail=None if restamper is None else restamper.flush,
             seal_open_frame=seal_open_sse_frame,
+            answer_status=with_answered_status,
         )
 
     @overload

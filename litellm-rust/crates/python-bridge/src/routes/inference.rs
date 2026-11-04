@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use litellm_auth::AuthServices;
-use litellm_cache_response::{CachePolicy, CacheScope, ScopedCache};
+use litellm_cache_response::CachePolicy;
 use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
@@ -142,7 +142,6 @@ pub(super) trait InferenceRoute: Sized + 'static {
         auth: Arc<AuthServices>,
         secrets: Arc<dyn SecretSource>,
     ) -> Self;
-    fn with_cache(self, cache: ScopedCache) -> Self;
     fn machine(
         self,
         call: <Self::Protocol as Protocol>::Request,
@@ -176,12 +175,8 @@ where
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            let (cache, cache_options) = crate::cache::configured_native(py, arguments, call_type)?;
-            let route = match cache {
-                Some(cache) => route.with_cache(ScopedCache::new(cache, CacheScope::Shared)),
-                None => route,
-            };
-            Ok(route.machine(request, cache_options.policy))
+            crate::cache::ensure_cache_disabled(py, arguments, call_type)?;
+            Ok(route.machine(request, CachePolicy::default()))
         },
         host,
         hooks,
