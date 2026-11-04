@@ -4,6 +4,7 @@ import {
   dailyActivityKeyPageCall,
   dailyActivityKeySearchCall,
   dailyActivityModelTopKeysCall,
+  dailyActivityTagPageCall,
 } from "@/components/networking";
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import type {
@@ -12,6 +13,8 @@ import type {
   DailyActivityKeySearchResponse,
   DailyActivityKeyPageResponse,
   DailyActivityRequest,
+  DailyActivityTagPageRequest,
+  DailyActivityTagPageResponse,
   ExportFormat,
   ExportType,
   ModelTopKeysResponse,
@@ -30,6 +33,10 @@ export interface EntityApi {
   exportRows(req: DailyActivityRequest, exportType: ExportType, format: ExportFormat): Promise<Blob>;
 }
 
+export interface TeamEntityApi extends EntityApi {
+  tagPage(req: DailyActivityTagPageRequest): Promise<DailyActivityTagPageResponse>;
+}
+
 const entityApi = (
   entity: DailyActivityEntity,
   defaults?: Pick<DailyActivityRequest, "excludeEntityIds">,
@@ -42,9 +49,12 @@ const entityApi = (
   exportRows: (req, exportType, format) => dailyActivityExportCall(entity, { ...defaults, ...req }, exportType, format),
 });
 
-export const ENTITY_API: Record<EntityType, EntityApi> = {
+export const ENTITY_API: Record<EntityType, EntityApi> & { team: TeamEntityApi } = {
   tag: entityApi("tag"),
-  team: entityApi("team", { excludeEntityIds: ["litellm-dashboard"] }),
+  team: {
+    ...entityApi("team", { excludeEntityIds: ["litellm-dashboard"] }),
+    tagPage: dailyActivityTagPageCall,
+  },
   organization: entityApi("organization"),
   customer: entityApi("customer"),
   agent: entityApi("agent"),
