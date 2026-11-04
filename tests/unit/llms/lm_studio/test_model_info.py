@@ -14,9 +14,10 @@ from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 @pytest.mark.parametrize(
     ("model", "expected"),
     (
-        ("org/model", 2048),
+        ("org/model", 8192),
         ("instance-a", 8192),
         ("instance-b", 2048),
+        ("small-first", 1024),
         ("other", 4096),
         ("model", None),
         ("missing", None),
@@ -38,13 +39,20 @@ async def test_matches_loaded_instances_without_using_theoretical_limits(model: 
                             {"id": "instance-b", "config": {"context_length": 2048}},
                         ],
                     },
+                    {
+                        "key": "small-first",
+                        "loaded_instances": [
+                            {"id": "small-a", "config": {"context_length": 1024}},
+                            {"id": "big-b", "config": {"context_length": 4096}},
+                        ],
+                    },
                     {"key": "other", "loaded_instances": [{"id": "other", "config": {"context_length": 4096}}]},
                     {"key": "unloaded", "max_context_length": 131072, "loaded_instances": []},
                     {
                         "key": "incomplete",
                         "loaded_instances": [
-                            {"id": "valid", "config": {"context_length": 4096}},
                             {"id": "invalid", "config": {}},
+                            {"id": "valid", "config": {"context_length": 4096}},
                         ],
                     },
                 ]

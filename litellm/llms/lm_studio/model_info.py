@@ -57,12 +57,12 @@ class _ModelsV1(LiteLLMBaseModel):
     def context_length(self, model: str) -> int | None:
         chat_cards: Final = tuple(card for card in self.models if card.kind != "embedding")
         instances: Final = tuple(chain.from_iterable(card.loaded_instances for card in chat_cards))
-        exact: Final = tuple(instance.config.context_length for instance in instances if instance.id == model)
-        matching: Final = next((card.loaded_instances for card in chat_cards if card.key == model), ())
-        contexts: Final = exact or tuple(instance.config.context_length for instance in matching)
-        if not contexts or any(context is None for context in contexts):
-            return None
-        return min(context for context in contexts if context is not None)
+        named: Final = next((instance for instance in instances if instance.id == model), None)
+        first_loaded: Final = next(
+            (card.loaded_instances[0] for card in chat_cards if card.key == model and card.loaded_instances), None
+        )
+        serving: Final = named if named is not None else first_loaded
+        return serving.config.context_length if serving is not None else None
 
 
 class _ModelV0(LiteLLMBaseModel):
