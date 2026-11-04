@@ -201,6 +201,7 @@ def _redact_choice_content(choice):
             choice.message.content = REDACTED_BY_LITELLM
         if getattr(choice.message, "reasoning_content", None) is not None:
             choice.message.reasoning_content = REDACTED_BY_LITELLM
+        _redact_field_when_present(choice.message, "refusal")
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
         _redact_provider_specific_fields(choice.message)
@@ -211,6 +212,7 @@ def _redact_choice_content(choice):
             choice.delta.content = REDACTED_BY_LITELLM
         if getattr(choice.delta, "reasoning_content", None) is not None:
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
+        _redact_field_when_present(choice.delta, "refusal")
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
         _redact_provider_specific_fields(choice.delta)
@@ -418,34 +420,31 @@ def _redact_tool_calls_dict(message: Mapping[str, object]) -> None:
         function_call["arguments"] = REDACTED_BY_LITELLM
 
 
+_REDACTED_TEXT_FIELDS: Final = ("content", "reasoning_content", "refusal")
+_CLEARED_FIELDS: Final = ("thinking_blocks", "audio")
+
+
+def _choice_payload(choice: Mapping[str, object]) -> object:
+    return choice["message"] if isinstance(choice.get("message"), dict) else choice.get("delta")
+
+
 def _redact_model_response_dict_choices(choices, redacted_str: str):
     for choice in choices:
-        if isinstance(choice, dict):
-            _redact_provider_specific_fields_dict(choice)
-            if "message" in choice and isinstance(choice["message"], dict):
-                if choice["message"].get("content") is not None:
-                    choice["message"]["content"] = redacted_str
-                if choice["message"].get("reasoning_content") is not None:
-                    choice["message"]["reasoning_content"] = redacted_str
-                if "thinking_blocks" in choice["message"]:
-                    choice["message"]["thinking_blocks"] = None
-                if "audio" in choice["message"]:
-                    choice["message"]["audio"] = None
-                _redact_tool_calls_dict(choice["message"])
-            elif "delta" in choice and isinstance(choice["delta"], dict):
-                if choice["delta"].get("content") is not None:
-                    choice["delta"]["content"] = redacted_str
-                if choice["delta"].get("reasoning_content") is not None:
-                    choice["delta"]["reasoning_content"] = redacted_str
-                if "thinking_blocks" in choice["delta"]:
-                    choice["delta"]["thinking_blocks"] = None
-                if "audio" in choice["delta"]:
-                    choice["delta"]["audio"] = None
-                _redact_tool_calls_dict(choice["delta"])
-            elif choice.get("text") is not None:
-                choice["text"] = redacted_str
-        else:
+        if not isinstance(choice, dict):
             _redact_choice_content(choice)
+            continue
+        _redact_provider_specific_fields_dict(choice)
+        if not isinstance(payload := _choice_payload(choice), dict):
+            if choice.get("text") is not None:
+                choice["text"] = redacted_str
+            continue
+        for text_field in _REDACTED_TEXT_FIELDS:
+            if payload.get(text_field) is not None:
+                payload[text_field] = redacted_str
+        for cleared_field in _CLEARED_FIELDS:
+            if cleared_field in payload:
+                payload[cleared_field] = None
+        _redact_tool_calls_dict(payload)
 
 
 def _redacted_baseline_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:

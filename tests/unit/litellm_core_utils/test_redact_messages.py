@@ -20,6 +20,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 import pytest_asyncio
+from openai import AsyncOpenAI
 from pydantic import JsonValue
 
 import litellm
@@ -1652,6 +1653,72 @@ async def test_responses_redaction_removes_request_instructions_from_logged_kwar
     assert kwargs is not None
     assert kwargs["standard_logging_object"]["model_parameters"]["instructions"] == "redacted-by-litellm"
     assert SECRET not in json.dumps({key: kwargs.get(key) for key in logged_keys}, default=str)
+
+
+_REFUSAL_PIECES: Final = ("I can't share ", SECRET)
+
+
+def _chat_chunk(delta: Mapping[str, object], finish_reason: str | None) -> str:
+    chunk: Final = {
+        "id": "chatcmpl-refusal",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "gpt-4.1",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(chunk)}\n\n"
+
+
+def _openai_refusal_reply(request: httpx.Request) -> httpx.Response:
+    if json.loads(request.content).get("stream"):
+        deltas: Final = ({"role": "assistant", "refusal": ""}, *({"refusal": piece} for piece in _REFUSAL_PIECES))
+        sse: Final = "".join(_chat_chunk(delta, None) for delta in deltas) + _chat_chunk({}, "stop") + "data: [DONE]\n\n"
+        return httpx.Response(200, request=request, headers={"content-type": "text/event-stream"}, content=sse)
+    message: Final = {"role": "assistant", "content": None, "refusal": "".join(_REFUSAL_PIECES)}
+    return httpx.Response(
+        200,
+        request=request,
+        json={
+            "id": "chatcmpl-refusal",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt-4.1",
+            "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+        },
+    )
+
+
+async def _caller_refusal(response: object) -> str | None:
+    if isinstance(response, litellm.CustomStreamWrapper):
+        return "".join([getattr(chunk.choices[0].delta, "refusal", None) or "" async for chunk in response])
+    assert isinstance(response, ModelResponse)
+    return getattr(response.choices[0].message, "refusal", None)  # pyright: ignore[reportAttributeAccessIssue]  # choices is a Choices | StreamingChoices union
+
+
+@pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [True, False])
+async def test_redaction_hides_a_refusal_from_loggers_but_not_from_the_caller(
+    stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    test_custom_logger: Final = TestCustomLogger()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "callbacks", [test_custom_logger])
+    client: Final = AsyncOpenAI(
+        api_key="fake-key", http_client=httpx.AsyncClient(transport=httpx.MockTransport(_openai_refusal_reply))
+    )
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-4.1", messages=[{"role": "user", "content": "hi"}], stream=stream, client=client
+    )
+    caller_refusal: Final = await _caller_refusal(response)
+
+    await asyncio.wait_for(test_custom_logger.logged.wait(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    logged: Final = test_custom_logger.logged_standard_logging_payload
+    assert caller_refusal == "".join(_REFUSAL_PIECES)
+    assert logged is not None
+    assert logged["response"]["choices"][0]["message"]["refusal"] == "redacted-by-litellm"
+    assert SECRET not in json.dumps(logged["response"], default=str)
 
 
 @pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
