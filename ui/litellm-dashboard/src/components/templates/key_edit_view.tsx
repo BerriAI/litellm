@@ -114,6 +114,7 @@ function KeyEditSession({
     values: toKeyEditFormValues(keyData),
     resetOptions: { keepDirtyValues: true },
   });
+  const { dirtyFields } = form.formState;
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const team = teams?.find((team) => team.team_id === keyData.team_id);
@@ -319,7 +320,7 @@ function KeyEditSession({
           ...values,
           ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
         }),
-        [...Object.keys(form.formState.dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
+        [...Object.keys(dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
       );
     } finally {
       setIsKeySaving(false);
