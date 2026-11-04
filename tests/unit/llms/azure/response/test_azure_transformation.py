@@ -1563,8 +1563,9 @@ def test_openai_gpt5_resolves_to_responses_config_with_temperature() -> None:
     ids=["azure", "o_series", "azure_ai", "azure_ai_agent"],
 )
 @pytest.mark.parametrize("as_model", [False, True], ids=["dict", "pydantic"])
-def test_azure_reasoning_replay_removes_output_content_without_changing_history(
-    config: AzureOpenAIResponsesAPIConfig, model: str, as_model: bool
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop-params", "no-drop-params"])
+def test_azure_reasoning_replay_removes_output_content_only_under_drop_params_without_changing_history(
+    config: AzureOpenAIResponsesAPIConfig, model: str, as_model: bool, drop_params: bool
 ) -> None:
     replayable_reasoning: Final = {
         "id": "rs_saved_reasoning",
@@ -1603,16 +1604,17 @@ def test_azure_reasoning_replay_removes_output_content_without_changing_history(
         model=model,
         input=history,
         response_api_optional_request_params={},
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
         headers={},
     )
 
-    assert request["input"] == [replayable_reasoning, tool_call, tool_result, answer, prompt]
+    sent_reasoning: Final = replayable_reasoning if drop_params else saved_reasoning
+    assert request["input"] == [sent_reasoning, tool_call, tool_result, answer, prompt]
     assert history == original
 
 
 @pytest.mark.parametrize("as_model", [False, True], ids=["dict", "pydantic"])
-def test_openai_replay_keeps_reasoning_content_and_message_status(as_model: bool) -> None:
+def test_openai_replay_without_drop_params_keeps_reasoning_content_and_message_status(as_model: bool) -> None:
     saved_reasoning: Final = {
         "id": "rs_saved_reasoning",
         "type": "reasoning",
@@ -1756,6 +1758,7 @@ async def test_azure_responses_replays_reasoning_history_without_fields_azure_re
         "stream": stream,
         "store": False,
         "include": ["reasoning.encrypted_content"],
+        "drop_params": True,
     }
     response: Final = await litellm.aresponses(**request_params) if async_call else litellm.responses(**request_params)
     deltas: Final = (
@@ -1786,18 +1789,18 @@ async def test_azure_responses_replays_reasoning_history_without_fields_azure_re
     [(False, True), (False, False), (True, True)],
     ids=["dictionary-with-id", "dictionary-without-id", "pydantic"],
 )
-def test_azure_reasoning_replay_drops_status_and_content(as_model: bool, include_id: bool) -> None:
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop-params", "no-drop-params"])
+def test_azure_reasoning_replay_drops_status_always_and_content_under_drop_params(
+    as_model: bool, include_id: bool, drop_params: bool
+) -> None:
     replayable: Final = {
         "type": "reasoning",
         "summary": [],
         "encrypted_content": "opaque-saved-reasoning",
         **({"id": "rs_saved_reasoning"} if include_id else {}),
     }
-    saved_reasoning: Final = {
-        **replayable,
-        "status": "completed",
-        "content": [{"type": "reasoning_text", "text": "Inspect the file first."}],
-    }
+    saved_content: Final = [{"type": "reasoning_text", "text": "Inspect the file first."}]
+    saved_reasoning: Final = {**replayable, "status": "completed", "content": saved_content}
     history: Final = [ResponseReasoningItem.model_validate(saved_reasoning) if as_model else saved_reasoning]
     original: Final = deepcopy(history)
 
@@ -1805,9 +1808,9 @@ def test_azure_reasoning_replay_drops_status_and_content(as_model: bool, include
         model="gpt-6.1-sol",
         input=history,
         response_api_optional_request_params={},
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
         headers={},
     )
 
-    assert request["input"] == [replayable]
+    assert request["input"] == [replayable if drop_params else {**replayable, "content": saved_content}]
     assert history == original

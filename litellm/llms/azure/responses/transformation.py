@@ -73,14 +73,17 @@ def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[st
 
 
 _AZURE_REJECTED_INPUT_FIELDS: Final = MappingProxyType(
-    {"message": frozenset({"status"}), "reasoning": frozenset({"status", "content"})}
+    {"message": frozenset({"status"}), "reasoning": frozenset({"status"})}
+)
+_AZURE_REJECTED_INPUT_FIELDS_UNDER_DROP_PARAMS: Final = MappingProxyType(
+    {**_AZURE_REJECTED_INPUT_FIELDS, "reasoning": frozenset({"status", "content"})}
 )
 
 
-def _without_fields_azure_rejects(item: object) -> object:
+def _without_fields_azure_rejects(item: object, rejected_fields: Mapping[str, frozenset[str]]) -> object:
     if not is_str_keyed_mapping(item):
         return item
-    rejected: Final = _AZURE_REJECTED_INPUT_FIELDS.get(str(item.get("type")), frozenset())
+    rejected: Final = rejected_fields.get(str(item.get("type")), frozenset())
     return {key: value for key, value in item.items() if key not in rejected} if rejected else item
 
 
@@ -135,12 +138,15 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
 
     def _validate_input_param(
-        self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
+        self, input: str | ResponseInputParam, *, drop_params: bool = False
     ) -> str | ResponseInputParam:
-        validated_input: Final = super()._validate_input_param(input, drops_set_created_by=drops_set_created_by)
+        validated_input: Final = super()._validate_input_param(input, drop_params=drop_params)
         if not isinstance(validated_input, list):
             return validated_input
-        sanitized_items: Final = [_without_fields_azure_rejects(item) for item in validated_input]
+        rejected_fields: Final = (
+            _AZURE_REJECTED_INPUT_FIELDS_UNDER_DROP_PARAMS if drop_params else _AZURE_REJECTED_INPUT_FIELDS
+        )
+        sanitized_items: Final = [_without_fields_azure_rejects(item, rejected_fields) for item in validated_input]
         return cast("ResponseInputParam", sanitized_items)  # cast-ok: items keep their shape minus rejected fields
 
     def transform_responses_api_request(
