@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence, Sized
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
@@ -129,6 +129,13 @@ def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming
 def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, object]) -> None:
     for key, value in fields.items():
         setattr(response, key, value)
+
+
+def _entry_len(entries: Mapping[str, object], key: str) -> int:
+    value: Final = entries[key]
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 def _prepend_upstream_choice_extras(
@@ -1091,7 +1098,7 @@ class CustomStreamWrapper:
 
     def is_chunk_non_empty(
         self,
-        completion_obj: dict[str, Any],
+        completion_obj: Mapping[str, object],
         model_response: ModelResponseStream,
         response_obj: Mapping[str, object],
     ) -> bool:
@@ -1101,7 +1108,7 @@ class CustomStreamWrapper:
             or (
                 "tool_calls" in completion_obj
                 and completion_obj["tool_calls"] is not None
-                and len(completion_obj["tool_calls"]) > 0
+                and _entry_len(completion_obj, "tool_calls") > 0
             )
             or ("function_call" in completion_obj and completion_obj["function_call"] is not None)
             or (
@@ -1894,7 +1901,7 @@ class CustomStreamWrapper:
                     return
             ## CHECK FOR TOOL USE
 
-            if "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0:
+            if "tool_calls" in completion_obj and _entry_len(completion_obj, "tool_calls") > 0:
                 if self.is_function_call is True:  # user passed in 'functions' param
                     completion_obj["function_call"] = completion_obj["tool_calls"][0]["function"]
                     completion_obj["tool_calls"] = None

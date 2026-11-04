@@ -97,11 +97,13 @@ async def count_live_proxy_workers(prisma_client: PrismaClient) -> int | None:
     counts on the primary: a lagging read replica must never undercount.
     """
     try:
+        from litellm.proxy.utils import query_raw_rows
+
         db: Final = prisma_client.db
         primary_db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) else db
         async with db_span("count_live_proxy_workers", "LiteLLM_ProxyWorkerHeartbeat"):
             rows: Final = _RAW_QUERY_RESULT.validate_python(
-                await primary_db.query_raw(COUNT_SQL, PROXY_WORKER_LIVENESS_WINDOW_SECONDS)
+                await query_raw_rows(primary_db, COUNT_SQL, PROXY_WORKER_LIVENESS_WINDOW_SECONDS)
             )
         return _COUNT_ROWS_ADAPTER.validate_python(rows)[0]["live_workers"]
     except Exception as count_err:  # noqa: BLE001  # an unknown count must degrade to "warn", never to a 503

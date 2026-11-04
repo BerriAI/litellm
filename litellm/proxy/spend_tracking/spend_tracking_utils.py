@@ -75,7 +75,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
-from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.proxy.utils import PrismaClient, hash_token, query_raw_rows
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     summary_only_compaction_content,
@@ -1092,7 +1092,7 @@ async def _query_raw_rows(
     sql_query: str,
     *args: object,
 ) -> Sequence[Mapping[str, object]] | None:
-    return await prisma_client.db.query_raw(sql_query, *args)
+    return await query_raw_rows(prisma_client.db, sql_query, *args)
 
 
 async def get_spend_by_team(

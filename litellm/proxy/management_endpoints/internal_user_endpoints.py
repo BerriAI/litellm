@@ -84,7 +84,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     set_object_permission,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-from litellm.proxy.utils import handle_exception_on_proxy, hash_password
+from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -1204,7 +1204,7 @@ async def user_info_v2(
 async def _fetch_admin_teams_and_keys_rows(
     prisma_client: "PrismaClient", sql_query: str
 ) -> Sequence[_AdminTeamAndKeyRows]:
-    return _ADMIN_TEAM_AND_KEY_ROWS_ADAPTER.validate_python(await prisma_client.db.query_raw(sql_query))
+    return _ADMIN_TEAM_AND_KEY_ROWS_ADAPTER.validate_python(await query_raw_rows(prisma_client.db, sql_query))
 
 
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):

@@ -310,7 +310,6 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult
     from opentelemetry.trace import Span as _Span
     from prisma import models as prisma_models
-    from prisma.actions import LiteLLM_DeprecatedVerificationTokenActions
     from prisma.client import TransactionManager
     from prisma.models import LiteLLM_DeprecatedVerificationToken
     from prisma.types import HttpConfig, LiteLLM_VerificationTokenInclude
@@ -400,7 +399,7 @@ def _update_many_batch(db: PrismaWrapper | RoutingPrismaWrapper) -> _UpdateManyB
     return db.batch_()
 
 
-def _query_raw_rows(
+def query_raw_rows(
     db: PrismaWrapper | RoutingPrismaWrapper, query: str, *args: object
 ) -> Awaitable[Sequence[Mapping[str, object]]]:
     return db.query_raw(query, *args)
@@ -5356,9 +5355,9 @@ async def _lookup_deprecated_key(
         _deprecated_key_cache.pop(hashed_token, None)
 
     try:
-        deprecated_keys_table: Final[
-            LiteLLM_DeprecatedVerificationTokenActions[LiteLLM_DeprecatedVerificationToken]
-        ] = db.litellm_deprecatedverificationtoken
+        deprecated_keys_table: Final[TableActions[LiteLLM_DeprecatedVerificationToken]] = (
+            db.litellm_deprecatedverificationtoken
+        )
         deprecated_row: Final = await deprecated_keys_table.find_first(
             where={
                 "token": hashed_token,
@@ -6217,7 +6216,7 @@ class PrismaClient:
                         LIMIT $1
                         OFFSET $2
                         """
-                        response = await _query_raw_rows(self.db, sql_query, limit, offset)
+                        response = await query_raw_rows(self.db, sql_query, limit, offset)
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug("PrismaClient: get_data: table_name == 'spend'")
@@ -7516,7 +7515,7 @@ class PrismaClient:
                 # caller's own retried query, a stronger check than SELECT 1,
                 # and a reader that fails to come back sets `_reader_unavailable`
                 # so reads fall through to the writer just recreated here.
-                await _query_raw_rows(self.writer_db, "SELECT 1")
+                await query_raw_rows(self.writer_db, "SELECT 1")
                 # A recreate can decline: the optimistic-lock guard no-ops when
                 # the writer generation moved since cycle entry, and the routing
                 # wrapper then leaves the reader untouched as well. Callers that
@@ -7866,7 +7865,7 @@ class PrismaClient:
 
     async def _view_setup_gate_table_present(self) -> bool:
         rows: Final = _VIEW_SETUP_GATE_PROBE_ROWS.validate_python(
-            await _query_raw_rows(self.db, "SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
+            await query_raw_rows(self.db, "SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
         )
         return rows[0]["present"]
 
@@ -7876,7 +7875,7 @@ class PrismaClient:
                 await asyncio.sleep(self._db_health_watchdog_interval_seconds)
                 async with db_span("db_health_watchdog", None):
                     await asyncio.wait_for(
-                        _query_raw_rows(self.db, "SELECT 1"),
+                        query_raw_rows(self.db, "SELECT 1"),
                         timeout=self._db_health_watchdog_probe_timeout_seconds,
                     )
                 if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
@@ -7936,7 +7935,7 @@ class PrismaClient:
     async def _writer_is_read_only(self, writer: PrismaWrapper) -> bool:
         """True iff the pooled writer session answers reads but rejects writes (SQLSTATE 25006)."""
         rows: Final = _WRITER_WRITABILITY_PROBE_ROWS.validate_python(
-            await _query_raw_rows(writer, _WRITER_WRITABILITY_PROBE_SQL)
+            await query_raw_rows(writer, _WRITER_WRITABILITY_PROBE_SQL)
         )
         return any(row.get("transaction_read_only") == "on" for row in rows)
 
@@ -7963,7 +7962,7 @@ class PrismaClient:
         """
         sql_query: Final = "SELECT 1"
         async with db_span("health_check", None):
-            response: Final[object] = await _query_raw_rows(wrapper, sql_query)
+            response: Final[object] = await query_raw_rows(wrapper, sql_query)
         return response
 
     async def _probe_answers_now(self, wrapper: PrismaWrapper) -> bool:

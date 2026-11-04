@@ -1113,7 +1113,6 @@ from litellm.types.utils import (
     SelectTokenizerResponse,
     StandardLoggingPayload,
 )
-from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import add_custom_logger_callback_to_specific_event
 
 try:
@@ -8696,7 +8695,7 @@ class ProxyConfig:
         environment_read: Final = next(self._environment_read_numbers)
         sections: Final = tuple(self._settings_stores)
         responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
-        general_settings_response: Final = responses[sections.index("general_settings")]
+        general_settings_response: Final[_ConfigParamValueRow | None] = responses[sections.index("general_settings")]
         general_settings_value: Final[Mapping[str, SettingsJsonValue]] = (
             self._prepared_db_settings_values("general_settings", general_settings_response.param_value)
             if general_settings_response is not None and general_settings_response.param_value is not None
@@ -15976,10 +15975,9 @@ async def _count_request_tokens(
 
     deployment: dict[str, Any] | None = None if routed is None else dict(routed)
     litellm_model_name = None
-    model_info: ModelMapInfo | None = None
+    model_info: Final = None if routed is None else routed.get("model_info", {})
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
-        model_info = deployment.get("model_info", {})
         deployment = {  # rebind-ok: merge the named credential into a copy
             **deployment,
             "litellm_params": with_named_credential(
@@ -16157,7 +16155,7 @@ async def _count_request_tokens(
     if model_info is not None:
         custom_tokenizer = cast(
             CustomHuggingfaceTokenizer | None,
-            model_info.get("custom_tokenizer", None),
+            _with_get(model_info).get("custom_tokenizer", None),
         )
     system_message: Final = _system_message(local_system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)

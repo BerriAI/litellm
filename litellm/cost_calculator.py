@@ -1321,8 +1321,16 @@ def get_usage_object(
         return None
 
 
+class _DumpedUsageFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _dumped_usage_fields(usage_model: BaseModel) -> Mapping[str, object]:
+    return usage_model.model_dump()
+
+
 def _usage_from_model(usage_model: BaseModel) -> Usage:
-    return Usage(**usage_model.model_dump())
+    return Usage(**_DumpedUsageFields(**_dumped_usage_fields(usage_model)))
 
 
 def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:

@@ -21,7 +21,9 @@ LITELLM_SUPPORT_CONTACT: Final = "support@berri.ai"
 def _query_raw_rows(
     client: "PrismaClient", query: str, *args: object
 ) -> Awaitable[Sequence[Mapping[str, object]] | None]:
-    return client.db.query_raw(query, *args)
+    from litellm.proxy.utils import query_raw_rows
+
+    return query_raw_rows(client.db, query, *args)
 
 
 async def get_all_team_member_emails(team_id: str | None = None) -> list:

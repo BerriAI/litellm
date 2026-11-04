@@ -53,11 +53,13 @@ async def fetch_user_spend_rows(
     today: datetime.date,
     baseline_days: int,
 ) -> tuple[UserSpendRow, ...]:
+    from litellm.proxy.utils import query_raw_rows
+
     today_str: Final = today.strftime("%Y-%m-%d")
     month_start_str: Final = today.replace(day=1).strftime("%Y-%m-%d")
     baseline_start_str: Final = (today - datetime.timedelta(days=max(baseline_days, 1))).strftime("%Y-%m-%d")
     return USER_SPEND_ROWS_ADAPTER.validate_python(
-        await prisma_client.db.query_raw(USER_SPEND_QUERY, today_str, month_start_str, baseline_start_str)
+        await query_raw_rows(prisma_client.db, USER_SPEND_QUERY, today_str, month_start_str, baseline_start_str)
     )
 
 

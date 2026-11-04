@@ -145,6 +145,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
     has_attributes,
+    require_attributes,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
@@ -685,6 +686,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+_NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _CALL_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -705,6 +707,18 @@ _DEPLOYMENTS_ADAPTER: Final = TypeAdapter(Sequence[Mapping[str, object]])
 
 class _SupportsAclose(Protocol):
     def aclose(self) -> Awaitable[object]: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+class _AsyncDeploymentSelector(Protocol):
+    async_get_available_deployments: Callable[..., Awaitable[object]]
+
+
+class _DeploymentSelector(Protocol):
+    get_available_deployments: Callable[..., object]
 
 
 def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: str) -> Sequence[Mapping[str, object]]:
@@ -2746,7 +2760,7 @@ class PythonCore(DeprecatedRouterMembers):
         self,
         *,
         strategy: str | None,
-        selector: Any | None,
+        selector: RouterStrategySelector | None,
         model: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None,
@@ -2762,7 +2776,9 @@ class PythonCore(DeprecatedRouterMembers):
             return None
         match strategy:
             case "least-busy":
-                return await selector.async_get_available_deployments(
+                return await require_attributes(
+                    selector, _AsyncDeploymentSelector, "async_get_available_deployments"
+                ).async_get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                 )
@@ -2771,21 +2787,27 @@ class PythonCore(DeprecatedRouterMembers):
                 # `get_available_deployments`. Mirror the pre-routing-groups
                 # top-level fallback by calling it inline so groups using v1
                 # still work from async callers.
-                return selector.get_available_deployments(
+                return require_attributes(
+                    selector, _DeploymentSelector, "get_available_deployments"
+                ).get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                     messages=messages,
                     input=input,
                 )
             case "usage-based-routing-v2" | "cost-based-routing":
-                return await selector.async_get_available_deployments(
+                return await require_attributes(
+                    selector, _AsyncDeploymentSelector, "async_get_available_deployments"
+                ).async_get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                     messages=messages,
                     input=input,
                 )
             case "latency-based-routing":
-                return await selector.async_get_available_deployments(
+                return await require_attributes(
+                    selector, _AsyncDeploymentSelector, "async_get_available_deployments"
+                ).async_get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                     messages=messages,
@@ -2799,7 +2821,7 @@ class PythonCore(DeprecatedRouterMembers):
         self,
         *,
         strategy: str | None,
-        selector: Any | None,
+        selector: RouterStrategySelector | None,
         model: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None,
@@ -2818,19 +2840,25 @@ class PythonCore(DeprecatedRouterMembers):
         # `async_get_available_deployments`
         match strategy:
             case "least-busy":
-                return selector.get_available_deployments(
+                return require_attributes(
+                    selector, _DeploymentSelector, "get_available_deployments"
+                ).get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                 )
             case "usage-based-routing" | "usage-based-routing-v2":
-                return selector.get_available_deployments(
+                return require_attributes(
+                    selector, _DeploymentSelector, "get_available_deployments"
+                ).get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                     messages=messages,
                     input=input,
                 )
             case "latency-based-routing":
-                return selector.get_available_deployments(
+                return require_attributes(
+                    selector, _DeploymentSelector, "get_available_deployments"
+                ).get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                     messages=messages,
@@ -5205,7 +5233,7 @@ class PythonCore(DeprecatedRouterMembers):
             except (ValueError, TypeError):
                 pass  # Skip if value can't be converted to int
 
-    def _set_failed_deployment_id_on_exception(self, exception: Exception, deployment: Mapping[str, Any]) -> None:
+    def _set_failed_deployment_id_on_exception(self, exception: Exception, deployment: Mapping[str, object]) -> None:
         """
         Stamp the failed deployment's `model_info.id` on the exception so the
         fallback layer can exclude it from subsequent re-picks within the same
@@ -5217,7 +5245,8 @@ class PythonCore(DeprecatedRouterMembers):
         """
         if getattr(exception, "failed_deployment_id", None):
             return
-        deployment_id: Final = (deployment.get("model_info") or {}).get("id")
+        model_info: Final = deployment.get("model_info")
+        deployment_id: Final = require_attributes(model_info, _SupportsGet, "get").get("id") if model_info else None
         if deployment_id:
             try:
                 exception.failed_deployment_id = deployment_id
@@ -5231,7 +5260,7 @@ class PythonCore(DeprecatedRouterMembers):
         # _update_kwargs_with_deployment and stamped into kwargs["model_info"]; stamping
         # the static shared deployment's id instead would let one tenant's bad credentials
         # cool down the deployment every other tenant sharing this config relies on.
-        effective_model_info: Final = kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
+        effective_model_info: Final = kwargs.get("model_info") or deployment.get("model_info") or _NO_MODEL_INFO
         self._set_failed_deployment_id_on_exception(exception, MappingProxyType({"model_info": effective_model_info}))
 
     @staticmethod

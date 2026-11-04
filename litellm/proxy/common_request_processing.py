@@ -62,12 +62,14 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    attribute_or_none,
     finite_cost,
     get_or_create_metadata_bucket,
     has_attributes,
     independent_snapshot,
     is_expected_client_error,
     redact_nested_match_and_regex_keys,
+    require_attributes,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -668,6 +670,10 @@ _UPSTREAM_RESPONSE: Final = TypeAdapter(
 
 class _ReadsHeaderValues(Protocol):
     def get(self, key: str, default: str = "") -> str: ...
+
+
+class _NativeLoggingRelease(Protocol):
+    def release(self, success: bool, /) -> object: ...
 
 
 def _as_header_reader(headers: _ReadsHeaderValues) -> _ReadsHeaderValues:
@@ -4148,10 +4154,10 @@ class ProxyBaseLLMRequestProcessing:
         gating logic directly rather than reimplementing the finally block.
         """
         if getattr(logging_obj, "call_type", None) in ("ocr", "aocr"):
-            pending: Final = getattr(logging_obj, "_native_pending_logging", None)
+            pending: Final = attribute_or_none(logging_obj, "_native_pending_logging")
             if pending is not None:
                 logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
-                pending.release(not exception_raised)
+                require_attributes(pending, _NativeLoggingRelease, "release").release(not exception_raised)
         _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return

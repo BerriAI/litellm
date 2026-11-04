@@ -195,6 +195,13 @@ def _is_mergeable_client_metadata(key: str, value: object) -> bool:
     return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
 
 
+def _request_body_fields(parsed: object) -> Mapping[str, object]:
+    fields: Final = as_str_mapping(parsed)
+    if fields is None:
+        raise TypeError(f"unsupported operand type(s) for |: '{type(parsed).__name__}' and 'dict'")
+    return fields
+
+
 class _RegisteredPassThroughRoute(TypedDict):
     endpoint_id: ReadOnly[str]
     path: ReadOnly[str | None]
@@ -288,9 +295,9 @@ async def chat_completion_pass_through_endpoint(
         body: Final = await request.body()
         body_str: Final = body.decode()
         try:
-            data = ast.literal_eval(body_str) | data
+            data = {**_request_body_fields(_DECODED_JSON.validate_python(ast.literal_eval(body_str))), **data}
         except Exception:
-            data = json.loads(body_str) | data
+            data = {**_request_body_fields(_DECODED_JSON.validate_python(json.loads(body_str))), **data}
 
         data["adapter_id"] = adapter_id
 

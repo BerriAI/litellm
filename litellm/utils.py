@@ -4492,8 +4492,9 @@ def get_optional_params_transcription(
 
     passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
     passed_params.pop("model")
-    custom_llm_provider = passed_params.pop("custom_llm_provider")
-    drop_params = normalize_drop_params(passed_params.pop("drop_params"))
+    passed_params.pop("custom_llm_provider")
+    passed_params.pop("drop_params")
+    normalized_drop_params: Final = normalize_drop_params(drop_params)
     special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
     from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
         transcription_stream_flag,
@@ -4504,7 +4505,7 @@ def get_optional_params_transcription(
         passed_params[k] = v
 
     sends_through_openai_sdk: Final = custom_llm_provider in ("openai", "azure")
-    drops_unsupported_params: Final = drop_params is True or litellm.drop_params is True
+    drops_unsupported_params: Final = normalized_drop_params is True or litellm.drop_params is True
     transcription_params: Final = (
         OPENAI_TRANSCRIPTION_PARAMS
         if sends_through_openai_sdk or drops_unsupported_params
@@ -4556,7 +4557,7 @@ def get_optional_params_transcription(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=normalized_drop_params if normalized_drop_params is not None else False,
         )
     elif custom_llm_provider == "bedrock":
         from litellm.llms.bedrock.audio_transcription import (
@@ -4565,7 +4566,7 @@ def get_optional_params_transcription(
         )
 
         match map_openai_transcription_params(
-            non_default_params, drop_params=drop_params is True or litellm.drop_params is True
+            non_default_params, drop_params=normalized_drop_params is True or litellm.drop_params is True
         ):
             case UnsupportedTranscriptionParams(message=message):
                 raise UnsupportedParamsError(message=message, llm_provider="bedrock")
@@ -4578,7 +4579,7 @@ def get_optional_params_transcription(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=normalized_drop_params if normalized_drop_params is not None else False,
         )
 
     optional_params = add_provider_specific_params_to_optional_params(

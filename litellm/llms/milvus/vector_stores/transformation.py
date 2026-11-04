@@ -252,10 +252,11 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
 
                 # Build attributes with all available metadata
                 # Exclude system fields and already-processed fields
-                attributes = {}
-                for key, value in result.items():
-                    if key not in ["id", "content", "distance", text_field]:
-                        attributes[key] = value
+                attributes = {
+                    key: value
+                    for key, value in decoded_json_object(_DECODED_JSON.validate_python(result)).items()
+                    if key not in ["id", "content", "distance", text_field]
+                }
 
                 result_obj = VectorStoreSearchResult(
                     score=score,

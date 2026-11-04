@@ -40,6 +40,7 @@ import openai
 from openai import AsyncStream, Stream
 from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -403,6 +404,10 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
+
+
+class _ForwardedCompletionParams(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -8167,7 +8172,7 @@ def text_completion(
 
     text_completion_response = TextCompletionResponse()
 
-    optional_params: Final[dict[str, Any]] = {}
+    optional_params: Final[dict[str, object]] = {}
     # default values for all optional params are none, litellm only passes them to the llm when they are set to non None values
     if best_of is not None:
         optional_params["best_of"] = best_of
@@ -8234,7 +8239,7 @@ def text_completion(
 
                 def process_prompt(i, individual_prompt):
                     decoded_prompt: Final = tokenizer.decode(individual_prompt)
-                    all_params: Final = {**kwargs, **optional_params}
+                    all_params: Final = _ForwardedCompletionParams(**{**kwargs, **optional_params})
                     response: Final[TextCompletionResponse] = text_completion(
                         model=model,
                         prompt=decoded_prompt,
@@ -8308,7 +8313,7 @@ def text_completion(
         messages=messages,
         *args,
         **kwargs,
-        **optional_params,
+        **_ForwardedCompletionParams(**optional_params),
     )
     if kwargs.get("acompletion", False) is True:
         return response
@@ -8652,7 +8657,7 @@ def transcription(
 ) -> (
     TranscriptionResponse
     | Stream[TranscriptionStreamEvent]
-    | Coroutine[Any, Any, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+    | Coroutine[object, object, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
 ):
     """
     Calls openai + azure whisper endpoints.
@@ -8741,7 +8746,7 @@ def transcription(
         TranscriptionResponse
         | Stream[TranscriptionStreamEvent]
         | AsyncStream[TranscriptionStreamEvent]
-        | Coroutine[Any, Any, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+        | Coroutine[object, object, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
     )
 
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(

@@ -12,7 +12,7 @@ import subprocess
 import time
 import urllib
 import urllib.parse
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, Protocol, TypeVar
 
@@ -36,7 +36,10 @@ from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from prisma import Prisma
+    from prisma import models as prisma_models
     from prisma.types import HttpConfig
+
+    from litellm.repositories.prisma_protocols import TableActions
 
 _ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = "20261015120000_add_environment_variables_revision_trigger"
 
@@ -903,6 +906,21 @@ class PrismaWrapper:
         def is_connected(self) -> bool: ...
 
         async def disconnect(self, timeout: float | timedelta | None = None) -> None: ...
+
+        async def execute_raw(self, query: str, *args: object) -> int: ...
+
+        async def query_first(self, query: str, *args: object) -> Mapping[str, object] | None: ...
+
+        @property
+        def litellm_deprecatedverificationtoken(
+            self,
+        ) -> TableActions[prisma_models.LiteLLM_DeprecatedVerificationToken]: ...
+
+        @property
+        def litellm_mcpservertable(self) -> TableActions[prisma_models.LiteLLM_MCPServerTable]: ...
+
+        @property
+        def litellm_shadowevaljob(self) -> TableActions[prisma_models.LiteLLM_ShadowEvalJob]: ...
 
     def __getattr__(self, name: str):
         """
