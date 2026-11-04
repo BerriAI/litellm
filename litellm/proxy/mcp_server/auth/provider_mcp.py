@@ -132,25 +132,41 @@ async def authorize_provider_mcp(
     if current_auth is None:
         _raise_denied(MCPAdmissionError("Provider MCP requests require an authenticated caller"))
     manager: Final = global_manager()
-    registrations: Final = {server.url: server for server in manager.catalog.provider_registrations().values()}
+    servers: Final = tuple(manager.catalog.provider_registrations().values())
+    # Uniqueness of provider URLs is enforced on write, but a request must not depend on it:
+    # every registration of a URL is considered, so a duplicate can never shadow a grant.
+    registrations: Final = {
+        url: tuple(server for server in servers if server.url == url) for url in {s.url for s in servers}
+    }
     allowed_servers: Final = frozenset(await manager.get_allowed_mcp_servers(current_auth))
     for attachment in attachments:
         await _authorize_attachment(attachment, registrations, allowed_servers, current_auth)
 
 
+async def _granted_tools(registration: LiteLLM_MCPServerTable, auth: UserAPIKeyAuth) -> frozenset[str]:
+    permitted: Final = await MCPRequestHandler.get_allowed_tools_for_server(registration.server_id, auth)
+    ceiling: Final = frozenset(registration.allowed_tools or ())
+    return ceiling if permitted is None else ceiling.intersection(permitted)
+
+
 async def _authorize_attachment(
     attachment: ProviderMCPAttachment | MCPAdmissionError,
-    registrations: Mapping[str | None, LiteLLM_MCPServerTable],
+    registrations: Mapping[str | None, tuple[LiteLLM_MCPServerTable, ...]],
     allowed_servers: frozenset[str],
     auth: UserAPIKeyAuth,
 ) -> None:
+    """Admit the attachment when any registration of its URL that the key or team is granted
+    allows every requested tool."""
     if isinstance(attachment, MCPAdmissionError):
         _raise_denied(attachment)
-    registration: Final = registrations.get(attachment.url)
-    if registration is None or registration.server_id not in allowed_servers:
+    granted: Final = tuple(
+        registration
+        for registration in registrations.get(attachment.url, ())
+        if registration.server_id in allowed_servers
+    )
+    if not granted:
         _raise_denied(MCPAdmissionError("Provider MCP server is not registered or not permitted for this key/team"))
-    permitted: Final = await MCPRequestHandler.get_allowed_tools_for_server(registration.server_id, auth)
-    ceiling: Final = frozenset(registration.allowed_tools or ())
-    allowed: Final = ceiling if permitted is None else ceiling.intersection(permitted)
-    if not attachment.tools <= allowed:
-        _raise_denied(MCPAdmissionError("Provider MCP tools exceed the registered server or key/team permissions"))
+    for registration in granted:
+        if attachment.tools <= await _granted_tools(registration, auth):
+            return
+    _raise_denied(MCPAdmissionError("Provider MCP tools exceed the registered server or key/team permissions"))

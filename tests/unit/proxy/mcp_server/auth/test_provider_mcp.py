@@ -187,6 +187,20 @@ async def test_server_denial_cannot_be_bypassed_by_tool_name(servers: list[str],
     assert denied.value.code == "403"
 
 
+async def test_duplicate_url_registration_neither_shadows_nor_widens_the_granted_one(
+    native_auth: UserAPIKeyAuth, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog: Final = mcp_server_manager.global_mcp_server_manager.catalog
+    granted: Final = catalog.provider_registrations()["native-id"]
+    duplicate: Final = granted.model_copy(update={"server_id": "duplicate-id", "alias": None, "allowed_tools": ["delete"]})
+    monkeypatch.setattr(catalog, "provider_registrations", lambda: {"native-id": granted, "duplicate-id": duplicate})
+
+    await authorize_provider_mcp(_openai(["search"]), native_auth)
+    with pytest.raises(ProxyException) as denied:
+        await authorize_provider_mcp(_openai(["delete"]), native_auth)
+    assert denied.value.code == "403"
+
+
 async def test_canonical_host_and_default_port_match(native_auth: UserAPIKeyAuth) -> None:
     body: Final = _openai(["search"], "https://NATIVE.example:443/mcp")
     await authorize_provider_mcp(body, native_auth)
