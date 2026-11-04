@@ -431,6 +431,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     regional_processing_uplift_multiplier_us: (
         float | None
     )  # OpenAI US data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
+    fedramp_uplift_multiplier: ReadOnly[
+        float | None
+    ]  # OpenAI FedRAMP endpoint (gov.api.openai.com) uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
     regional_endpoint_uplift_multiplier: ReadOnly[
         float | None
     ]  # Vertex AI non-global (regional) endpoint uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
@@ -4258,6 +4261,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     annotation_cost_per_page_batches: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
+    fedramp_uplift_multiplier: float | None = None
     regional_endpoint_uplift_multiplier: float | None = None
 
     @classmethod
@@ -4646,6 +4650,7 @@ class LlmProviders(str, Enum):
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"
+    EMPIRIOLABS = "empiriolabs"
     EU_JEV = "eu_jev"
     MISTRAL = "mistral"
     MILVUS = "milvus"
@@ -5260,11 +5265,13 @@ class DataResidency(Enum):
     Inferred from the OpenAI api_base host (eu.api.openai.com -> EU,
     us.api.openai.com -> US). Used to apply the regional-processing
     cost uplift (see ``regional_processing_uplift_multiplier_<region>``
-    on ModelInfo).
+    on ModelInfo). gov.api.openai.com maps to FEDRAMP, which applies
+    ``fedramp_uplift_multiplier`` instead.
     """
 
     US = "us"
     EU = "eu"
+    FEDRAMP = "fedramp"
 
 
 LLMResponseTypes = (
