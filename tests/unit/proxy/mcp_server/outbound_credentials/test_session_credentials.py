@@ -2,6 +2,7 @@
 
 import _hashlib
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -234,15 +235,15 @@ def test_signing_config_error_detail_never_leaks_key_material():
 
 
 def test_session_key_without_fips_stays_the_scrypt_key_of_the_master_key() -> None:
-    keys = session_keys_from_master_key(MASTER_KEY)
+    keys: Final = session_keys_from_master_key(MASTER_KEY)
     assert keys.signing_key.get_secret_value() == "990dce331d97862e3af47815b707c42923fc760e6740d4a77a81583a206f339d"
 
 
 def _fips_keys(master_key: str) -> tuple[str, str, str]:
     envelope_keys_from_master_key.cache_clear()
     session_keys_from_master_key.cache_clear()
-    envelope = envelope_keys_from_master_key(master_key)
-    session = session_keys_from_master_key(master_key)
+    envelope: Final = envelope_keys_from_master_key(master_key)
+    session: Final = session_keys_from_master_key(master_key)
     return (
         envelope.signing_key.get_secret_value(),
         envelope.encryption_key.get_secret_value(),
@@ -250,7 +251,7 @@ def _fips_keys(master_key: str) -> tuple[str, str, str]:
     )
 
 
-_needs_shared_openssl = pytest.mark.skipif(
+_needs_shared_openssl: Final = pytest.mark.skipif(
     not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
 )
 
@@ -261,7 +262,7 @@ def test_keys_under_fips_come_from_the_salt_key_are_distinct_and_the_same_on_eve
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + "5a" * 32)
-    first = _fips_keys(MASTER_KEY)
+    first: Final = _fips_keys(MASTER_KEY)
     assert first == _fips_keys(MASTER_KEY)
     assert len(set(first)) == 3, first
     assert first == (
@@ -275,8 +276,8 @@ def test_keys_under_fips_come_from_the_salt_key_are_distinct_and_the_same_on_eve
 @pytest.mark.usefixtures("openssl_enforcing_fips")
 def test_keys_under_fips_all_change_when_the_master_key_rotates(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + "5a" * 32)
-    before = _fips_keys(MASTER_KEY)
-    after = _fips_keys("sk-a-different-master-key")
+    before: Final = _fips_keys(MASTER_KEY)
+    after: Final = _fips_keys("sk-a-different-master-key")
     assert set(before).isdisjoint(after), (before, after)
 
 

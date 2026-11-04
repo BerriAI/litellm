@@ -9,6 +9,7 @@ through the consumer; and no path leaks the upstream token in a repr.
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import pytest
 from pydantic import SecretStr
@@ -321,7 +322,7 @@ def test_is_bridge_envelope_shaped_rejects_non_envelope_bearer():
 
 
 def test_envelope_keys_without_fips_stay_the_scrypt_keys_of_the_master_key() -> None:
-    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    keys: Final = envelope_keys_from_master_key(_MASTER_KEY)
     assert (keys.signing_key.get_secret_value(), keys.encryption_key.get_secret_value()) == (
         "34d3bb6ae2e03cddca3417209304e9603417b89258d3979d0569880b6fbd1bed",
         "eebfbee8cbe767ee136ce3a9745b44de2b2ae35d1ea46dcf72c58b811fac3250",

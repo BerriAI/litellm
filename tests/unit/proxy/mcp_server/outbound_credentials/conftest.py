@@ -1,5 +1,6 @@
 import _hashlib
 from collections.abc import Iterator
+from typing import Final
 
 import pytest
 
@@ -9,7 +10,7 @@ from litellm.proxy.mcp_server.outbound_credentials.session_credentials import se
 
 @pytest.fixture
 def openssl_enforcing_fips(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    real_new = _hashlib.new
+    real_new: Final = _hashlib.new
 
     def new(name: str, data: bytes = b"", *, usedforsecurity: bool = True) -> _hashlib.HASH:
         if name == "md5":
