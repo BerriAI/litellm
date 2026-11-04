@@ -47,6 +47,7 @@ from litellm.llms.base_llm.search.transformation import (
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.secret_managers.main import get_secret_str
 
 # AgentCore web-search rejects queries longer than 200 characters
@@ -146,7 +147,9 @@ def _iter_sse_events(text: str) -> Iterator[Mapping[str, object]]:
     progress notifications before the JSON-RPC response.
     """
     for chunk in _SSE_EVENT_SEPARATOR.split(text):
-        payload = "\n".join(line[len("data:") :].lstrip() for line in chunk.splitlines() if line.startswith("data:"))
+        payload = "\n".join(
+            line[len("data:") :].lstrip() for line in split_sse_lines(chunk) if line.startswith("data:")
+        )
         if not payload:
             continue
         try:

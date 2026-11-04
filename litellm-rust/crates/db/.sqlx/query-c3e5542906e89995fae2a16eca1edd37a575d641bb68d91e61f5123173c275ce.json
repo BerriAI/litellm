@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH added AS (\n    SELECT id, SUM(cost) AS cost\n    FROM UNNEST($1::text[], $2::float8[]) AS a(id, cost)\n    GROUP BY id\n),\nlocked AS (\n    SELECT t.team_id FROM \"LiteLLM_TeamTable\" t\n    WHERE t.team_id IN (SELECT id FROM added)\n    ORDER BY t.team_id FOR UPDATE\n)\nUPDATE \"LiteLLM_TeamTable\" t\nSET spend = t.spend + added.cost,\n    updated_at = (NOW() AT TIME ZONE 'UTC')\nFROM added\nWHERE t.team_id = added.id AND t.team_id IN (SELECT team_id FROM locked)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Float8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c3e5542906e89995fae2a16eca1edd37a575d641bb68d91e61f5123173c275ce"
+}

@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
+import { useTranslation } from "react-i18next";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 // Written to sessionStorage so the admin hook (useMcpOAuthFlow), the user hook
@@ -28,6 +29,7 @@ const resolveDefaultRedirect = () => {
 };
 
 const McpOAuthCallbackContent = () => {
+  const { t } = useTranslation();
   const searchParams = useSearchParams();
 
   const payload = useMemo(() => {
@@ -80,20 +82,19 @@ const McpOAuthCallbackContent = () => {
     <div className="min-h-screen flex items-center justify-center bg-muted p-6">
       <div className="max-w-lg w-full rounded-lg bg-card shadow-md p-8 text-center space-y-4">
         <h1 className="text-xl font-semibold text-foreground">LiteLLM MCP OAuth</h1>
-        <p className="text-sm text-foreground">
-          Authorization complete. You may close this window and return to the LiteLLM dashboard.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          If the window does not close automatically, everything is still saved—you can close it manually.
-        </p>
+        <p className="text-sm text-foreground">{t("mcpOAuthCallback.authorizationComplete")}</p>
+        <p className="text-xs text-muted-foreground">{t("mcpOAuthCallback.manualCloseHint")}</p>
       </div>
     </div>
   );
 };
 
 const McpOAuthCallbackPage = () => {
+  const { t } = useTranslation();
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+    <Suspense
+      fallback={<div className="min-h-screen flex items-center justify-center">{t("mcpOAuthCallback.loading")}</div>}
+    >
       <McpOAuthCallbackContent />
     </Suspense>
   );

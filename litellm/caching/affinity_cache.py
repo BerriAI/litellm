@@ -4,17 +4,26 @@ import json
 from collections.abc import Mapping
 from typing import (
     Final,
-    cast,  # noqa: TID251  # Redis script results are narrowed only to object, then validated
+    cast,  # noqa: TID251  # Heterogeneous cache results are narrowed only to object, then validated
 )
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_batch import active_request_redis_batch
 
 ROUTER_SESSION_PINS_TARGET: Final = "router_session_pins"
 
 _PIN_JSON_ADAPTER: Final = TypeAdapter[JsonValue](JsonValue)
+
+_READ_PIN_SCRIPT: Final = """
+local current = redis.call('GET', KEYS[1])
+if current ~= false then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return current
+"""
 
 _CLAIM_PIN_SCRIPT: Final = """
 local current = redis.call('GET', KEYS[1])
@@ -101,6 +110,37 @@ def _decode_pin(value: str) -> object:
         return _PIN_JSON_ADAPTER.validate_json(value)
     except ValidationError:
         return value
+
+
+async def read_affinity_pin(cache: DualCache, cache_key: str, ttl_seconds: int) -> object:
+    """Refresh the authoritative pin without writing a previously observed value back."""
+    redis_cache: Final = cache.redis_cache
+    if redis_cache is not None:
+        try:
+            read_script: Final = redis_cache.async_register_script(_READ_PIN_SCRIPT)
+            batch: Final = active_request_redis_batch(redis_cache)
+            raw: Final = cast(  # cast-ok: Redis script returns a serialized pin or a miss; validate before use
+                object,
+                await batch.script(_READ_PIN_SCRIPT, read_script, (cache_key,), (int(ttl_seconds),))
+                if batch is not None and batch.pending
+                else await read_script(keys=(cache_key,), args=(int(ttl_seconds),)),
+            )
+            decoded: Final = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            value: Final = _decode_pin(decoded) if isinstance(decoded, str) else None
+            if value is None:
+                cache.in_memory_cache.delete_cache(cache_key)
+            else:
+                set_local_affinity_pin(cache, cache_key, value, ttl_seconds)
+        except Exception as error:  # noqa: BLE001  # Redis faults retain pod-local continuity, unlike a successful miss
+            verbose_router_logger.debug("Affinity cache: Redis read failed, using pod-local pin. error=%s", error)
+        else:
+            return value
+    local_value: Final = cast(  # cast-ok: the heterogeneous local cache is parsed by the affinity caller
+        object, cache.in_memory_cache.get_cache(cache_key)
+    )
+    if local_value is not None:
+        set_local_affinity_pin(cache, cache_key, local_value, ttl_seconds)
+    return local_value
 
 
 async def claim_affinity_pin(

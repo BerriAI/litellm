@@ -1,3 +1,5 @@
+import type { ParseKeys, TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import airiaLogo from "../../../../../public/assets/logos/airia.svg";
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
@@ -133,10 +135,10 @@ export const normalizeLoggingOnlyScopeChoice = (
   directionalScopeSupported: boolean,
 ): LoggingOnlyScopeChoice => (directionalScopeSupported || choice === "default" ? choice : "default");
 
-const LOGGING_ONLY_SCOPE_OPTIONS: LoggingOnlyScopeOption[] = [
-  { label: "Default (request and response)", value: "default" },
-  { label: "Input only (request)", value: "input" },
-  { label: "Output only (response)", value: "output" },
+const LOGGING_ONLY_SCOPE_OPTIONS: { labelKey: ParseKeys; value: LoggingOnlyScopeChoice }[] = [
+  { labelKey: "guardrails.modeOptions.loggingOnlyScope.default", value: "default" },
+  { labelKey: "guardrails.modeOptions.loggingOnlyScope.input", value: "input" },
+  { labelKey: "guardrails.modeOptions.loggingOnlyScope.output", value: "output" },
 ];
 
 export const loggingOnlyScopeToChoice = (v: string | null | undefined): LoggingOnlyScopeChoice =>
@@ -185,10 +187,10 @@ export const getLoggingOnlyScopeUpdate = (
   };
 };
 
-export const formatLoggingOnlyScope = (v: string | null | undefined): string => {
-  if (v === "input") return "Input only (request)";
-  if (v === "output") return "Output only (response)";
-  return "Default (request and response)";
+export const formatLoggingOnlyScope = (v: string | null | undefined, t: TFunction = i18n.t.bind(i18n)): string => {
+  if (v === "input") return t("guardrails.modeOptions.loggingOnlyScope.input");
+  if (v === "output") return t("guardrails.modeOptions.loggingOnlyScope.output");
+  return t("guardrails.modeOptions.loggingOnlyScope.default");
 };
 
 export const modeIncludesLoggingOnly = (raw: unknown): boolean => {
@@ -203,10 +205,13 @@ export const modeIncludesLoggingOnly = (raw: unknown): boolean => {
   return toModeArray(fallback).includes("logging_only") || taggedModes;
 };
 
-export const getLoggingOnlyScopeOptions = (directionalScopeSupported: boolean): LoggingOnlyScopeOption[] =>
-  directionalScopeSupported
-    ? LOGGING_ONLY_SCOPE_OPTIONS
-    : LOGGING_ONLY_SCOPE_OPTIONS.filter((option) => option.value === "default");
+export const getLoggingOnlyScopeOptions = (
+  directionalScopeSupported: boolean,
+  t: TFunction = i18n.t.bind(i18n),
+): LoggingOnlyScopeOption[] =>
+  LOGGING_ONLY_SCOPE_OPTIONS.filter((option) => directionalScopeSupported || option.value === "default").map(
+    ({ labelKey, value }) => ({ label: t(labelKey), value }),
+  );
 
 export const supportsDirectionalLoggingOnlyScope = (
   settings: { providers_without_directional_logging_only_scope?: string[] } | null,
@@ -392,10 +397,10 @@ export function choiceToSkipToolForCreate(choice: SkipToolMessageChoice | undefi
 export const GUARDRAIL_STREAM_SCOPES = ["both", "streaming", "non_streaming"] as const;
 export type GuardrailStreamScope = (typeof GUARDRAIL_STREAM_SCOPES)[number];
 
-export const STREAM_SCOPE_OPTIONS: { value: GuardrailStreamScope; label: string }[] = [
-  { value: "both", label: "Streaming and non-streaming" },
-  { value: "streaming", label: "Streaming only" },
-  { value: "non_streaming", label: "Non-streaming only" },
+export const STREAM_SCOPE_OPTIONS: { value: GuardrailStreamScope; labelKey: ParseKeys }[] = [
+  { value: "both", labelKey: "guardrails.modeOptions.streamScope.both" },
+  { value: "streaming", labelKey: "guardrails.modeOptions.streamScope.streaming" },
+  { value: "non_streaming", labelKey: "guardrails.modeOptions.streamScope.nonStreaming" },
 ];
 
 export const isGuardrailStreamScope = (value: unknown): value is GuardrailStreamScope =>
@@ -427,16 +432,17 @@ export const streamScopePayload = (
   return Object.fromEntries(Object.entries(perMode).filter((entry) => entry[1] !== "both"));
 };
 
-export const formatGuardrailStreamScope = (raw: unknown): string => {
+export const formatGuardrailStreamScope = (raw: unknown, t: TFunction = i18n.t.bind(i18n)): string => {
   if (isGuardrailStreamScope(raw)) {
-    return STREAM_SCOPE_OPTIONS.find((option) => option.value === raw)?.label ?? raw;
+    const option = STREAM_SCOPE_OPTIONS.find((candidate) => candidate.value === raw);
+    return option ? t(option.labelKey) : raw;
   }
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const entries = Object.entries(raw as Record<string, unknown>).filter(
       (entry): entry is [string, GuardrailStreamScope] => isGuardrailStreamScope(entry[1]),
     );
     if (entries.length === 0) return "";
-    return entries.map(([mode, scope]) => `${mode}: ${formatGuardrailStreamScope(scope)}`).join(", ");
+    return entries.map(([mode, scope]) => `${mode}: ${formatGuardrailStreamScope(scope, t)}`).join(", ");
   }
   return "";
 };
