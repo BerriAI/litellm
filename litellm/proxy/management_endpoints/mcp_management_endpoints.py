@@ -2484,6 +2484,16 @@ if MCP_AVAILABLE:
             non_admin_missing="not_found",
         )
         assert authorized.runtime is not None
+        # Caller-facing OAuth-by-id entry point (authorize/token/register). An admin-disabled server
+        # stays in the raw registry (and a disabled DB server's config twin resurfaces through the
+        # config|registry merge), so a caller holding an existing grant/refresh token must not keep
+        # exchanging tokens after disable. Treat a hidden id as not-found before any upstream request
+        # — even for admins, since a disabled server makes no upstream connections.
+        if global_mcp_server_manager.is_server_caller_hidden(authorized.runtime.server_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server {server_id} not found"},
+            )
         return authorized.runtime
 
     @asynccontextmanager

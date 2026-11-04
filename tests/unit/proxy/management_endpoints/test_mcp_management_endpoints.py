@@ -2652,6 +2652,38 @@ class TestTemporaryMCPSessionEndpoints:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_or_404_hides_disabled_server(self):
+        """BUG #1: the OAuth-by-id resolver (authorize/token/register) must 404 an admin-disabled
+        server before any upstream request, so a held grant/refresh token cannot keep exchanging
+        tokens after disable. Gated even for admins, since a disabled server makes no connections."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_cached_temporary_mcp_server_or_404,
+        )
+
+        registry_server = generate_mock_mcp_server_config_record(server_id="server-x")
+        admin_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = registry_server
+        mock_manager.get_mcp_server_by_name.return_value = None
+        mock_manager.is_server_caller_hidden.return_value = True
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _get_cached_temporary_mcp_server_or_404("server-x", admin_auth)
+
+        assert exc_info.value.status_code == 404
+        mock_manager.is_server_caller_hidden.assert_called_once_with("server-x")
+
+    @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_non_admin_denied(self):
         """Non-admin without access to the server gets 403, not the server."""
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
