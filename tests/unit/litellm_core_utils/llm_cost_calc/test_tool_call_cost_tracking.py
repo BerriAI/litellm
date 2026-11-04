@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -7,7 +8,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.types.llms.openai import FileSearchTool, ResponsesAPIResponse, WebSearchOptions
-from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
+from litellm.types.utils import ModelResponse, ServerToolUse, StandardBuiltInToolsParams, Usage
 
 
 def test_web_search_cost_low():
@@ -1050,6 +1051,175 @@ def test_azure_ai_non_claude_web_search_keeps_generic_fallback() -> None:
     usage = Usage(prompt_tokens=1840, completion_tokens=412, total_tokens=2252)
 
     assert get_cost_for_web_search_request(custom_llm_provider="azure_ai", usage=usage, model_info=model_info) is None
+
+
+def _register_priced_deployment(
+    model: str, search_cost_per_query: float | None, deployment_id: str | None = None
+) -> str:
+    from litellm import Router
+
+    token_rates: Final = {"input_cost_per_token": 3e-6, "output_cost_per_token": 1.5e-5}
+    search_rates: Final = (
+        {}
+        if search_cost_per_query is None
+        else {
+            "search_context_cost_per_query": {
+                "search_context_size_low": search_cost_per_query,
+                "search_context_size_medium": search_cost_per_query,
+                "search_context_size_high": search_cost_per_query,
+            }
+        }
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "priced-deployment",
+                "litellm_params": {"model": model, "api_key": "k", "vertex_project": "p", "vertex_location": "global"},
+                "model_info": {**token_rates, **search_rates, **({} if deployment_id is None else {"id": deployment_id})},
+            }
+        ]
+    )
+    return router.model_list[0]["model_info"]["id"]
+
+
+def _claude_chat_response(
+    web_search_requests: int, model: str = "claude-sonnet-5-5"
+) -> tuple[object, Usage | None]:
+    usage: Final = Usage(
+        prompt_tokens=1840,
+        completion_tokens=412,
+        total_tokens=2252,
+        server_tool_use=ServerToolUse(web_search_requests=web_search_requests),
+    )
+    return ModelResponse(model=model, usage=usage), usage
+
+
+def _claude_messages_response(
+    web_search_requests: int, model: str = "claude-sonnet-5-5"
+) -> tuple[object, Usage | None]:
+    return {
+        "id": "msg_vertex_claude_web_search",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "scripted answer"}],
+        "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "server_tool_use": {"web_search_requests": web_search_requests},
+        },
+    }, None
+
+
+@pytest.mark.parametrize("build_response", [_claude_chat_response, _claude_messages_response])
+@pytest.mark.parametrize(("web_search_requests", "search_cost_per_query"), [(2, 0.01), (3, 0.01), (2, 0.0)])
+def test_vertex_claude_deployment_priced_web_search_billed_per_request(
+    local_model_cost_map: None,
+    build_response: Callable[[int], tuple[object, Usage | None]],
+    web_search_requests: int,
+    search_cost_per_query: float,
+) -> None:
+    deployment_id: Final = _register_priced_deployment("vertex_ai/claude-sonnet-5-5", search_cost_per_query)
+    response_object, usage = build_response(web_search_requests)
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=deployment_id,
+        response_object=response_object,
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(web_search_requests * search_cost_per_query)
+
+
+@pytest.mark.parametrize("build_response", [_claude_chat_response, _claude_messages_response])
+@pytest.mark.parametrize(
+    ("deployment_model", "served_model", "custom_llm_provider"),
+    # Google bills Claude web search on Sonnet 4.5 and Haiku 4.5 too:
+    # https://cloud.google.com/model-garden/partner-models/pricing (read 2026-10-30)
+    [
+        ("vertex_ai/claude-sonnet-5-5", "claude-sonnet-5-5", "vertex_ai"),
+        ("vertex_ai/claude-sonnet-4-5@20250929", "claude-sonnet-4-5-20250929", "vertex_ai"),
+        ("vertex_ai/claude-haiku-4-5@20251001", "claude-haiku-4-5-20251001", "vertex_ai"),
+        ("anthropic/claude-sonnet-5-5", "claude-sonnet-5-5", "anthropic"),
+        ("azure_ai/claude-sonnet-5-5", "claude-sonnet-5-5", "azure_ai"),
+    ],
+)
+@pytest.mark.parametrize("deployment_id", [None, "claude-token-priced"], ids=["hashed_id", "claude_in_id"])
+def test_claude_deployment_with_token_rates_only_bills_served_model_search_price(
+    local_model_cost_map: None,
+    build_response: Callable[[int, str], tuple[object, Usage | None]],
+    deployment_model: str,
+    served_model: str,
+    custom_llm_provider: str,
+    deployment_id: str | None,
+) -> None:
+    served_search_pricing: Final = (
+        litellm.get_model_info(model=deployment_model).get("search_context_cost_per_query") or {}
+    )
+    served_search_price: Final = served_search_pricing.get("search_context_size_medium") or 0.0
+    registered_id: Final = _register_priced_deployment(deployment_model, None, deployment_id)
+    response_object, usage = build_response(2, served_model)
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=registered_id,
+        response_object=response_object,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        standard_built_in_tools_params=None,
+    )
+
+    assert served_search_price > 0
+    assert cost == pytest.approx(2 * served_search_price)
+
+
+def test_vertex_claude_deployment_with_token_rates_only_and_unmapped_served_model_bills_no_search(
+    local_model_cost_map: None,
+) -> None:
+    deployment_id: Final = _register_priced_deployment("vertex_ai/claude-sonnet-5-5", None)
+    usage: Final = Usage(
+        prompt_tokens=1840,
+        completion_tokens=412,
+        total_tokens=2252,
+        server_tool_use=ServerToolUse(web_search_requests=2),
+    )
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=deployment_id,
+        response_object=ModelResponse(model="claude-unmapped-preview", usage=usage),
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0
+
+
+@pytest.mark.parametrize("deployment_id", [None, "claude-code-gemini"], ids=["hashed_id", "claude_in_id"])
+def test_vertex_gemini_deployment_priced_web_search_stays_per_prompt(
+    local_model_cost_map: None, deployment_id: str | None
+) -> None:
+    search_cost_per_prompt: Final = 0.03
+    registered_id: Final = _register_priced_deployment(
+        "vertex_ai/gemini-2.5-flash", search_cost_per_prompt, deployment_id
+    )
+    usage: Final = Usage(
+        prompt_tokens=1840,
+        completion_tokens=412,
+        total_tokens=2252,
+        server_tool_use=ServerToolUse(web_search_requests=2),
+    )
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=registered_id,
+        response_object=ModelResponse(model="gemini-2.5-flash", usage=usage),
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(search_cost_per_prompt)
 
 
 @pytest.mark.parametrize(

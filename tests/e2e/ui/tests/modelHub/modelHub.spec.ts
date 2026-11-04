@@ -64,7 +64,7 @@ test.describe("AI Hub (internal admin view)", () => {
 test.describe("Public model hub (/ui/model_hub_table)", () => {
   // No storageState — the public page is reached anonymously with a `key` query param.
 
-  test("Public model_hub_table loads and renders the Model Hub tab", async ({ page }) => {
+  test("Public model_hub_table loads and renders the Models tab", async ({ page }) => {
     // The page expects the proxy key as the `key` query param. Use the master
     // key the e2e runner already exports — this matches what the AI Hub copy
     // button hands out.
@@ -74,13 +74,10 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
     // race can't briefly mask the tab while we're evaluating visibility.
     await dismissFeedbackPopup(page);
 
-    // Page loads (no auth redirect) and the Model Hub tab is always present.
-    // Agent Hub and MCP Hub tabs are conditionally rendered only when public
-    // agents/MCP servers exist, so we don't assert on them in a fresh CI run.
-    await expect(page.getByRole("tab", { name: "Model Hub" })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("tab", { name: /^Models/ })).toBeVisible({ timeout: 10_000 });
   });
 
-  test("Agent Hub and MCP Hub tabs render their public entries", async ({ page, request }) => {
+  test("Agents and MCP servers tabs render their public entries", async ({ page, request }) => {
     const suffix = `${Date.now()}`;
     const agentName = `e2e-public-agent-${suffix}`;
     const mcpServerName = `e2e_public_mcp_${suffix}`;
@@ -145,18 +142,18 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
       await page.goto(`/ui/model_hub_table?key=${masterKey()}`);
       await dismissFeedbackPopup(page);
 
-      const agentHubTab = page.getByRole("tab", { name: "Agent Hub" });
-      await expect(agentHubTab).toBeVisible({ timeout: 15_000 });
-      await agentHubTab.click();
-      await expect(page.getByText("Available Agents")).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByRole("row").filter({ hasText: agentName })).toHaveCount(1, { timeout: 10_000 });
+      const agentsTab = page.getByRole("tab", { name: /^Agents/ });
+      await expect(agentsTab).toBeVisible({ timeout: 15_000 });
+      await agentsTab.click();
+      await expect(page.getByRole("textbox", { name: "Search agents" })).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByRole("link").filter({ hasText: agentName })).toHaveCount(1, { timeout: 10_000 });
       await expect(page.getByText("E2E public agent").first()).toBeVisible();
 
-      const mcpHubTab = page.getByRole("tab", { name: "MCP Hub" });
-      await expect(mcpHubTab).toBeVisible();
-      await mcpHubTab.click();
-      await expect(page.getByText("Available MCP Servers")).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByRole("row").filter({ hasText: mcpServerName })).toHaveCount(1, { timeout: 10_000 });
+      const mcpTab = page.getByRole("tab", { name: /^MCP/ });
+      await expect(mcpTab).toBeVisible();
+      await mcpTab.click();
+      await expect(page.getByRole("textbox", { name: "Search MCP servers" })).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByRole("link").filter({ hasText: mcpServerName })).toHaveCount(1, { timeout: 10_000 });
       await expect(page.getByText("E2E public MCP server").first()).toBeVisible();
     } finally {
       await request.post("/v1/mcp/make_public", { headers: auth, data: { mcp_server_ids: priorMcpIds } });

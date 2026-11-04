@@ -10,6 +10,7 @@ from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tuple, cast
+from pydantic import TypeAdapter, ValidationError
 
 from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
@@ -50,6 +51,7 @@ def _error_names_resource(error: Exception, resource_id: str) -> bool:
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
 RECENT_BATCH_POLL_WINDOW: Final = timedelta(hours=48)
 GIVE_UP_POLLING_AFTER: Final = timedelta(days=2 * MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+_FILE_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
 
 PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
@@ -550,6 +552,10 @@ class CheckBatchCost:
         llm_provider: str,
         bare_model_name: str,
     ) -> Optional[Tuple[str, str]]:
+        stored_model_id: Final = self._get_stored_model_id(job)
+        if stored_model_id is not None and self._batch_deployment_exists(stored_model_id):
+            return stored_model_id, job.unified_object_id
+
         deployment_id = self._get_deployment_id_for_bare_model(bare_model_name, llm_provider)
         if deployment_id is None:
             verbose_proxy_logger.info(
@@ -662,22 +668,35 @@ class CheckBatchCost:
         )
 
     @staticmethod
-    def _get_input_file_id(job: "ManagedObjectRow") -> Optional[str]:
-        from litellm.types.utils import LiteLLMBatch
-
+    def _parse_file_object(job: "ManagedObjectRow") -> Optional[dict[str, object]]:
         file_object: Final = job.file_object
         try:
-            parsed_file_object: Final[object] = (
+            return _FILE_OBJECT_ADAPTER.validate_python(
                 json.loads(file_object) if isinstance(file_object, str) else file_object
             )
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, ValidationError):
             return None
-        if not isinstance(parsed_file_object, dict):
+
+    @classmethod
+    def _get_input_file_id(cls, job: "ManagedObjectRow") -> Optional[str]:
+        from litellm.types.utils import LiteLLMBatch
+
+        parsed_file_object: Final = cls._parse_file_object(job)
+        if parsed_file_object is None:
             return None
         try:
             return LiteLLMBatch.model_validate(parsed_file_object).input_file_id
         except Exception:
             return None
+
+    @classmethod
+    def _get_stored_model_id(cls, job: "ManagedObjectRow") -> Optional[str]:
+        """The deployment that created the batch, written into file_object by the managed
+        files hook at create time. Older rows have no such key and fall back to matching
+        the bare model name against the router."""
+        parsed_file_object: Final = cls._parse_file_object(job)
+        model_id: Final = parsed_file_object.get("model_id") if parsed_file_object else None
+        return model_id if isinstance(model_id, str) and model_id else None
 
     async def _track_completed_batch_cost(
         self,

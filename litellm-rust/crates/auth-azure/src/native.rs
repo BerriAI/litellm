@@ -13,7 +13,8 @@ use azure_identity::{
 use sha2::{Digest, Sha256};
 
 use litellm_auth_types::{Error, ErrorDetail};
-use litellm_auth_types::{InputSource, ResolvedCredential, SecretValue, Sourced};
+use litellm_auth_types::{InputSource, ResolvedCredential, Sourced};
+use litellm_secret_value::SecretValue;
 
 use super::credential_provider_cache::{
     AzureCredentialProviderCache, AzureCredentialProviderCacheKey,
@@ -498,7 +499,8 @@ mod tests {
     use azure_core::{Bytes, Result};
 
     use super::{NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest};
-    use litellm_auth_types::{InputSource, SecretValue, Sourced};
+    use litellm_auth_types::{InputSource, Sourced};
+    use litellm_secret_value::SecretValue;
 
     fn deployment<T>(value: T) -> Sourced<T> {
         Sourced::new(value, InputSource::Deployment)

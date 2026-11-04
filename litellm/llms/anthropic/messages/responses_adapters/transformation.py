@@ -534,6 +534,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         output_config: dict[str, object] | None = None,
         auto_summary_level: str = "detailed",
         *,
+        model: str,
         drop_params: bool = True,
     ) -> dict[str, object] | None:
         """
@@ -555,7 +556,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(output_config, dict) and output_config.get("effort"):
                 effort = output_config["effort"]
         elif thinking_type == "enabled":
-            budget_effort: Final = reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            budget_effort: Final = reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
             if budget_effort is None:
                 return None
             effort = budget_effort
@@ -667,6 +668,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 thinking,
                 output_config=cast(dict[str, object] | None, output_config),
                 auto_summary_level=auto_summary_level,
+                model=model,
                 drop_params=drop_params,
             )
             if reasoning:

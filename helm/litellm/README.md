@@ -1,10 +1,8 @@
 # LiteLLM componentized chart
 
-This chart deploys separate gateway, backend and UI services. Configure Lens through `lensWorker.mode`: `disabled` keeps it off, `bundled` installs the Lens dependency, and `external` connects an existing Lens service
+This chart deploys separate gateway, backend and UI services
 
-Bundled mode generates separate service and identity-signing credentials. External mode requires `lensWorker.gateway.secretName` and `lensWorker.serviceTokenSecret.name`; their keys default to `gateway-secret` and `service-token`. Provision distinct values matching the external Lens deployment
-
-Follow the [Lens Helm connection guide](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#connect-a-gateway) for the complete values and verification flow. It also links the GitOps credential requirements and existing-data migration. Source-chart installation requires a built Lens image until the first signed Lens release is published
+This chart does not deploy Lens. Deploy Lens from [its own chart](https://github.com/BerriAI/lens/tree/main/helm/lens), then set `lens.enabled: true`, `lens.url`, `lens.publicUrl`, `lens.gatewaySecret.name` and `lens.serviceTokenSecret.name`. The secret keys default to `gateway-secret` and `service-token`. Set `lens.service.name` when that Lens runs in this release's namespace and the chart ingress should route `/lens-ingest` to it. The old `lensWorker` values are no longer read, and enabling them fails the render
 
 For an ingress with separate component hostnames, set all three `ingress.componentHosts` values, leave `ingress.host` and `ingress.extraPaths` empty, configure `ui.backendUrl` as the backend's public origin and `backend.gatewayUrl` as the gateway's public origin, and set `ui.publicUrl` to the browser-facing UI origin. The UI Deployment receives `LITELLM_BACKEND_URL` from `ui.backendUrl` only when `ingress.componentHosts` is configured.
 

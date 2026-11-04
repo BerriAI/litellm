@@ -1786,7 +1786,7 @@ def _routed_model_name_on_provider(
 def _stored_model_name_routes_to_provider(
     llm_router: Router, custom_llm_provider: str, provider_model_names: frozenset[str], model_name: str
 ) -> bool:
-    routing_group: Final = llm_router.get_routing_group(model_name)
+    routing_group: Final = llm_router.registry().routing_group(model_name)
     routed_model_names: Final = (
         tuple(routing_group.models) if routing_group is not None else (llm_router.registry().resolve(model_name),)
     )

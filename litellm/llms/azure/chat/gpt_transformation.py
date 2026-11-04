@@ -1,16 +1,26 @@
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,  # noqa: TID251  # non_default_params reaches the mapper as an untyped dict
+)
 
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.integrations.anthropic_cache_control_hook import deployment_prompt_cache_breakpoint_support
+from litellm.litellm_core_utils.allowed_tools_tool_choice import is_allowed_tools_tool_choice
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    chat_completion_prompt_cache_breakpoints_for_wire,
     drop_tool_reference_parts_from_tool_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
     hoist_images_from_tool_messages,
     system_messages_first,
     tool_with_sanitized_parameters,
+    without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
@@ -241,12 +251,12 @@ class AzureOpenAIConfig(BaseConfig):
                         or (api_version_year == "2023" and api_version_month < "12")
                         or (api_version_year == "2023" and api_version_month == "12" and api_version_day < "01")
                     ):
-                        if litellm.drop_params is True or (drop_params is not None and drop_params is True):
-                            pass
-                        else:
+                        if is_allowed_tools_tool_choice(
+                            cast(object, value)  # cast-ok: widening an untyped dict value to object is always sound
+                        ) or not (litellm.drop_params is True or (drop_params is not None and drop_params is True)):
                             raise UnsupportedParamsError(
                                 status_code=400,
-                                message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
+                                message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. drop_params never drops an allowed_tools tool_choice, since that would let the model call tools the request excluded. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
                             )
                     elif value == "required" and (
                         api_version_year == "2024" and api_version_month <= "05"
@@ -290,11 +300,16 @@ class AzureOpenAIConfig(BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         headers: dict,
     ) -> dict:
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
-        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(ordered_messages)
+        wire_messages: Final = (
+            self._with_wire_safe_prompt_cache_breakpoints(model, ordered_messages, litellm_params)
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            else ordered_messages
+        )
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(wire_messages)
         azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
         request_params: Final = MappingProxyType(
             {
@@ -309,6 +324,14 @@ class AzureOpenAIConfig(BaseConfig):
             **request_params,
             **sanitized_tools_update(optional_params),
         }
+
+    @staticmethod
+    def _with_wire_safe_prompt_cache_breakpoints(
+        model: str, messages: list[AllMessageValues], litellm_params: Mapping[str, object]
+    ) -> list[AllMessageValues]:
+        if deployment_prompt_cache_breakpoint_support(model, "azure", litellm_params) is False:
+            return [without_prompt_cache_breakpoints(message) for message in messages]
+        return [chat_completion_prompt_cache_breakpoints_for_wire(message, drop_params=True) for message in messages]
 
     def transform_response(
         self,

@@ -1,4 +1,6 @@
+import datetime
 import json
+import time
 from typing import Final
 
 import httpx
@@ -8,6 +10,8 @@ import respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.health_check_helpers import wildcard_health_check_models
+from litellm.litellm_core_utils.model_retirement import is_past_deprecation_date
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 from litellm.utils import ProviderConfigManager
@@ -89,11 +93,99 @@ def _aiand_catalog() -> frozenset[str]:
     return frozenset(name for name, info in litellm.model_cost.items() if info.get("litellm_provider") == "aiand")
 
 
-def test_aiand_wildcard_lists_its_priced_models():
-    catalog: Final = _aiand_catalog()
+def _utc_today() -> datetime.date:
+    return datetime.datetime.now(datetime.timezone.utc).date()
 
-    assert catalog
-    assert frozenset(get_known_models_from_wildcard("aiand/*")) == catalog
+
+def test_aiand_wildcard_lists_only_models_not_yet_retired():
+    catalog: Final = _aiand_catalog()
+    retired: Final = frozenset(
+        name
+        for name in catalog
+        if (retired_on := litellm.model_cost[name].get("deprecation_date")) is not None
+        and datetime.date.fromisoformat(retired_on) <= _utc_today()
+    )
+
+    assert catalog - retired
+    assert frozenset(get_known_models_from_wildcard("aiand/*")) == catalog - retired
+
+
+def test_aiand_wildcard_drops_a_model_whose_retirement_date_passes_while_running(monkeypatch: pytest.MonkeyPatch):
+    model: Final = "aiand/acme/retires-while-running"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "aiand", "deprecation_date": "2999-01-01"})
+    try:
+        litellm.add_known_models({model: litellm.model_cost[model]})
+        assert model in get_known_models_from_wildcard("aiand/*")
+
+        monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "aiand", "deprecation_date": "2000-01-01"})
+
+        assert model not in get_known_models_from_wildcard("aiand/*")
+    finally:
+        litellm.aiand_models.discard(model)
+        litellm.add_known_models({})
+
+
+def test_aiand_models_by_provider_leaves_out_models_retired_at_load():
+    retired: Final = frozenset(
+        name
+        for name, row in litellm.model_cost.items()
+        if row.get("litellm_provider") == "aiand" and is_past_deprecation_date(row)
+    )
+
+    assert retired
+    assert retired.isdisjoint(litellm.models_by_provider["aiand"])
+
+
+def test_aiand_wildcard_health_check_skips_a_model_whose_retirement_date_passes_while_running(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model: Final = "aiand/acme/free-and-retiring"
+    live_row: Final = {
+        "litellm_provider": "aiand",
+        "mode": "chat",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "deprecation_date": "2999-01-01",
+    }
+    monkeypatch.setitem(litellm.model_cost, model, live_row)
+    try:
+        litellm.add_known_models({model: live_row})
+        assert model in wildcard_health_check_models(wildcard="aiand/*", custom_llm_provider="aiand")
+
+        monkeypatch.setitem(litellm.model_cost, model, {**live_row, "deprecation_date": "2000-01-01"})
+
+        assert model not in wildcard_health_check_models(wildcard="aiand/*", custom_llm_provider="aiand")
+    finally:
+        litellm.aiand_models.discard(model)
+        litellm.add_known_models({})
+
+
+@pytest.mark.parametrize("host_zone", ["Etc/GMT+12", "Etc/GMT-14"])
+def test_aiand_models_retire_on_the_utc_date_whatever_the_host_zone(monkeypatch: pytest.MonkeyPatch, host_zone: str):
+    today: Final = _utc_today()
+    rows: Final = {
+        "aiand/acme/retires-today": {"litellm_provider": "aiand", "deprecation_date": today.isoformat()},
+        "aiand/acme/retires-tomorrow": {
+            "litellm_provider": "aiand",
+            "deprecation_date": (today + datetime.timedelta(days=1)).isoformat(),
+        },
+    }
+    for name, row in rows.items():
+        monkeypatch.setitem(litellm.model_cost, name, row)
+    monkeypatch.setenv("TZ", host_zone)
+    time.tzset()
+    try:
+        litellm.add_known_models(rows)
+        listed: Final = frozenset(get_known_models_from_wildcard("aiand/*"))
+
+        assert "aiand/acme/retires-today" not in listed
+        assert "aiand/acme/retires-tomorrow" in listed
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+        for name in rows:
+            litellm.aiand_models.discard(name)
+        litellm.add_known_models({})
 
 
 def test_aiand_calls_are_billed_from_their_cost_rows():
