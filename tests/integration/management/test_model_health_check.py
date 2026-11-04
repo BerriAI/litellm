@@ -1581,7 +1581,7 @@ def test_health_test_model_names_the_check_that_failed_for_an_unsaved_model_that
         ), response.text
         assert checks["cost_tracking"][0] == "fail", response.text
         assert "no price resolved for this model" in checks["cost_tracking"][1], response.text
-        assert len(wire.drain()) == 5, response.text
+        assert len(wire.drain()) == 4, response.text
 
 
 @pytest.mark.timeout(240)

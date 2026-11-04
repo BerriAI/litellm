@@ -339,7 +339,7 @@ def test_a_turn_three_provider_error_is_reported_as_the_conversation_failure():
         "fail",
         "turn 3 request with the follow-up question failed: RuntimeError: 400 invalid assistant message",
     )
-    assert checks["prompt_caching"] == ("pass", "turn 2 read 4800 of 5000 input tokens from cache (96.0%)")
+    assert checks["prompt_caching"] == ("fail", "not checked, the conversation did not reach turn 3")
 
 
 def test_zero_cached_tokens_is_retried_once_and_fails_when_the_retry_misses_too():
@@ -370,18 +370,17 @@ def test_a_cache_hit_on_the_retry_passes_and_says_so():
         [
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=5000), 0.0005),
-            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=5000), 0.0004),
         ],
     )
 
     result: Final = _run(CHAT_COMPLETIONS_SCRIPT, provider)
 
-    assert len(provider.sent) == 5
+    assert len(provider.sent) == 4
     assert _checks(result)["prompt_caching"] == (
         "pass",
         "turn 2 read 5000 of 5000 input tokens from cache (100.0%) on the second attempt, "
-        "turn 3 read 5000 of 5000 input tokens from cache (100.0%) on the second attempt",
+        "turn 3 read 5000 of 5000 input tokens from cache (100.0%)",
     )
     assert result.spend_usd == pytest.approx(0.0049)
 
@@ -403,25 +402,41 @@ def test_turn_three_reading_fewer_cached_tokens_than_turn_two_fails_prompt_cachi
     assert "turn 3 read 4600 cached tokens, fewer than turn 2's 4800" in detail, detail
 
 
-def test_a_cache_miss_on_turn_three_fails_prompt_caching_after_its_own_retry():
+def test_a_cache_miss_on_turn_three_fails_prompt_caching_without_a_retry_that_could_hit_a_rewritten_prompt():
     provider: Final = _ScriptedProvider(
         CalledTurn(_chat_reply(tool_call=True), 0.004),
         [
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0005),
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
-            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=5000), 0.0004),
         ],
     )
 
     result: Final = _run(CHAT_COMPLETIONS_SCRIPT, provider)
 
-    assert len(provider.sent) == 4
+    assert len(provider.sent) == 3
     assert _checks(result)["prompt_caching"] == (
         "fail",
-        "turn 3 reported 0 cached tokens on 5000 input tokens in 2 attempts, the provider did not reuse the "
-        "repeated system prompt",
+        "turn 3 reported 0 cached tokens on 5000 input tokens, the provider did not reuse the repeated system prompt",
     )
     assert _checks(result)["conversation"][0] == "pass"
+
+
+def test_a_chat_reply_whose_content_is_a_list_of_text_parts_still_answers_the_conversation():
+    plain: Final = _chat_reply(tool_call=False, text="", cached_tokens=4800).model_dump()
+    multipart: Final = {
+        **plain,
+        "choices": [
+            {**plain["choices"][0], "message": {"role": "assistant", "content": [{"type": "text", "text": "72F"}]}}
+        ],
+    }
+    provider: Final = _ScriptedProvider(
+        CalledTurn(_chat_reply(tool_call=True), 0.004), [CalledTurn(multipart, 0.0005), CalledTurn(multipart, 0.0005)]
+    )
+
+    checks: Final = _checks(_run(CHAT_COMPLETIONS_SCRIPT, provider))
+
+    assert checks["conversation"][0] == "pass", checks["conversation"]
 
 
 def test_a_model_without_a_price_fails_cost_tracking_and_a_zero_priced_model_only_warns():

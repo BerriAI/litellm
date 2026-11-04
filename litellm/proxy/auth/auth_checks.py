@@ -1066,6 +1066,7 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
         "/health",
         "/health/services",
         "/health/test_connection",
+        "/health/test_model",
         "/auto_router/test_routing",
     }
 )

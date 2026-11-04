@@ -5481,8 +5481,6 @@ async def _run_centralized_checks_for_end_user(
             setattr(_proxy_server_mod, attribute, value)
 
 
-
-
 @pytest.mark.parametrize(
     ("make_token", "make_end_user", "gpt_4o_spend", "model", "route", "must_raise"),
     [
@@ -11212,7 +11210,8 @@ def registered_budgeted_route() -> Iterator[None]:
 )
 @pytest.mark.usefixtures("registered_budgeted_route")
 @pytest.mark.parametrize(
-    "route", ["/v1/messages", "/health/services", "/health/test_connection", BUDGETED_PASS_THROUGH_ROUTE]
+    "route",
+    ["/v1/messages", "/health/services", "/health/test_connection", "/health/test_model", BUDGETED_PASS_THROUGH_ROUTE],
 )
 async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spend, expect_blocked, route):
     """A team member counter sitting exactly at the cap (where a resized reservation

@@ -323,6 +323,14 @@ def _first_choice_message(plain: Mapping[str, object]) -> object:
     return {**_EMPTY_ASSISTANT, **_PLAIN_OBJECT.validate_python(message)}
 
 
+def _chat_text(content: str | Sequence[object] | None) -> str:
+    if isinstance(content, str):
+        return content
+    if content is None:
+        return ""
+    return " ".join(text for part in content if isinstance(part, Mapping) and isinstance(text := part.get("text"), str))
+
+
 def _parse_chat(response: object) -> ParsedTurn | str:
     plain: Final = _plain(response)
     if plain is None:
@@ -348,7 +356,7 @@ def _parse_chat(response: object) -> ParsedTurn | str:
             if first_call is not None
             else None
         ),
-        text=message.content if isinstance(message.content, str) else "",
+        text=_chat_text(message.content),
         input_tokens=usage.prompt_tokens if usage is not None else 0,
         cache_read_tokens=(details.cached_tokens or 0) if details is not None else 0,
         assistant_echo=_first_choice_message(plain),
@@ -550,8 +558,9 @@ def _cache_miss(turn: RepeatedTurn, parsed: ParsedTurn) -> CheckResult:
     return CheckResult(
         "prompt_caching",
         "fail",
-        f"turn {turn.number} reported 0 cached tokens on {parsed.input_tokens} input tokens in {turn.attempts} "
-        "attempts, the provider did not reuse the repeated system prompt",
+        f"turn {turn.number} reported 0 cached tokens on {parsed.input_tokens} input tokens"
+        f"{f' in {turn.attempts} attempts' if turn.attempts > 1 else ''}, the provider did not reuse the repeated "
+        "system prompt",
     )
 
 
@@ -570,8 +579,9 @@ def _cache_shrank(second: ParsedTurn | None, third: ParsedTurn | None) -> CheckR
 
 def _prompt_caching_check(second: RepeatedTurn, third: RepeatedTurn) -> CheckResult:
     reached: Final = tuple((turn, parsed) for turn in (second, third) if (parsed := _parsed(turn)) is not None)
-    if not reached:
-        return CheckResult("prompt_caching", "fail", "not checked, the conversation did not reach turn 2")
+    if len(reached) < 2:
+        unreached: Final = 2 if not reached else 3
+        return CheckResult("prompt_caching", "fail", f"not checked, the conversation did not reach turn {unreached}")
     missed: Final = next((_cache_miss(turn, parsed) for turn, parsed in reached if parsed.cache_read_tokens == 0), None)
     if missed is not None:
         return missed
@@ -662,7 +672,7 @@ async def _repeated_turn(
         return RepeatedTurn(number=number, outcome=None, parsed=None, attempts=0)
     first: Final = await _turn(script, build(), call, new_call_id())
     first_parsed: Final = script.parse(first.response) if first.response is not None else None
-    if not _missed_cache(first_parsed):
+    if number == 3 or not _missed_cache(first_parsed):
         return RepeatedTurn(number=number, outcome=first, parsed=first_parsed, attempts=1)
     retry: Final = await _turn(script, build(), call, new_call_id())
     retry_parsed: Final = script.parse(retry.response) if retry.response is not None else None
