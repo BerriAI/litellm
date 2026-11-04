@@ -202,7 +202,8 @@ def create_config_class(provider: SimpleProviderConfig):
             return optional_params
 
         def transform_parsed_response_dict(
-            self, parsed_response: dict[str, object]
+            self,
+            parsed_response: dict[str, object],  # mutable-ok: BaseConfig signature
         ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
             """
             Carry the provider's usage.tool_usage search count as usage.server_tool_use.web_search_requests,
