@@ -1215,6 +1215,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
+        custom_llm_provider: str | None,
         drop_params: bool,
         base_model: str | None,
     ) -> None:
@@ -1224,7 +1225,8 @@ class LiteLLMAnthropicMessagesAdapter:
         it travels on its own instead of only alongside ``thinking``. ``format`` stays behind, since
         ``_translate_output_format_to_openai`` carries it as ``response_format``. Without ``thinking``
         only ``effort`` goes, since the other keys (``task_budget``) never reached Converse there and
-        it rejects them.
+        it rejects them, and only through the ``bedrock`` provider, since an ARN-named model on another
+        (``litellm_proxy``) never got it there.
         """
         if "output_config" not in anthropic_message_request or not self._is_bedrock_claude_target(new_kwargs["model"]):
             return
@@ -1234,6 +1236,8 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         has_thinking: Final = bool(anthropic_message_request.get("thinking"))
+        if not has_thinking and custom_llm_provider != "bedrock":
+            return
         effort_config: Final = {
             k: v for k, v in output_config.items() if k == "effort" or (has_thinking and k != "format")
         }
@@ -1353,6 +1357,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self._translate_output_config_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
+            custom_llm_provider=custom_llm_provider,
             drop_params=drop_params,
             base_model=base_model,
         )

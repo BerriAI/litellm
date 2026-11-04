@@ -5625,6 +5625,40 @@ async def test_bedrock_application_inference_profile_loses_the_effort_only_when_
     assert sent.get("output_config") == ({"effort": "high"} if forwards_effort else None)
 
 
+@pytest.mark.asyncio
+async def test_a_bedrock_arn_behind_another_provider_gets_no_effort_without_a_thinking_block(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    next_hop: Final = respx_mock.post("http://next-hop.test/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-next-hop",
+                "object": "chat.completion",
+                "created": 0,
+                "model": _APPLICATION_INFERENCE_PROFILE,
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Paris"}}
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+            },
+        )
+    )
+
+    await litellm.anthropic.messages.acreate(
+        model=f"litellm_proxy/{_APPLICATION_INFERENCE_PROFILE}",
+        api_base="http://next-hop.test",
+        api_key="sk-next-hop",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        output_config={"effort": "low"},
+    )
+
+    assert "output_config" not in json.loads(next_hop.calls.last.request.read())
+
+
 @pytest.mark.parametrize(
     "output_config",
     [pytest.param(None, id="null"), pytest.param({"format": _CITY_FORMAT}, id="format_only")],

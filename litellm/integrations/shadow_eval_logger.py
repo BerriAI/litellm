@@ -134,9 +134,7 @@ def _chat_request_from_anthropic_messages(
         )
     )
     translated, _ = adapter.translate_anthropic_to_openai(request)  # pyright: ignore[reportArgumentType]  # wire-body mapping is the surface's native request shape; the adapter is duck-typed and read-only here
-    if request.get("thinking"):
-        return translated
-    return MappingProxyType({k: v for k, v in translated.items() if k != "output_config"})
+    return translated
 
 
 def _chat_request_from_responses(
