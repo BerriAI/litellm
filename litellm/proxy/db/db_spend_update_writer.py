@@ -162,11 +162,11 @@ def _org_member_transaction_key(org_id: str, user_id: str) -> str:
 
 def _persistable_api_key(token: str | None, logged_api_key: str) -> str | None:
     from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
-    from litellm.proxy.spend_tracking.spend_tracking_utils import _redact_logged_api_key
+    from litellm.proxy.spend_tracking.spend_tracking_utils import redact_logged_api_key
 
     if token is None or token == logged_api_key or is_valid_sha256_hash(token):
         return token
-    return _redact_logged_api_key(token)
+    return redact_logged_api_key(token)
 
 
 def _is_batch_cost_row(payload: SpendLogsPayload) -> bool:
@@ -601,9 +601,7 @@ def debitable_model_access_groups(
     return tuple(group for group in ordered if group in served)
 
 
-def _stamp_spend_payload(
-    payload: SpendLogsPayload, response_cost: float | None, *, org_id: str | None, team_id: str | None
-) -> float | None:
+def _billable_cost(response_cost: float | None, payload: SpendLogsPayload) -> float | None:
     billable_cost: Final = finite_cost(response_cost)
     if response_cost is not None and billable_cost is None:
         verbose_proxy_logger.warning(
@@ -611,16 +609,11 @@ def _stamp_spend_payload(
             response_cost,
             single_log_line(payload["request_id"]),
         )
-    payload["spend"] = billable_cost or 0.0
-    if isinstance(payload["startTime"], datetime):
-        payload["startTime"] = payload["startTime"].isoformat()
-    if isinstance(payload["endTime"], datetime):
-        payload["endTime"] = payload["endTime"].isoformat()
-    if org_id:
-        payload["organization_id"] = org_id
-    if team_id:
-        payload["team_id"] = team_id
     return billable_cost
+
+
+def _iso_timestamp(value: datetime | str) -> str:
+    return value.isoformat() if isinstance(value, datetime) else value
 
 
 class DBSpendUpdateWriter:
@@ -719,7 +712,14 @@ class DBSpendUpdateWriter:
                 llm_router=llm_router,
             )
             payload_for_recovery = payload  # rebind-ok: observe stamp changes made by batch takeover
-            billable_cost: Final = _stamp_spend_payload(payload, response_cost, org_id=org_id, team_id=team_id)
+            billable_cost: Final = _billable_cost(response_cost, payload)
+            payload["spend"] = billable_cost or 0.0
+            payload["startTime"] = _iso_timestamp(payload["startTime"])
+            payload["endTime"] = _iso_timestamp(payload["endTime"])
+            if org_id:
+                payload["organization_id"] = org_id
+            if team_id:
+                payload["team_id"] = team_id
 
             from litellm.accounting.snapshot import build_accounting_payload
 
