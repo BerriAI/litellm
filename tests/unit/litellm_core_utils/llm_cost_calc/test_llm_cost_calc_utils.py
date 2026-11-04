@@ -4248,6 +4248,37 @@ def test_azure_gpt_6_foundry_price_sheet(_local_model_cost_map, model_base):
         assert azure_eu_info[field] == pytest.approx(1.2 * base)
 
 
+@pytest.mark.parametrize("model", ["azure/gpt-6-luna", "azure/gpt-6-luna-2026-09-22"])
+@pytest.mark.parametrize(
+    ("prompt_tokens", "input_rate", "cache_read_rate", "output_rate"),
+    [
+        (100_000, 5e-08, 5e-09, 2.5e-07),
+        (300_000, 1e-07, 1e-08, 3.75e-07),
+    ],
+)
+def test_generic_cost_per_token_azure_gpt_6_luna_flex_tiers(
+    _local_model_cost_map, model, prompt_tokens, input_rate, cache_read_rate, output_rate
+):
+    """azure/gpt-6-luna bills Azure's Flex Global rates, half of Standard, with the long context step past 272K."""
+    cached_tokens = 20_000
+    completion_tokens = 1_000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="azure",
+        service_tier="flex",
+    )
+    expected_prompt = (prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
 @pytest.mark.parametrize("region_prefix", ["azure/", "azure/us/", "azure/eu/"])
 def test_azure_gpt_5_6_alias_matches_sol_pricing(_local_model_cost_map, region_prefix):
     """The bare gpt-5.6 alias routes to GPT-5.6 Sol, so every Azure region must bill the
