@@ -1126,7 +1126,7 @@ async def test_a_failed_pick_stamps_no_deployment() -> None:
         ],
     )
 
-    with pytest.raises(Exception) as raised:
+    with pytest.raises(litellm.BadRequestError, match="no healthy deployments") as raised:
         await router._aembedding(input=["hi"], model="no-such-model")
 
     assert getattr(raised.value, "failed_deployment_id", None) is None
