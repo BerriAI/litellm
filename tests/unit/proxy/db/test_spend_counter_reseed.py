@@ -480,3 +480,36 @@ async def test_from_db_still_never_reads_the_end_user_row():
 
     assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:end_user:customer-42") is None
     assert prisma.db.litellm_endusertable.where_clauses == []
+
+
+class _WarmRedisCounter:
+    def __init__(self, value: float) -> None:
+        self.value: Final = value
+        self.read_keys: list[str] = []
+
+    async def async_get_cache(self, key: str) -> float:
+        self.read_keys.append(key)
+        return self.value
+
+
+@pytest.mark.asyncio
+async def test_coalesced_window_serves_a_warm_redis_counter_without_reading_the_db():
+    prisma: Final = _FakePrismaClient(row=_row(WINDOW_START, 4.5), spend_logs_total=100.0)
+    redis: Final = _WarmRedisCounter(12.25)
+    cache: Final = DualCache(redis_cache=redis)
+    counter_key: Final = "spend:key:tok-warm:window:30d"
+
+    result: Final = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma,
+        spend_counter_cache=cache,
+        counter_key=counter_key,
+        entity_type="Key",
+        entity_id="tok-warm",
+        window_duration="30d",
+        window_start=WINDOW_START,
+    )
+
+    assert result == 12.25
+    assert redis.read_keys == [counter_key]
+    assert prisma.db.litellm_budgetwindowspend.where_clauses == []
+    assert prisma.db.litellm_spendlogs.call_count == 0

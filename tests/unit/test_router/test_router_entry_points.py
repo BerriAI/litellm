@@ -19,7 +19,7 @@ from litellm import Router
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router_api import SETTING_FIELDS, ChangeSet, RouterSettings
 from litellm.router_deprecated import DEPRECATED_ROUTER_MEMBER_USES, DeprecatedRouterMembers
-from litellm.types.router import Deployment
+from litellm.types.router import Deployment, PreRoutingHookResponse
 
 
 def _router() -> Router:
@@ -793,6 +793,29 @@ def test_direct_call_of_an_async_subclass_override_runs_it_once():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         asyncio.run(r.async_pre_routing_hook("m", {}))
+    assert calls == ["m"]
+
+
+def test_subclass_method_calling_its_async_override_runs_it_once_and_returns_its_result():
+    calls = []
+    rerouted = PreRoutingHookResponse(model="rerouted", messages=[])
+
+    class Sub(litellm.Router):
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            calls.append(model)
+            await super().async_pre_routing_hook(model, request_kwargs, messages, input, specific_deployment)
+            return rerouted
+
+        async def preview_route(self, model):
+            return await self.async_pre_routing_hook(model, {})
+
+    r = Sub(model_list=[{"model_name": "m", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"}}])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = asyncio.run(r.preview_route("m"))
+    assert result is rerouted
     assert calls == ["m"]
 
 

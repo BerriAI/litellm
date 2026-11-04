@@ -1,4 +1,5 @@
 import contextlib
+import re
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -497,6 +498,18 @@ class TestGoogleAIStudioTokenCounter:
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response
+
+    @pytest.mark.parametrize(
+        ("part", "message"),
+        [
+            (7, "argument of type 'int' is not iterable"),
+            (frozenset({"functionResponse"}), "'frozenset' object is not subscriptable"),
+            ({"functionResponse": "done"}, "FunctionResponse() argument after ** must be a mapping, not str"),
+        ],
+    )
+    def test_clean_contents_for_gemini_api_rejects_a_malformed_part(self, part: object, message: str) -> None:
+        with pytest.raises(TypeError, match=re.escape(message)):
+            GeminiCountTokensHandler()._clean_contents_for_gemini_api([{"role": "user", "parts": [part]}])
 
 
 def _map_image_config(raw_image_config: str) -> dict[str, object]:

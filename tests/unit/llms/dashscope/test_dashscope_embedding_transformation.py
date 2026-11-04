@@ -171,3 +171,22 @@ def test_transform_embedding_response_error():
         )
     assert exc.value.status_code == 401
     assert "Incorrect API key" in exc.value.message
+
+
+def test_transform_embedding_response_rejects_a_scalar_body():
+    raw = httpx.Response(
+        status_code=200,
+        content=b"5",
+        request=httpx.Request("POST", "https://example.com"),
+    )
+    with pytest.raises(TypeError, match=r"^argument of type 'int' is not iterable$"):
+        DashScopeEmbeddingConfig().transform_embedding_response(
+            model="text-embedding-v4",
+            raw_response=raw,
+            model_response=EmbeddingResponse(),
+            logging_obj=MagicMock(),
+            api_key="sk-test",
+            request_data={"input": ["a"]},
+            optional_params={},
+            litellm_params={},
+        )

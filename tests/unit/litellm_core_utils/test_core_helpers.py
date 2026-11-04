@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.core_helpers import (
     redact_nested_match_and_regex_keys,
     response_cost_in_hidden_params,
     set_provider_response_headers_in_hidden_params,
+    subscript,
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -852,3 +853,10 @@ def test_billed_usage_cost_keeps_the_upstream_charge_after_litellm_wrote_its_bil
     stamp_litellm_bill_on_usage(unreported, unreported.usage, 0.0015)
     assert unreported.usage.cost == 0.0015
     assert billed_usage_cost(unreported, "openai") is None
+
+
+def test_subscript_reads_keys_and_indexes_and_rejects_values_without_item_access() -> None:
+    assert subscript({"role": "user"}, "role") == "user"
+    assert subscript(["system", "user"], 1) == "user"
+    with pytest.raises(TypeError, match="'int' object is not subscriptable"):
+        subscript(5, "role")

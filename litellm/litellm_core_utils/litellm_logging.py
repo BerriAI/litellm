@@ -85,7 +85,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    decoded_json_object,
+    as_str_mapping,
     finite_cost,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
@@ -672,6 +672,19 @@ class _A2AResponseCopier(Protocol):
 
 class _MetadataLookup(Protocol):
     get: Callable[[str], object]
+
+
+class _ParamsLookup(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+def _callback_control_params(litellm_params: object) -> dict[str, object]:
+    mapping: Final = as_str_mapping(litellm_params)
+    if isinstance(mapping, dict):
+        return mapping
+    if mapping is not None:
+        return dict(mapping)
+    return litellm_params.model_dump() if isinstance(litellm_params, BaseModel) else {}
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -2477,7 +2490,7 @@ class Logging(LiteLLMLoggingBaseClass):
         return self.response_cost_calculator(result=result, cache_hit=cache_hit)
 
     @staticmethod
-    def is_sync_litellm_request(litellm_params: Mapping[str, object]) -> bool:
+    def is_sync_litellm_request(litellm_params: _ParamsLookup) -> bool:
         """True for sync SDK entrypoints (``completion``), false for async (``acompletion``, etc.)."""
         return (
             litellm_params.get(CallTypes.acompletion.value, False) is not True
@@ -2932,7 +2945,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if litellm.global_disable_no_log_param:
             return True
 
-        request_params: Final = decoded_json_object(litellm_params)
+        request_params: Final = require_attributes(litellm_params, _ParamsLookup, "get")
         if request_params.get("no-log", False) is True:
             # proxy cost tracking cal backs should run
 
@@ -2943,7 +2956,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Check for dynamically disabled callbacks via headers
         if EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_dynamically(
             callback=callback,
-            litellm_params=request_params if isinstance(request_params, dict) else dict(request_params),
+            litellm_params=_callback_control_params(litellm_params),
             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
         ):
             verbose_logger.debug(
@@ -3650,7 +3663,7 @@ class Logging(LiteLLMLoggingBaseClass):
             publish_logging_payload=not for_async_request,
         )
         litellm_params = self._model_call_details_view.get("litellm_params", {})
-        is_sync_request: Final = self.is_sync_litellm_request(decoded_json_object(litellm_params))
+        is_sync_request: Final = self.is_sync_litellm_request(require_attributes(litellm_params, _ParamsLookup, "get"))
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: (
@@ -3811,13 +3824,17 @@ class Logging(LiteLLMLoggingBaseClass):
                         supabaseClient.log_event(
                             model=model,
                             messages=messages,
-                            end_user=decoded_json_object(optional_params).get("user", "default"),
+                            end_user=require_attributes(optional_params, _ParamsLookup, "get").get("user", "default"),
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
                             litellm_call_id=(
                                 current_call_id
-                                if (current_call_id := decoded_json_object(litellm_params).get("litellm_call_id"))
+                                if (
+                                    current_call_id := require_attributes(litellm_params, _ParamsLookup, "get").get(
+                                        "litellm_call_id", None
+                                    )
+                                )
                                 is not None
                                 else str(uuid.uuid4())
                             ),
@@ -4663,7 +4680,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
             return
         litellm_params: Final = self._model_call_details_view.get("litellm_params", {})
-        is_sync_request: Final = self.is_sync_litellm_request(decoded_json_object(litellm_params))
+        is_sync_request: Final = self.is_sync_litellm_request(require_attributes(litellm_params, _ParamsLookup, "get"))
 
         try:
             start_time, end_time = self._failure_handler_helper_fn(

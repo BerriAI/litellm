@@ -2701,6 +2701,55 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(
     dummy_logger.log_stream_event.assert_not_called()
 
 
+def test_sync_success_callbacks_run_when_litellm_params_is_a_params_model(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.router import GenericLiteLLMParams
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False
+    logging_obj.call_type = "completion"
+    logging_obj.model_call_details["litellm_params"] = GenericLiteLLMParams()
+    dummy_logger = DummyLogger()
+    dummy_logger.log_success_event = MagicMock()
+    logging_obj.dynamic_success_callbacks = [dummy_logger]
+    logging_obj.dynamic_async_success_callbacks = []
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+
+    logging_obj.success_handler(
+        result=ModelResponse(
+            id="resp-123",
+            model="gpt-4o-mini",
+            choices=[{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop", "index": 0}],
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+    )
+
+    dummy_logger.log_success_event.assert_called_once()
+
+
+@pytest.mark.parametrize(("extra_params", "expected"), [({}, True), ({"no-log": True}, False)])
+def test_should_run_callback_reads_no_log_from_a_params_model(
+    logging_obj: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+    extra_params: dict[str, object],
+    expected: bool,
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+
+    should_run: Final = logging_obj.should_run_callback(
+        callback="langfuse", litellm_params=GenericLiteLLMParams(**extra_params), event_hook="success_handler"
+    )
+
+    assert should_run is expected
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("different_headers", [False, True])
 async def test_completed_success_preserves_generic_logger_configuration(
