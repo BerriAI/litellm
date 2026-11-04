@@ -3222,6 +3222,7 @@ async def provider_mcp_auth(monkeypatch: pytest.MonkeyPatch) -> "UserAPIKeyAuth"
     manager: Final = mcp_server_manager.MCPServerManager()
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enforce_provider_mcp_permissions": True})
     await manager.load_servers_from_config(
         {
             "docs": {

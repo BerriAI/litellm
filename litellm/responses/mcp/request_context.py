@@ -28,6 +28,18 @@ class _AuthCarryingMetadata(TypedDict):
     user_api_key_auth: ReadOnly[NotRequired["UserAPIKeyAuth | None"]]
 
 
+PROVIDER_MCP_ENFORCEMENT_SETTING: Final = "enforce_provider_mcp_permissions"
+
+
+def provider_mcp_enforcement_enabled() -> bool:
+    """Provider-native MCP checks are opt-in. Off (the default) forwards provider-run MCP attachments
+    unchecked, exactly as before registrations existed. Read per request, so a config reload applies."""
+    from litellm.proxy import proxy_server
+
+    value: Final = proxy_server.general_settings.get(PROVIDER_MCP_ENFORCEMENT_SETTING)
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
 async def authorize_provider_mcp_request(
     body: Mapping[str, object], context: Mapping[str, object], *, provider_bound: bool = False
 ) -> None:
@@ -37,7 +49,7 @@ async def authorize_provider_mcp_request(
         if isinstance(context.get(key), Mapping)
     )
     auth: Final = next((bucket["user_api_key_auth"] for bucket in buckets if "user_api_key_auth" in bucket), None)
-    if auth is None:
+    if auth is None or not provider_mcp_enforcement_enabled():
         return
     extra: Final = body.get("extra_body")
     effective: Final = (

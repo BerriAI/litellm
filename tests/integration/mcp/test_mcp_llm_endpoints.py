@@ -48,7 +48,9 @@ pytestmark: Final = [pytest.mark.xdist_group("mcp_llm_private_gateway"), pytest.
 
 @contextmanager
 def _private_gateway(
-    directory: Path, guardrails: Sequence[Mapping[str, JsonValue]] = ()
+    directory: Path,
+    guardrails: Sequence[Mapping[str, JsonValue]] = (),
+    extra_general_settings: Mapping[str, JsonValue] | None = None,
 ) -> Iterator[tuple[Gateway, Mapping[str, str]]]:
     stock: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final = directory / "stored-responses.yaml"
@@ -57,7 +59,11 @@ def _private_gateway(
         yaml.safe_dump(
             {
                 **stock,
-                "general_settings": {**object_value(stock["general_settings"]), "store_prompts_in_spend_logs": True},
+                "general_settings": {
+                    **object_value(stock["general_settings"]),
+                    "store_prompts_in_spend_logs": True,
+                    **(extra_general_settings or {}),
+                },
                 "litellm_settings": {
                     **object_value(stock["litellm_settings"]),
                     "cost_margin_config": {
@@ -96,6 +102,22 @@ def _serving(served: tuple[Gateway, Mapping[str, str]]) -> Iterator[Gateway]:
 def _llm_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, Mapping[str, str]]]:
     with _private_gateway(tmp_path_factory.mktemp("mcp-llm-gateway")) as served:
         yield served
+
+
+@pytest.fixture(scope="module")
+def _enforcing_llm_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, Mapping[str, str]]]:
+    with _private_gateway(
+        tmp_path_factory.mktemp("mcp-llm-enforcing-gateway"),
+        extra_general_settings={"enforce_provider_mcp_permissions": True},
+    ) as served:
+        yield served
+
+
+@pytest.fixture
+def enforcing_gateway(_enforcing_llm_gateway: tuple[Gateway, Mapping[str, str]]) -> Iterator[Gateway]:
+    """A proxy that opted in to provider-native MCP checks."""
+    with _serving(_enforcing_llm_gateway) as private:
+        yield private
 
 
 @pytest.fixture
@@ -744,10 +766,43 @@ CALLER_FUNCTION_TOOLS: Final[Mapping[Surface, Mapping[str, object]]] = {
 
 
 @pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
-def test_non_gateway_tools_follow_provider_native_admission_policy(
+def test_tools_that_do_not_name_the_gateway_reach_the_provider_unchanged_and_never_the_peer(
     gateway: Gateway, surface: Surface
 ) -> None:
+    """Provider-native MCP checks are opt-in, so by default these reach the provider exactly as before."""
     with _rig(gateway, surface) as rig:
+        remote_mcp_tools: Final = [
+            {
+                "type": "mcp",
+                "server_label": "docs",
+                "server_url": "https://mcp.example.com/sse",
+                "require_approval": "never",
+            },
+            {
+                "type": "mcp",
+                "server_label": "repos",
+                "server_url": f"https://mcp.example.com/mcp/unserved{uuid.uuid4().hex[:8]}",
+                "require_approval": "never",
+            },
+        ]
+        response: Final = rig.send(_granted_key(rig), [CALLER_FUNCTION_TOOLS[surface], *remote_mcp_tools])
+        assert response.status_code == 200, response.text
+        bodies: Final = tuple(
+            JSON_OBJECT.validate_json(request.body) for request in rig.wire.drain() if request.method == "POST"
+        )
+        assert len(bodies) == 1, bodies
+        forwarded: Final = bodies[0].get("tools")
+        assert isinstance(forwarded, list) and len(forwarded) == 3, forwarded
+        assert [tool for tool in forwarded if isinstance(tool, dict) and tool.get("type") == "mcp"] == remote_mcp_tools
+        assert "lookup" in json.dumps([tool for tool in forwarded if tool not in remote_mcp_tools]), forwarded
+        assert tool_calls(rig.peer.drain()) == (), "a tool that does not name the gateway reached the peer"
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_non_gateway_tools_follow_provider_native_admission_policy(
+    enforcing_gateway: Gateway, surface: Surface
+) -> None:
+    with _rig(enforcing_gateway, surface) as rig:
         remote_mcp_tools: Final = [
             {
                 "type": "mcp",
@@ -780,8 +835,10 @@ def test_non_gateway_tools_follow_provider_native_admission_policy(
 
 
 @pytest.mark.parametrize("stream", (False, True))
-def test_chat_to_anthropic_denies_native_mcp_before_provider_dispatch(gateway: Gateway, stream: bool) -> None:
-    with _rig(gateway, "chat", upstream="messages") as rig:
+def test_chat_to_anthropic_denies_native_mcp_before_provider_dispatch(
+    enforcing_gateway: Gateway, stream: bool
+) -> None:
+    with _rig(enforcing_gateway, "chat", upstream="messages") as rig:
         response: Final = rig.send(
             _granted_key(rig),
             [CALLER_FUNCTION_TOOLS["chat"]],

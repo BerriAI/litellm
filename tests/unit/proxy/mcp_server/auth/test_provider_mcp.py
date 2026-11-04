@@ -87,7 +87,9 @@ async def native_auth(monkeypatch: pytest.MonkeyPatch) -> UserAPIKeyAuth:
     team: Final = await cache.async_get_cache(key="team_id:team")
     database: Final = SimpleNamespace(litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=team)))
     monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database, writer_db=database))
-    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": []})
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"supported_db_objects": [], "enforce_provider_mcp_permissions": True}
+    )
     return UserAPIKeyAuth(
         api_key="test-key",
         team_id="team",
@@ -209,7 +211,7 @@ async def test_duplicate_url_registration_neither_shadows_nor_widens_the_granted
         litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=team)),
     )
     monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=tables, writer_db=tables))
-    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {"enforce_provider_mcp_permissions": True})
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", mcp_server_manager.MCPServerManager())
 
     await authorize_provider_mcp(_openai(["search"]), native_auth)
@@ -265,6 +267,59 @@ async def test_mcp_tools_carried_in_responses_input_items_are_admitted_like_top_
     with pytest.raises(ProxyException) as denied:
         await authorize_provider_mcp_request(body, context)
     assert denied.value.code == "403"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _openai(["search"], "https://unregistered.example/mcp"),
+        _openai(["delete"]),
+        _openai({"tool_names": []}),
+        {"tools": [{"type": "mcp", "server_label": "docs", "server_url": "https://native.example/mcp"}]},
+    ],
+    ids=["unregistered_url", "ungranted_tool", "empty_tool_name_filter", "unbounded_attachment"],
+)
+async def test_provider_mcp_checks_are_off_unless_the_proxy_opts_in(
+    native_auth: UserAPIKeyAuth, monkeypatch: pytest.MonkeyPatch, body: dict[str, object]
+) -> None:
+    """Without enforce_provider_mcp_permissions, provider-run MCP passes through as it did before."""
+    context: Final = {"litellm_metadata": {"user_api_key_auth": native_auth}}
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": []})
+    assert await authorize_provider_mcp_request(body, context) is None
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"supported_db_objects": [], "enforce_provider_mcp_permissions": "true"}
+    )
+    with pytest.raises(ProxyException) as denied:
+        await authorize_provider_mcp_request(body, context)
+    assert denied.value.code == "403"
+
+
+async def test_ungranted_provider_tool_reaches_provider_unchanged_when_checks_are_off(
+    native_auth: UserAPIKeyAuth, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    import json
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": []})
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(url__regex=r"https://native-provider.example/.*").respond(
+        200,
+        json={
+            "id": "resp_native", "object": "response", "created_at": 1, "model": "gpt-5.6-luna",
+            "status": "completed", "output": [], "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    )
+    attachment: Final = _openai(["delete"], "https://unregistered.example/mcp")
+    await litellm.aresponses(
+        model="openai/gpt-5.6-luna",
+        input="Use the tool",
+        api_key="test-provider-key",
+        api_base="https://native-provider.example/v1",
+        litellm_metadata={"user_api_key_auth": native_auth},
+        **attachment,
+    )
+    assert json.loads(upstream.calls.last.request.content)["tools"] == attachment["tools"]
 
 
 async def test_canonical_host_and_default_port_match(native_auth: UserAPIKeyAuth) -> None:
