@@ -22,6 +22,7 @@ from litellm.models.gateway_activity import GatewayRouteActivity, GatewayStatusC
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.deps.repositories import GatewayActivityRepositoryDep
+from litellm.repositories.daily_activity_sql import adjust_dates_for_timezone
 from litellm.types.proxy.gateway_requests import (
     GatewayRequestActivityResponse,
     GatewayRequestBreakdownEntry,
@@ -87,6 +88,21 @@ async def get_gateway_daily_activity(
     activity: GatewayActivityRepositoryDep,
     start_date: str | None = Query(default=None, description="Start date in YYYY-MM-DD format"),
     end_date: str | None = Query(default=None, description="End date in YYYY-MM-DD format"),
+    timezone_offset_minutes: Annotated[
+        int | None,
+        Query(
+            alias="timezone",
+            ge=-840,
+            le=840,
+            description="Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset().",
+        ),
+    ] = None,
+    include_current_utc_day: Annotated[
+        bool,
+        Query(
+            description="Include the current UTC bucket when the range reaches the caller's local today. Requires timezone."
+        ),
+    ] = True,
 ) -> GatewayRequestActivityResponse:
     """
     Successful and failed gateway requests, counted at the ASGI edge.
@@ -109,13 +125,14 @@ async def get_gateway_daily_activity(
     default_start, default_end = _default_range()
     selected_start: Final = start_date or default_start
     selected_end: Final = end_date or default_end
-    utc_today: Final = datetime.now(timezone.utc).date().isoformat()
-    query_end: Final = (
-        max(selected_end, utc_today)
-        if selected_end >= (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
-        else selected_end
+    query_start, query_end = adjust_dates_for_timezone(
+        selected_start,
+        selected_end,
+        timezone_offset_minutes,
+        include_current_utc_day,
+        utc_now=datetime.now(timezone.utc),
     )
-    activity_rows: Final = await activity.get_activity(selected_start, query_end)
+    activity_rows: Final = await activity.get_activity(query_start, query_end)
     rows: Final = tuple(row for row in activity_rows if isinstance(row, GatewayRouteActivity))
     status_code_rows: Final = tuple(row for row in activity_rows if isinstance(row, GatewayStatusCodeActivity))
     verbose_proxy_logger.debug("/gateway/daily/activity - aggregated %d rows", len(rows))
