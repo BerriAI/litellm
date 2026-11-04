@@ -54,6 +54,23 @@ class TestSarvamProviderConfig:
         assert config is not None
         assert config.custom_llm_provider == "sarvam"
 
+    def test_sarvam_listed_in_add_model_provider_fields(self):
+        import json
+        from pathlib import Path
+
+        fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+        entries = json.loads(fields_path.read_text())
+        sarvam_entries = [entry for entry in entries if entry["litellm_provider"] == "sarvam"]
+
+        assert len(sarvam_entries) == 1
+        entry = sarvam_entries[0]
+        assert entry["provider"] == "SARVAM"
+        assert entry["provider_display_name"] == "Sarvam"
+        assert entry["default_model_placeholder"] == "sarvam/sarvam-105b"
+        field_keys = {field["key"] for field in entry["credential_fields"]}
+        assert "api_key" in field_keys
+        assert "api_base" in field_keys
+
 
 class TestSarvamCostMap:
     @pytest.fixture(autouse=True)
