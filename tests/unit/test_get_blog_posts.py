@@ -50,11 +50,10 @@ def reset_blog_posts_cache():
     GetBlogPosts._last_fetch_time = 0.0
 
 
-def test_load_local_blog_posts_returns_posts_without_tags():
+def test_load_local_blog_posts_returns_posts():
     posts = GetBlogPosts.load_local_blog_posts()
     assert len(posts) > 0
     assert all(isinstance(post, BlogPost) for post in posts)
-    assert posts[0].tags == ()
 
 
 def test_parse_rss_to_posts():

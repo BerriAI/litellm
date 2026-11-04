@@ -29,7 +29,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field";
+import { Kbd } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { cn } from "@/lib/cva.config";
 import { hasProxyWideSpendView, isProxyAdminRole } from "@/utils/roles";
 import { getPreferredLiteAdminModel, MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
@@ -184,7 +186,7 @@ export default function LiteAdminTrigger() {
     >
       <AriaAvatar />
       <span className="hidden lg:inline">{ARIA_AGENT_LABEL}</span>
-      <kbd className="hidden rounded-full border border-info/30 px-1.5 font-sans text-xs lg:inline">⌘J</kbd>
+      <Kbd className="hidden lg:inline-flex">⌘J</Kbd>
     </Button>
   );
 }
@@ -209,6 +211,7 @@ export function AriaUsageTrigger() {
 
 export function AriaUsageComposer() {
   const state = useContext(LiteAdminContext);
+  const term = useTerminology();
   if (!state) return null;
   const { open, setUsageContainer } = state;
   return (
@@ -217,7 +220,7 @@ export function AriaUsageComposer() {
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <AriaAvatar size={24} /> {ARIA_AGENT_LABEL}
         </h2>
-        <p className="text-sm text-muted-foreground">Your AI usage assistant</p>
+        <p className="text-sm text-muted-foreground">{term("Your AI usage assistant")}</p>
       </div>
       <div ref={setUsageContainer} />
     </section>
@@ -556,6 +559,7 @@ function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
 
 function PanelHeader({ children }: { children?: ReactNode }) {
   const state = useContext(LiteAdminContext);
+  const term = useTerminology();
   return (
     <div className="flex items-start justify-between gap-3 border-b p-4">
       <div className="flex flex-col gap-1 text-sm">
@@ -565,7 +569,7 @@ function PanelHeader({ children }: { children?: ReactNode }) {
         </DialogTitle>
         <DialogDescription>
           {state?.access.mode === "usage"
-            ? "Your AI assistant for usage and spend."
+            ? term("Your AI assistant for usage and spend.")
             : "Ask about your gateway. Review changes in chat."}
         </DialogDescription>
       </div>

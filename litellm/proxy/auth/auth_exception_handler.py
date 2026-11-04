@@ -24,11 +24,13 @@ from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module expor
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
     is_invalid_virtual_key_error,
+    is_unauthorized_error,
     mark_invalid_virtual_key_error,
     normalize_request_route,
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -60,14 +62,14 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             message=str(e.detail),
             internal_message=e.internal_message,
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=e.status_code,
         )
     if isinstance(e, HTTPException):
         return ProxyException(
             message=getattr(e, "detail", f"Authentication Error({e})"),
             type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
         )
     if isinstance(e, ProxyException):
@@ -77,7 +79,7 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
     return ProxyException(
         message="Authentication Error, " + str(e),
         type=ProxyErrorTypes.auth_error,
-        param=getattr(e, "param", "None"),
+        param=openai_error_param(e),
         code=status.HTTP_401_UNAUTHORIZED,
     )
 
@@ -200,11 +202,11 @@ class UserAPIKeyAuthExceptionHandler:
             user_agent: Final = _get_user_agent(request)
 
             # Log authentication failures before identity seeding and callbacks, so the log
-            # survives a raising callback pipeline. Classify and route malformed virtual-key
-            # rejections to WARNING on stdout (suppressible via LITELLM_LOG=ERROR).
+            # survives a raising callback pipeline. Route 401 rejections to WARNING on stdout
+            # (suppressible via LITELLM_LOG=ERROR); anything else is unexpected and logs at ERROR.
             log_extra: Final = {"requester_ip": requester_ip}
             is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
-            is_quiet_log: Final = is_invalid_virtual_key and not litellm.log_client_error_tracebacks
+            is_quiet_log: Final = is_unauthorized_error(e) and not litellm.log_client_error_tracebacks
             logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
             logger.log(
                 logging.WARNING if is_quiet_log else logging.ERROR,
