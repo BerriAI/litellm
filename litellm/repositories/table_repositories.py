@@ -99,13 +99,13 @@ def _accounting_payload(value: object) -> Mapping[str, object]:
 _ACCOUNTING_ONLY_FIELDS: Final = frozenset({"accounting_payload", "accounting_log_disabled", "accounting_delivery_id"})
 
 
-def _is_batch(row: Mapping[str, object]) -> bool:
-    return row.get("call_type") == "aretrieve_batch"
+def _settles_once(row: Mapping[str, object]) -> bool:
+    """A batch or video cost row: update_database gives every other ledger row its own delivery id."""
+    return "accounting_delivery_id" not in row
 
 
 def _delivery_id(row: Mapping[str, object]) -> str:
-    delivery_id: Final = row.get("accounting_delivery_id")
-    return delivery_id if isinstance(delivery_id, str) and not _is_batch(row) else str(row["request_id"])
+    return str(row["accounting_delivery_id"]) if not _settles_once(row) else str(row["request_id"])
 
 
 class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs"]):
@@ -141,7 +141,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
                 "delivery_id": _delivery_id(row),
                 "request_id": row["request_id"],
                 "accounting_payload": _accounting_payload(row["accounting_payload"]),
-                "is_batch": _is_batch(row),
+                "is_batch": _settles_once(row),
             }
             for row in rows
         )
@@ -153,9 +153,9 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
             safe_dumps(payloads, non_finite_as_null=True),
         )
         accepted_ids: Final = frozenset(str(row["delivery_id"]) for row in inserted_deliveries)
-        charged_by_legacy: Final = await SpendLogsRepository._batches_charged_by_legacy(
+        charged_by_legacy: Final = await SpendLogsRepository._jobs_charged_by_legacy(
             transaction,
-            tuple(_delivery_id(row) for row in rows if _is_batch(row) and _delivery_id(row) in accepted_ids),
+            tuple(_delivery_id(row) for row in rows if _settles_once(row) and _delivery_id(row) in accepted_ids),
         )
         if charged_by_legacy:
             await transaction.execute_raw(
@@ -180,14 +180,14 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         return len(accepted)
 
     @staticmethod
-    async def _batches_charged_by_legacy(transaction: LedgerTransaction, batch_ids: Sequence[str]) -> frozenset[str]:
-        """Batches a pre-ledger retrieve already charged through its SpendLogs row."""
-        if not batch_ids:
+    async def _jobs_charged_by_legacy(transaction: LedgerTransaction, cost_row_ids: Sequence[str]) -> frozenset[str]:
+        """Batches and videos a pre-ledger poll already charged through their SpendLogs cost row."""
+        if not cost_row_ids:
             return frozenset()
         rows: Final = await transaction.query_raw(
             'SELECT DISTINCT request_id FROM "LiteLLM_SpendLogs" WHERE request_id = ANY($1::text[]) '
-            "AND call_type = 'aretrieve_batch' AND status = 'success' AND spend > 0",
-            list(batch_ids),
+            "AND status = 'success' AND spend > 0",
+            list(cost_row_ids),
         )
         return frozenset(str(row["request_id"]) for row in rows)
 

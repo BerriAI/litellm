@@ -22,7 +22,6 @@ from typing import Final, Literal
 import httpx
 import pytest
 import respx
-from openai.types.batch import BatchRequestCounts
 
 
 import litellm
@@ -2028,61 +2027,6 @@ def test_extract_credentials_keeps_openai_workload_identity_params():
     }
 
 
-# --------------------------------------------------------------------------- #
-# batch_cost_is_final
-# --------------------------------------------------------------------------- #
-
-
-def _retrieved_batch(
-    status: str, output_file_id: str | None = None, counts: BatchRequestCounts | None = None
-) -> LiteLLMBatch:
-    return LiteLLMBatch(
-        id="batch_abc",
-        completion_window="24h",
-        created_at=1,
-        endpoint="/v1/chat/completions",
-        input_file_id="file-in",
-        object="batch",
-        status="validating",
-        output_file_id=output_file_id,
-        request_counts=counts,
-    ).model_copy(update={"status": status})
-
-
-class TestBatchCostIsFinal:
-    """Every retrieve of one batch writes the same spend row, so the first retrieve
-    that prices it decides the row for good. A poll before the output exists must
-    therefore not count as final: pricing it recorded $0 and pinned it (LIT-7048)."""
-
-    @pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
-    def test_in_flight_batch_is_not_final(self, status):
-        assert bu.batch_cost_is_final(_retrieved_batch(status)) is False
-
-    @pytest.mark.parametrize("status", ["completed", "complete"])
-    def test_completed_with_output_is_final(self, status):
-        assert bu.batch_cost_is_final(_retrieved_batch(status, output_file_id="file-out")) is True
-
-    def test_completed_without_output_and_unknown_counts_is_not_final(self):
-        assert bu.batch_cost_is_final(_retrieved_batch("completed")) is False
-
-    def test_completed_without_output_and_zero_counts_is_not_final(self):
-        counts = BatchRequestCounts(total=0, completed=0, failed=0)
-        assert bu.batch_cost_is_final(_retrieved_batch("completed", counts=counts)) is False
-
-    def test_completed_without_output_but_successful_lines_is_not_final(self):
-        counts = BatchRequestCounts(total=2, completed=2, failed=0)
-        assert bu.batch_cost_is_final(_retrieved_batch("completed", counts=counts)) is False
-
-    @pytest.mark.parametrize("status", ["completed", "complete"])
-    def test_completed_without_output_and_every_line_failed_is_final(self, status):
-        counts = BatchRequestCounts(total=2, completed=0, failed=2)
-        assert bu.batch_cost_is_final(_retrieved_batch(status, counts=counts)) is True
-
-    @pytest.mark.parametrize("status", ["failed", "expired", "cancelled"])
-    def test_other_terminal_statuses_are_final(self, status):
-        assert bu.batch_cost_is_final(_retrieved_batch(status)) is True
-
-
 def _ocr_row(pages_processed, annotation_pages=None, model="mistral-ocr-latest"):
     usage_info = {"pages_processed": pages_processed, "doc_size_bytes": 4096}
     if annotation_pages is not None:
@@ -2965,7 +2909,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
     from unittest.mock import AsyncMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes, LiteLLMBatch
+    from litellm.types.utils import CallTypes
 
     # Mock batch result with completed status
     mock_batch = LiteLLMBatch(
@@ -3060,7 +3004,6 @@ async def test_handle_completed_batch_computes_real_cost_from_output_file(
     wrong token sum, or mispriced model fails this test.
     """
     from litellm.batches.batch_utils import handle_completed_batch
-    from litellm.types.utils import LiteLLMBatch
 
     batch = LiteLLMBatch(
         id="batch-real-cost-123",
@@ -3105,7 +3048,7 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
     from unittest.mock import AsyncMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes, LiteLLMBatch
+    from litellm.types.utils import CallTypes
 
     # Mock batch result with completed status
     mock_batch = LiteLLMBatch(
@@ -3187,7 +3130,7 @@ async def test_batch_retrieve_explicit_cost_split_sets_cost_breakdown():
     cost_breakdown carries real input/output costs; without it the UI's Cost Breakdown
     card renders blank for every batch. Regression for the split being dropped."""
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes, LiteLLMBatch
+    from litellm.types.utils import CallTypes
 
     mock_batch = LiteLLMBatch(
         id="batch-breakdown-1",
@@ -3243,7 +3186,7 @@ async def test_batch_retrieve_cost_tracking_with_unified_file_id_incomplete_batc
     from unittest.mock import AsyncMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes, LiteLLMBatch, SpecialEnums
+    from litellm.types.utils import CallTypes, SpecialEnums
 
     # Create a proper unified file ID by encoding the correct prefix
     unified_id_str = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:test_file_789;unified_id:batch-789"
@@ -3322,7 +3265,7 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
     from unittest.mock import AsyncMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes, LiteLLMBatch
+    from litellm.types.utils import CallTypes
 
     # Mock batch result with completed status
     mock_batch = LiteLLMBatch(

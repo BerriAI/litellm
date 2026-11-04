@@ -427,8 +427,8 @@ async def test_ledger_batch_retrieves_charge_once_in_every_logging_mode(
     monkeypatch.setattr(proxy_server, "general_settings", {"spend_logs_metadata_fields": {"include": ["status"]}})
     client = SimpleNamespace(db=delivery_client, writer_db=delivery_client, jsonify_object=jsonify_object)
     writer = DBSpendUpdateWriter()
-    first = await writer._claim_batch_cost_spend_log(payload=completed, prisma_client=client, disable_spend_logs=disabled)
-    again = await writer._claim_batch_cost_spend_log(
+    first = await writer._claim_settle_once_cost_row(payload=completed, prisma_client=client, disable_spend_logs=disabled)
+    again = await writer._claim_settle_once_cost_row(
         payload={**completed, "startTime": "2026-11-05T12:00:00+00:00"}, prisma_client=client, disable_spend_logs=disabled
     )
     assert (first, again) == (True, False)
