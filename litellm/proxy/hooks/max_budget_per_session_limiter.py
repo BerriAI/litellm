@@ -72,6 +72,30 @@ end
 return new_val
 """
 
+MAX_BUDGET_SESSION_CHARGE_JOB_ONCE_SCRIPT: Final = """
+local spend_key = KEYS[1]
+local marker_key = KEYS[2]
+local ttl = tonumber(ARGV[3])
+
+local polls = redis.call('INCR', marker_key)
+redis.call('EXPIRE', marker_key, ttl)
+local amount = ARGV[2]
+if polls == 1 then
+    amount = ARGV[1]
+end
+if tonumber(amount) <= 0 then
+    return '0'
+end
+
+local existed = redis.call('EXISTS', spend_key)
+redis.call('INCRBYFLOAT', spend_key, amount)
+if existed == 0 then
+    redis.call('EXPIRE', spend_key, ttl)
+end
+
+return amount
+"""
+
 # Default TTL for session budget counters (1 hour)
 DEFAULT_MAX_BUDGET_PER_SESSION_TTL: Final = 3600
 
@@ -96,12 +120,15 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             )
         )
 
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                MAX_BUDGET_SESSION_INCREMENT_SCRIPT
-            )
-        else:
-            self.increment_script = None
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        self.increment_script = (
+            redis_cache.async_register_script(MAX_BUDGET_SESSION_INCREMENT_SCRIPT) if redis_cache is not None else None
+        )
+        self.charge_job_once_script = (
+            redis_cache.async_register_script(MAX_BUDGET_SESSION_CHARGE_JOB_ONCE_SCRIPT)
+            if redis_cache is not None
+            else None
+        )
 
     @with_service_target("session_budgets")
     async def async_pre_call_hook(
@@ -187,17 +214,15 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
             cache_key: Final = self._make_cache_key(str(session_id))
             job: Final = job_to_charge_once(callback_fields, response_obj, response_cost)
-            charge: Final = (
-                response_cost if job is None or await self._claim_job_charge(cache_key, job) else job.repeat_poll_cost
-            )
-            if charge <= 0:
-                return
-            await self._increment_spend(cache_key, charge)
+            if job is None:
+                await self._increment_spend(cache_key, response_cost)
+            else:
+                await self._charge_job_once(cache_key, job, response_cost)
 
             verbose_proxy_logger.debug(
-                "MaxBudgetPerSessionHandler: incremented session %s spend by %.6f",
+                "MaxBudgetPerSessionHandler: charged session %s for a call that cost %.6f",
                 session_id,
-                charge,
+                response_cost,
             )
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -240,11 +265,30 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     def _make_cache_key(self, session_id: str) -> str:
         return f"{{session_budget:{session_id}}}:spend"
 
-    async def _claim_job_charge(self, cache_key: str, job: ChargeOnceJob) -> bool:
-        polls: Final = await self.internal_usage_cache.dual_cache.async_increment_cache(
-            key=job_charged_once_marker_key(spend_key=cache_key, job=job), value=1, ttl=self.ttl, refresh_ttl=True
+    async def _charge_job_once(self, cache_key: str, job: ChargeOnceJob, response_cost: float) -> None:
+        marker_key: Final = job_charged_once_marker_key(spend_key=cache_key, job=job)
+        if self.charge_job_once_script is not None:
+            try:
+                await self.charge_job_once_script(
+                    keys=[cache_key, marker_key],
+                    args=[str(response_cost), str(job.repeat_poll_cost), self.ttl],
+                )
+            except Exception as e:
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "MaxBudgetPerSessionHandler: Redis job charge failed, falling back to in-memory",
+                    e,
+                )
+            else:
+                return
+
+        polls: Final = await self.internal_usage_cache.dual_cache.in_memory_cache.async_increment(
+            key=marker_key, value=1, ttl=self.ttl
         )
-        return polls == 1
+        charge: Final = response_cost if polls == 1 else job.repeat_poll_cost
+        if charge > 0:
+            await self._in_memory_increment_spend(cache_key, charge)
 
     @with_service_target("session_budgets")
     async def _get_current_spend(self, cache_key: str) -> float:

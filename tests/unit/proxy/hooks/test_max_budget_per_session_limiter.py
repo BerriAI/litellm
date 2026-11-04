@@ -278,6 +278,7 @@ class _ClockedRedis:
     def __init__(self) -> None:
         self.now = 0.0
         self.entries: Mapping[str, tuple[float, float | None]] = MappingProxyType({})
+        self.scripts_fail = False
 
     def _live(self, key: str) -> tuple[float, float | None] | None:
         entry = self.entries.get(key)
@@ -301,13 +302,25 @@ class _ClockedRedis:
         expires_at = kept_expiry if ttl is None or (live is not None and not refresh_ttl) else self.now + ttl
         return self._store(key, value + (0.0 if live is None else live[0]), expires_at)
 
-    def async_register_script(self, script: str):
-        async def increment_expiring_on_first_write(keys: list[str], args: list[object]) -> float:
-            live = self._live(keys[0])
-            expires_at = self.now + float(str(args[1])) if live is None else live[1]
-            return self._store(keys[0], float(str(args[0])) + (0.0 if live is None else live[0]), expires_at)
+    def _increment_expiring_on_first_write(self, key: str, amount: float, ttl: float) -> float:
+        live = self._live(key)
+        expires_at = self.now + ttl if live is None else live[1]
+        return self._store(key, amount + (0.0 if live is None else live[0]), expires_at)
 
-        return increment_expiring_on_first_write
+    def async_register_script(self, script: str):
+        async def run(keys: list[str], args: list[object]) -> float:
+            if self.scripts_fail:
+                raise ConnectionError("Redis dropped the script call")
+            if len(keys) == 1:
+                return self._increment_expiring_on_first_write(keys[0], float(str(args[0])), float(str(args[1])))
+            marker = self._live(keys[1])
+            polls = self._store(keys[1], 1.0 + (0.0 if marker is None else marker[0]), self.now + float(str(args[2])))
+            amount = float(str(args[0] if polls == 1 else args[1]))
+            if amount > 0:
+                self._increment_expiring_on_first_write(keys[0], amount, float(str(args[2])))
+            return amount
+
+        return run
 
 
 @pytest.mark.asyncio
@@ -335,6 +348,29 @@ async def test_a_finished_video_polled_without_pause_is_not_charged_again_once_t
         await handler.async_log_success_event(chat, None, None, None)
 
     assert await handler._get_current_spend(handler._make_cache_key("session-jobs")) == pytest.approx(0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_finished_video_whose_charge_missed_redis_is_charged_on_the_next_poll_once_redis_answers():
+    from litellm.types.videos.main import VideoObject
+
+    redis: Final = _ClockedRedis()
+    handler: Final = PROXY_MaxBudgetPerSessionHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
+    video: Final = VideoObject(id="job-1", object="video", status="completed")
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
+        redis.scripts_fail = True
+        await handler.async_log_success_event(_video_poll(0.4), video, None, None)
+        redis.scripts_fail = False
+        for _ in range(2):
+            await handler.async_log_success_event(_video_poll(0.4), video, None, None)
+
+    assert await handler._get_current_spend(handler._make_cache_key("session-jobs")) == pytest.approx(0.4)
 
 
 @pytest.mark.asyncio
