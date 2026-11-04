@@ -306,19 +306,47 @@ def _set_tool_call_arguments(tool_call: _ToolCall, arguments: str) -> None:
 _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
-async def _rewritten_json_strings(value: JsonValue, rewrite: Callable[[str], Awaitable[str]]) -> JsonValue:
+def _json_literal_tokens(value: JsonValue) -> frozenset[str]:
     match value:
         case str():
-            return await rewrite(value)
+            return _literal_tokens(value)
+        case list():
+            return frozenset[str]().union(*map(_json_literal_tokens, value))
+        case dict():
+            return frozenset[str]().union(*map(_literal_tokens, value), *map(_json_literal_tokens, value.values()))
+        case _:
+            return frozenset()
+
+
+def _segment_literal_tokens(segment: tuple[_TextSlot | _ToolCallSlot, str]) -> frozenset[str]:
+    slot, source = segment
+    if isinstance(slot, _TextSlot):
+        return _literal_tokens(source)
+    try:
+        parsed: Final = _JSON_VALUE.validate_json(source)
+    except ValidationError:
+        return _literal_tokens(source)
+    return _json_literal_tokens(parsed)
+
+
+async def _rewritten_json_strings(value: JsonValue, rewrite: Callable[[str, bool], Awaitable[str]]) -> JsonValue:
+    match value:
+        case str():
+            return await rewrite(value, True)
         case list():
             return [await _rewritten_json_strings(item, rewrite) for item in value]
         case dict():
-            return {key: await _rewritten_json_strings(item, rewrite) for key, item in value.items()}
-        case _:
+            return {
+                await rewrite(key, False): await _rewritten_json_strings(item, rewrite) for key, item in value.items()
+            }
+        case bool() | None:
+            return value
+        case int() | float():
+            await rewrite(str(value), False)
             return value
 
 
-async def _rewritten_arguments(arguments: str, rewrite: Callable[[str], Awaitable[str]]) -> str:
+async def _rewritten_arguments(arguments: str, rewrite: Callable[[str, bool], Awaitable[str]]) -> str:
     """
     Rewrite each string of a tool call's JSON arguments on its own. An entity recognizer
     finds a bare value that it misses inside JSON quoting, and a restored value with a
@@ -327,7 +355,7 @@ async def _rewritten_arguments(arguments: str, rewrite: Callable[[str], Awaitabl
     try:
         parsed: Final = _JSON_VALUE.validate_json(arguments)
     except ValidationError:
-        return await rewrite(arguments)
+        return await rewrite(arguments, True)
     rewritten: Final = await _rewritten_json_strings(parsed, rewrite)
     return arguments if rewritten == parsed else json.dumps(rewritten, ensure_ascii=False)
 
@@ -1096,7 +1124,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return filtered_results
 
     def raise_exception_if_blocked_entities_detected(
-        self, analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse
+        self, analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse, block_all: bool = False
     ) -> None:
         """
         Raise an exception if blocked entities are detected
@@ -1114,7 +1142,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
             if entity_type:
                 # Check if entity_type is in config (supports both enum and string)
-                if entity_type in self.pii_entities_config and self.pii_entities_config[entity_type] == PiiAction.BLOCK:
+                if block_all or self.pii_entities_config.get(entity_type) == PiiAction.BLOCK:
                     raise BlockedPiiEntityError(
                         entity_type=entity_type,
                         guardrail_name=self.guardrail_name,
@@ -1127,6 +1155,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_config: PresidioPerRequestConfig | None,
         request_data: dict,
         reserved_tokens: frozenset[str] = frozenset(),
+        allow_masking: bool = True,
     ) -> str:
         """
         Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
@@ -1155,7 +1184,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 ####################################################
                 # Blocked Entities check
                 ####################################################
-                self.raise_exception_if_blocked_entities_detected(analyze_results=analyze_results)
+                self.raise_exception_if_blocked_entities_detected(
+                    analyze_results=analyze_results, block_all=not allow_masking
+                )
+                if not allow_masking:
+                    return text
 
                 # Then anonymize the text using the analysis results
                 anonymized_text: Final = await self.anonymize_text(
@@ -1937,17 +1970,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Final = metadata.get("pii_tokens", {})
 
-        async def restore(text: str) -> str:
-            return self._unmask_pii_text(text, pii_tokens)
+        async def restore(text: str, allow_masking: bool) -> str:
+            return self._unmask_pii_text(text, pii_tokens) if allow_masking else text
 
-        def mask_reserving(reserved_tokens: frozenset[str]) -> Callable[[str], Awaitable[str]]:
-            async def mask(text: str) -> str:
+        def mask_reserving(reserved_tokens: frozenset[str]) -> Callable[[str, bool], Awaitable[str]]:
+            async def mask(text: str, allow_masking: bool) -> str:
                 return await self.check_pii(
                     text=text,
                     output_parse_pii=self.output_parse_pii,
                     presidio_config=None,
                     request_data=request_data or {},
                     reserved_tokens=reserved_tokens,
+                    allow_masking=allow_masking,
                 )
 
             return mask
@@ -1961,11 +1995,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
             else map(
                 mask_reserving,
-                accumulate(map(_literal_tokens, (source for _, source in segments)), frozenset[str].union),
+                accumulate(map(_segment_literal_tokens, segments), frozenset[str].union),
             )
         )
         rewritten: Final = [
-            await (_rewritten_arguments(source, rewrite) if isinstance(slot, _ToolCallSlot) else rewrite(source))
+            await (_rewritten_arguments(source, rewrite) if isinstance(slot, _ToolCallSlot) else rewrite(source, True))
             for (slot, source), rewrite in zip(segments, rewrites)
         ]
         by_slot: Final = dict(zip((slot for slot, _ in segments), rewritten))

@@ -707,7 +707,9 @@ async def test_presidio_sets_guardrail_information_in_request_data():
         "metadata": {},
     }
 
-    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data, reserved_tokens=frozenset()):
+    async def mock_check_pii(
+        text, output_parse_pii, presidio_config, request_data, reserved_tokens=frozenset(), *, allow_masking: bool = True
+    ):
         assert request_data is not None
 
         presidio.add_standard_logging_guardrail_information_to_request_data(
@@ -765,7 +767,9 @@ async def test_request_data_flows_to_apply_guardrail():
         "metadata": {},
     }
 
-    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data, reserved_tokens=frozenset()):
+    async def mock_check_pii(
+        text, output_parse_pii, presidio_config, request_data, reserved_tokens=frozenset(), *, allow_masking: bool = True
+    ):
         assert request_data is not None, "request_data should be passed to check_pii"
         assert "metadata" in request_data, "request_data should have metadata"
 
@@ -2347,7 +2351,9 @@ async def test_standalone_scans_without_restoration_tokens(input_type: Literal["
         mock_testing=True,
     )
 
-    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data, reserved_tokens=frozenset()):
+    async def mock_check_pii(
+        text, output_parse_pii, presidio_config, request_data, reserved_tokens=frozenset(), *, allow_masking: bool = True
+    ):
         return text.replace("John Smith", "<PERSON>")
 
     guardrail.check_pii = mock_check_pii
@@ -5233,7 +5239,11 @@ def _card_and_email_spans(text: str) -> tuple[PresidioAnalyzeResponseItem, ...]:
             score=1.0,
             analysis_explanation=None,
         )
-        for entity_type, value in (("CREDIT_CARD", _CARD_NUMBER), ("EMAIL_ADDRESS", _EMAIL))
+        for entity_type, value in (
+            ("CREDIT_CARD", _CARD_NUMBER),
+            ("CREDIT_CARD", _CARD_NUMBER.replace("-", "")),
+            ("EMAIL_ADDRESS", _EMAIL),
+        )
         if value in text
     )
 
@@ -5321,9 +5331,15 @@ def _drain(analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> tuple[PresidioAna
 
 def _guardrail_with_in_memory_presidio(
     analyzed: asyncio.Queue[PresidioAnalyzeRequest],
+    *,
+    output_parse_pii: bool = False,
+    action: PiiAction | None = None,
 ) -> OPTIONAL_PresidioPIIMasking:
     guardrail: Final = OPTIONAL_PresidioPIIMasking(
-        pii_entities_config=_BLOCK_CARD_MASK_EMAIL,
+        output_parse_pii=output_parse_pii,
+        pii_entities_config=(
+            _BLOCK_CARD_MASK_EMAIL if action is None else {entity: action for entity in _BLOCK_CARD_MASK_EMAIL}
+        ),
         presidio_analyzer_api_base="http://presidio-analyzer.test/",
         presidio_anonymizer_api_base="http://presidio-anonymizer.test/",
     )
@@ -5517,6 +5533,81 @@ async def _masked_anthropic_request(guardrail: OPTIONAL_PresidioPIIMasking, mess
     data: Final = {"model": "claude-fable-5-1", "max_tokens": 64, "messages": copy.deepcopy(list(messages))}
     await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
     return data
+
+
+@pytest.mark.parametrize("action", [PiiAction.MASK, PiiAction.BLOCK])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        json.dumps({_EMAIL: {"safe": True}}),
+        json.dumps({"nested": [{"card": int(_CARD_NUMBER.replace("-", ""))}]}),
+        _CARD_NUMBER.replace("-", ""),
+        _CARD_NUMBER.replace("-", "") + ".0",
+    ],
+)
+async def test_tool_argument_keys_and_numbers_cannot_bypass_pii_policy(arguments: str, action: PiiAction) -> None:
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed, output_parse_pii=True, action=action)
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup", arguments=arguments)
+    )
+    try:
+        with pytest.raises(BlockedPiiEntityError) as excinfo:
+            await guardrail.apply_guardrail(
+                inputs={"texts": [], "tool_calls": [tool_call]},
+                request_data={"metadata": {}},
+                input_type="request",
+            )
+    finally:
+        await guardrail._close_http_session()
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.entity_type == ("EMAIL_ADDRESS" if _EMAIL in arguments else "CREDIT_CARD")
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        r'{"guest":"test@example.com","nested":[{"url":"https://example.invalid/?q=\u003cEMAIL_ADDRESS_1\u003e"}]}',
+        r'{"guest":"test@example.com","\u003cEMAIL_ADDRESS_1\u003e":null}',
+    ],
+)
+async def test_escaped_tool_argument_tokens_never_restore_to_unrelated_pii(arguments: str) -> None:
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed, output_parse_pii=True)
+    request_data: Final[dict[str, dict[str, dict[str, str]]]] = {"metadata": {}}
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup", arguments=arguments)
+    )
+    try:
+        masked: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [tool_call]},
+            request_data=request_data,
+            input_type="request",
+        )
+        assert _EMAIL not in tool_call.function.arguments
+        assert "<EMAIL_ADDRESS_1>" not in request_data["metadata"]["pii_tokens"]
+        await guardrail.apply_guardrail(inputs=masked, request_data=request_data, input_type="response")
+        assert json.loads(tool_call.function.arguments) == json.loads(arguments)
+    finally:
+        await guardrail._close_http_session()
+
+
+async def test_safe_tool_argument_keys_and_scalar_types_keep_original_bytes() -> None:
+    arguments: Final = '{ "count": 42, "fraction": 1.25, "enabled": true, "absent": null, "items": [false, 0] }'
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed, output_parse_pii=True)
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup", arguments=arguments)
+    )
+    try:
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [tool_call]},
+            request_data={"metadata": {}},
+            input_type="request",
+        )
+        assert tool_call.function.arguments == arguments
+    finally:
+        await guardrail._close_http_session()
 
 
 async def test_restore_writes_the_original_values_into_non_streaming_tool_call_arguments() -> None:
