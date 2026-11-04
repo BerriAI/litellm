@@ -1081,6 +1081,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
+    "max-lines": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/users/_components/BulkEditUsers.tsx": {
     "prefer-const": {
       "count": 1
