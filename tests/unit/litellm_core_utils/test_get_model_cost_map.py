@@ -334,6 +334,62 @@ async def test_refetch_gives_up_after_max_attempts_with_exponential_backoff():
     assert 4.0 <= sleeper.waits[1] < 5.0
 
 
+def _jitter(count: int) -> list[float]:
+    rng = random.Random(0)
+    return [rng.uniform(0.0, 1.0) for _ in range(count)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("replies", "waits", "reloaded", "reason"),
+    [
+        pytest.param(
+            [httpx.Response(429, headers={"Retry-After": "3"}), httpx.Response(503), None],
+            [3.0, 4.0 + _jitter(1)[0]],
+            True,
+            None,
+            id="jitter_is_drawn_only_for_a_backoff",
+        ),
+        pytest.param(
+            [
+                httpx.Response(429, headers={"Retry-After": "-1"}),
+                httpx.Response(429, headers={"Retry-After": "nan"}),
+                None,
+            ],
+            [2.0 + _jitter(2)[0], 4.0 + _jitter(2)[1]],
+            True,
+            None,
+            id="negative_and_nan_retry_after_back_off",
+        ),
+        pytest.param(
+            [httpx.Response(429, headers={"Retry-After": "inf"}), None],
+            [30.0],
+            True,
+            None,
+            id="infinite_retry_after_is_capped",
+        ),
+        pytest.param([httpx.Response(501)], [], False, f"HTTP 501 from {_URL}", id="other_5xx_is_final"),
+        pytest.param([httpx.Response(302, content=b"moved")], [], False, "invalid JSON", id="a_redirect_is_read"),
+        pytest.param([httpx.Response(600, content=b"[]")], [], False, "expected a JSON object", id="600_is_read"),
+    ],
+)
+async def test_refetch_retry_policy_matches_main(
+    replies: list[httpx.Response | None], waits: list[float], reloaded: bool, reason: str | None
+):
+    client, _calls = _mock_client(
+        [reply if reply is not None else httpx.Response(200, content=_real_map_bytes()) for reply in replies]
+    )
+    sleeper = _SleepRecorder()
+
+    result = await refetch_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
+
+    assert sleeper.waits == waits
+    assert isinstance(result, ModelCostMapReloaded) is reloaded
+    if reason is not None:
+        assert isinstance(result, ModelCostMapReloadUnavailable)
+        assert result.reason.startswith(reason)
+
+
 @pytest.mark.asyncio
 async def test_refetch_caps_retry_after_wait():
     """A hostile/huge Retry-After is capped so reloads never sleep unbounded."""

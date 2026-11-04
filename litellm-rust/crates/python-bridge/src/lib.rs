@@ -36,7 +36,7 @@ mod _native {
     #[pymodule_export]
     use crate::model_registry::{
         AliasWarning, ModelCountProblem, bundled_model_cost_map, count_model_entries,
-        expand_model_aliases, git_blob_id, model_count_problem,
+        expand_model_aliases, git_blob_id, model_count_problem, retry_wait_seconds,
     };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
@@ -122,6 +122,7 @@ mod tests {
                 "expand_model_aliases",
                 "AliasWarning",
                 "git_blob_id",
+                "retry_wait_seconds",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

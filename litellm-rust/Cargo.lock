@@ -4304,6 +4304,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-model-catalog-refresh",
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",

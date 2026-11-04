@@ -46,6 +46,7 @@ from litellm.rust_bridge._native import (
     expand_model_aliases,
     git_blob_id,
     model_count_problem,
+    retry_wait_seconds,
 )
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
@@ -212,7 +213,6 @@ class GetModelCostMap:
 
 RETRYABLE_FETCH_STATUS_CODES: Final = frozenset({429, 500, 502, 503, 504})
 MODEL_COST_MAP_FETCH_MAX_ATTEMPTS: Final = 3
-MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS: Final = 30.0
 _litellm_import_complete = threading.Event()
 
 
@@ -250,13 +250,7 @@ def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
         seconds: Final = float(header)
     except ValueError:
         return None
-    return seconds if seconds >= 0 else None
-
-
-def _retry_wait_seconds(outcome: _FetchAttemptRetryable, attempt: int, rng: random.Random) -> float:
-    if outcome.retry_after_seconds is not None:
-        return min(outcome.retry_after_seconds, MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
-    return min(2.0**attempt + rng.uniform(0.0, 1.0), MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
+    return seconds
 
 
 class _AsyncGetClient(Protocol):
@@ -389,9 +383,9 @@ def _classify_fetch_response(response: httpx.Response, url: str) -> _FetchAttemp
 def _next_retry_wait(
     outcome: _FetchAttemptRetryable, attempt: int, max_attempts: int, rng: random.Random
 ) -> float | ModelCostMapReloadUnavailable:
-    if attempt == max_attempts:
+    wait_seconds: Final = retry_wait_seconds(attempt, max_attempts, outcome.retry_after_seconds, rng)
+    if wait_seconds is None:
         return ModelCostMapReloadUnavailable(reason=f"{outcome.reason} (after {max_attempts} attempts)")
-    wait_seconds: Final = _retry_wait_seconds(outcome=outcome, attempt=attempt, rng=rng)
     verbose_logger.warning(
         "LiteLLM: model cost map fetch attempt %d/%d failed (%s); retrying in %.1fs",
         attempt,

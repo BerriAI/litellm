@@ -1,3 +1,4 @@
+import random
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
 from typing import Never, final
@@ -35,6 +36,9 @@ class ModelCountProblem:
         @property
         def reference(self) -> int: ...
 
+def retry_wait_seconds(
+    attempt: int, max_attempts: int, retry_after_seconds: float | None, rng: random.Random
+) -> float | None: ...
 def model_count_problem(
     fetched_map: Mapping[str, object], backup_model_count: int, min_model_count: int, max_shrink_ratio: float
 ) -> ModelCountProblem.BelowMinimum | ModelCountProblem.Shrunk | None: ...
@@ -301,6 +305,7 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
+    "retry_wait_seconds",
     "trace_encode_error",
     "transcription",
 ]

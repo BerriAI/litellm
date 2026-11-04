@@ -1,4 +1,5 @@
 mod aliases;
+mod fetch;
 
 use litellm_model_catalog::{SizeProblem, is_model_key, size_problem};
 use pyo3::prelude::*;
@@ -7,6 +8,7 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyString};
 
 pub(crate) use aliases::{AliasWarning, expand_model_aliases};
+pub(crate) use fetch::retry_wait_seconds;
 
 /// Why a fetched map has too few models, as main's `_check_model_count_not_reduced` decides
 #[pyclass(frozen, module = "litellm.rust_bridge._native")]
