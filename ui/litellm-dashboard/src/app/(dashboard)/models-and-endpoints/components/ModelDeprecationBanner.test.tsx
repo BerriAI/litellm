@@ -36,8 +36,7 @@ const queryResult = (
   data: ModelDeprecationResponse | undefined,
   isLoading = false,
   isError = false,
-): ReturnType<typeof useModelDeprecations> =>
-  ({ data, isLoading, isError }) as ReturnType<typeof useModelDeprecations>;
+): ReturnType<typeof useModelDeprecations> => ({ data, isLoading, isError }) as ReturnType<typeof useModelDeprecations>;
 
 describe("ModelDeprecationBanner", () => {
   beforeEach(() => {
@@ -113,9 +112,7 @@ describe("ModelDeprecationBanner", () => {
   });
 
   it("shows at most five entries followed by the number remaining", () => {
-    const imminent = Array.from({ length: 7 }, (_value, index) =>
-      makeInfo({ model_name: `model-${index + 1}` }),
-    );
+    const imminent = Array.from({ length: 7 }, (_value, index) => makeInfo({ model_name: `model-${index + 1}` }));
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent })));
 
     render(<ModelDeprecationBanner />);

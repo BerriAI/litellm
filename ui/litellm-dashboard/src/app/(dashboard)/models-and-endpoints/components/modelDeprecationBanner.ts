@@ -6,15 +6,11 @@ export const deprecationBannerTitle = (
   warnWithinDays: number,
 ): string => {
   const deprecatedText =
-    deprecatedCount === 0
-      ? ""
-      : `${deprecatedCount} ${deprecatedCount === 1 ? "model is" : "models are"} deprecated`;
+    deprecatedCount === 0 ? "" : `${deprecatedCount} ${deprecatedCount === 1 ? "model is" : "models are"} deprecated`;
   const imminentModelLabel = imminentCount === 1 ? "model" : "models";
-  const imminentSubject =
-    deprecatedCount > 0 ? `${imminentCount}` : `${imminentCount} ${imminentModelLabel}`;
+  const imminentSubject = deprecatedCount > 0 ? `${imminentCount}` : `${imminentCount} ${imminentModelLabel}`;
   const imminentVerb = imminentCount === 1 ? "deprecates" : "deprecate";
-  const imminentText =
-    imminentCount === 0 ? "" : `${imminentSubject} ${imminentVerb} within ${warnWithinDays} days`;
+  const imminentText = imminentCount === 0 ? "" : `${imminentSubject} ${imminentVerb} within ${warnWithinDays} days`;
   return [deprecatedText, imminentText].filter((text) => text.length > 0).join(", ");
 };
 
