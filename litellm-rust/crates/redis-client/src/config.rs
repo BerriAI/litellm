@@ -8,7 +8,9 @@ use redis::{
 use litellm_circuit_breaker::Breaker;
 use litellm_secret_value::SecretValue;
 
-use crate::{ConnectError, Namespace, RedisEvents};
+use pkcs8::EncryptedPrivateKeyInfo;
+
+use crate::{ConnectError, KeyError, Namespace, RedisEvents};
 use litellm_redis_types::{Cluster, RedisUrl, Target, TlsOptions};
 
 // litellm/constants.py REDIS_SOCKET_TIMEOUT, which _coerce_redis_kwargs_types sets when socket_timeout is unset
@@ -72,7 +74,7 @@ pub(crate) fn tls_certificates(tls: &TlsOptions) -> Result<TlsCertificates, Conn
     let client_tls = match (&tls.certfile, &tls.keyfile) {
         (Some(certfile), keyfile) => Some(ClientTlsConfig {
             client_cert: read(certfile)?,
-            client_key: read(keyfile.as_ref().unwrap_or(certfile))?,
+            client_key: client_key(keyfile.as_ref().unwrap_or(certfile), tls.key_password.as_ref())?,
         }),
         (None, _) => None,
     };
@@ -150,6 +152,43 @@ fn with_system_roots(configured: Vec<u8>) -> Vec<u8> {
         .chain(b"\n".iter().copied())
         .chain(system_pem.flat_map(String::into_bytes))
         .collect()
+}
+
+/// The key as unencrypted PEM, decrypting a PKCS#8 `ENCRYPTED PRIVATE KEY` with `ssl_password` the way
+/// `load_cert_chain(password=...)` does, since rustls only reads unencrypted keys. Like OpenSSL, a password next to
+/// an unencrypted key is unused
+fn client_key(path: &PathBuf, password: Option<&SecretValue>) -> Result<Vec<u8>, ConnectError> {
+    let contents = read(path)?;
+    let key_error = |reason| ConnectError::TlsKey {
+        path: path.display().to_string(),
+        reason,
+    };
+    let Ok(sections) = pem::parse_many(&contents) else {
+        return Ok(contents);
+    };
+    let encrypted = sections
+        .iter()
+        .find(|section| section.tag() == "ENCRYPTED PRIVATE KEY");
+    match (encrypted, password) {
+        (Some(_), None) => Err(key_error(KeyError::MissingPassword)),
+        (Some(section), Some(password)) => {
+            let decrypted = EncryptedPrivateKeyInfo::try_from(section.contents())
+                .and_then(|info| info.decrypt(password.expose()))
+                .map_err(|source| key_error(KeyError::Decrypt(source)))?;
+            Ok(pem::encode(&pem::Pem::new("PRIVATE KEY", decrypted.as_bytes())).into_bytes())
+        }
+        (None, _) if sections.iter().any(is_legacy_encrypted) => {
+            Err(key_error(KeyError::LegacyEncryption))
+        }
+        (None, _) => Ok(contents),
+    }
+}
+
+fn is_legacy_encrypted(section: &pem::Pem) -> bool {
+    section
+        .headers()
+        .get("Proc-Type")
+        .is_some_and(|proc_type| proc_type.contains("ENCRYPTED"))
 }
 
 fn read(path: &PathBuf) -> Result<Vec<u8>, ConnectError> {

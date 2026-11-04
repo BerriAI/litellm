@@ -20,6 +20,7 @@ const URL_TLS_SETTINGS: &[&str] = &[
     "ssl_ca_path",
     "ssl_certfile",
     "ssl_keyfile",
+    "ssl_password",
     "ssl_check_hostname",
 ];
 
@@ -34,6 +35,7 @@ pub(super) fn tls_options(
         ca_path: text(input.ca_path.as_ref()).map(Into::into),
         certfile: text(input.certfile.as_ref()).map(Into::into),
         keyfile: text(input.keyfile.as_ref()).map(Into::into),
+        key_password: secret(input.key_password.as_ref()),
         verify_certificate: verify_certificate(input.cert_reqs.as_ref())?,
         check_hostname: flag(input.check_hostname.as_ref())?,
     })
@@ -99,6 +101,7 @@ pub(super) fn url_query(url: &str) -> Result<UrlQuery, RedisError> {
             ca_path: text(get("ssl_ca_path").as_ref()).map(Into::into),
             certfile: text(get("ssl_certfile").as_ref()).map(Into::into),
             keyfile: text(get("ssl_keyfile").as_ref()).map(Into::into),
+            key_password: secret(get("ssl_password").as_ref()),
             verify_certificate: verify_certificate(get("ssl_cert_reqs").as_ref())?,
             check_hostname: text(get("ssl_check_hostname").as_ref())
                 .is_some_and(|text| url_bool(&text)),

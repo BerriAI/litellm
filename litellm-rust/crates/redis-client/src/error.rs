@@ -22,6 +22,24 @@ pub enum ConnectError {
         #[source]
         source: std::io::Error,
     },
+    #[error("reading the Redis TLS key {path}")]
+    TlsKey {
+        path: String,
+        #[source]
+        reason: KeyError,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KeyError {
+    #[error("the key is encrypted, so ssl_password is required")]
+    MissingPassword,
+    #[error("ssl_password does not decrypt the key, or the key uses an unsupported cipher")]
+    Decrypt(#[source] pkcs8::Error),
+    #[error(
+        "the key uses legacy OpenSSL PEM encryption, which Rust cannot read. Convert it to PKCS#8 with `openssl pkcs8 -topk8`"
+    )]
+    LegacyEncryption,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

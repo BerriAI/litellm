@@ -293,6 +293,11 @@ impl SentinelConnection {
                         "reading a Redis TLS file",
                         path,
                     )),
+                    ConnectError::TlsKey { path, reason } => RedisError::from((
+                        ErrorKind::InvalidClientConfig,
+                        "reading the Redis TLS key",
+                        format!("{path}: {reason}"),
+                    )),
                 },
             )?;
         redis::Client::open(info)

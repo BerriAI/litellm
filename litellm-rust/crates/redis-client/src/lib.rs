@@ -11,7 +11,7 @@ mod script;
 pub use client::{RedisClient, Ttl};
 pub use commands::{Amount, Expiry};
 pub use config::{Credentials, DEFAULT_TIMEOUT, RedisConfig, Timeouts};
-pub use error::{ConnectError, Error};
+pub use error::{ConnectError, Error, KeyError};
 pub use events::{CallEvent, FailureKind, Operation, Outcome, RedisEvents};
 pub use litellm_redis_types::{
     Cluster, Node, RedisUrl, Sentinel, Standalone, StaticAuth, Target, TlsOptions, UnixSocket,

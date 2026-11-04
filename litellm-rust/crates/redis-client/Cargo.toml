@@ -20,6 +20,7 @@ redis = { workspace = true, features = [
     "tokio-rustls-comp",
 ] }
 pem = "4.0.0"
+pkcs8 = { version = "0.10.2", features = ["3des", "encryption", "std"] }
 rustls-native-certs.workspace = true
 socket2 = "0.6.5"
 thiserror.workspace = true

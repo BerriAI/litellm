@@ -7,6 +7,7 @@ use litellm_redis_types::{
     Auth, AwsIamAuth, AzureAdAuth, HealthCheck, Node, ProviderHandle, Resolution, StaticAuth,
     Target, TlsOptions,
 };
+use litellm_secret_value::SecretValue;
 use rstest::rstest;
 use serde_json::json;
 
@@ -327,22 +328,22 @@ fn incomplete_aws_iam_auth_fails(#[case] yaml: &str, #[case] message: &str) {
 #[case::defaults_verify_the_certificate_but_not_the_hostname(
     "    ssl: true",
     &[],
-    Some(TlsOptions { ca_certs: None, ca_data: None, ca_path: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
+    Some(TlsOptions { ca_certs: None, ca_data: None, ca_path: None, certfile: None, keyfile: None, key_password: None, verify_certificate: true, check_hostname: false })
 )]
 #[case::every_option(
-    "    ssl: true\n    ssl_ca_certs: /ca.pem\n    ssl_certfile: /client.pem\n    ssl_keyfile: /client.key\n    ssl_cert_reqs: none\n    ssl_check_hostname: true",
+    "    ssl: true\n    ssl_ca_certs: /ca.pem\n    ssl_certfile: /client.pem\n    ssl_keyfile: /client.key\n    ssl_password: key-secret\n    ssl_cert_reqs: none\n    ssl_check_hostname: true",
     &[],
-    Some(TlsOptions { ca_certs: Some("/ca.pem".into()), ca_data: None, ca_path: None, certfile: Some("/client.pem".into()), keyfile: Some("/client.key".into()), verify_certificate: false, check_hostname: true })
+    Some(TlsOptions { ca_certs: Some("/ca.pem".into()), ca_data: None, ca_path: None, certfile: Some("/client.pem".into()), keyfile: Some("/client.key".into()), key_password: Some(SecretValue::new("key-secret")), verify_certificate: false, check_hostname: true })
 )]
 #[case::options_from_the_environment(
     "    ssl: true",
-    &[("REDIS_SSL_CA_CERTS", "/env-ca.pem"), ("REDIS_SSL_CERT_REQS", "optional")],
-    Some(TlsOptions { ca_certs: Some("/env-ca.pem".into()), ca_data: None, ca_path: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
+    &[("REDIS_SSL_CA_CERTS", "/env-ca.pem"), ("REDIS_SSL_CERT_REQS", "optional"), ("REDIS_SSL_PASSWORD", "env-key-secret")],
+    Some(TlsOptions { ca_certs: Some("/env-ca.pem".into()), ca_data: None, ca_path: None, certfile: None, keyfile: None, key_password: Some(SecretValue::new("env-key-secret")), verify_certificate: true, check_hostname: false })
 )]
 #[case::gcp_ca_certs_replace_the_configured_ones(
     "    ssl: true\n    ssl_ca_certs: /ca.pem\n    gcp_service_account: account\n    gcp_ssl_ca_certs: /gcp-ca.pem",
     &[],
-    Some(TlsOptions { ca_certs: Some("/gcp-ca.pem".into()), ca_data: None, ca_path: None, certfile: None, keyfile: None, verify_certificate: true, check_hostname: false })
+    Some(TlsOptions { ca_certs: Some("/gcp-ca.pem".into()), ca_data: None, ca_path: None, certfile: None, keyfile: None, key_password: None, verify_certificate: true, check_hostname: false })
 )]
 #[case::options_without_ssl_stay_plaintext("    ssl_ca_certs: /ca.pem", &[], None)]
 fn tls_options_resolve_like_redis_py(
@@ -355,6 +356,22 @@ fn tls_options_resolve_like_redis_py(
     let resolved = resolve(&yaml, environment).unwrap();
 
     assert!(matches!(resolved.target, Target::Standalone(host) if host.tls == expected));
+}
+
+#[rstest]
+fn a_rediss_url_reads_ssl_password_from_its_query() {
+    let resolved = resolve_kwargs(
+        json!({"url": "rediss://cache:6380/0?ssl_password=query-key-secret"}),
+        &HashMap::new(),
+    )
+    .unwrap();
+
+    let Target::Url(parsed) = resolved.target else {
+        panic!("expected a url target, got {:?}", resolved.target);
+    };
+    let key_password = parsed.tls.and_then(|tls| tls.key_password);
+    assert_eq!(expose(key_password.as_ref()), Some("query-key-secret"));
+    assert!(resolved.ignored.is_empty(), "{:?}", resolved.ignored);
 }
 
 #[rstest]
@@ -957,6 +974,11 @@ fn expected_view(fields: serde_json::Value) -> serde_json::Value {
     json!({"host": "redis", "ssl": true, "ssl_ca_path": "/ca"}),
     &[],
     Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": null, "ca_data": null, "ca_path": "/ca", "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}}))),
+)]
+#[case::ssl_password_is_unsupported(
+    json!({"host": "redis", "ssl": true, "ssl_certfile": "/client.pem", "ssl_password": "key-secret"}),
+    &[],
+    Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": null, "ca_data": null, "ca_path": null, "certfile": "/client.pem", "keyfile": null, "verify_certificate": true, "check_hostname": false}}))),
 )]
 #[case::host_with_every_basic_setting(
     json!({"db": 2, "host": "redis", "password": "pass", "port": 6380, "socket_timeout": 1.5, "ssl": true, "username": "user"}),

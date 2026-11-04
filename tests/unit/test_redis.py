@@ -2137,6 +2137,17 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
             id="ssl_ca_path_is_unsupported",
         ),
         pytest.param(
+            {"host": "redis", "ssl": True, "ssl_certfile": "/client.pem", "ssl_password": "key-secret"},
+            {},
+            {
+                "rejected": {
+                    "message": "Redis.__init__() got an unexpected keyword argument 'ssl_password'",
+                    "type": "TypeError",
+                }
+            },
+            id="ssl_password_is_unsupported",
+        ),
+        pytest.param(
             {
                 "db": 2,
                 "host": "redis",
