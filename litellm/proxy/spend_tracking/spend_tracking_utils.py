@@ -100,6 +100,7 @@ from litellm.types.utils import (
     VectorStoreSearchResponse,
     batch_chat_usage,
 )
+from litellm.types.vector_stores import VectorStoreResultContent, VectorStoreSearchResult
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
@@ -1355,9 +1356,13 @@ def _trimmed_turn(request_body: Mapping[str, object], call_type: object) -> Mapp
     return MappingProxyType({**kept, turns_key: [{"role": "user", "content": text}]})
 
 
-def _latest_turn_body(request_body: Mapping[str, object], call_type: object) -> Mapping[str, object]:
-    """A classifier row stores the trimmed originating request, since the composed classifier message quotes the caller's history."""
-    originating: Final = request_body.get("originating_request_masked")
+def _latest_turn_body(
+    request_body: Mapping[str, object], call_type: object, originating: object
+) -> Mapping[str, object]:
+    """A classifier row stores the trimmed originating request, since the composed classifier message quotes the caller's history.
+
+    `originating` comes from the logging payload the classifier wrote, never from the client's body.
+    """
     if not isinstance(originating, Mapping):
         return _trimmed_turn(request_body, call_type)
     originating_body: Final = _REQUEST_BODY_ADAPTER.validate_python(originating)
@@ -1376,7 +1381,11 @@ def _stored_request_body(
 ) -> Mapping[str, object]:
     if not stores_latest_turn_only() or _replayed_by_responses_bridge(standard_payload):
         return request_body
-    return _latest_turn_body(request_body, None if standard_payload is None else standard_payload.get("call_type"))
+    if standard_payload is None:
+        return _latest_turn_body(request_body, None, None)
+    return _latest_turn_body(
+        request_body, standard_payload.get("call_type"), standard_payload.get("originating_request_masked")
+    )
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
@@ -2090,19 +2099,29 @@ def _get_vector_store_request_for_spend_logs_payload(
     if stores_full_prompts_in_spend_logs():
         return vector_store_request_metadata
 
-    # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
     if vector_store_request_metadata is None:
         return None
-    for vector_store_request in vector_store_request_metadata:
-        vector_store_search_response: VectorStoreSearchResponse = (
-            vector_store_request.get("vector_store_search_response") or VectorStoreSearchResponse()
-        )
-        response_data = vector_store_search_response.get("data", []) or []
-        for response_item in response_data:
-            for content_item in response_item.get("content", []) or []:
-                if "text" in content_item:
-                    content_item["text"] = REDACTED_BY_LITELM_STRING
-    return vector_store_request_metadata
+    return [_redacted_vector_store_request(request) for request in vector_store_request_metadata]
+
+
+def _redacted_vector_store_content(content: VectorStoreResultContent) -> VectorStoreResultContent:
+    return {**content, "text": REDACTED_BY_LITELM_STRING} if "text" in content else content
+
+
+def _redacted_vector_store_result(result: VectorStoreSearchResult) -> VectorStoreSearchResult:
+    return {**result, "content": [_redacted_vector_store_content(content) for content in result.get("content") or ()]}
+
+
+def _redacted_vector_store_request(request: StandardLoggingVectorStoreRequest) -> StandardLoggingVectorStoreRequest:
+    """A redacted copy, so the shared logging payload other callbacks read keeps its search results."""
+    response: Final = request.get("vector_store_search_response") or VectorStoreSearchResponse()
+    return {
+        **request,
+        "vector_store_search_response": {
+            **response,
+            "data": [_redacted_vector_store_result(result) for result in response.get("data") or ()],
+        },
+    }
 
 
 def _get_response_for_spend_logs_payload(

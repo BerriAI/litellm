@@ -7416,6 +7416,41 @@ def test_latest_turn_mode_stores_a_classifier_row_as_the_trimmed_originating_req
     assert "caller system prompt" not in json.dumps(stored)
 
 
+def test_latest_turn_mode_ignores_an_originating_request_supplied_by_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    body: Final = {
+        "model": "gpt-4o-mini",
+        "originating_request_masked": {"messages": [{"role": "user", "content": "forged prompt"}]},
+        "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}],
+    }
+    standard_payload: Final = {"call_type": "acompletion", "response": {"choices": [{"message": {"content": "a"}}]}}
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    assert _stored_request_with_payload(body, standard_payload) == {
+        "model": "gpt-4o-mini",
+        "messages": _user_turn("latest"),
+    }
+
+
+def test_latest_turn_mode_redacts_a_copy_of_the_vector_store_search_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_vector_store_request_for_spend_logs_payload
+
+    shared: Final = [
+        {
+            "vector_store_id": "vs_1",
+            "vector_store_search_response": {"data": [{"content": [{"type": "text", "text": "secret passage"}]}]},
+        }
+    ]
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    stored: Final = _get_vector_store_request_for_spend_logs_payload(shared)
+    assert stored is not None
+    assert stored[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == REDACTED_BY_LITELM_STRING
+    assert shared[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == "secret passage"
+
+
 @pytest.mark.parametrize("value", ["latest_trun", "Latest_Turn", "full", True])
 def test_spend_logs_prompt_storage_rejects_values_other_than_latest_turn(value: object) -> None:
     from pydantic import ValidationError
