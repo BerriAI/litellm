@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis, RedisCluster
     from redis.asyncio.client import Pipeline
     from redis.asyncio.cluster import ClusterPipeline
+    from redis.client import Pipeline as SyncPipeline
 
     from litellm._service_logger import ServiceLogging
 
@@ -95,6 +96,16 @@ class _AsyncRedisCommands(Protocol):
 
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
 
+    def zrem(self, name: str, *values: str) -> Awaitable[int]: ...
+
+
+class _SyncRedisCommands(Protocol):
+    """Sync redis commands this cache issues; ``get_redis_client`` is untyped, so call sites need this protocol."""
+
+    def pipeline(self, transaction: bool = True) -> "SyncPipeline[bytes]": ...
+
+    def zrem(self, name: str, *values: str) -> int: ...
+
 
 _GENERIC_CALLER_MODULES: Final = frozenset(
     {
@@ -127,26 +138,12 @@ _GENERIC_CALLER_FRAME_NAMES: Final = frozenset(
 )
 _CALL_STACK_END_MODULES: Final = ("asyncio", "concurrent", "threading")
 
-_INCREMENT_WITH_FLOOR_LUA: Final = (
-    "local count = redis.call('INCRBY', KEYS[1], ARGV[1]) "
-    "if count < 0 then count = redis.call('INCRBY', KEYS[1], -count) end "
-    "if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
-    "return count"
-)
-
 _INCREMENT_IF_PRESENT_LUA: Final = (
     "if redis.call('EXISTS', KEYS[1]) == 0 then return false end return redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])"
 )
 
-_LUA_COUNT: Final = TypeAdapter(int)
 _LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
-_OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
-
-
-def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, ...]:
-    return _OPTIONAL_COUNTS.validate_python(
-        tuple(value.decode("utf-8") if isinstance(value, bytes) else value for value in values)
-    )
+_COUNTS: Final = TypeAdapter(tuple[int, ...])
 
 
 def _is_generic_caller_frame(frame: FrameType) -> bool:
@@ -829,6 +826,9 @@ class RedisCache(BaseCache):
     def _async_commands(self) -> _AsyncRedisCommands:
         return self.init_async_client()
 
+    def _sync_commands(self) -> _SyncRedisCommands:
+        return self.redis_client  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # get_redis_client is untyped
+
     def check_and_fix_namespace(self, key: str) -> str:
         """
         Make sure each key starts with the given namespace
@@ -954,41 +954,44 @@ class RedisCache(BaseCache):
             raise e
 
     @_redis_circuit_breaker_guard_sync
-    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
-        """Add ``value`` to ``key``, clamp the result at zero, and give a new key ``ttl``, in one Lua call.
+    def track_in_flight(self, key: str, member: str, started_at: float, max_age: int) -> None:
+        """Record ``member`` as in flight under ``key`` since ``started_at``, dropping members older than ``max_age``.
 
-        A counter whose key expired while a request was still in flight would otherwise be
-        recreated negative by that request's decrement. Clamping inside the same call is what
-        keeps it safe: a separate corrective write could land after another pod's increment and
-        erase it.
-
-        The TTL is set only on a key that has none, so a counter expires ``ttl`` after it was
-        created rather than ``ttl`` after it was last touched. Refreshing it on every touch
-        would keep a count a dead worker never decremented alive for as long as the group
-        takes traffic. Returns the resulting count.
+        Every request is its own member of a sorted set, so finishing one request can only ever
+        remove that request. A shared counter with a key-wide TTL forgot every request still in
+        flight when it expired, and their later decrements made a busy deployment read idle. A
+        member a dead worker never removed still stops counting ``max_age`` after it started.
         """
         namespaced_key: Final = self.check_and_fix_namespace(key=key)
-        count: Final[object] = self.redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue]  # stubs omit eval
-            _INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl
-        )
-        return _LUA_COUNT.validate_python(count)
+        with self._sync_commands().pipeline(transaction=False) as pipe:
+            pipe.zremrangebyscore(namespaced_key, "-inf", f"({started_at - max_age}")
+            pipe.zadd(namespaced_key, {member: started_at})
+            pipe.expire(namespaced_key, max_age)
+            pipe.execute()
 
     @_redis_circuit_breaker_guard_sync
-    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
-        """Read integer counters for ``key_list``, in order, raising when Redis cannot answer.
+    def untrack_in_flight(self, key: str, member: str) -> None:
+        self._sync_commands().zrem(self.check_and_fix_namespace(key=key), member)
 
-        ``batch_get_cache`` swallows every failure and returns an empty dict, which the caller
-        cannot tell apart from "every counter is unset". A caller that has to fall back to its
-        own numbers when Redis is unreachable needs the failure, not a dict of zeros.
+    @_redis_circuit_breaker_guard_sync
+    def batch_count_in_flight(self, key_list: list[str], since: float) -> tuple[int, ...]:
+        """Count the members of each key that started at or after ``since``, in order.
+
+        Raises when Redis cannot answer, because a caller that falls back to its own numbers
+        cannot tell a swallowed failure apart from "nothing is in flight".
         """
-        namespaced_keys: Final = [self.check_and_fix_namespace(key=key) for key in key_list]
-        return _decoded_counts(self._run_redis_mget_operation(keys=namespaced_keys))
+        with self._sync_commands().pipeline(transaction=False) as pipe:
+            for key in key_list:
+                pipe.zcount(self.check_and_fix_namespace(key=key), since, "+inf")
+            return _COUNTS.validate_python(pipe.execute())
 
     @_redis_circuit_breaker_guard
-    async def async_batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
-        """Async twin of ``batch_get_counts``, raising on failure the same way."""
-        namespaced_keys: Final = [self.check_and_fix_namespace(key=key) for key in key_list]
-        return _decoded_counts(await self._async_run_redis_mget_operation(keys=namespaced_keys))
+    async def async_batch_count_in_flight(self, key_list: list[str], since: float) -> tuple[int, ...]:
+        """Async twin of ``batch_count_in_flight``, raising on failure the same way."""
+        async with self._async_commands().pipeline(transaction=False) as pipe:
+            for key in key_list:
+                pipe.zcount(self.check_and_fix_namespace(key=key), since, "+inf")
+            return _COUNTS.validate_python(await pipe.execute())
 
     @_redis_circuit_breaker_guard
     async def async_scan_iter(self, pattern: str, count: int = 100) -> list:
@@ -1566,12 +1569,18 @@ class RedisCache(BaseCache):
         return float(result)
 
     @_redis_circuit_breaker_guard
-    async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:
-        """Async twin of ``increment_with_floor``, sharing its Lua script and its guarantees."""
-        _redis_client: Final = self._async_commands()
+    async def async_track_in_flight(self, key: str, member: str, started_at: float, max_age: int) -> None:
+        """Async twin of ``track_in_flight``."""
         namespaced_key: Final = self.check_and_fix_namespace(key=key)
-        count: Final = await _redis_client.eval(_INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl)
-        return _LUA_COUNT.validate_python(count)
+        async with self._async_commands().pipeline(transaction=False) as pipe:
+            pipe.zremrangebyscore(namespaced_key, "-inf", f"({started_at - max_age}")
+            pipe.zadd(namespaced_key, {member: started_at})
+            pipe.expire(namespaced_key, max_age)
+            await pipe.execute()
+
+    @_redis_circuit_breaker_guard
+    async def async_untrack_in_flight(self, key: str, member: str) -> None:
+        await self._async_commands().zrem(self.check_and_fix_namespace(key=key), member)
 
     @_redis_circuit_breaker_guard
     async def async_increment_if_present(
