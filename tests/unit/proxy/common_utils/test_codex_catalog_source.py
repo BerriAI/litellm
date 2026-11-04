@@ -303,6 +303,41 @@ def test_a_release_asked_for_while_the_in_flight_fetches_are_at_the_cap_gets_the
     assert source_label == vendored_codex_stock().source and not any("0.152.0" in url for url in calls), calls
 
 
+def test_a_fetch_that_outlasts_the_response_deadline_serves_the_vendored_pair_then_the_release_once_it_lands() -> None:
+    class _Gated(_RawTree):
+        def __init__(self, replies: Mapping[str, tuple[int, bytes]]) -> None:
+            super().__init__(replies)
+            self.gate = asyncio.Event()
+
+        async def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            timeout: float | None = None,
+            max_response_bytes: int | None = None,
+        ) -> httpx.Response:
+            self.calls.append(url)
+            await self.gate.wait()
+            status, body = self.replies.get(url, (404, b"404: Not Found"))
+            return httpx.Response(status, content=body)
+
+    async def scenario() -> tuple[str, str, int]:
+        tree: Final = _Gated(_tree(RELEASE))
+        source: Final = CodexCatalogSource(client=tree, clock=_Clock(), response_deadline=0.01)
+        early: Final = await source.stock(RELEASE)
+        tree.gate.set()
+        await asyncio.gather(*(asyncio.all_tasks() - {asyncio.current_task()}))
+        late: Final = await source.stock(RELEASE)
+        return early.source, late.source, len(tree.calls)
+
+    assert asyncio.run(asyncio.wait_for(scenario(), timeout=30)) == (
+        vendored_codex_stock().source,
+        f"github rust-v{RELEASE}",
+        2,
+    )
+
+
 def test_a_download_the_client_cuts_at_the_byte_limit_falls_through_to_the_next_source() -> None:
     class _CuttingTree(_RawTree):
         async def get(

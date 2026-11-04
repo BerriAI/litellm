@@ -6,7 +6,8 @@ parallel tool calls, a generic prompt). openai/codex publishes every release's e
 ``https://raw.githubusercontent.com/openai/codex/rust-v<version>/codex-rs/models-manager/models.json``
 (Apache-2.0) with its ``prompt.md`` beside them, so the pair for the exact ``client_version`` asking is
 fetched once and kept for the life of the process, since a release tag never changes. A version without a
-tag (before 0.120, or not released yet), a fetch that fails, a body that does not parse,
+tag (before 0.120, or not released yet), a fetch that fails, a body that does not parse, a request the
+fetch outlasts by ``CODEX_CATALOG_RESPONSE_DEADLINE_SECONDS`` (Codex gives up on its catalog after five),
 ``LITELLM_OFFLINE_MODE`` and ``LITELLM_LOCAL_CODEX_CATALOG=True`` all serve the vendored pair instead, a
 failed fetch again after ``CODEX_CATALOG_RETRY_SECONDS``. ``LITELLM_CODEX_CATALOG_BASE_URL`` points the
 fetch at a mirror of the openai/codex raw tree.
@@ -15,7 +16,6 @@ fetch at a mirror of the openai/codex raw tree.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import re
 import time
@@ -24,7 +24,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeAlias
 
 import httpx
 from pydantic import ValidationError
@@ -44,11 +44,14 @@ CODEX_CATALOG_OPENAI_URL: Final = "https://chatgpt.com/backend-api/codex/models"
 CODEX_CATALOG_BASE_URL: Final = "https://raw.githubusercontent.com/openai/codex"
 CODEX_CATALOG_RETRY_SECONDS: Final = 300.0
 CODEX_CATALOG_FETCH_TIMEOUT_SECONDS: Final = 10.0
+CODEX_CATALOG_RESPONSE_DEADLINE_SECONDS: Final = 4.0
 CODEX_CATALOG_MAX_BYTES: Final = 16 * 1024 * 1024
 CODEX_CATALOG_CACHED_VERSIONS: Final = 16
 _RELEASE_VERSION: Final = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$")
 _MODELS_PATH: Final = "codex-rs/models-manager/models.json"
 _PROMPT_PATH: Final = "codex-rs/models-manager/prompt.md"
+
+_CacheSlot: TypeAlias = tuple[str, str | None]
 
 
 class _AsyncGetClient(Protocol):
@@ -80,13 +83,6 @@ def _default_client() -> _AsyncGetClient:
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
     return get_async_httpx_client(llm_provider=httpxSpecialProvider.CodexModelCatalog)
-
-
-def _cache_slot(tag: str, openai_api_key: str | None) -> str:
-    """Catalogs fetched with different OpenAI keys are kept apart, since OpenAI may answer per account."""
-    if openai_api_key is None:
-        return tag
-    return f"{tag}#{hashlib.sha256(openai_api_key.encode()).hexdigest()[:16]}"
 
 
 def vendored_codex_stock() -> CodexStock:
@@ -124,6 +120,7 @@ class CodexCatalogSource:
         clock: Callable[[], float] = time.monotonic,
         retry_seconds: float = CODEX_CATALOG_RETRY_SECONDS,
         timeout: float = CODEX_CATALOG_FETCH_TIMEOUT_SECONDS,
+        response_deadline: float = CODEX_CATALOG_RESPONSE_DEADLINE_SECONDS,
         cached_versions: int = CODEX_CATALOG_CACHED_VERSIONS,
     ) -> None:
         self._client = client
@@ -138,9 +135,10 @@ class CodexCatalogSource:
         self._clock = clock
         self._retry_seconds = retry_seconds
         self._timeout = timeout
+        self._response_deadline = response_deadline
         self._cached_versions = cached_versions
-        self._cache: OrderedDict[str, _Cached] = OrderedDict()  # mutable-ok: filled as releases are first asked for
-        self._pending: dict[str, asyncio.Task[CodexStock]] = {}  # mutable-ok: the fetches in flight, one per release
+        self._cache: OrderedDict[_CacheSlot, _Cached] = OrderedDict()  # mutable-ok: filled as releases are asked for
+        self._pending: dict[_CacheSlot, asyncio.Task[CodexStock]] = {}  # mutable-ok: the fetches in flight
 
     async def stock(self, client_version: str | None, *, openai_api_key: str | None = None) -> CodexStock:
         """The catalog for ``client_version``: OpenAI's live one when an OpenAI key is at hand,
@@ -148,14 +146,14 @@ class CodexCatalogSource:
         tag: Final = codex_release_tag(client_version)
         if tag is None or client_version is None or uses_vendored_codex_catalog():
             return vendored_codex_stock()
-        slot: Final = _cache_slot(tag, openai_api_key)
+        slot: Final = (tag, openai_api_key)
         cached: Final = self._cache.get(slot)
         if cached is not None and (cached.retry_at is None or cached.retry_at > self._clock()):
             self._cache.move_to_end(slot)
             return cached.stock
         pending: Final = self._pending.get(slot)
         if pending is not None:
-            return await asyncio.shield(pending)
+            return await self._within_deadline(tag, pending)
         if len(self._pending) >= self._cached_versions:
             verbose_proxy_logger.warning(
                 "Codex catalog %s not fetched, %d fetches already in flight, serving the %s one",
@@ -167,9 +165,21 @@ class CodexCatalogSource:
         task: Final = asyncio.ensure_future(self._resolve(slot, tag, client_version, openai_api_key))
         self._pending[slot] = task
         task.add_done_callback(lambda _: self._pending.pop(slot, None))
-        return await asyncio.shield(task)
+        return await self._within_deadline(tag, task)
 
-    async def _resolve(self, slot: str, tag: str, version: str, openai_api_key: str | None) -> CodexStock:
+    async def _within_deadline(self, tag: str, fetch: asyncio.Task[CodexStock]) -> CodexStock:
+        done, _ = await asyncio.wait((fetch,), timeout=self._response_deadline)
+        if fetch in done:
+            return fetch.result()
+        verbose_proxy_logger.warning(
+            "Codex catalog %s still fetching after %.0fs, serving the %s one to this request",
+            tag,
+            self._response_deadline,
+            vendored_codex_stock().source,
+        )
+        return vendored_codex_stock()
+
+    async def _resolve(self, slot: _CacheSlot, tag: str, version: str, openai_api_key: str | None) -> CodexStock:
         fetched: Final = await self._fetch(tag, version, openai_api_key)
         if isinstance(fetched, _FetchFailed):
             verbose_proxy_logger.warning(
