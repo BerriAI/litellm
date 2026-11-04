@@ -396,13 +396,10 @@ def _cached_oidc_token(cache_key: str) -> str | None:
     return cached if isinstance(cached, str) else None
 
 
-def _oidc_exchange_error(response: httpx.Response, message: str) -> AzureOpenAIError:
-    reason: Final = _entra_rejection_reason(message) if response.status_code in (400, 401) else None
-    if reason is not None:
-        return _entra_rejection(reason)
-    return AzureOpenAIError(
-        status_code=response.status_code, message=message, response=response, headers=response.headers
-    )
+def _oidc_exchange_rejection_reason(error: MaskedHTTPStatusError) -> str | None:
+    if error.response.status_code not in (400, 401):
+        return None
+    return _entra_rejection_reason(error.text or error.response.text)
 
 
 def _exchange_oidc_token(cache_key: str, token_url: str, client_id: str, scope: str, oidc_token: str) -> str:
@@ -423,7 +420,10 @@ def _exchange_oidc_token(cache_key: str, token_url: str, client_id: str, scope: 
                 },
             )
         except MaskedHTTPStatusError as error:
-            raise _oidc_exchange_error(error.response, error.text or error.response.text) from error
+            reason: Final = _oidc_exchange_rejection_reason(error)
+            if reason is None:
+                raise
+            raise _entra_rejection(reason) from error
 
     if req_token.status_code != 200:
         raise AzureOpenAIError(

@@ -25525,9 +25525,10 @@ async def test_router_caller_entra_credential_rejection_leaves_the_shared_deploy
         pytest.param({"client_secret": "environment-secret"}, id="environment_secret"),
         pytest.param({"client_id": "environment-client"}, id="environment_client_id"),
         pytest.param({"azure_scope": "https://cognitiveservices.azure.com/.default"}, id="default_scope"),
+        pytest.param({"client_secret": ""}, id="blank_secret"),
     ],
 )
-async def test_router_caller_entra_field_matching_a_default_the_deployment_overrides_leaves_it_routable(
+async def test_router_caller_entra_field_that_changes_the_deployment_credential_leaves_it_routable(
     caller_field, monkeypatch
 ):
     monkeypatch.setenv("AZURE_CLIENT_SECRET", "environment-secret")
@@ -25664,6 +25665,50 @@ async def test_router_caller_entra_field_that_changes_nothing_still_cools_down_a
                 )
             ),
             **caller_fields,
+        )
+
+    with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hi",
+        )
+
+    assert excinfo.value.all_deployments_in_cooldown is True
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_caller_repeating_the_secret_an_empty_router_default_selects_still_cools_down(monkeypatch):
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "environment-secret")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "tenant_id": "configured-tenant",
+                    "client_id": "configured-client",
+                    "client_secret": "configured-secret",
+                },
+                "model_info": {"id": "configured-deployment"},
+            }
+        ],
+        default_litellm_params={"client_secret": ""},
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=_caused_by_an_entra_rejection(
+                litellm.AuthenticationError(
+                    message="Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
+                    llm_provider="azure",
+                    model="gpt-4.1",
+                )
+            ),
+            client_secret="environment-secret",
         )
 
     with pytest.raises(litellm.RouterRateLimitError) as excinfo:

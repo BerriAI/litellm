@@ -872,16 +872,18 @@ def is_caller_entra_credential_failure(
         _CREDENTIAL_VALUES_ADAPTER.validate_python(
             CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
         ),
-        azure_entra_environment_defaults(),
     )
+    environment: Final = azure_entra_environment_defaults()
     return any(
-        call_params.get(key) not in (None, "") and call_params.get(key) != _first_set(configured_by_precedence, key)
+        call_params.get(key) is not None
+        and (call_params.get(key) or environment.get(key))
+        != (_first_configured(configured_by_precedence, key) or environment.get(key))
         for key in AZURE_ENTRA_LITELLM_PARAM_KEYS
     )
 
 
-def _first_set(sources: tuple[Mapping[str, object], ...], key: str) -> object:
-    return next((value for source in sources if (value := source.get(key)) not in (None, "")), None)
+def _first_configured(sources: tuple[Mapping[str, object], ...], key: str) -> object:
+    return next((value for source in sources if (value := source.get(key)) is not None), None)
 
 
 def is_caller_scoped_auth_failure(deployment: Deployment | None, exception_status: str | int) -> bool:

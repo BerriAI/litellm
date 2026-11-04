@@ -7316,6 +7316,49 @@ class TestRouterModelRelayUpstreamContract:
 
         assert excinfo.value is upstream_failure
 
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_entra_throttling_the_oidc_token_exchange_as_a_429(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+        monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "azure/gpt-5",
+                        "api_base": "https://litellm-qa.openai.azure.com",
+                        "api_version": "2025-04-01-preview",
+                        "tenant_id": "throttled-tenant",
+                        "client_id": "qa-client",
+                        "azure_ad_token": "oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+        self._install_router(monkeypatch, router, {"model": "gpt-5", "stream": False})
+
+        with respx.mock:
+            respx.post("https://login.microsoftonline.com/throttled-tenant/oauth2/v2.0/token").mock(
+                return_value=httpx.Response(
+                    429,
+                    headers={"Retry-After": "7"},
+                    json={"error": "temporarily_unavailable", "error_codes": [90055]},
+                )
+            )
+            deployment_route: Final = respx.post(url__startswith="https://litellm-qa.openai.azure.com").mock(
+                return_value=httpx.Response(200, json={"ok": True})
+            )
+            response: Final = await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert (response.status_code, response.headers.get("retry-after")) == (429, "7")
+        assert not deployment_route.called
+
 
 NIM_INFER_BODY = {
     "input": [
