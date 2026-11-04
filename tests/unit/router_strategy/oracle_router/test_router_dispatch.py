@@ -11,7 +11,7 @@ from litellm.types.router import Deployment, LiteLLM_Params, RequestType
 
 
 def _oracle(router: Router, name: str):
-    return router.oracle_routers[name][0].strategy
+    return router.registry().plugins("oracle")[name][0].strategy
 
 
 def _model_list(decision_maker=None, verifier=None, extra=()):
@@ -60,7 +60,7 @@ def test_prefix_is_classified_as_oracle_and_not_as_a_semantic_router():
 
 def test_init_registers_the_router_and_exactly_one_hook():
     router = Router(model_list=_model_list())
-    assert "oracle" in router.oracle_routers
+    assert "oracle" in router.registry().plugins("oracle")
     assert _oracle(router, "oracle").models == ("smart", "fast")
     hooks = [hook for hook in _oracle_hooks() if hook.oracle_router is _oracle(router, "oracle")]
     assert len(hooks) == 1
@@ -126,7 +126,7 @@ def test_deleting_the_deployment_unregisters_the_router_and_its_hook():
     router = Router(model_list=_model_list())
     before = _oracle(router, "oracle")
     router.delete_deployment(id=router.get_model_ids(model_name="oracle")[0])
-    assert "oracle" not in router.oracle_routers
+    assert "oracle" not in router.registry().plugins("oracle")
     assert all(hook.oracle_router is not before for hook in _oracle_hooks())
 
 
@@ -161,7 +161,7 @@ def test_resolve_strategy_router_finds_registered_strategy_routers_only():
     model_list[1]["model_info"] = {"litellm_routing_preferences": {"quality_tier": 3}}
     model_list[2]["model_info"] = {"litellm_routing_preferences": {"quality_tier": 1}}
     router = Router(model_list=model_list)
-    assert router._resolve_strategy_router("tiered") is router.quality_routers["tiered"][0].strategy
+    assert router._resolve_strategy_router("tiered") is router.registry().plugins("quality")["tiered"][0].strategy
     assert router._resolve_strategy_router("smart") is None and router._resolve_strategy_router("ghost") is None
 
 
@@ -244,11 +244,11 @@ def test_custom_plugins_load_from_the_config_file_but_never_for_models_written_t
                 model_info={"id": "api-oracle-1", "db_model": True},
             )
         )
-    assert popen_calls == [] and "api-oracle" not in router.oracle_routers
+    assert popen_calls == [] and "api-oracle" not in router.registry().plugins("oracle")
 
 
 def test_strategy_router_dependencies_cover_available_models():
-    from litellm.router_utils.auto_router_model_naming import strategy_router_dependencies
+    from litellm.router_strategy.auto_router.auto_router_model_naming import strategy_router_dependencies
 
     deps = strategy_router_dependencies(
         {"model": "auto_router/oracle_router", "oracle_router_config": {"available_models": ["smart", "fast"]}}

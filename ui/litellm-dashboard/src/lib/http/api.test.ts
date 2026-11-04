@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchClient } from "./api";
+import { ApiError } from "./client";
+import { shouldRetry } from "@/contexts/ReactQueryProvider";
 import {
   registerAuthHeaderNameGetter,
   registerAuthTokenGetter,
@@ -68,6 +70,61 @@ describe("typed api client middleware", () => {
       headers: { "x-litellm-key": "Bearer explicit-token" },
     });
     expect(requests[0].headers.get("x-litellm-key")).toBe("Bearer explicit-token");
+  });
+
+  it("asks for JSON on a bodyless GET so the next dev rewrite routes it to the proxy, not the page", async () => {
+    const { fetch, requests } = capturingFetch(jsonResponse(200, { data: [] }));
+
+    await fetchClient.GET("/lens", { fetch });
+
+    expect(requests[0].headers.get("Accept")).toBe("application/json");
+    expect(requests[0].headers.get("Content-Type")).toBeNull();
+  });
+
+  it("keeps an Accept header the caller set", async () => {
+    const { fetch, requests } = capturingFetch(jsonResponse(200, { data: [] }));
+
+    await fetchClient.GET("/lens", { fetch, headers: { Accept: "text/event-stream" } });
+
+    expect(requests[0].headers.get("Accept")).toBe("text/event-stream");
+  });
+
+  it("reports a non-JSON success body as an ApiError naming the path that react-query will not retry", async () => {
+    const onError = vi.fn();
+    registerErrorHandler(onError);
+    const html = new Response("<!DOCTYPE html><html></html>", {
+      status: 200,
+      headers: { "Content-Type": "text/html" },
+    });
+    const { fetch } = capturingFetch(html);
+
+    const error = await fetchClient.GET("/lens", { fetch }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).message).toBe("Expected JSON from /lens but the server returned text/html");
+    expect((error as ApiError).status).toBe(200);
+    expect(onError).toHaveBeenCalledWith("Expected JSON from /lens but the server returned text/html");
+    expect(shouldRetry(0, error)).toBe(false);
+  });
+
+  it("accepts a JSON success body whose content type carries a charset", async () => {
+    const response = new Response(JSON.stringify({ data: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    });
+    const { fetch } = capturingFetch(response);
+
+    const { data } = await fetchClient.GET("/model_group/info", { fetch });
+
+    expect(data).toEqual({ data: [] });
+  });
+
+  it("accepts a JSON body served without a JSON content type", async () => {
+    const { fetch } = capturingFetch(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+
+    const { data } = await fetchClient.GET("/model_group/info", { fetch });
+
+    expect(data).toEqual({ data: [] });
   });
 
   it("omits the auth header when no token is set", async () => {

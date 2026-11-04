@@ -8,8 +8,10 @@ from typing import Final, get_type_hints
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.constants import MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -17,6 +19,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    hierarchical_router_settings_updates,
     log_llm_api_exception,
     resolve_litellm_call_id,
 )
@@ -34,8 +37,10 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.utils import CallTypes
 
 router: Final = APIRouter()
+_IMAGE_GENERATION_MODEL_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
@@ -132,6 +137,19 @@ async def image_generation(
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
+        if llm_router is not None:
+            requested_model: Final = _IMAGE_GENERATION_MODEL_ADAPTER.validate_python(data.get("model"))
+            data.update(
+                await hierarchical_router_settings_updates(
+                    requested_model=requested_model,
+                    user_api_key_dict=user_api_key_dict,
+                    llm_router=llm_router,
+                    proxy_config=proxy_config,
+                    proxy_logging_obj=proxy_logging_obj,
+                    apply_model_group_alias=request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is not True,
+                )
+            )
+
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         prompt_value: Final = data.get("prompt")
         if prompt_value is not None:
@@ -156,6 +174,7 @@ async def image_generation(
             route_type="aimage_generation",
             llm_router=llm_router,
             user_model=user_model,
+            user_api_key_dict=user_api_key_dict,
         )
         response = await llm_call
 
@@ -203,7 +222,10 @@ async def image_generation(
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+            dispatched_call_type=CallTypes.aimage_generation.value,
         )
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):
@@ -259,7 +281,7 @@ async def image_edit_api(
     curl -s -D >(grep -i x-request-id >&2) \
     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png) \
     -X POST "http://localhost:4000/v1/images/edits" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F "model=gpt-image-1" \
         -F "image[]=@soap.png" \
         -F 'prompt=Create a studio ghibli image of this'
@@ -280,11 +302,11 @@ async def image_edit_api(
     # The validation will be done at the model level if image is truly required
 
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -298,7 +320,7 @@ async def image_edit_api(
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
     form_fields: Final = coerce_numeric_form_fields(
-        parsed_body=await _read_request_body(request=request),
+        parsed_body=await read_request_body(request=request),
         numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
     )
     data: Final = {
@@ -345,7 +367,7 @@ async def image_edit_api(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

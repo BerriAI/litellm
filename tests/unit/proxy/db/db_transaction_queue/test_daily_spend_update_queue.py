@@ -287,7 +287,7 @@ async def test_queue_max_size_triggers_aggregation(
 ):
     """Test that reaching MAX_SIZE_IN_MEMORY_QUEUE triggers aggregation"""
     # Override MAX_SIZE_IN_MEMORY_QUEUE for testing
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     monkeypatch.setattr(daily_spend_update_queue, "MAX_SIZE_IN_MEMORY_QUEUE", 6)
 
     test_key = "user1_2023-01-01_key123_gpt-4_openai"

@@ -201,10 +201,10 @@ def test_invalid_marengo_3_params_are_rejected_before_the_request_is_sent(params
 
 
 def test_config_sends_the_nested_payload_for_marengo_3_and_the_flat_one_for_2_7():
-    nested = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_US)._transform_request(
+    nested = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_US).transform_request(
         input="hello", inference_params={"input_type": "text"}
     )
-    flat = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_27_US)._transform_request(
+    flat = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_27_US).transform_request(
         input="hello", inference_params={"input_type": "text"}
     )
     assert nested == {"inputType": "text", "text": {"inputText": "hello"}}
@@ -212,20 +212,20 @@ def test_config_sends_the_nested_payload_for_marengo_3_and_the_flat_one_for_2_7(
 
 
 def test_config_without_a_model_keeps_the_2_7_payload():
-    request = TwelveLabsMarengoEmbeddingConfig()._transform_request(input="hello", inference_params={})
+    request = TwelveLabsMarengoEmbeddingConfig().transform_request(input="hello", inference_params={})
     assert request == {"inputType": "text", "inputText": "hello", "textTruncate": "end"}
 
 
 @pytest.mark.parametrize("input_type", ["video", "audio"])
 def test_marengo_3_video_and_audio_still_require_the_async_route(input_type):
     with pytest.raises(ValueError, match=f"Input type '{input_type}' requires async_invoke route"):
-        TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_BASE)._transform_request(
+        TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_BASE).transform_request(
             input="s3://media/clip.mp4", inference_params={"input_type": input_type}
         )
 
 
 def test_marengo_3_async_invoke_wraps_the_nested_payload_with_the_base_model_id():
-    request = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_BASE)._transform_request(
+    request = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_BASE).transform_request(
         input="s3://media/clip.mp4",
         inference_params={
             "input_type": "video",
@@ -252,7 +252,7 @@ def test_marengo_3_async_invoke_wraps_the_nested_payload_with_the_base_model_id(
 
 def test_marengo_3_async_invoke_requires_an_output_s3_uri():
     with pytest.raises(ValueError, match="output_s3_uri cannot be empty"):
-        TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_BASE)._transform_request(
+        TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_BASE).transform_request(
             input="hello",
             inference_params={"input_type": "text"},
             async_invoke_route=True,
@@ -355,8 +355,8 @@ def test_drop_params_comes_from_the_call_or_the_global(monkeypatch):
 def test_config_drops_marengo_2_7_only_params_only_when_asked():
     config = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_US)
     with pytest.raises(BedrockError, match=r"Marengo 2\.7 parameters textTruncate"):
-        config._transform_request("hello", {"textTruncate": "end"})
-    assert config._transform_request("hello", {"textTruncate": "end"}, drop_params=True) == {
+        config.transform_request("hello", {"textTruncate": "end"})
+    assert config.transform_request("hello", {"textTruncate": "end"}, drop_params=True) == {
         "inputType": "text",
         "text": {"inputText": "hello"},
     }

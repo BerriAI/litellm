@@ -1,12 +1,15 @@
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
-import { screen } from "@testing-library/react";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
+import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails");
+vi.mock("@/app/(dashboard)/hooks/users/useUsers");
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("./AccessGroupsModal/AccessGroupEditModal", () => ({
   AccessGroupEditModal: ({ visible, onCancel }: { visible: boolean; onCancel: () => void }) =>
@@ -18,6 +21,7 @@ vi.mock("./AccessGroupsModal/AccessGroupEditModal", () => ({
 }));
 
 const mockUseAccessGroupDetails = vi.mocked(useAccessGroupDetails);
+const mockUseUserLookup = vi.mocked(useUserLookup);
 
 const baseMockReturnValue = {
   data: undefined,
@@ -58,6 +62,7 @@ const createMockAccessGroup = (overrides: Partial<AccessGroupResponse> = {}): Ac
   assigned_key_ids: ["key-1", "key-2"],
   access_mcp_servers: [{ id: "mcp-1", name: "GitHub MCP" }],
   access_agents: [{ id: "agent-1", name: "Support Agent" }],
+  access_skill_names: ["private-plugin"],
   assigned_teams: [{ id: "team-1", name: "Platform Team" }],
   assigned_keys: [
     { id: "key-1", name: "ci-key" },
@@ -88,6 +93,7 @@ describe("AccessGroupDetail", () => {
       ...baseMockReturnValue,
       data: createMockAccessGroup(),
     } as ReturnType<typeof useAccessGroupDetails>);
+    mockUseUserLookup.mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
   });
 
   it("should render the component", () => {
@@ -141,6 +147,64 @@ describe("AccessGroupDetail", () => {
 
     expect(screen.getByText("Group Details")).toBeInTheDocument();
     expect(screen.getByText("A test access group")).toBeInTheDocument();
+  });
+
+  describe("user references", () => {
+    it("shows a user's alias as a linked name and reveals the id in a tooltip", async () => {
+      const user = userEvent.setup();
+      mockUseUserLookup.mockReturnValue({
+        data: { user_alias: "Alice", user_email: "alice@example.com" },
+      } as ReturnType<typeof useUserLookup>);
+      renderWith({ created_by: "user-123" });
+
+      const link = screen.getByRole("link", { name: "Alice" });
+      expect(link).toHaveAttribute("href", expect.stringContaining("/users?user=user-123"));
+      expect(screen.queryByText("user-123")).not.toBeInTheDocument();
+
+      await user.hover(link);
+
+      expect(await screen.findByText("user-123")).toBeInTheDocument();
+    });
+
+    it("shows the email when the user has no alias", () => {
+      mockUseUserLookup.mockReturnValue({
+        data: { user_alias: null, user_email: "alice@example.com" },
+      } as ReturnType<typeof useUserLookup>);
+      renderWith({ updated_by: "user-456" });
+
+      expect(screen.getByRole("link", { name: "alice@example.com" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/users?user=user-456"),
+      );
+    });
+
+    it("falls back to the email when the alias contains only whitespace", () => {
+      mockUseUserLookup.mockReturnValue({
+        data: { user_alias: "   ", user_email: "alice@example.com" },
+      } as ReturnType<typeof useUserLookup>);
+      renderWith({ created_by: "user-789" });
+
+      expect(screen.getByRole("link", { name: "alice@example.com" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/users?user=user-789"),
+      );
+    });
+
+    it("links the user id when lookup has no user details", () => {
+      renderWith({ updated_by: "missing-user" });
+
+      expect(screen.getByRole("link", { name: "missing-user" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/users?user=missing-user"),
+      );
+    });
+
+    it("shows the default admin badge without looking up its user id", () => {
+      renderWith({ created_by: DEFAULT_PROXY_ADMIN_USER_ID });
+
+      expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
+      expect(mockUseUserLookup).toHaveBeenCalledWith(null);
+    });
   });
 
   it("should display em dash when description is empty", () => {
@@ -336,6 +400,34 @@ describe("AccessGroupDetail", () => {
 
       expect(screen.getByText("No MCP servers assigned to this group")).toBeInTheDocument();
     });
+
+    it("should list the allowed tools per server, with deny-all and unrestricted servers spelled out", async () => {
+      const user = userEvent.setup();
+      renderWith({
+        access_mcp_servers: [
+          { id: "mcp-1", name: "GitHub MCP" },
+          { id: "mcp-2", name: "Jira MCP" },
+          { id: "mcp-3", name: "Slack MCP" },
+        ],
+        mcp_tool_permissions: { "mcp-1": ["list_issues", "create_issue"], "mcp-2": [] },
+      });
+
+      await user.click(screen.getByRole("tab", { name: /MCP Servers/i }));
+
+      const list = screen.getByRole("region", { name: "MCP tool permissions" });
+      expect(within(list).getByText("list_issues, create_issue")).toBeInTheDocument();
+      expect(within(list).getByText("No tools")).toBeInTheDocument();
+      expect(within(list).getByText("All tools")).toBeInTheDocument();
+    });
+
+    it("should not render a tool permission list when the group has none", async () => {
+      const user = userEvent.setup();
+      renderWith({ mcp_tool_permissions: null });
+
+      await user.click(screen.getByRole("tab", { name: /MCP Servers/i }));
+
+      expect(screen.queryByRole("region", { name: "MCP tool permissions" })).not.toBeInTheDocument();
+    });
   });
 
   describe("Agents tab", () => {
@@ -365,6 +457,26 @@ describe("AccessGroupDetail", () => {
       await user.click(screen.getByRole("tab", { name: /Agents/i }));
 
       expect(screen.getByText("No agents assigned to this group")).toBeInTheDocument();
+    });
+  });
+
+  describe("Skills tab", () => {
+    it("should list the plugin names granted by the group", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
+
+      await user.click(screen.getByRole("tab", { name: /Skills/i }));
+
+      expect(screen.getByText("private-plugin")).toBeInTheDocument();
+    });
+
+    it("should show empty state when none assigned", async () => {
+      const user = userEvent.setup();
+      renderWith({ access_skill_names: [] });
+
+      await user.click(screen.getByRole("tab", { name: /Skills/i }));
+
+      expect(screen.getByText("No skills assigned to this group")).toBeInTheDocument();
     });
   });
 

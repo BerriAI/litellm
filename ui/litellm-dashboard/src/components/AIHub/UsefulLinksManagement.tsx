@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
-import { getProxyBaseUrl, getPublicModelHubInfo, updateUsefulLinksCall } from "../networking";
+import { getProxyBaseUrl, getPublicModelHubInfo, getUiPageUrl, updateUsefulLinksCall } from "../networking";
 
 interface UsefulLinksManagementProps {
   accessToken: string | null;
@@ -292,7 +292,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
             <p className="text-sm font-medium text-foreground">Manage Existing Links</p>
             <div className="flex items-center space-x-2">
               <Link
-                href={`${getProxyBaseUrl()}/ui/model_hub_table`}
+                href={getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs bg-info/10 text-info px-3 py-1.5 rounded-sm hover:bg-info/15 flex items-center"

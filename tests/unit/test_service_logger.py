@@ -7,10 +7,17 @@ is called without call_type in kwargs (e.g. from batch polling callbacks).
 
 import pytest
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, patch
+
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
 from litellm._service_logger import ServiceLogging
+from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.types.services import ServiceTypes
 
 
@@ -316,3 +323,47 @@ async def test_only_redis_service_spans_carry_the_ambient_key_family(monkeypatch
         "redis.get router_session_pins": "router_session_pins",
         "batch_write_to_db _PROXY_track_cost_callback": None,
     }
+
+
+def _in_memory_provider(exporter: InMemorySpanExporter) -> TracerProvider:
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider
+
+
+@pytest.mark.asyncio
+async def test_generic_otel_logger_receives_service_event_once_beside_langfuse_otel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    langfuse_exporter: Final = InMemorySpanExporter()
+    generic_exporter: Final = InMemorySpanExporter()
+    langfuse_provider: Final = _in_memory_provider(langfuse_exporter)
+    generic_provider: Final = _in_memory_provider(generic_exporter)
+    langfuse_logger: Final = LangfuseOtelLogger(
+        config=OpenTelemetryConfig(exporter="console", skip_set_global=True), tracer_provider=langfuse_provider
+    )
+    generic_logger: Final = OpenTelemetry(
+        config=OpenTelemetryConfig(exporter="console", skip_set_global=True), tracer_provider=generic_provider
+    )
+    monkeypatch.setattr(litellm, "service_callback", [langfuse_logger, generic_logger])
+    parent: Final = generic_logger.tracer.start_span("parent")
+
+    try:
+        await ServiceLogging().async_service_success_hook(
+            service=ServiceTypes.DB,
+            call_type="success",
+            duration=0.1,
+            parent_otel_span=parent,
+            start_time=0.0,
+            end_time=1.0,
+        )
+    finally:
+        langfuse_provider.shutdown()
+        generic_provider.shutdown()
+
+    service_spans: Final = [
+        span for span in generic_exporter.get_finished_spans() if span.attributes.get("service") == ServiceTypes.DB.value
+    ]
+    assert len(service_spans) == 1
+    assert service_spans[0].attributes.get("call_type") == "success"
+    assert langfuse_exporter.get_finished_spans() == ()

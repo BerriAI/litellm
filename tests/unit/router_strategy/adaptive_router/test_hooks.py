@@ -10,6 +10,7 @@ from litellm.router_strategy.adaptive_router.config import (
 )
 from litellm.router_strategy.adaptive_router.hooks import (
     AdaptiveRouterPostCallHook,
+    AdaptiveRouterResponseHeaderHook,
     _recent_tool_results,
     _resolve_session_key,
 )
@@ -337,8 +338,7 @@ async def test_post_call_response_headers_hook_returns_chosen_model_header():
     """The header hook returns the `x-litellm-adaptive-router-model` header
     so proxy header construction picks it up (works for both streaming and
     non-streaming; `async_post_call_success_hook` is too late for streaming)."""
-    hook = _make_hook()
-    headers = await hook.async_post_call_response_headers_hook(
+    headers = await AdaptiveRouterResponseHeaderHook().async_post_call_response_headers_hook(
         data={"metadata": {"adaptive_router_chosen_model": "smart"}},
         user_api_key_dict=MagicMock(),
         response=MagicMock(),
@@ -348,8 +348,7 @@ async def test_post_call_response_headers_hook_returns_chosen_model_header():
 
 @pytest.mark.asyncio
 async def test_post_call_response_headers_hook_noop_when_metadata_missing_key():
-    hook = _make_hook()
-    headers = await hook.async_post_call_response_headers_hook(
+    headers = await AdaptiveRouterResponseHeaderHook().async_post_call_response_headers_hook(
         data={"metadata": {"litellm_session_id": "sess-A"}},
         user_api_key_dict=MagicMock(),
         response=MagicMock(),
@@ -359,8 +358,7 @@ async def test_post_call_response_headers_hook_noop_when_metadata_missing_key():
 
 @pytest.mark.asyncio
 async def test_post_call_response_headers_hook_noop_when_no_metadata():
-    hook = _make_hook()
-    headers = await hook.async_post_call_response_headers_hook(
+    headers = await AdaptiveRouterResponseHeaderHook().async_post_call_response_headers_hook(
         data={},
         user_api_key_dict=MagicMock(),
         response=MagicMock(),
@@ -370,8 +368,7 @@ async def test_post_call_response_headers_hook_noop_when_no_metadata():
 
 @pytest.mark.asyncio
 async def test_post_call_response_headers_hook_noop_when_metadata_not_dict():
-    hook = _make_hook()
-    headers = await hook.async_post_call_response_headers_hook(
+    headers = await AdaptiveRouterResponseHeaderHook().async_post_call_response_headers_hook(
         data={"metadata": "not-a-dict"},
         user_api_key_dict=MagicMock(),
         response=MagicMock(),

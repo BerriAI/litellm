@@ -36,7 +36,7 @@ def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 def _oracle_routers() -> tuple["OracleRouter", ...]:
     from litellm.proxy.proxy_server import llm_router
 
-    registry: Final = llm_router.oracle_routers if llm_router is not None else {}
+    registry: Final = llm_router.registry().plugins("oracle") if llm_router is not None else {}
     tagged_entries: Final = tuple(chain.from_iterable(registry.values()))
     return tuple(tagged.strategy for tagged in tagged_entries)
 

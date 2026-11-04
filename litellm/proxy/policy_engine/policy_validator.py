@@ -139,17 +139,13 @@ class PolicyValidator:
             return True  # Can't validate without router, assume valid
 
         try:
+            registry: Final = self.llm_router.registry()
             # Check if model is in router's model names
-            if model in self.llm_router.model_names:
+            if model in registry.names(kind="group_set"):
                 return True
 
             # Check if model matches any pattern via pattern router
-            if hasattr(self.llm_router, "pattern_router"):
-                pattern_deployments: Final = self.llm_router.pattern_router.get_deployments_by_pattern(model=model)
-                if pattern_deployments:
-                    return True
-
-            return False
+            return bool(registry.patterns().get_deployments_by_pattern(model=model))
         except Exception as e:
             verbose_proxy_logger.warning("Could not check model '%s': %s", model, e)
             return True  # Assume valid on error
@@ -193,7 +189,7 @@ class PolicyValidator:
         # A concrete entry is one the request-time matcher compares by exact equality;
         # only a trailing "*" is a wildcard (RouteChecks._is_wildcard_pattern), and those
         # are left unvalidated since they may match zero entities today and more later.
-        is_pattern: Final = RouteChecks._is_wildcard_pattern
+        is_pattern: Final = RouteChecks.is_wildcard_pattern
         concrete_teams: Final = [t for t in (teams or []) if not is_pattern(pattern=t)]
         concrete_keys: Final = [k for k in (keys or []) if not is_pattern(pattern=k)]
         concrete_models: Final = [m for m in (models or []) if not is_pattern(pattern=m)]
@@ -429,7 +425,7 @@ class PolicyValidator:
 
         for policy_name, policy_data in policy_config.items():
             try:
-                policy = temp_registry._parse_policy(policy_name, policy_data)
+                policy = temp_registry.parse_policy(policy_name, policy_data)
                 policies[policy_name] = policy
             except Exception as e:
                 errors.append(

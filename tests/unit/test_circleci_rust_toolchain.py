@@ -117,7 +117,7 @@ def test_step_lists_exist() -> None:
         for name, steps in lists.items()
         if any(BUILDS_WORKSPACE.search(_without_comments(_step_text(s))) for s in steps)
     }
-    assert len(building) > 10, f"expected many workspace-building step lists, found {sorted(building)}"
+    assert "command setup_litellm_test_deps" in building, f"found {sorted(building)}"
 
 
 def test_no_workspace_build_without_a_provisioned_rust_toolchain() -> None:

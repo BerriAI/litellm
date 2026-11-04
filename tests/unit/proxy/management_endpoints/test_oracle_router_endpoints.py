@@ -39,9 +39,21 @@ class _Maker:
         return {"type": "test"}
 
 
+class _Registry:
+    def __init__(self, oracle: OracleRouter) -> None:
+        self._oracle_routers = {oracle.router_name: [TaggedPreRoutingStrategy(tags=(), strategy=oracle)]}
+
+    def plugins(self, kind: str):
+        assert kind == "oracle"
+        return self._oracle_routers
+
+
 class _LLMRouter:
     def __init__(self, oracle: OracleRouter) -> None:
-        self.oracle_routers = {oracle.router_name: [TaggedPreRoutingStrategy(tags=(), strategy=oracle)]}
+        self._registry = _Registry(oracle)
+
+    def registry(self) -> _Registry:
+        return self._registry
 
 
 @pytest.fixture

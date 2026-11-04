@@ -1,14 +1,19 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, LoaderCircle } from "lucide-react";
+import { ChevronRight, Inbox, LoaderCircle } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { SystemOneAnswer, SystemOneResponse } from "./lib/schemas";
+import type { OpenAIDecisionsResponse } from "./lib/openAIDecisions";
+
+const SCORE_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
 interface ResponseViewProps {
-  response?: SystemOneResponse;
+  response?: SystemOneResponse | OpenAIDecisionsResponse;
+  view?: "form" | "curl";
   fallbackModel?: string;
   latencyMs?: number;
   error?: string;
@@ -24,6 +29,7 @@ function ProbabilityMeter({
   probability: number;
   selected?: boolean;
 }) {
+  const { t } = useTranslation();
   const percentage = Math.round(probability * 100);
   return (
     <div className="grid gap-1.5">
@@ -33,9 +39,11 @@ function ProbabilityMeter({
       </div>
       <div
         role="meter"
-        aria-label={`${label} probability`}
+        aria-label={t("playground.systemOne.responseView.probability", { label })}
         aria-valuenow={percentage}
-        aria-valuetext={selected ? `${percentage}%, selected` : `${percentage}%`}
+        aria-valuetext={
+          selected ? t("playground.systemOne.responseView.percentSelected", { percentage }) : `${percentage}%`
+        }
         aria-valuemin={0}
         aria-valuemax={100}
         className="h-2 overflow-hidden rounded-full bg-muted"
@@ -50,12 +58,13 @@ function ProbabilityMeter({
 }
 
 function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
+  const { t } = useTranslation();
   if (answer.type === "noul") {
     const percentage = Math.round(answer.noul * 100);
     return (
       <div className="grid gap-3">
-        <p className="text-sm font-medium">{percentage}% yes</p>
-        <ProbabilityMeter label="Yes" probability={answer.noul} />
+        <p className="text-sm font-medium">{t("playground.systemOne.responseView.percentYes", { percentage })}</p>
+        <ProbabilityMeter label={t("playground.systemOne.responseView.yes")} probability={answer.noul} />
       </div>
     );
   }
@@ -65,10 +74,12 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
     return (
       <div className="grid gap-4">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">Selected choice</span>
+          <span className="text-xs text-muted-foreground">{t("playground.systemOne.responseView.selectedChoice")}</span>
           <Badge>{answer.choice}</Badge>
-          {answer.confidence !== undefined && (
-            <Badge variant="outline">{Math.round(answer.confidence * 100)}% confidence</Badge>
+          {typeof answer.confidence === "number" && (
+            <Badge variant="outline">
+              {t("playground.systemOne.responseView.confidence", { percentage: Math.round(answer.confidence * 100) })}
+            </Badge>
           )}
         </div>
         <div className="grid gap-3">
@@ -84,15 +95,21 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">Score</span>
-        <Badge>{answer.score}</Badge>
-        {answer.confidence !== undefined && (
-          <Badge variant="outline">{Math.round(answer.confidence * 100)}% confidence</Badge>
+        <span className="text-xs text-muted-foreground">{t("playground.systemOne.responseView.score")}</span>
+        <Badge>{SCORE_FORMAT.format(answer.score)}</Badge>
+        {typeof answer.confidence === "number" && (
+          <Badge variant="outline">
+            {t("playground.systemOne.responseView.confidence", { percentage: Math.round(answer.confidence * 100) })}
+          </Badge>
         )}
       </div>
       <div className="grid gap-3">
         {levels.map(([level, probability]) => {
-          const label = answer.legend?.[level] ? `${level}: ${answer.legend[level]}` : level;
+          const description = answer.legend?.[level];
+          const label =
+            description === undefined
+              ? level
+              : `${level}: ${typeof description === "string" ? description : JSON.stringify(description)}`;
           return (
             <ProbabilityMeter
               key={level}
@@ -107,7 +124,93 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
   );
 }
 
-export default function ResponseView({ response, fallbackModel, latencyMs, error, isLoading }: ResponseViewProps) {
+function OpenAIAnswerDetails({ answer }: { answer: OpenAIDecisionsResponse["answers"][number] }) {
+  const { t } = useTranslation();
+  switch (answer.type) {
+    case "refusal":
+      return <p className="text-sm text-muted-foreground">{t("playground.systemOne.responseView.refused")}</p>;
+    case "predicate":
+      return <AnswerDetails answer={{ type: "noul", noul: answer.probability }} />;
+    case "choice":
+      return (
+        <AnswerDetails
+          answer={{
+            type: "choice",
+            choice: String(answer.choice),
+            confidence: answer.confidence,
+            probabilities: Object.fromEntries(
+              answer.probabilities.map(({ value, probability }) => [String(value), probability]),
+            ),
+          }}
+        />
+      );
+    case "score":
+      return (
+        <AnswerDetails
+          answer={{
+            type: "score",
+            score: answer.score,
+            confidence: answer.confidence,
+            probabilities: Object.fromEntries(
+              answer.probabilities.map(({ value, probability }) => [String(value), probability]),
+            ),
+            legend: Object.fromEntries(answer.probabilities.map(({ value, label }) => [String(value), label])),
+          }}
+        />
+      );
+  }
+}
+
+function RawResponse({ response }: { response: NonNullable<ResponseViewProps["response"]> }) {
+  const { t } = useTranslation();
+  return (
+    <section aria-label={t("playground.systemOne.responseView.rawJson")}>
+      <pre className="whitespace-pre-wrap wrap-anywhere rounded-md bg-muted p-3 font-mono text-xs">
+        {JSON.stringify(response, null, 2)}
+      </pre>
+    </section>
+  );
+}
+
+function AnswerCards({ answers }: { answers: SystemOneResponse["answers"] | OpenAIDecisionsResponse["answers"] }) {
+  const { t } = useTranslation();
+  const cards = Array.isArray(answers)
+    ? answers.map((answer, index) => ({
+        id: index,
+        name: answer.name ?? t("playground.systemOne.responseView.question", { number: index + 1 }),
+        type: answer.type,
+        details: <OpenAIAnswerDetails answer={answer} />,
+      }))
+    : Object.entries(answers).map(([id, answer]) => ({
+        id,
+        name: id,
+        type: answer.type,
+        details: <AnswerDetails answer={answer} />,
+      }));
+  return (
+    <ul className="grid gap-3">
+      {cards.map(({ id, name, type, details }) => (
+        <li key={id} className="grid gap-3 rounded-lg bg-muted/50 p-4">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="font-mono text-[13px] font-medium">{name}</h3>
+            <span className="text-xs text-muted-foreground">{type}</span>
+          </div>
+          {details}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export default function ResponseView({
+  response,
+  view = "form",
+  fallbackModel,
+  latencyMs,
+  error,
+  isLoading,
+}: ResponseViewProps) {
+  const { t } = useTranslation();
   const [showRaw, setShowRaw] = useState(false);
 
   if (isLoading) {
@@ -115,7 +218,7 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
       <Card>
         <CardContent className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
-          Calculating calibrated probabilities
+          {t("playground.systemOne.responseView.loading")}
         </CardContent>
       </Card>
     );
@@ -124,7 +227,7 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
   if (error) {
     return (
       <Alert variant="destructive">
-        <AlertTitle>System One request failed</AlertTitle>
+        <AlertTitle>{t("playground.systemOne.responseView.failed")}</AlertTitle>
         <AlertDescription>{error}</AlertDescription>
       </Alert>
     );
@@ -132,11 +235,16 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
 
   if (!response) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Calibrated probabilities</CardTitle>
-          <CardDescription>Send a request to see System One answers and probabilities.</CardDescription>
+      <Card className="gap-0 py-0">
+        <CardHeader className="flex min-h-12 flex-row items-center border-b px-4 py-2 [.border-b]:pb-2">
+          <CardTitle className="text-sm font-medium">{t("playground.systemOne.responseView.response")}</CardTitle>
         </CardHeader>
+        <CardContent className="flex min-h-[360px] flex-col items-center justify-center gap-3 p-4 text-center">
+          <div className="flex size-10 items-center justify-center rounded-lg bg-muted">
+            <Inbox className="size-5 text-muted-foreground" />
+          </div>
+          <p className="text-sm text-muted-foreground">{t("playground.systemOne.responseView.empty")}</p>
+        </CardContent>
       </Card>
     );
   }
@@ -144,52 +252,54 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
   const model = response.model ?? fallbackModel;
 
   return (
-    <Card className="wrap-anywhere">
-      <CardHeader>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="grid gap-1">
-            <CardTitle>Calibrated probabilities</CardTitle>
-            {model && <CardDescription>{model}</CardDescription>}
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            {latencyMs !== undefined && <Badge variant="outline">{Math.round(latencyMs)} ms</Badge>}
-            {response.usage && (
-              <Badge variant="outline">
-                {response.usage.input_tokens} input / {response.usage.output_tokens} output tokens
-              </Badge>
-            )}
-          </div>
+    <Card className="gap-0 overflow-hidden py-0 wrap-anywhere">
+      <CardHeader className="flex min-h-12 flex-row flex-wrap items-center justify-between gap-2 border-b px-4 py-2 [.border-b]:pb-2">
+        <CardTitle className="text-sm font-medium">
+          {view === "curl"
+            ? t("playground.systemOne.responseView.responseJson")
+            : t("playground.systemOne.responseView.response")}
+        </CardTitle>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {latencyMs !== undefined && (
+            <Badge variant="outline" className="font-mono text-[11px] font-normal tabular-nums">
+              {t("playground.systemOne.responseView.latency", { ms: Math.round(latencyMs) })}
+            </Badge>
+          )}
+          {model && (
+            <Badge
+              variant="outline"
+              className="h-auto max-w-full min-w-0 shrink font-mono text-[11px] font-normal wrap-anywhere whitespace-normal"
+            >
+              {model}
+            </Badge>
+          )}
+          {response.usage && (
+            <Badge variant="outline" className="font-mono text-[11px] font-normal tabular-nums">
+              {t("playground.systemOne.responseView.usage", {
+                input: response.usage.input_tokens,
+                output: response.usage.output_tokens,
+              })}
+            </Badge>
+          )}
         </div>
       </CardHeader>
-      <CardContent className="grid gap-3">
-        {Object.entries(response.answers).map(([id, answer]) => (
-          <Card key={id} size="sm">
-            <CardHeader>
-              <CardTitle className="font-mono">{id}</CardTitle>
-              <CardAction>
-                <Badge variant="secondary">{answer.type}</Badge>
-              </CardAction>
-            </CardHeader>
-            <CardContent>
-              <AnswerDetails answer={answer} />
-            </CardContent>
-          </Card>
-        ))}
-        <Collapsible open={showRaw} onOpenChange={setShowRaw}>
-          <CollapsibleTrigger
-            render={
-              <Button variant="ghost" size="sm">
-                <ChevronDown className="size-4" />
-                Raw response
-              </Button>
-            }
-          />
-          <CollapsibleContent>
-            <pre className="whitespace-pre-wrap wrap-anywhere rounded-md bg-muted p-3 font-mono text-xs">
-              {JSON.stringify(response, null, 2)}
-            </pre>
-          </CollapsibleContent>
-        </Collapsible>
+      <CardContent className="grid gap-3 p-4">
+        {view === "curl" ? <RawResponse response={response} /> : <AnswerCards answers={response.answers} />}
+        {view === "form" && (
+          <Collapsible open={showRaw} onOpenChange={setShowRaw} className="-mx-4 -mb-4 border-t">
+            <CollapsibleTrigger
+              render={
+                <Button variant="ghost" className="w-full justify-start rounded-none px-4 text-muted-foreground">
+                  <ChevronRight className={`size-4 transition-transform ${showRaw ? "rotate-90" : ""}`} />
+                  {t("playground.systemOne.responseView.rawResponse")}
+                </Button>
+              }
+            />
+            <CollapsibleContent className="px-4 pb-4">
+              <RawResponse response={response} />
+            </CollapsibleContent>
+          </Collapsible>
+        )}
       </CardContent>
     </Card>
   );

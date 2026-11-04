@@ -183,7 +183,7 @@ class TestContainerAPI:
                 litellm_metadata={"model_info": {"id": "deployment-abc"}},
             )
 
-        decoded = ResponsesAPIRequestUtils._decode_container_id(response.id)
+        decoded = ResponsesAPIRequestUtils.decode_container_id(response.id)
         assert decoded["model_id"] == "deployment-abc"
         assert decoded["custom_llm_provider"] == "openai"
         assert decoded["response_id"] == "cntr_upstream_123"
@@ -272,7 +272,7 @@ class TestContainerAPI:
 
     def test_retrieve_container_reencodes_short_managed_id_for_routing(self):
         """Short cntr_ IDs must still re-encode output so follow-ups keep router affinity."""
-        short_managed_id = ResponsesAPIRequestUtils._build_container_id(
+        short_managed_id = ResponsesAPIRequestUtils.build_container_id(
             custom_llm_provider="azure",
             model_id="router-gpt",
             container_id="x",
@@ -303,14 +303,14 @@ class TestContainerAPI:
         mock_method.assert_called_once()
         assert mock_method.call_args.kwargs["container_id"] == "x"
         assert response.id.startswith("cntr_")
-        decoded = ResponsesAPIRequestUtils._decode_container_id(response.id)
+        decoded = ResponsesAPIRequestUtils.decode_container_id(response.id)
         assert decoded.get("response_id") == "x"
         assert decoded.get("model_id") == "router-gpt"
         assert decoded.get("custom_llm_provider") == "azure"
 
     def test_delete_container_reencodes_short_managed_id_for_routing(self):
         """Same as retrieve: short managed IDs must round-trip encoding on delete result."""
-        short_managed_id = ResponsesAPIRequestUtils._build_container_id(
+        short_managed_id = ResponsesAPIRequestUtils.build_container_id(
             custom_llm_provider="azure",
             model_id="router-gpt",
             container_id="z",
@@ -336,7 +336,7 @@ class TestContainerAPI:
         mock_method.assert_called_once()
         assert mock_method.call_args.kwargs["container_id"] == "z"
         assert response.id.startswith("cntr_")
-        decoded = ResponsesAPIRequestUtils._decode_container_id(response.id)
+        decoded = ResponsesAPIRequestUtils.decode_container_id(response.id)
         assert decoded.get("response_id") == "z"
         assert decoded.get("model_id") == "router-gpt"
 

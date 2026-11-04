@@ -1,6 +1,6 @@
 from .chat import ChatClient
 from .client import Client
-from .exceptions import UnauthorizedError
+from .exceptions import StreamError, UnauthorizedError
 from .health import HealthManagementClient
 from .model_groups import ModelGroupsManagementClient
 from .models import ModelsManagementClient
@@ -12,6 +12,7 @@ __all__ = [
     "HealthManagementClient",
     "ModelGroupsManagementClient",
     "ModelsManagementClient",
+    "StreamError",
     "UnauthorizedError",
     "UsersManagementClient",
 ]

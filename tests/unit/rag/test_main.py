@@ -11,17 +11,24 @@ aquery carries the completion response with real usage and cost.
 """
 
 import asyncio
+import datetime
 import json
-from typing import Final
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future
+from types import MappingProxyType
+from typing import Final, cast
 from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
 import litellm
+import litellm.utils as litellm_utils
 from litellm._internal_context import is_internal_call
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import CallTypes, ModelResponse
 
@@ -43,10 +50,26 @@ async def _drain_logging_worker() -> None:
 class RecordingLogger(CustomLogger):
     def __init__(self):
         super().__init__()
-        self.success_events = []
+        self.success_events: Final[list[dict[str, object]]] = []
+        self.sync_success_events: Final[list[dict[str, object]]] = []
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         self.success_events.append({"kwargs": kwargs, "response_obj": response_obj})
+
+    def log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.sync_success_events.append({"kwargs": kwargs, "response_obj": response_obj})
 
 
 @pytest.mark.asyncio
@@ -103,6 +126,81 @@ async def test_aquery_single_billing_event_carries_completion_usage_and_cost(use
     assert standard_logging_object["prompt_tokens"] > 0
     assert standard_logging_object["completion_tokens"] > 0
     assert standard_logging_object["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_router", [False, True])
+async def test_aquery_vector_store_search_sub_call_logs_no_sync_success_event_on_the_parent(
+    use_router: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _drain_logging_worker()
+    recording_logger: Final = RecordingLogger()
+
+    class InlineExecutor:
+        def submit(
+            self,
+            fn: Callable[..., object],
+            *args: object,
+            **kwargs: object,
+        ) -> Future[object]:
+            future: Final = Future[object]()
+            future.set_result(fn(*args, **kwargs))
+            return future
+
+    monkeypatch.setattr(litellm_utils, "executor", InlineExecutor())
+    monkeypatch.setattr(litellm_logging, "executor", InlineExecutor())
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+
+    router_kwargs: Final = (
+        {
+            "router": litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "gpt-4o-mini",
+                        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                    }
+                ]
+            )
+        }
+        if use_router
+        else {}
+    )
+
+    response: Final = await litellm.aquery(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What is the secret project codename?"}],
+        retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
+        mock_response="The secret project codename is AZURE-FALCON-42.",
+        **router_kwargs,
+    )
+    assert isinstance(response, ModelResponse), "aquery should return its completion response"
+    assert is_internal_call.get() is False, "aquery should restore the internal-call context"
+    await _drain_logging_worker()
+
+    assert len(recording_logger.success_events) == 1, "aquery should run one async success callback"
+    event: Final = recording_logger.success_events[0]
+    response_obj: Final = event["response_obj"]
+    assert isinstance(response_obj, ModelResponse), "the async callback should receive the completion response"
+    assert response_obj.usage.total_tokens > 0, "the async callback response should include completion usage"
+
+    event_kwargs: Final = cast(Mapping[str, object], event["kwargs"])
+    standard_logging_object: Final = cast(Mapping[str, object], event_kwargs["standard_logging_object"])
+    assert cast(str, standard_logging_object["call_type"]) == "aquery", "the async event should be for aquery"
+    assert cast(int, standard_logging_object["total_tokens"]) > 0, (
+        "the async event should include total completion tokens"
+    )
+    assert cast(int, standard_logging_object["prompt_tokens"]) > 0, "the async event should include prompt tokens"
+    assert cast(int, standard_logging_object["completion_tokens"]) > 0, (
+        "the async event should include completion tokens"
+    )
+    assert cast(float, standard_logging_object["response_cost"]) > 0, "the async event should include completion cost"
+    sync_response_types: Final = [
+        type(event["response_obj"]).__name__ for event in recording_logger.sync_success_events
+    ]
+    assert recording_logger.sync_success_events == [], (
+        "an internal sub-call must not log on the parent's logging object; "
+        f"sync success event response types: {sync_response_types}"
+    )
 
 
 @pytest.mark.asyncio
@@ -536,6 +634,91 @@ async def test_aquery_forwards_vector_store_params_to_search_but_not_completion(
     assert completion_kwargs["api_key"] == "sk-llm-key"
     assert completion_kwargs["api_base"] == "https://llm.example.com"
     assert not ({"milvus_text_field", "outputFields"} & set(completion_kwargs))
+
+
+_UNDECODABLE_FILE: Final = {"filename": "notes.txt", "content": "x"}
+
+
+@pytest.mark.parametrize(
+    ("ingest_options", "expected_provider"),
+    [
+        ({"vector_store": {"custom_llm_provider": "bedrock"}}, "bedrock"),
+        ({"vector_store": MappingProxyType({"custom_llm_provider": "bedrock"})}, "bedrock"),
+        ({"vector_store": {"vector_store_id": "vs_1", 7: "ignored"}}, None),
+        ({}, None),
+    ],
+)
+def test_ingest_failure_is_attributed_to_the_vector_store_provider(
+    ingest_options: dict[str, object], expected_provider: str | None
+) -> None:
+    with pytest.raises(litellm.APIConnectionError, match="Invalid base64-encoded string") as raised:
+        litellm.ingest(ingest_options=ingest_options, file=_UNDECODABLE_FILE)
+
+    assert raised.value.llm_provider == expected_provider
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ingest_options", "expected_provider"),
+    [
+        ({"vector_store": {"custom_llm_provider": "bedrock"}}, "bedrock"),
+        ({"vector_store": MappingProxyType({"custom_llm_provider": "bedrock"})}, "bedrock"),
+        ({"vector_store": {"vector_store_id": "vs_1", 7: "ignored"}}, None),
+        ({}, None),
+    ],
+)
+async def test_aingest_failure_is_attributed_to_the_vector_store_provider(
+    ingest_options: dict[str, object], expected_provider: str | None
+) -> None:
+    with pytest.raises(litellm.APIConnectionError, match="Invalid base64-encoded string") as raised:
+        await litellm.aingest(ingest_options=ingest_options, file=_UNDECODABLE_FILE)
+
+    assert raised.value.llm_provider == expected_provider
+
+
+@pytest.mark.parametrize("vector_store", [None, "openai", ["openai"], [{"api_key": "sk-test"}]])
+def test_ingest_failure_with_a_vector_store_that_is_not_a_mapping_raises_a_validation_error(
+    vector_store: object,
+) -> None:
+    with pytest.raises(ValidationError) as raised:
+        litellm.ingest(ingest_options={"vector_store": vector_store}, file=_UNDECODABLE_FILE)
+
+    assert "sk-test" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vector_store", [None, "openai", ["openai"], [{"api_key": "sk-test"}]])
+async def test_aingest_failure_with_a_vector_store_that_is_not_a_mapping_raises_a_validation_error(
+    vector_store: object,
+) -> None:
+    with pytest.raises(ValidationError) as raised:
+        await litellm.aingest(ingest_options={"vector_store": vector_store}, file=_UNDECODABLE_FILE)
+
+    assert "sk-test" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [None, 5])
+async def test_aquery_with_a_provider_that_is_not_a_string_bills_only_the_completion(provider: object) -> None:
+    messages: Final = [{"role": "user", "content": "hello"}]
+    default_provider_response: Final = await litellm.aquery(
+        model="gpt-4o-mini",
+        messages=messages,
+        retrieval_config={"vector_store_id": "vs_test_123"},
+        mock_response="hi there",
+    )
+
+    response: Final = await litellm.aquery(
+        model="gpt-4o-mini",
+        messages=messages,
+        retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": provider},
+        mock_response="hi there",
+    )
+
+    await _drain_logging_worker()
+
+    assert response._hidden_params["response_cost"] > 0
+    assert response._hidden_params["response_cost"] == default_provider_response._hidden_params["response_cost"]
 
 
 def test_rag_call_types_are_registered():

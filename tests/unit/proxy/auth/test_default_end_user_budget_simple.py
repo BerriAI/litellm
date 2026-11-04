@@ -137,7 +137,7 @@ async def test_budget_enforcement_blocks_over_budget_users():
     Note: Budget enforcement happens in common_checks() via _check_end_user_budget(),
     not in get_end_user_object(). get_end_user_object only fetches the user data.
     """
-    from litellm.proxy.auth.auth_checks import _check_end_user_budget
+    from litellm.proxy.auth.auth_checks import check_end_user_budget
     
     end_user_id = f"test_user_{uuid.uuid4().hex}"
     default_budget_id = str(uuid.uuid4())
@@ -187,7 +187,7 @@ async def test_budget_enforcement_blocks_over_budget_users():
 
     # Now test budget enforcement separately via _check_end_user_budget
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
-        await _check_end_user_budget(
+        await check_end_user_budget(
             end_user_obj=result,
             route="/chat/completions",
         )

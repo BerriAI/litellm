@@ -29,9 +29,11 @@ import pytest
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import unique_marker
 from e2e_http import AbandonedRequest, StreamingResponse
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatMessage, ReliabilityChatBody, RouterSettingsOverride
 from reliability_support import (
+    AZURE_MODEL,
     REPLICA_PROPAGATION_SECONDS,
     chat_override,
     create_azure_benched_on_first_failure_deployment,
@@ -102,6 +104,14 @@ def _hang_up_mid_answer(client: ComplexityRouterClient, key: str, group: str) ->
 
 class TestReliabilityCancelOnDisconnect:
     @pytest.mark.covers("reliability.cooldown.client_disconnect.stays_healthy")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.AZURE,),
+            models=(AZURE_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_client_hanging_up_never_benches_the_deployment(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:

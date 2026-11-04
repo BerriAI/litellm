@@ -3,12 +3,14 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS
 from litellm.litellm_core_utils.audio_utils.utils import (
     normalize_transcription_language_to_bcp47,
     process_audio_file,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -35,6 +37,7 @@ from litellm.types.utils import (
 
 INTERACTIONS_API_REVISION: Final = "2026-05-20"
 WORD_INFO_ANNOTATION_TYPE: Final = "word_info"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -104,8 +107,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
-        return f"{resolved_api_base}/v1beta/interactions"
+        return join_api_base(GeminiModelInfo.get_api_base(api_base), "v1beta/interactions")
 
     def transform_audio_transcription_request(
         self,
@@ -132,7 +134,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         raw_response: Response,
     ) -> TranscriptionResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except ValueError:
             raise GeminiError(
                 status_code=raw_response.status_code,

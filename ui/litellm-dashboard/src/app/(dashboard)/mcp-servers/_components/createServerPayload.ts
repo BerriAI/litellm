@@ -15,6 +15,7 @@ export const AUTH_TYPES_REQUIRING_AUTH_VALUE = [
   AUTH_TYPE.BEARER_TOKEN,
   AUTH_TYPE.TOKEN,
   AUTH_TYPE.BASIC,
+  AUTH_TYPE.AUTHORIZATION,
 ];
 
 export const AUTH_TYPES_REQUIRING_CREDENTIALS = [
@@ -29,7 +30,7 @@ export const AUTH_TYPES_REQUIRING_CREDENTIALS = [
 
 export interface DcrClient {
   readonly client_id: string;
-  readonly client_secret?: string;
+  readonly client_secret?: string | null;
 }
 
 export interface CreateServerUiState {

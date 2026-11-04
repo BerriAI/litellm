@@ -14,6 +14,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrou
 )
 from litellm.types.utils import SpecialEnums
 from litellm.types.llms.openai import BatchJobStatus
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 class TestVertexAIBatchPassthroughHandler:
@@ -86,9 +87,7 @@ class TestVertexAIBatchPassthroughHandler:
                             "error_file_id": None,
                             "completion_window": "24h",
                         }
-                        mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = (
-                            "123456789"
-                        )
+                        mock_transformation.get_batch_id_from_vertex_ai_batch_response.return_value = "123456789"
 
                         # Test the handler
                         result = VertexPassthroughLoggingHandler.batch_prediction_jobs_handler(
@@ -146,7 +145,9 @@ class TestVertexAIBatchPassthroughHandler:
 
     def test_get_actual_model_id_from_router_with_router(self):
         """Test getting model ID when router is available"""
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+        with patch(
+            "litellm.proxy.proxy_server.llm_router", new=route_entry_points_to_stubs(MagicMock())
+        ) as mock_router:
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path"
             ) as mock_extract:
@@ -186,7 +187,9 @@ class TestVertexAIBatchPassthroughHandler:
 
     def test_get_actual_model_id_from_router_model_not_found(self):
         """Test getting model ID when model is not found in router"""
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+        with patch(
+            "litellm.proxy.proxy_server.llm_router", new=route_entry_points_to_stubs(MagicMock())
+        ) as mock_router:
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path"
             ) as mock_extract:
@@ -445,7 +448,7 @@ class TestVertexAIBatchPassthroughHandler:
                 "input_file_id": "gs://bucket/in.jsonl",
                 "completion_window": "24h",
             }
-            mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = "123456"
+            mock_transformation.get_batch_id_from_vertex_ai_batch_response.return_value = "123456"
 
             VertexPassthroughLoggingHandler.batch_prediction_jobs_handler(
                 httpx_response=response,
@@ -507,11 +510,7 @@ class TestVertexAIBatchPassthroughHandler:
         expected_results = ["456789", "def123", "999", "invalid-format"]
 
         for test_case, expected in zip(test_cases, expected_results):
-            result = (
-                VertexAIBatchTransformation._get_batch_id_from_vertex_ai_batch_response(
-                    {"name": test_case}
-                )
-            )
+            result = VertexAIBatchTransformation.get_batch_id_from_vertex_ai_batch_response({"name": test_case})
             assert result == expected
 
     def test_model_name_extraction_from_vertex_path(self):
@@ -576,9 +575,7 @@ class TestVertexAIBatchPassthroughHandler:
                         "error_file_id": None,
                         "completion_window": "24h",
                     }
-                    mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = (
-                        "123456789"
-                    )
+                    mock_transformation.get_batch_id_from_vertex_ai_batch_response.return_value = "123456789"
 
                     # Test the complete workflow
                     result = VertexPassthroughLoggingHandler.batch_prediction_jobs_handler(

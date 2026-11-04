@@ -11,15 +11,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel
-
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.access_group_model_sync import raw_executor, still_backed
 from litellm.router import Router
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _TouchedRow(BaseModel):
+class _TouchedRow(LiteLLMBaseModel):
     kind: str
     object_id: str
     team_alias: str | None = None

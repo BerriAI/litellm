@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from pydantic import BaseModel, Field
 
 
-class OracleRouterFeedbackRequest(BaseModel):
+class OracleRouterFeedbackRequest(BaseModel, frozen=True):
     """Report that a program finished. ``score`` is optional when the router's verifier grades it."""
 
     program_id: str = Field(min_length=1)
@@ -16,7 +16,7 @@ class OracleRouterFeedbackRequest(BaseModel):
     payload: Mapping[str, object] = Field(default_factory=dict, description="Passed to the verifier unchanged")
 
 
-class OracleRouterFeedbackResponse(BaseModel):
+class OracleRouterFeedbackResponse(BaseModel, frozen=True):
     program_id: str
     router_name: str
     model: str
@@ -27,5 +27,5 @@ class OracleRouterFeedbackResponse(BaseModel):
     )
 
 
-class OracleRouterStateResponse(BaseModel):
+class OracleRouterStateResponse(BaseModel, frozen=True):
     routers: Sequence[Mapping[str, object]]

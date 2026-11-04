@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH added AS (\n    SELECT id, SUM(cost) AS cost\n    FROM UNNEST($1::text[], $2::float8[]) AS a(id, cost)\n    GROUP BY id\n), locked AS (\n    SELECT t.token FROM \"LiteLLM_VerificationToken\" t\n    WHERE t.token IN (SELECT id FROM added)\n    ORDER BY t.token FOR UPDATE\n)\nUPDATE \"LiteLLM_VerificationToken\" t\nSET spend = t.spend + added.cost,\n    total_spend = t.total_spend + added.cost,\n    last_active = (clock_timestamp() AT TIME ZONE 'UTC'),\n    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')\nFROM added\nWHERE t.token = added.id AND t.token IN (SELECT token FROM locked)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Float8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3829a383d0ae50578f0fd75da3910731a0cacc1ae5b92eec32967f539948f563"
+}

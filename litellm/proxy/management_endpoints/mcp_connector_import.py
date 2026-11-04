@@ -11,13 +11,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AliasChoices, ConfigDict, Field, ValidationError
 
 from litellm.proxy._types import MCPApprovalStatus, NewMCPServerRequest
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPAuth, MCPAuthType, MCPCredentials, MCPTransport
 
 
-class MCPConnectorEntry(BaseModel):
+class MCPConnectorEntry(LiteLLMBaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str | None = None
@@ -33,7 +34,7 @@ class MCPConnectorEntry(BaseModel):
     description: str | None = None
 
 
-class MCPConnectorImportRequest(BaseModel):
+class MCPConnectorImportRequest(LiteLLMBaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     mcp_servers: Mapping[str, MCPConnectorEntry] | tuple[MCPConnectorEntry, ...] = Field(
@@ -53,23 +54,23 @@ class ConnectorConversionError:
     error: str
 
 
-class MCPConnectorImportResult(BaseModel):
+class MCPConnectorImportResult(LiteLLMBaseModel):
     name: str
     server_id: str
     alias: str
 
 
-class MCPConnectorImportSkipped(BaseModel):
+class MCPConnectorImportSkipped(LiteLLMBaseModel):
     name: str
     reason: str
 
 
-class MCPConnectorImportFailure(BaseModel):
+class MCPConnectorImportFailure(LiteLLMBaseModel):
     name: str
     error: str
 
 
-class MCPConnectorImportResponse(BaseModel):
+class MCPConnectorImportResponse(LiteLLMBaseModel):
     imported: tuple[MCPConnectorImportResult, ...]
     skipped: tuple[MCPConnectorImportSkipped, ...]
     errors: tuple[MCPConnectorImportFailure, ...]

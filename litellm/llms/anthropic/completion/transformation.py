@@ -6,7 +6,8 @@ Litellm provider slug: `anthropic_text/<model_name>`
 
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -14,8 +15,8 @@ import httpx
 import litellm
 from litellm.constants import DEFAULT_MAX_TOKENS
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import (
@@ -73,7 +74,7 @@ class AnthropicTextConfig(BaseConfig):
         top_k: int | None = None,
         metadata: dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -112,7 +113,7 @@ class AnthropicTextConfig(BaseConfig):
     ) -> dict:
         prompt: Final = self._get_anthropic_text_prompt_from_messages(messages=messages, model=model)
         ## Load Config
-        config: Final = litellm.AnthropicTextConfig.get_config()
+        config: Final[Mapping[str, object]] = MappingProxyType(litellm.AnthropicTextConfig.get_config())
         for k, v in config.items():
             if (
                 k not in optional_params
@@ -163,7 +164,7 @@ class AnthropicTextConfig(BaseConfig):
             if param == "stream" and value is True:
                 optional_params["stream"] = value
             if param == "stop" and (isinstance(value, str) or isinstance(value, list)):
-                _value = litellm.AnthropicConfig()._map_stop_sequences(value)
+                _value = litellm.AnthropicConfig().map_stop_sequences(value)
                 if _value is not None:
                     optional_params["stop_sequences"] = _value
             if param == "temperature":
@@ -232,16 +233,20 @@ class AnthropicTextConfig(BaseConfig):
     def _is_anthropic_text_model(model: str) -> bool:
         return model == "claude-2" or model == "claude-instant-1"
 
+    @classmethod
+    def is_anthropic_text_model(
+        cls,
+        model: str,
+    ) -> bool:
+        return cls._is_anthropic_text_model(model)
+
     def _get_anthropic_text_prompt_from_messages(self, messages: list[AllMessageValues], model: str) -> str:
         custom_prompt_dict: Final = litellm.custom_prompt_dict
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="anthropic"
             )
         else:
             prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="anthropic")

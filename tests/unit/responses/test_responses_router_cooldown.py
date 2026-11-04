@@ -13,7 +13,7 @@ import pytest
 
 
 import litellm
-from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
 
 
 @pytest.mark.asyncio
@@ -76,8 +76,8 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
                 input="hi",
             )
 
-    cooldown_ids = await _async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
+    cooldown_ids = await async_get_cooldown_deployments(
+        ctx=router._core_ctx, parent_otel_span=None
     )
     assert failing_deployment_id in cooldown_ids, (
         f"Responses API failure callback did not register cooldown for "
