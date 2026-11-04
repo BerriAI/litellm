@@ -21,7 +21,7 @@ secret:
     - "miniconda.sh"
     
     # Build outputs and static assets
-    - "litellm/proxy/_experimental/out/**"
+    - "litellm/proxy/ui/out/**"
     - "ui/litellm-dashboard/public/**"
     - "**/swagger/*.js"
     - "**/*.woff"

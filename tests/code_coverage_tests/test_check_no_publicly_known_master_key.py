@@ -8,7 +8,7 @@ import pytest
 
 GUARD: Final = Path(__file__).resolve().parent / "check_no_publicly_known_master_key.py"
 RETIRED_KEY: Final = "sk-" + "1234"
-BUNDLE_CHUNK: Final = "litellm/proxy/_experimental/out/_next/static/chunks/chunk.js"
+BUNDLE_CHUNK: Final = "litellm/proxy/ui/out/_next/static/chunks/chunk.js"
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -49,7 +49,7 @@ def test_clean_tracked_files_pass(tmp_path: Path) -> None:
     [
         "litellm/proxy/proxy_server.py",
         "ui/litellm-dashboard/src/app/page.tsx",
-        "litellm/proxy/_experimental/x.py",
+        "litellm/proxy/ui/x.py",
         BUNDLE_CHUNK,
     ],
 )

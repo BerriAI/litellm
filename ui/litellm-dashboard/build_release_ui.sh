@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-destination_dir="../../litellm/proxy/_experimental/out"
+destination_dir="../../litellm/proxy/ui/out"
 
 chmod +x ./build_ui.sh
 ./build_ui.sh
