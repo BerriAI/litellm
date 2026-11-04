@@ -2,13 +2,18 @@
 Unit tests for the EmpirioLabs OpenAI-like provider.
 """
 
+import json
 import os
 import sys
+from typing import Final
+
+import respx
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 )
 
+import litellm
 from litellm.llms.openai_like.dynamic_config import create_config_class
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -61,3 +66,28 @@ def test_empiriolabs_complete_url_appends_endpoint():
         stream=False,
     )
     assert url == f"{EMPIRIOLABS_BASE_URL}/chat/completions"
+
+
+EMBEDDING_RESPONSE: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
+    "model": "text-embedding-v4",
+    "usage": {"prompt_tokens": 2, "total_tokens": 2},
+}
+
+
+def test_empiriolabs_embeddings_post_to_v1_embeddings_with_the_bearer_key():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{EMPIRIOLABS_BASE_URL}/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        response: Final = litellm.embedding(
+            model="empiriolabs/text-embedding-v4",
+            input=["Say hello"],
+            api_key="empiriolabs-test-key",
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert request.headers["authorization"] == "Bearer empiriolabs-test-key"
+    assert body["model"] == "text-embedding-v4"
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
