@@ -5565,6 +5565,73 @@ def test_converse_drop_params_keeps_output_config_for_supporting_anthropic():
     assert additional.get("output_config") == {"effort": "high"}
 
 
+_APPLICATION_INFERENCE_PROFILE_ARN: Final = (
+    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
+)
+
+
+def _converse_output_config(model: str, output_config: dict, litellm_params: dict[str, object]) -> object:
+    result: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"maxTokens": 256, "output_config": output_config},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return result.get("additionalModelRequestFields", {}).get("output_config")
+
+
+@pytest.mark.parametrize("effort", ["xhigh", "turbo"])
+def test_converse_refuses_an_effort_the_model_cannot_take_without_drop_params(local_model_cost_map, effort):
+    with pytest.raises(litellm.BadRequestError, match="effort"):
+        _converse_output_config("us.anthropic.claude-sonnet-4-6", {"effort": effort}, {})
+
+
+@pytest.mark.parametrize("effort", ["xhigh", "turbo"])
+def test_converse_drops_an_effort_the_model_cannot_take_under_deployment_drop_params(
+    local_model_cost_map, caplog, effort
+):
+    with caplog.at_level("WARNING"):
+        sent: Final = _converse_output_config(
+            "us.anthropic.claude-sonnet-4-6", {"effort": effort}, {"drop_params": True}
+        )
+
+    assert sent is None
+    assert any("output_config.effort" in record.getMessage() for record in caplog.records)
+
+
+def test_converse_forwards_an_unresolved_arn_effort_only_without_drop_params(local_model_cost_map):
+    assert _converse_output_config(_APPLICATION_INFERENCE_PROFILE_ARN, {"effort": "high"}, {}) == {"effort": "high"}
+    assert _converse_output_config(_APPLICATION_INFERENCE_PROFILE_ARN, {"effort": "high"}, {"drop_params": True}) is None
+
+
+@pytest.mark.parametrize(
+    ("base_model", "expected"),
+    [("us.anthropic.claude-opus-4-7", {"effort": "high"}), ("us.anthropic.claude-haiku-4-5-20251001-v1:0", None)],
+)
+def test_converse_gates_an_arn_effort_on_its_base_model_under_drop_params(local_model_cost_map, base_model, expected):
+    litellm_params: Final[dict[str, object]] = {"drop_params": True, "base_model": base_model}
+
+    assert _converse_output_config(_APPLICATION_INFERENCE_PROFILE_ARN, {"effort": "high"}, litellm_params) == expected
+
+
+def test_converse_refuses_a_reasoning_effort_tier_the_model_cannot_take(local_model_cost_map):
+    with pytest.raises(litellm.BadRequestError, match="xhigh"):
+        AmazonConverseConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model="bedrock/converse/us.anthropic.claude-sonnet-4-6",
+            drop_params=False,
+        )
+
+
+def test_converse_keeps_the_effort_for_a_claude_id_the_cost_map_does_not_list_yet(local_model_cost_map):
+    model: Final = "us.anthropic.claude-opus-9-9-v1:0"
+    assert model not in litellm.model_cost
+
+    assert _converse_output_config(model, {"effort": "high"}, {"drop_params": True}) == {"effort": "high"}
+
+
 def test_transform_response_native_structured_output():
     """Test response handling when model returns JSON as text content (native structured output)."""
     response_json = {
