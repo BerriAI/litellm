@@ -5129,12 +5129,32 @@ class TestHandleLLMApiExceptionRetryAfter:
 
 
 class TestHandleLLMApiExceptionProviderOverload:
-    async def _invoke(self, exc: Exception, route_type: str) -> ProxyException:
+    class _RecordingFailureHook(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.original_exception: Exception | None = None
+
+        async def async_post_call_failure_hook(
+            self,
+            request_data: dict,
+            original_exception: Exception,
+            user_api_key_dict: UserAPIKeyAuth,
+            traceback_str: str | None = None,
+        ) -> None:
+            self.original_exception = original_exception
+
+    async def _invoke(
+        self,
+        exc: Exception,
+        route_type: str,
+        monkeypatch: pytest.MonkeyPatch,
+        recording_hook: _RecordingFailureHook | None = None,
+    ) -> ProxyException:
         processor: Final = ProxyBaseLLMRequestProcessing(data={})
         processor.route_type = route_type
-        proxy_logging_obj: Final = MagicMock()
-        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        callback: Final = recording_hook if recording_hook is not None else self._RecordingFailureHook()
+        monkeypatch.setattr(litellm, "callbacks", [callback])
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
 
         with pytest.raises(ProxyException) as raised:
             await processor.handle_llm_api_exception(
@@ -5146,7 +5166,9 @@ class TestHandleLLMApiExceptionProviderOverload:
         return raised.value
 
     @pytest.mark.parametrize("route_type", ("acompletion", "atext_completion", "aresponses"))
-    async def test_openai_routes_answer_provider_overload_as_503(self, route_type: str) -> None:
+    async def test_openai_routes_answer_provider_overload_as_503(
+        self, route_type: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         exc: Final = InternalServerError(
             message="Overloaded",
             llm_provider="anthropic",
@@ -5154,7 +5176,7 @@ class TestHandleLLMApiExceptionProviderOverload:
             provider_status_code=529,
         )
 
-        proxy_exc: Final = await self._invoke(exc, route_type)
+        proxy_exc: Final = await self._invoke(exc, route_type, monkeypatch)
 
         assert proxy_exc.code == "503"
         assert proxy_exc.type == "service_unavailable_error"
@@ -5165,7 +5187,7 @@ class TestHandleLLMApiExceptionProviderOverload:
         (("acompletion", 500), ("anthropic_messages", 529)),
     )
     async def test_non_overload_and_non_openai_routes_keep_their_status(
-        self, route_type: str, provider_status_code: int
+        self, route_type: str, provider_status_code: int, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         exc: Final = InternalServerError(
             message="Internal server error",
@@ -5174,13 +5196,15 @@ class TestHandleLLMApiExceptionProviderOverload:
             provider_status_code=provider_status_code,
         )
 
-        proxy_exc: Final = await self._invoke(exc, route_type)
+        proxy_exc: Final = await self._invoke(exc, route_type, monkeypatch)
 
         assert proxy_exc.code == "500"
         assert proxy_exc.type == "internal_server_error"
         assert proxy_exc.to_dict()["code"] == "500"
 
-    async def test_openai_route_answers_wrapped_provider_overload_as_503(self) -> None:
+    async def test_openai_route_answers_wrapped_provider_overload_as_503(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         original: Final = InternalServerError(
             message="Overloaded",
             llm_provider="anthropic",
@@ -5194,13 +5218,13 @@ class TestHandleLLMApiExceptionProviderOverload:
             original_exception=original,
         )
 
-        proxy_exc: Final = await self._invoke(exc, "acompletion")
+        proxy_exc: Final = await self._invoke(exc, "acompletion", monkeypatch)
 
         assert proxy_exc.code == "503"
         assert proxy_exc.type == "service_unavailable_error"
         assert proxy_exc.to_dict()["code"] == "server_is_overloaded"
 
-    async def test_anthropic_text_api_overload_answers_503(self) -> None:
+    async def test_anthropic_text_api_overload_answers_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
         exc: Final = APIError(
             status_code=529,
             message="Overloaded",
@@ -5208,7 +5232,7 @@ class TestHandleLLMApiExceptionProviderOverload:
             model="claude",
         )
 
-        proxy_exc: Final = await self._invoke(exc, "atext_completion")
+        proxy_exc: Final = await self._invoke(exc, "atext_completion", monkeypatch)
 
         assert proxy_exc.code == "503"
         assert proxy_exc.type == "service_unavailable_error"
@@ -5219,7 +5243,7 @@ class TestHandleLLMApiExceptionProviderOverload:
         (("acompletion", 503), ("anthropic_messages", 500)),
     )
     async def test_failure_hook_receives_the_answered_overload_status(
-        self, route_type: str, expected_status: int
+        self, route_type: str, expected_status: int, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         exc: Final = InternalServerError(
             message="Overloaded",
@@ -5227,20 +5251,12 @@ class TestHandleLLMApiExceptionProviderOverload:
             model="claude",
             provider_status_code=529,
         )
-        processor: Final = ProxyBaseLLMRequestProcessing(data={})
-        processor.route_type = route_type
-        proxy_logging_obj: Final = MagicMock()
-        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        recording_hook: Final = self._RecordingFailureHook()
 
-        with pytest.raises(ProxyException):
-            await processor.handle_llm_api_exception(
-                e=exc,
-                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
-                proxy_logging_obj=proxy_logging_obj,
-            )
+        await self._invoke(exc, route_type, monkeypatch, recording_hook)
 
-        original_exception: Final = proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"]
+        original_exception: Final = recording_hook.original_exception
+        assert original_exception is not None
         assert original_exception.status_code == expected_status
 
 
