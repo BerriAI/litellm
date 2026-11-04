@@ -117,12 +117,31 @@ class GroqChatConfig(OpenAILikeChatConfig):
         try:
             if self._supports_reasoning(model):
                 base_params.append("reasoning_format")
-                if not self._is_deepseek_r1_model(model):
+                if self._model_supports_reasoning_effort(model):
                     base_params.append("reasoning_effort")
         except Exception as e:
             verbose_logger.debug("Error checking if model supports reasoning: %s", e)
 
         return base_params
+
+    @classmethod
+    def _model_supports_reasoning_effort(cls, model: str) -> bool:
+        """
+        Check if the model accepts reasoning_effort on Groq.
+        First consults the model catalog (if an explicit flag like supports_reasoning_effort is present),
+        and falls back to excluding DeepSeek R1 models which reason unconditionally and reject this parameter.
+        """
+        try:
+            from litellm.utils import get_model_info
+
+            model_info = get_model_info(model=model, custom_llm_provider="groq")
+            if model_info.get("supports_reasoning_effort") is False:
+                return False
+            if model_info.get("supports_reasoning_effort") is True:
+                return True
+        except Exception:
+            pass
+        return not cls._is_deepseek_r1_model(model)
 
     @staticmethod
     def _is_deepseek_r1_model(model: str) -> bool:
@@ -301,10 +320,10 @@ class GroqChatConfig(OpenAILikeChatConfig):
         if reasoning_format is not None:
             optional_params["reasoning_format"] = reasoning_format
 
-        if self._is_deepseek_r1_model(model) and "reasoning_effort" in non_default_params:
+        if not self._model_supports_reasoning_effort(model) and "reasoning_effort" in non_default_params:
             if drop_params or litellm.drop_params:
                 verbose_logger.warning(
-                    f"Dropping reasoning_effort={non_default_params['reasoning_effort']} for model={model} because Groq does not support reasoning_effort on DeepSeek R1 models."
+                    f"Dropping reasoning_effort={non_default_params['reasoning_effort']} for model={model} because Groq does not support reasoning_effort on this model."
                 )
                 non_default_params.pop("reasoning_effort", None)
             else:
