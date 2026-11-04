@@ -290,6 +290,11 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
                 "web_search_results",
                 "tool_results",
                 "code_interpreter_results",
+                "search_results",
+                "rerank_results",
+                "executed_tools",
+                "custom_outputs",
+                "tool_search_items",
                 "token_ids",
             )
             if key in fields
