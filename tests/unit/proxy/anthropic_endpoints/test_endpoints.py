@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.types import Message
 
+import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
@@ -302,7 +303,7 @@ class TestProxyExceptionAnthropicEnvelope:
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         from litellm.proxy._types import ProxyException
 
-        request = MagicMock()
+        request: Final = MagicMock()
         request.headers = {}
 
         response = ep._anthropic_error_json_response(
@@ -319,10 +320,135 @@ class TestProxyExceptionAnthropicEnvelope:
         assert fallback.status_code == 500
         assert json.loads(fallback.body)["error"]["type"] == "api_error"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "unavailable, expected_status, expected_error_type, hook_receives_copy",
+        [
+            pytest.param(
+                litellm.ServiceUnavailableError(
+                    message='BedrockException - {"message": "Bedrock is unable to process your request."}',
+                    llm_provider="bedrock",
+                    model="global.anthropic.claude-opus-5-5",
+                ),
+                503,
+                "api_error",
+                False,
+                id="bedrock-503",
+            ),
+            pytest.param(
+                litellm.InternalServerError(
+                    message='AnthropicError - {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+                    llm_provider="anthropic",
+                    model="claude-opus-5-5",
+                    provider_status_code=529,
+                ),
+                529,
+                "overloaded_error",
+                True,
+                id="anthropic-529",
+            ),
+        ],
+    )
+    async def test_anthropic_response_records_the_answered_status(
+        self,
+        unavailable: litellm.ServiceUnavailableError | litellm.InternalServerError,
+        expected_status: int,
+        expected_error_type: str,
+        hook_receives_copy: bool,
+    ) -> None:
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        raised_status: Final = unavailable.status_code
+        request: Final = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(ep, "read_request_body", new=AsyncMock(return_value={})),
+            patch.object(
+                ep.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=AsyncMock(side_effect=unavailable),
+            ),
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        recorded: Final = mock_logging.post_call_failure_hook.await_args.kwargs["original_exception"]
+        assert recorded is not None
+        assert (recorded is not unavailable) is hook_receives_copy
+        assert recorded.status_code == expected_status
+        assert unavailable.status_code == raised_status
+        assert response.status_code == expected_status
+        assert json.loads(response.body)["error"]["type"] == expected_error_type
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "unavailable, expected_status, expected_error_type",
+        [
+            pytest.param(
+                litellm.ServiceUnavailableError(
+                    message="Bedrock is unable to process your request.",
+                    llm_provider="bedrock",
+                    model="global.anthropic.claude-opus-5-5",
+                ),
+                503,
+                "api_error",
+                id="bedrock-503",
+            ),
+            pytest.param(
+                litellm.InternalServerError(
+                    message='AnthropicError - {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+                    llm_provider="anthropic",
+                    model="claude-opus-5-5",
+                    provider_status_code=529,
+                ),
+                529,
+                "overloaded_error",
+                id="anthropic-529",
+            ),
+        ],
+    )
+    async def test_count_tokens_answers_provider_errors(
+        self,
+        unavailable: litellm.ServiceUnavailableError | litellm.InternalServerError,
+        expected_status: int,
+        expected_error_type: str,
+    ) -> None:
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        request = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(
+                ep,
+                "read_request_body",
+                new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
+            ),
+            patch.object(
+                proxy_server, "count_request_tokens", new=AsyncMock(side_effect=unavailable)
+            ),
+        ):
+            response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+        body: Final = json.loads(response.body)
+        assert response.status_code == expected_status
+        assert body["type"] == "error"
+        assert body["error"]["type"] == expected_error_type
+
     @pytest.mark.parametrize("status_code", [402, 409, 422, 504])
     def test_a_failure_inside_the_handler_keeps_the_api_error_type_for_a_status_outside_the_table(
         self, status_code: int
-    ):
+    ) -> None:
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         from litellm.proxy._types import ProxyException
 
@@ -334,7 +460,6 @@ class TestProxyExceptionAnthropicEnvelope:
 
         assert response.status_code == status_code
         assert json.loads(response.body)["error"] == {"type": "api_error", "message": "scripted"}
-
     @staticmethod
     def _call_id_error_response(general_settings, provider_specific_fields=None):
         import litellm.proxy.anthropic_endpoints.endpoints as ep
@@ -428,7 +553,7 @@ class TestHttpExceptionDictDetail:
             ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
-            response = await ep.anthropic_response(
+            response: Final = await ep.anthropic_response(
                 fastapi_response=MagicMock(),
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(),
