@@ -1911,7 +1911,7 @@ class TestProxyFunctionCalling:
             ("gpt-4-turbo", "litellm_proxy/gpt-4-turbo", True),
             ("gpt-4-1106-preview", "litellm_proxy/gpt-4-1106-preview", True),
             # Azure OpenAI models
-            ("azure/gpt-4", "litellm_proxy/azure/gpt-4", True),
+            ("azure/gpt-4.1", "litellm_proxy/azure/gpt-4.1", True),
             ("azure/gpt-3.5-turbo", "litellm_proxy/azure/gpt-3.5-turbo", True),
             (
                 "azure/gpt-4-1106-preview",
@@ -2004,7 +2004,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/together-mistral",
-                "together_ai/mistralai/Mistral-7B-Instruct-v0.1",
+                "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
                 False,
             ),
             # Ollama with custom names (cannot be resolved)
