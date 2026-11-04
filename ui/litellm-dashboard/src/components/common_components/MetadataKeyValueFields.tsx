@@ -1,5 +1,6 @@
 import { CircleMinus, Plus } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   useFieldArray,
   type Control,
@@ -96,11 +97,19 @@ const MetadataRow = <TFieldValues extends FieldValues>({
   schemaLabel,
   onRemove,
 }: MetadataRowProps<TFieldValues>) => {
+  const { t } = useTranslation();
   return (
     <div className="mb-2 flex items-start gap-2">
       {schemaLabel === undefined ? (
         <FormField control={control} name={`${name}.${index}.key` as FieldPath<TFieldValues>}>
-          {({ ref, value, ...rest }) => <Input {...rest} ref={ref} value={(value as string) ?? ""} placeholder="Key" />}
+          {({ ref, value, ...rest }) => (
+            <Input
+              {...rest}
+              ref={ref}
+              value={(value as string) ?? ""}
+              placeholder={t("metadataKeyValueFields.keyPlaceholder")}
+            />
+          )}
         </FormField>
       ) : (
         <Label
@@ -118,7 +127,7 @@ const MetadataRow = <TFieldValues extends FieldValues>({
             id={schemaLabel === undefined ? id : `${rowId}-value`}
             ref={ref}
             value={(value as string) ?? ""}
-            placeholder="Value"
+            placeholder={t("metadataKeyValueFields.valuePlaceholder")}
           />
         )}
       </FormField>
@@ -126,7 +135,7 @@ const MetadataRow = <TFieldValues extends FieldValues>({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Remove key-value pair"
+          aria-label={t("metadataKeyValueFields.removePair")}
           className="mt-1 text-destructive"
           onClick={onRemove}
         >
@@ -144,6 +153,7 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
   schemaFields = [],
   schemaLoading = false,
 }: MetadataKeyValueFieldsProps<TFieldValues>) => {
+  const { t } = useTranslation();
   const { fields, append, remove } = useFieldArray({ control, name });
   const seededRef = useRef(false);
   const schemaLabelsByKey = new Map(schemaFields.map((field) => [field.key, field.label || field.key]));
@@ -208,7 +218,7 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
         onClick={() => append({ key: "", value: "" } as never, { shouldFocus: false })}
       >
         <Plus className="size-4" />
-        Add Key-Value Pair
+        {t("metadataKeyValueFields.addPair")}
       </Button>
     </>
   );

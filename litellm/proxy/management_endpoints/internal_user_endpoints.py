@@ -47,7 +47,7 @@ from litellm.proxy.auth.password_policy import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
+from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     object_permission_cache_key,
@@ -1048,6 +1048,7 @@ async def _check_user_info_v2_access(
     1. Proxy admins / proxy admin viewers can access any user
     2. User can access their own info
     3. Team admins can access info of users in their teams
+    4. Org admins can access info of users in their organizations
 
     Raises on unexpected DB errors so they surface as 500s, not silent 404s.
     """
@@ -1090,7 +1091,31 @@ async def _check_user_info_v2_access(
                     if team.team_id in (target_user.teams or []):
                         return target_user
 
+    if user_api_key_dict.user_id is not None and await _target_in_caller_admin_org(
+        prisma_client=prisma_client,
+        caller_user_id=user_api_key_dict.user_id,
+        target_user_id=target_user_id,
+    ):
+        return await _fetch_target_user()
+
     return None
+
+
+async def _target_in_caller_admin_org(
+    prisma_client: "PrismaClient",
+    caller_user_id: str,
+    target_user_id: str,
+) -> bool:
+    admin_memberships: Final = await prisma_client.db.litellm_organizationmembership.find_many(
+        where={"user_id": caller_user_id, "user_role": LitellmUserRoles.ORG_ADMIN.value}
+    )
+    if not admin_memberships:
+        return False
+    admin_org_ids: Final = {membership.organization_id for membership in admin_memberships}
+    target_memberships: Final = await prisma_client.db.litellm_organizationmembership.find_many(
+        where={"user_id": target_user_id}
+    )
+    return any(membership.organization_id in admin_org_ids for membership in target_memberships)
 
 
 @router.get(
@@ -1197,6 +1222,8 @@ async def user_info_v2(
             ),
         )
     except Exception as e:
+        if isinstance(e, HTTPException) and e.status_code < 500:
+            raise openai_shaped_proxy_exception(e, str(e.detail), e.status_code)
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info_v2(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 

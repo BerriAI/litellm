@@ -4,7 +4,7 @@ import copy
 import logging
 import math
 import re
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
@@ -97,11 +97,15 @@ def safe_divide_seconds(seconds: float, denominator: float, default: float | Non
     return float(seconds / denominator)
 
 
-_DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
+_LAX_BOOL: Final = TypeAdapter(bool)
 
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
+
+
+def as_object_list(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
 
 
 def decoded_json_object(value: object) -> Mapping[str, object]:
@@ -156,13 +160,17 @@ def attribute_items(source: object, name: str) -> Iterable[object]:
     return iter_items(value) if value else ()
 
 
-def normalize_drop_params(value: object) -> bool | None:
+def lax_bool(value: object) -> bool | None:
     if value is None or isinstance(value, bool):
         return value
     try:
-        return _DROP_PARAMS_BOOL.validate_python(value.strip() if isinstance(value, str) else value)
+        return _LAX_BOOL.validate_python(value.strip() if isinstance(value, str) else value)
     except ValidationError:
         return None
+
+
+def normalize_drop_params(value: object) -> bool | None:
+    return lax_bool(value)
 
 
 def drops_unsupported_params(drop_params: object) -> bool:

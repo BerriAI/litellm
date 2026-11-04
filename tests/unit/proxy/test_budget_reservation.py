@@ -66,7 +66,7 @@ def spend_counter_state():
     original_prisma_client = ps.prisma_client
 
     counter_cache = DualCache()
-    key_cache = DualCache()
+    key_cache = UserApiKeyCache()
     ps.spend_counter_cache = counter_cache
     ps.user_api_key_cache = key_cache
     ps.prisma_client = None
