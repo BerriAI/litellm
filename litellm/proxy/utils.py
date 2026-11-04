@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from functools import partial
+from functools import partial, reduce
 from itertools import takewhile
 from operator import attrgetter
 from types import MappingProxyType
@@ -66,6 +66,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     SPEND_LOG_QUEUE_MAX_BYTES,
+    SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
     VLLM_CHOICE_FIELDS,
@@ -1680,14 +1681,17 @@ _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "updat
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
 
 
+def _extended_exception_chain(chain: tuple[BaseException, ...], iteration: int) -> tuple[BaseException, ...]:
+    if len(chain) != iteration + 1:
+        return chain
+    following: Final = chain[-1].__cause__ or chain[-1].__context__
+    if following is None or following in chain:
+        return chain
+    return (*chain, following)
+
+
 def _exception_chain(exception: BaseException) -> tuple[BaseException, ...]:
-    chain: Final[list[BaseException]] = [exception]  # mutable-ok: built once, returned frozen
-    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
-        following = chain[-1].__cause__ or chain[-1].__context__
-        if following is None or following in chain:
-            break
-        chain.append(following)
-    return tuple(chain)
+    return reduce(_extended_exception_chain, range(_EXCEPTION_CHAIN_MAX_DEPTH), (exception,))
 
 
 def _timed_out_reading_from_provider(exception: Exception) -> bool:
@@ -1760,7 +1764,10 @@ def _proxy_only_error_log_fields(
 
 
 def _failure_fields_to_lift(
-    request_data: Mapping[str, object], provider_billed: bool = False, dispatched_call_type: str | None = None
+    request_data: Mapping[str, object],
+    provider_billed: bool = False,
+    dispatched_call_type: str | None = None,
+    route_call_type: str | None = None,
 ) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
@@ -1770,7 +1777,8 @@ def _failure_fields_to_lift(
     attribution on failed-request spend logs."""
     _logging_obj: Final = request_data.get("litellm_logging_obj")
     if _logging_obj is None:
-        return _EMPTY_LIFT
+        return _EMPTY_LIFT if dispatched_call_type is None else MappingProxyType({"call_type": dispatched_call_type})
+    _estimate_call_type: Final = dispatched_call_type or route_call_type
     _model_call_details: Final = getattr(_logging_obj, "model_call_details", {})
     _first_handoff: Final = _model_call_details.get("first_api_call_start_time")
     _litellm_params: Final = getattr(_logging_obj, "litellm_params", None)
@@ -1785,10 +1793,10 @@ def _failure_fields_to_lift(
         provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
-        dispatched_call_type=dispatched_call_type,
+        dispatched_call_type=_estimate_call_type,
     )
     _prompt_estimate: Final = (
-        _estimated_prompt_usage(_model_call_details, request_data, dispatched_call_type)
+        _estimated_prompt_usage(_model_call_details, request_data, _estimate_call_type)
         if _billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
         else None
     )
@@ -1808,7 +1816,7 @@ def _failure_fields_to_lift(
             _billed,
             _deployment_id,
             _base_model,
-            dispatched_call_type,
+            _estimate_call_type,
         )
         if Logging.usage_capture_callback is not None
         and (_billed or _model_call_details.get("combined_usage_object") is not None)
@@ -4104,13 +4112,15 @@ class ProxyLogging:
                 route=route,
                 original_exception=original_exception,
                 error_type=error_type,
+                dispatched_call_type=dispatched_call_type,
             )
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
                 request_data,
                 provider_billed=_provider_billed_the_failure(original_exception),
-                dispatched_call_type=dispatched_call_type or _call_type_for_route(user_api_key_dict.request_route),
+                dispatched_call_type=dispatched_call_type,
+                route_call_type=_call_type_for_route(user_api_key_dict.request_route),
             )
         )
 
@@ -4199,6 +4209,7 @@ class ProxyLogging:
         route: str | None = None,
         original_exception: Exception | None = None,
         error_type: ProxyErrorTypes | None = None,
+        dispatched_call_type: str | None = None,
     ):
         """
         Handle logging for proxy only errors by calling `litellm_logging_obj.async_failure_handler`
@@ -4298,7 +4309,7 @@ class ProxyLogging:
                 litellm_logging_obj.model_call_details["input"] = input
                 body_shape_call_type = CallTypes.aembedding.value
             resolved_call_type: Final = _call_type_for_route(route) or (
-                None if set_up_by_request else body_shape_call_type
+                None if set_up_by_request else dispatched_call_type or body_shape_call_type
             )
             if resolved_call_type is not None and litellm_logging_obj.call_type != CallTypes.pass_through.value:
                 litellm_logging_obj.call_type = resolved_call_type
@@ -5302,6 +5313,39 @@ _deprecated_key_cache: Final[LimitedSizeOrderedDict] = LimitedSizeOrderedDict(ma
 _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
 _PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 _PRISMA_DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
+_SPEND_LOG_READ_STATEMENT_TIMEOUT: Final = timedelta(seconds=SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS)
+_STATEMENT_TIMEOUT_TRANSACTION_GRACE: Final = timedelta(seconds=5)
+
+
+class _ReadTransactionClient(Protocol):
+    @property
+    def read_db(self) -> PrismaWrapper: ...
+
+
+async def query_raw_within_statement_timeout(
+    prisma_client: _ReadTransactionClient,
+    sql: str,
+    *params: object,
+    what: str = "Spend logs",
+    timeout: timedelta = _SPEND_LOG_READ_STATEMENT_TIMEOUT,
+) -> Sequence[Mapping[str, object]]:
+    """One raw read on the read target that Postgres cancels at ``timeout``.
+
+    Prisma's HTTP client gives up on a statement after 30s anyway, so without
+    this the Admin UI's error is the same but Postgres keeps running the scan.
+    A cancelled read surfaces as a 503 asking for a narrower date range.
+    """
+    try:
+        async with prisma_client.read_db.tx(timeout=timeout + _STATEMENT_TIMEOUT_TRANSACTION_GRACE) as transaction:
+            await transaction.execute_raw(f"SET LOCAL statement_timeout = {int(timeout / timedelta(milliseconds=1))}")
+            return await transaction.query_raw(sql, *params)
+    except Exception as e:
+        if not PrismaDBExceptionHandler.is_statement_timeout_error(e):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": f"{what} took longer than {int(timeout.total_seconds())}s. Pick a shorter date range"},
+        ) from e
 
 
 async def _lookup_deprecated_key(

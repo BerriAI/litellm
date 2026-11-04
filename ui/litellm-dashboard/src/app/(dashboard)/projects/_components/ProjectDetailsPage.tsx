@@ -6,8 +6,8 @@ import { isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { BarChart } from "@/components/shared/charts";
 import { ArrowLeftIcon, DollarSignIcon, EditIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
-import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 import CopyButton from "@/components/shared/CopyButton";
+import { UserReference } from "@/components/shared/UserReference";
 import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -116,7 +116,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
               {project.created_by && (
                 <>
                   <span>by</span>
-                  <DefaultProxyAdminTag userId={project.created_by} />
+                  <UserReference userId={project.created_by} />
                 </>
               )}
             </dd>
@@ -126,7 +126,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
               {project.updated_by && (
                 <>
                   <span>by</span>
-                  <DefaultProxyAdminTag userId={project.updated_by} />
+                  <UserReference userId={project.updated_by} />
                 </>
               )}
             </dd>

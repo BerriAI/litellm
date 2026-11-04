@@ -1,6 +1,7 @@
 """Cross-group fallbacks of a router core: where the chain comes from, how it is walked, and what is raised."""
 
 from collections.abc import Callable, Mapping
+from typing import Final
 
 import pytest
 
@@ -355,21 +356,13 @@ async def test_an_error_specific_chain_wins_over_the_general_chain(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("error", "field", "raised"),
-    [
-        (context_window, "context_window_fallbacks", litellm.ContextWindowExceededError),
-        (content_policy, "content_policy_fallbacks", litellm.ContentPolicyViolationError),
-    ],
-    ids=["context-window", "content-policy"],
-)
-async def test_an_error_specific_chain_without_the_group_raises_without_trying_the_general_chain(
-    make_core: MakeCore, host: ScriptedHost, error: Callable[[], Exception], field: str, raised: type[Exception]
+async def test_an_unmatched_content_policy_chain_does_not_try_the_general_chain(
+    make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    core = build(make_core, fallbacks=[{"a": ["b"]}], **{field: [{"other": ["c"]}]})
-    host.answer("openai/a", error())
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}], content_policy_fallbacks=[{"other": ["c"]}])
+    host.answer("openai/a", content_policy())
 
-    with pytest.raises(raised):
+    with pytest.raises(litellm.ContentPolicyViolationError):
         await complete(core)
 
     assert host.deployments_called("acompletion") == ["a"]

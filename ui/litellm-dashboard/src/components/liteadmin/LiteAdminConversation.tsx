@@ -1,7 +1,6 @@
 import { useEffect, type RefObject } from "react";
 import { ArrowDown, Check, ChevronDown } from "lucide-react";
 import { MessageScroller, useMessageScroller } from "@shadcn/react/message-scroller";
-import { ChatMessageContent } from "@/components/chat/ChatMessages";
 import CopyButton from "@/components/shared/CopyButton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +10,6 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import type { ActionEntry, ConversationEntry } from "./useLiteAdmin";
-import { AriaAvatar } from "./AriaAvatar";
 import { AriaAnswer } from "./AriaAnswer";
 import { ARIA_AGENT_LABEL } from "./aria-brand";
 
@@ -23,33 +21,15 @@ const ACTION_STATUS: Record<ActionEntry["status"], string> = {
   unknown: "Check result",
 };
 
-const SUGGESTED_QUESTIONS = [
-  "How much have I spent this week?",
-  "Which models are costing the most?",
-  "How can I reduce my spend?",
-];
-
 interface ConversationProps {
   entries: ConversationEntry[];
   thinking: boolean;
-  readOnly?: boolean;
   open: boolean;
   reviewRef: RefObject<HTMLDivElement | null>;
   onAnswer: (id: string, approved: boolean) => void;
-  onQuestion: (question: string) => void;
-  questionsDisabled: boolean;
 }
 
-export function LiteAdminConversation({
-  entries,
-  thinking,
-  open,
-  readOnly = false,
-  reviewRef,
-  onAnswer,
-  onQuestion,
-  questionsDisabled,
-}: ConversationProps) {
+export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAnswer }: ConversationProps) {
   return (
     <MessageScroller.Provider autoScroll>
       <MessageScroller.Root className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -64,14 +44,11 @@ export function LiteAdminConversation({
                   (entry.message.role === "assistant" ? (
                     <AriaAnswer message={entry.message} chart={entry.chart} question={entry.question} />
                   ) : (
-                    <article aria-label="Your question" className="space-y-2">
-                      <p className="text-right text-xs font-medium text-muted-foreground">You</p>
-                      <ChatMessageContent
-                        message={entry.message}
-                        allowImages={false}
-                        isLastMessage={false}
-                        isStreaming={false}
-                      />
+                    <article
+                      aria-label="Your question"
+                      className="ml-auto w-fit max-w-[90%] whitespace-pre-wrap break-words rounded-xl bg-muted px-4 py-3 text-sm leading-relaxed"
+                    >
+                      {entry.message.content}
                     </article>
                   ))}
                 {entry.kind === "action" && (
@@ -95,30 +72,6 @@ export function LiteAdminConversation({
             )}
           </MessageScroller.Content>
         </MessageScroller.Viewport>
-        {entries.length === 0 && (
-          <div className="absolute inset-0 flex flex-col items-center gap-4 overflow-y-auto p-5 text-center">
-            <div className="flex items-center gap-2 pt-2">
-              <AriaAvatar size={40} />
-              <p className="text-base font-semibold">Hi, I’m Aria.</p>
-            </div>
-            <div className="flex w-full flex-col gap-2" aria-label="Suggested questions">
-              {SUGGESTED_QUESTIONS.map((question) => (
-                <Button
-                  key={question}
-                  variant="outline"
-                  className="h-auto min-h-10 justify-start whitespace-normal px-3 py-2 text-left font-normal"
-                  disabled={questionsDisabled}
-                  onClick={() => onQuestion(question)}
-                >
-                  {question}
-                </Button>
-              ))}
-            </div>
-            <p className="max-w-64 text-xs leading-relaxed text-muted-foreground">
-              {readOnly ? "Answers use usage data your account can access." : "You review every change before it runs."}
-            </p>
-          </div>
-        )}
         <MessageScroller.Button
           aria-label="Jump to latest"
           className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full shadow-sm data-[active=false]:pointer-events-none data-[active=false]:opacity-0"

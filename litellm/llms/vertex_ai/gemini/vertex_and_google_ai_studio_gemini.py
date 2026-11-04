@@ -104,7 +104,7 @@ from ..common_utils import (
 )
 from ..context_caching.known_cached_contents import known_cached_contents
 from ..context_caching.rejected_cache_retry import (
-    cache_rebuild,
+    cache_rebuilds,
     post_with_fresh_cache_async,
     post_with_fresh_cache_sync,
 )
@@ -134,6 +134,13 @@ from .long_decode import (
     url_for,
     with_initial_prompt_tokens,
     with_spans_shifted,
+)
+from .rejected_thought_signature_retry import (
+    build_with_accepted_thought_signatures_async,
+    build_with_accepted_thought_signatures_sync,
+    post_with_accepted_thought_signatures_async,
+    post_with_accepted_thought_signatures_sync,
+    with_placeholder_thought_signatures,
 )
 from .transformation import (
     async_transform_request_body,
@@ -3500,22 +3507,16 @@ class VertexLLM(VertexBase):
             litellm_params=litellm_params,
         )
 
-        rebuild: Final = cache_rebuild(
-            partial(
-                async_transform_request_body,
-                **data,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-                vertex_auth_header=auth_header,
-            ),
-            messages,
-            optional_params,
-        )
-        request_body: Final = await async_transform_request_body(
+        transform: Final = partial(
+            async_transform_request_body,
             **data,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
+        )
+        rebuild, uncached = cache_rebuilds(transform, messages, optional_params)
+        request_body: Final = await build_with_accepted_thought_signatures_async(
+            transform, with_placeholder_thought_signatures, uncached
         )
 
         ## LOGGING
@@ -3545,7 +3546,14 @@ class VertexLLM(VertexBase):
             async def post(body: RequestBody) -> ModelResponseIterator:
                 return await open_stream(client=client, data=json.dumps(body), request_body=body)
 
-            return (await post_with_fresh_cache_async(request_body, rebuild, post, log_request))[1]
+            accepted: Final = partial(
+                post_with_accepted_thought_signatures_async,
+                placeholders=with_placeholder_thought_signatures,
+                uncached=uncached,
+                post=post,
+                log_request=log_request,
+            )
+            return (await post_with_fresh_cache_async(request_body, rebuild, accepted, log_request))[1][1]
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=None,
@@ -3612,22 +3620,16 @@ class VertexLLM(VertexBase):
             litellm_params=litellm_params,
         )
 
-        rebuild: Final = cache_rebuild(
-            partial(
-                async_transform_request_body,
-                **data,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-                vertex_auth_header=auth_header,
-            ),
-            messages,
-            optional_params,
-        )
-        request_body: Final = await async_transform_request_body(
+        transform: Final = partial(
+            async_transform_request_body,
             **data,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
+        )
+        rebuild, uncached = cache_rebuilds(transform, messages, optional_params)
+        request_body: Final = await build_with_accepted_thought_signatures_async(
+            transform, with_placeholder_thought_signatures, uncached
         )
 
         _async_client_params: Final = {}
@@ -3669,7 +3671,14 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        sent_body, first_response = await post_with_fresh_cache_async(request_body, rebuild, post, log_request)
+        accepted: Final = partial(
+            post_with_accepted_thought_signatures_async,
+            placeholders=with_placeholder_thought_signatures,
+            uncached=uncached,
+            post=post,
+            log_request=log_request,
+        )
+        _, (sent_body, first_response) = await post_with_fresh_cache_async(request_body, rebuild, accepted, log_request)
         return _transform_long_decode_hops(
             model=model,
             hops=await collect_hops_async(parse_body(first_response), sent_body, post),
@@ -3801,22 +3810,16 @@ class VertexLLM(VertexBase):
         )
 
         ## TRANSFORMATION ##
-        rebuild: Final = cache_rebuild(
-            partial(
-                sync_transform_request_body,
-                **transform_request_params,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-                vertex_auth_header=auth_header,
-            ),
-            messages,
-            optional_params,
-        )
-        data: Final = sync_transform_request_body(
+        transform: Final = partial(
+            sync_transform_request_body,
             **transform_request_params,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
+        )
+        rebuild, uncached = cache_rebuilds(transform, messages, optional_params)
+        data: Final = build_with_accepted_thought_signatures_sync(
+            transform, with_placeholder_thought_signatures, uncached
         )
 
         ## LOGGING
@@ -3845,7 +3848,14 @@ class VertexLLM(VertexBase):
                 def post(body: RequestBody) -> ModelResponseIterator:
                     return open_stream(client=client, data=json.dumps(body), request_body=body)
 
-                return post_with_fresh_cache_sync(data, rebuild, post, log_request)[1]
+                accepted: Final = partial(
+                    post_with_accepted_thought_signatures_sync,
+                    placeholders=with_placeholder_thought_signatures,
+                    uncached=uncached,
+                    post=post,
+                    log_request=log_request,
+                )
+                return post_with_fresh_cache_sync(data, rebuild, accepted, log_request)[1][1]
 
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=None,
@@ -3889,7 +3899,14 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        sent_body, first_response = post_with_fresh_cache_sync(data, rebuild, post, log_request)
+        accepted: Final = partial(
+            post_with_accepted_thought_signatures_sync,
+            placeholders=with_placeholder_thought_signatures,
+            uncached=uncached,
+            post=post,
+            log_request=log_request,
+        )
+        _, (sent_body, first_response) = post_with_fresh_cache_sync(data, rebuild, accepted, log_request)
         return _transform_long_decode_hops(
             model=model,
             hops=collect_hops_sync(parse_body(first_response), sent_body, post),

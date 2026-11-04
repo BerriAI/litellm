@@ -40,6 +40,7 @@ from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
     apply_bedrock_invoke_structured_output,
+    bedrock_native_output_is_deployment_opt_in,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
@@ -47,7 +48,7 @@ from litellm.llms.bedrock.common_utils import (
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    requests_opt_in_native_output,
+    requests_native_output,
     requests_output_config_format,
     strip_unsupported_bedrock_invoke_output_config_keys,
     supports_bedrock_prompt_cache_ttl,
@@ -131,7 +132,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         litellm_params: GenericLiteLLMParams,
     ) -> GenericLiteLLMParams | None:
         model_info: Final = _MODEL_INFO.validate_python(litellm_params.model_info)
-        if not requests_opt_in_native_output(model, anthropic_messages_optional_request_params, model_info):
+        if not (
+            requests_native_output(anthropic_messages_optional_request_params)
+            and bedrock_native_output_is_deployment_opt_in(model, model_info=model_info)
+        ):
             return None
         return litellm_params.model_copy(
             update={"model_info": {**(model_info or {}), "supports_bedrock_native_structured_output": False}}

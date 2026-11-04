@@ -29,9 +29,11 @@ from litellm.llms.gemini.image_generation.cost_calculator import (
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_image_generation_cost_calculator,
 )
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
+    DataResidency,
     ImageObject,
     ImageResponse,
     ImageUsage,
@@ -40,6 +42,62 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+
+
+def test_realtime_cached_modality_breakdown_matches_prompt_cost(_local_model_cost_map):
+    model: Final = "gpt-realtime-2.1-mini"
+    rates: Final = litellm.model_cost[model]
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=400,
+            audio_tokens=400,
+            image_tokens=200,
+            cached_tokens=300,
+            cached_tokens_details=CachedTokensDetails(text_tokens=100, audio_tokens=150, image_tokens=50),
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+    breakdown: Final = get_token_type_cost_breakdown(model=model, custom_llm_provider="openai", usage=usage)
+    cached_cost: Final = (
+        100 * rates["cache_read_input_token_cost"]
+        + 150 * rates["cache_read_input_audio_token_cost"]
+        + 50 * rates["cache_read_input_image_token_cost"]
+    )
+    uncached_cost: Final = (
+        300 * rates["input_cost_per_token"]
+        + 250 * rates["input_cost_per_audio_token"]
+        + 150 * rates["input_cost_per_image_token"]
+    )
+
+    assert breakdown.cache_read_cost == pytest.approx(cached_cost)
+    assert prompt_cost == pytest.approx(uncached_cost + cached_cost)
+
+
+def test_image_model_bills_cached_image_tokens_at_its_cached_image_rate(_local_model_cost_map):
+    model: Final = "gpt-image-2"
+    rates: Final = litellm.model_cost[model]
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=200,
+            image_tokens=800,
+            cached_tokens=600,
+            cached_tokens_details=CachedTokensDetails(text_tokens=100, image_tokens=500),
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+    cached_cost: Final = 100 * rates["cache_read_input_token_cost"] + 500 * rates["cache_read_input_image_token_cost"]
+    uncached_cost: Final = 100 * rates["input_cost_per_token"] + 300 * rates["input_cost_per_image_token"]
+
+    assert rates["cache_read_input_image_token_cost"] != rates["cache_read_input_token_cost"]
+    assert prompt_cost == pytest.approx(uncached_cost + cached_cost)
 
 
 @pytest.fixture
@@ -2234,6 +2292,10 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
     prompt_tokens_details: PromptTokensDetailsResult = {
         "cache_hit_tokens": 0,
         "cache_hit_audio_tokens": 0,
+        "cached_text_tokens": 0,
+        "cached_audio_tokens": 0,
+        "cached_image_tokens": 0,
+        "has_cached_tokens_details": False,
         "cache_creation_tokens": 0,
         "cache_creation_token_details": CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=100,
@@ -2518,6 +2580,51 @@ def test_data_residency_applies_uplift(data_residency, model, _local_model_cost_
     assert regional[1] == pytest.approx(base[1] * 1.10, rel=1e-9)
 
 
+def test_fedramp_data_residency_applies_configured_uplift() -> None:
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    model_info: Final[ModelInfo] = {
+        "key": "fedramp-fixture",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supported_openai_params": None,
+        "regional_processing_uplift_multiplier_us": 1.5,
+        "fedramp_uplift_multiplier": 1.1,
+    }
+
+    base: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+    fedramp: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=DataResidency.FEDRAMP.value,
+        model_info=model_info,
+    )
+
+    us: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=DataResidency.US.value,
+        model_info=model_info,
+    )
+
+    assert sum(base) > 0
+    assert fedramp[0] == pytest.approx(base[0] * 1.1)
+    assert fedramp[1] == pytest.approx(base[1] * 1.1)
+    assert us[0] == pytest.approx(base[0] * 1.5)
+    assert us[1] == pytest.approx(base[1] * 1.5)
+
+
 @pytest.mark.parametrize("model", ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-4o", "gpt-4.1"])
 def test_data_residency_no_uplift_for_pre_march_2026_models(model, _local_model_cost_map):
     """Models released before 2026-03-05 must not have the regional uplift."""
@@ -2656,6 +2763,22 @@ def test_vertex_uplift_invalid_multiplier_defaults_to_one():
     assert (
         get_vertex_regional_endpoint_uplift({"regional_endpoint_uplift_multiplier": "not-a-number"}, "us-east5") == 1.0
     )
+
+
+@pytest.mark.parametrize(
+    "model_info, data_residency",
+    [
+        ({"fedramp_uplift_multiplier": "not-a-number"}, "fedramp"),
+        ({}, "fedramp"),
+        ({"fedramp_uplift_multiplier": 1.1}, "us"),
+        ({"fedramp_uplift_multiplier": 1.1}, None),
+    ],
+)
+def test_fedramp_uplift_defaults_to_one(model_info: ModelInfo, data_residency: str | None):
+    """A malformed or missing FedRAMP multiplier, or a non-FedRAMP host, bills base pricing and never raises."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_fedramp_uplift_multiplier
+
+    assert get_fedramp_uplift_multiplier(model_info, data_residency) == 1.0
 
 
 def test_service_tier_suffixes_constant_in_sync_with_enum():

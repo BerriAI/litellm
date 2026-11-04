@@ -10,7 +10,7 @@
 import asyncio
 import copy
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
@@ -107,7 +107,13 @@ def redacted_response_obj_for_custom_logger(response_obj: object, custom_logger:
 
 def _is_redactable_response(response_obj: object) -> bool:
     return isinstance(
-        response_obj, (litellm.ModelResponse, litellm.ResponsesAPIResponse, litellm.EmbeddingResponse)
+        response_obj,
+        (
+            litellm.ModelResponse,
+            litellm.TextCompletionResponse,
+            litellm.ResponsesAPIResponse,
+            litellm.EmbeddingResponse,
+        ),
     ) or (isinstance(response_obj, dict) and ("choices" in response_obj or "output" in response_obj))
 
 
@@ -171,6 +177,8 @@ def _redact_streaming_response(streaming_response):
             _redact_bedrock_guardrail_trace(streaming_response)
     elif isinstance(streaming_response, litellm.ResponsesAPIResponse):
         return perform_redaction({}, streaming_response)
+    elif isinstance(streaming_response, litellm.TranscriptionResponse):
+        streaming_response.text = REDACTED_BY_LITELLM
     elif hasattr(streaming_response, "output"):
         _redact_responses_api_output(streaming_response.output)
         if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
@@ -206,6 +214,7 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        _drop_field_when_present(choice.message, "reasoning_items")
         _redact_provider_specific_fields(choice.message)
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
@@ -216,12 +225,14 @@ def _redact_choice_content(choice):
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        _drop_field_when_present(choice.delta, "reasoning_items")
         _redact_provider_specific_fields(choice.delta)
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))
     elif isinstance(choice, litellm.utils.TextChoices):
         _redact_field_when_present(choice, "text")
         _redact_field_when_present(choice, "reasoning_content")
+        _drop_field_when_present(choice, "logprobs")
 
 
 def _as_mapping(value: object) -> Mapping[str, object] | None:
@@ -280,6 +291,11 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
 def _redact_field_when_present(item: object, field: str) -> None:
     if getattr(item, field, None) is not None:
         setattr(item, field, REDACTED_BY_LITELLM)
+
+
+def _drop_field_when_present(item: object, field: str) -> None:
+    if getattr(item, field, None) is not None:
+        setattr(item, field, None)
 
 
 def _redact_responses_api_output(output_items):
@@ -438,32 +454,22 @@ def _redact_tool_calls_dict(message: Mapping[str, object]) -> None:
         function_call["arguments"] = REDACTED_BY_LITELLM
 
 
-def _redact_model_response_dict_choices(choices, redacted_str: str):
+def _redact_model_response_dict_choices(choices: Iterable[object], redacted_str: str) -> None:
     for choice in choices:
         if isinstance(choice, dict):
             _redact_provider_specific_fields_dict(choice)
             if choice.get("token_ids") is not None:
                 choice["token_ids"] = None
-            if "message" in choice and isinstance(choice["message"], dict):
-                if choice["message"].get("content") is not None:
-                    choice["message"]["content"] = redacted_str
-                if choice["message"].get("reasoning_content") is not None:
-                    choice["message"]["reasoning_content"] = redacted_str
-                if "thinking_blocks" in choice["message"]:
-                    choice["message"]["thinking_blocks"] = None
-                if "audio" in choice["message"]:
-                    choice["message"]["audio"] = None
-                _redact_tool_calls_dict(choice["message"])
-            elif "delta" in choice and isinstance(choice["delta"], dict):
-                if choice["delta"].get("content") is not None:
-                    choice["delta"]["content"] = redacted_str
-                if choice["delta"].get("reasoning_content") is not None:
-                    choice["delta"]["reasoning_content"] = redacted_str
-                if "thinking_blocks" in choice["delta"]:
-                    choice["delta"]["thinking_blocks"] = None
-                if "audio" in choice["delta"]:
-                    choice["delta"]["audio"] = None
-                _redact_tool_calls_dict(choice["delta"])
+            if (
+                body := next((choice[key] for key in ("message", "delta") if isinstance(choice.get(key), dict)), None)
+            ) is not None:
+                for field in ("content", "reasoning_content"):
+                    if body.get(field) is not None:
+                        body[field] = redacted_str
+                for field in ("thinking_blocks", "reasoning_items", "audio"):
+                    if field in body:
+                        body[field] = None
+                _redact_tool_calls_dict(body)
             elif choice.get("text") is not None:
                 choice["text"] = redacted_str
         else:
@@ -586,7 +592,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             return {"text": REDACTED_BY_LITELLM}
 
         _result: Final = copy.deepcopy(result)
-        if isinstance(_result, litellm.ModelResponse):
+        if isinstance(_result, (litellm.ModelResponse, litellm.TextCompletionResponse)):
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:
                     _redact_choice_content(choice)
