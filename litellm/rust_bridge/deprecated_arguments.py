@@ -15,8 +15,6 @@ _DEPRECATED: Final = MappingProxyType(
         "client": "client= is deprecated: litellm is moving requests to Rust, which ignores it and uses its own HTTP settings"
     }
 )
-_INTERNAL: Final = frozenset({"shared_session"})
-_DROPPED: Final = _INTERNAL | frozenset(_DEPRECATED)
 
 
 def _first_stacklevel_outside_litellm() -> int:
@@ -40,9 +38,3 @@ def warn_deprecated(name: str) -> None:
 def warn_deprecated_in(kwargs: Mapping[str, object]) -> None:
     for name in (name for name in _DEPRECATED if kwargs.get(name) is not None):
         warn_deprecated(name)
-
-
-def without_ignored(kwargs: Mapping[str, object]) -> Mapping[str, object]:
-    if _DROPPED.isdisjoint(kwargs):
-        return kwargs
-    return MappingProxyType({key: value for key, value in kwargs.items() if key not in _DROPPED})

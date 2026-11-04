@@ -158,7 +158,6 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import realtime_health_check
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.rust_bridge.ignored_arguments import warn_deprecated, warn_deprecated_in
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
 from litellm.types.completion import (
@@ -8413,7 +8412,6 @@ async def atranscription(
     loop: Final = asyncio.get_event_loop()
     model: Final = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
-    warn_deprecated_in(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs))
     kwargs["atranscription"] = True
     file: Final = kwargs.get("file", None)
     try:
@@ -8568,8 +8566,6 @@ def transcription(
     client: openai.AsyncOpenAI | openai.OpenAI | openai.AzureOpenAI | openai.AsyncAzureOpenAI | None = kwargs.pop(
         "client", None
     )
-    if client is not None and not atranscription:
-        warn_deprecated("client")
 
     if litellm_logging_obj:
         litellm_logging_obj.model_call_details["client"] = str(client)

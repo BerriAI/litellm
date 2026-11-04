@@ -1,10 +1,9 @@
-import warnings
 from collections.abc import Mapping, Sequence
 from typing import Final
 
 import pytest
 
-from litellm.rust_bridge.public_call import AsyncFlag, native_call, native_call_hook, signature
+from litellm.rust_bridge.public_call import AsyncFlag, native_call, signature
 
 
 def _messages(
@@ -77,25 +76,3 @@ def test_flag_keywords_name_positionals_and_drop_only_the_flag() -> None:
 def test_flag_keywords_reject_a_parameter_given_twice() -> None:
     with pytest.raises(TypeError):
         _FLAG.keywords((128,), {"max_tokens": 64})
-
-
-
-@pytest.mark.parametrize(
-    "supplied",
-    (
-        {"client": object(), "api_key": "k"},
-        {"shared_session": object(), "api_key": "k"},
-        {"client": None, "api_key": "k"},
-        {"api_key": "k"},
-    ),
-)
-def test_hook_hands_rust_the_call_without_client_or_shared_session(supplied: Mapping[str, object]) -> None:
-    extra_body: Final = {"pages": [0]}
-    call: Final = native_call(_SIGNATURE, (128, [], "model"), {**supplied, "extra_body": extra_body})
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        seen: Final = native_call_hook(lambda hooked: hooked.kwargs, call, (), {})
-
-    assert seen == {"api_key": "k", "extra_body": extra_body}
-    assert seen["extra_body"] is extra_body

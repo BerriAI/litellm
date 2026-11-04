@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
-
-from litellm.rust_bridge.ignored_arguments import without_ignored
 
 
 def signature(legacy: Callable[..., object]) -> inspect.Signature:
@@ -116,4 +114,4 @@ def native_call_hook(
     _args: tuple[object, ...],
     _kwargs: Mapping[str, object],
 ) -> NativeResultT:
-    return hook(replace(call, kwargs=without_ignored(call.kwargs)))
+    return hook(call)

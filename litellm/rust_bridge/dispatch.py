@@ -8,7 +8,6 @@ from litellm._logging import verbose_logger
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, Rules
-from litellm.rust_bridge.ignored_arguments import warn_deprecated_in
 
 RequestT: Final = TypeVar("RequestT")
 NativeT: Final = TypeVar("NativeT")
@@ -59,7 +58,6 @@ class PublicDispatch(Generic[RequestT]):
         native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], ResultT],
         rules: Rules | None = None,
     ) -> ResultT:
-        warn_deprecated_in(kwargs)
         selected_rules: Final = catalog.RULES if rules is None else rules
         if isinstance(python, runtime.NoPythonImplementation):
             native_request: Final = self._native_request(args, kwargs)
@@ -96,7 +94,6 @@ class PublicDispatch(Generic[RequestT]):
         native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], Awaitable[ResultT]],
         rules: Rules | None = None,
     ) -> ResultT:
-        warn_deprecated_in(kwargs)
         selected_rules: Final = catalog.RULES if rules is None else rules
         if isinstance(python, runtime.NoPythonImplementation):
             native_request: Final = self._native_request(args, kwargs)

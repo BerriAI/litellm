@@ -1,4 +1,3 @@
-import warnings
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Final, NoReturn, TypeAlias
@@ -330,41 +329,3 @@ async def test_dispatch_without_python_never_falls_back(
 
     with pytest.raises(NoPythonImplementationError, match=f"ocr has no Python implementation, so .*{reason}"):
         await dispatch_without_python(ocr_dispatch(request_value), bound, rules, asynchronous=asynchronous)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_python_served_call_keeps_the_client_but_warns_it_is_deprecated(asynchronous: bool) -> None:
-    client: Final = object()
-    received: Final[list[object]] = []
-
-    def python(*args: object, **kwargs: object) -> object:  # kwargs-ok: records the forwarded call
-        received.append(kwargs["client"])
-        return "python"
-
-    async def apython(*args: object, **kwargs: object) -> object:  # kwargs-ok: records the forwarded call
-        return python(*args, **kwargs)
-
-    dispatch: Final = PublicDispatch(
-        route=Route.CHAT_COMPLETIONS,
-        request=lambda args, kwargs: None,
-        context=lambda _: RouteContext(Route.CHAT_COMPLETIONS),
-    )
-    rules: Final[Rules] = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        result: Final = (
-            await dispatch.arun(
-                ("model",), {"client": client}, python=apython, binding=binding(), native=pytest.fail, rules=rules
-            )
-            if asynchronous
-            else dispatch.run(
-                ("model",), {"client": client}, python=python, binding=binding(), native=pytest.fail, rules=rules
-            )
-        )
-
-    assert result == "python"
-    assert received == [client]
-    assert [(warning.category, warning.filename) for warning in caught if "client=" in str(warning.message)] == [
-        (DeprecationWarning, __file__)
-    ]
