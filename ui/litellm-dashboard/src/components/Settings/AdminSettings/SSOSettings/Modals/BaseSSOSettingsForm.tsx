@@ -6,6 +6,7 @@ import { FormProvider, useFormContext, useWatch, type UseFormReturn } from "reac
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { ssoProviderLogoMap, ssoProviderDisplayNames } from "../constants";
+import { diffSSOSettingsPayload } from "../utils";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -221,6 +222,21 @@ export const pickMountedSSOValues = (values: SSOSettingsFormValues, variant: SSO
   Object.fromEntries(
     mountedSSOFieldNames(values, variant).map((name) => [name, values[name as keyof SSOSettingsFormValues]]),
   );
+
+export const buildSSOSettingsPatch = (
+  seeded: SSOSettingsFormValues,
+  submitted: SSOSettingsFormValues,
+  variant: SSOFormVariant,
+  toPayload: (values: SSOSettingsFormValues) => Record<string, unknown>,
+): Record<string, unknown> => {
+  const competingProviderFields =
+    seeded.sso_provider === submitted.sso_provider ? [] : Object.keys(ssoProviderConfigs).flatMap(providerFieldNames);
+  const editedFieldNames = new Set([...mountedSSOFieldNames(submitted, variant), ...competingProviderFields]);
+  const seededEditedValues: SSOSettingsFormValues = Object.fromEntries(
+    Object.entries(seeded).filter(([name]) => editedFieldNames.has(name)),
+  );
+  return diffSSOSettingsPayload(toPayload(seededEditedValues), toPayload(submitted));
+};
 
 export const submitMountedSSOValues =
   (

@@ -4254,6 +4254,7 @@ def _convert_to_bedrock_tool_call_invoke(
     tool_calls: list,
     model: str | None = None,
     deployment_model: str | None = None,
+    model_info: Mapping[str, object] | None = None,
 ) -> list[BedrockContentBlock]:
     """
     OpenAI tool invokes:
@@ -4338,6 +4339,7 @@ def _convert_to_bedrock_tool_call_invoke(
                                     block_type="content_block",
                                     model=model,
                                     deployment_model=deployment_model,
+                                    model_info=model_info,
                                 )
                                 if _cache_point_block is not None:
                                     _parts_list.append(_cache_point_block)
@@ -4358,6 +4360,7 @@ def _convert_to_bedrock_tool_call_invoke(
                         block_type="content_block",
                         model=model,
                         deployment_model=deployment_model,
+                        model_info=model_info,
                     )
                     if cache_point_block is not None:
                         _parts_list.append(cache_point_block)
@@ -5029,6 +5032,7 @@ class BedrockConverseMessagesProcessor:
         deployment_model: str | None = None,
         base_model: str | None = None,
         drop_params: bool = False,
+        model_info: Mapping[str, object] | None = None,
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
 
@@ -5091,6 +5095,7 @@ class BedrockConverseMessagesProcessor:
                                 block_type="content_block",
                                 model=model,
                                 deployment_model=deployment_model,
+                                model_info=model_info,
                             )
                             if _cache_point_block is not None:
                                 _parts.append(_cache_point_block)
@@ -5098,7 +5103,11 @@ class BedrockConverseMessagesProcessor:
                 elif message_content and isinstance(message_content, str):
                     _part = BedrockContentBlock(text=message_content)
                     _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                        message_block, block_type="content_block", model=model, deployment_model=deployment_model
+                        message_block,
+                        block_type="content_block",
+                        model=model,
+                        deployment_model=deployment_model,
+                        model_info=model_info,
                     )
                     user_content.append(_part)
                     if _cache_point_block is not None:
@@ -5149,6 +5158,7 @@ class BedrockConverseMessagesProcessor:
                         block_type="content_block",
                         model=model,
                         deployment_model=deployment_model,
+                        model_info=model_info,
                     )
                     if cache_point_block is not None:
                         tool_content.append(cache_point_block)
@@ -5214,6 +5224,7 @@ class BedrockConverseMessagesProcessor:
                             block_type="content_block",
                             model=model,
                             deployment_model=deployment_model,
+                            model_info=model_info,
                         )
                         if _cache_point_block is not None and not (
                             drop_params and _as_thinking_block(element) is not None
@@ -5231,6 +5242,7 @@ class BedrockConverseMessagesProcessor:
                         block_type="content_block",
                         model=model,
                         deployment_model=deployment_model,
+                        model_info=model_info,
                     )
                     if _cache_point_block is not None:
                         assistant_content.append(_cache_point_block)
@@ -5239,7 +5251,7 @@ class BedrockConverseMessagesProcessor:
                 if _tool_calls:
                     assistant_content.extend(
                         _convert_to_bedrock_tool_call_invoke(
-                            _tool_calls, model=model, deployment_model=deployment_model
+                            _tool_calls, model=model, deployment_model=deployment_model, model_info=model_info
                         )
                     )
 
@@ -5434,6 +5446,7 @@ def _bedrock_converse_messages_pt(
     deployment_model: str | None = None,
     base_model: str | None = None,
     drop_params: bool = False,
+    model_info: Mapping[str, object] | None = None,
 ) -> list[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -5502,6 +5515,7 @@ def _bedrock_converse_messages_pt(
                             block_type="content_block",
                             model=model,
                             deployment_model=deployment_model,
+                            model_info=model_info,
                         )
                         if _cache_point_block is not None:
                             _parts.append(_cache_point_block)
@@ -5509,7 +5523,11 @@ def _bedrock_converse_messages_pt(
             elif message_content and isinstance(message_content, str):
                 _part = BedrockContentBlock(text=message_content)
                 _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                    message_block, block_type="content_block", model=model, deployment_model=deployment_model
+                    message_block,
+                    block_type="content_block",
+                    model=model,
+                    deployment_model=deployment_model,
+                    model_info=model_info,
                 )
                 user_content.append(_part)
                 if _cache_point_block is not None:
@@ -5562,6 +5580,7 @@ def _bedrock_converse_messages_pt(
                     block_type="content_block",
                     model=model,
                     deployment_model=deployment_model,
+                    model_info=model_info,
                 )
                 if cache_point_block is not None:
                     tool_content.append(cache_point_block)
@@ -5628,6 +5647,7 @@ def _bedrock_converse_messages_pt(
                             block_type="content_block",
                             model=model,
                             deployment_model=deployment_model,
+                            model_info=model_info,
                         )
                         if _cache_point_block is not None and not (
                             drop_params and _as_thinking_block(element) is not None
@@ -5640,14 +5660,20 @@ def _bedrock_converse_messages_pt(
                     assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                    assistant_message_block, block_type="content_block", model=model, deployment_model=deployment_model
+                    assistant_message_block,
+                    block_type="content_block",
+                    model=model,
+                    deployment_model=deployment_model,
+                    model_info=model_info,
                 )
                 if _cache_point_block is not None:
                     assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
                 assistant_content.extend(
-                    _convert_to_bedrock_tool_call_invoke(_tool_calls, model=model, deployment_model=deployment_model)
+                    _convert_to_bedrock_tool_call_invoke(
+                        _tool_calls, model=model, deployment_model=deployment_model, model_info=model_info
+                    )
                 )
 
             msg_i += 1
@@ -5703,7 +5729,10 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
 
 
 def add_cache_point_tool_block(
-    tool: dict, model: str | None = None, deployment_model: str | None = None
+    tool: dict,
+    model: str | None = None,
+    deployment_model: str | None = None,
+    model_info: Mapping[str, object] | None = None,
 ) -> BedrockToolBlock | None:
     from litellm.llms.bedrock.common_utils import (
         bedrock_cache_point_ttl_supported,
@@ -5711,7 +5740,7 @@ def add_cache_point_tool_block(
     )
 
     cache_control: Final = tool.get("cache_control", None)
-    if cache_control is not None and bedrock_model_accepts_cache_points(model, deployment_model):
+    if cache_control is not None and bedrock_model_accepts_cache_points(model, deployment_model, model_info):
         cache_point: Final = cache_control.get("type", "ephemeral")
         if cache_point == "ephemeral":
             cache_point_block: Final[CachePointBlock] = {"type": "default"}
@@ -5748,7 +5777,10 @@ def _is_bedrock_tool_block(tool: dict) -> bool:
 
 
 def _bedrock_tools_pt(
-    tools: list, model: str | None = None, deployment_model: str | None = None
+    tools: list,
+    model: str | None = None,
+    deployment_model: str | None = None,
+    model_info: Mapping[str, object] | None = None,
 ) -> list[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -5869,7 +5901,9 @@ def _bedrock_tools_pt(
         tool_block_list.append(tool_block)
 
         ## ADD CACHE POINT TOOL BLOCK ##
-        cache_point_tool_block = add_cache_point_tool_block(tool, model=model, deployment_model=deployment_model)
+        cache_point_tool_block = add_cache_point_tool_block(
+            tool, model=model, deployment_model=deployment_model, model_info=model_info
+        )
         if cache_point_tool_block is not None:
             tool_block_list.append(cache_point_tool_block)
 

@@ -1360,7 +1360,7 @@ def test_azure_ai_services_handler(api_base, expected_url):
     with patch.object(client, "post") as mock_client:
         try:
             response = litellm.completion(
-                model="azure_ai/Meta-Llama-3.1-70B-Instruct",
+                model="azure_ai/Llama-3.3-70B-Instruct",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 api_key="my-fake-api-key",
                 api_base=api_base,
@@ -1385,7 +1385,7 @@ def test_azure_ai_services_with_api_version():
     with patch.object(client, "post") as mock_client:
         try:
             response = litellm.completion(
-                model="azure_ai/Meta-Llama-3.1-70B-Instruct",
+                model="azure_ai/Llama-3.3-70B-Instruct",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 api_key="my-fake-api-key",
                 api_version="2024-05-01-preview",

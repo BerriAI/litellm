@@ -83,6 +83,7 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
+from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     CHAT_ALLOWED_TOOLS_LAYOUT,
     parse_chat_allowed_tools_tool_choice,
@@ -2312,7 +2313,7 @@ def client(original_function):
 
                 is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not is_completion_litellm_router_call
+                    num_retries and not is_completion_litellm_router_call and not is_agentic_followup_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2346,7 +2347,7 @@ def client(original_function):
 
                 is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not is_responses_litellm_router_call
+                    num_retries and not is_responses_litellm_router_call and not is_agentic_followup_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2645,7 +2646,10 @@ def client(original_function):
                 is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
-                    num_retries and not is_acompletion_litellm_router_call and not isinstance(e, ImportError)
+                    num_retries
+                    and not is_acompletion_litellm_router_call
+                    and not isinstance(e, ImportError)
+                    and not is_agentic_followup_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -2676,7 +2680,10 @@ def client(original_function):
                 is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
-                    num_retries and not is_aresponses_litellm_router_call and not isinstance(e, ImportError)
+                    num_retries
+                    and not is_aresponses_litellm_router_call
+                    and not isinstance(e, ImportError)
+                    and not is_agentic_followup_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -4226,6 +4233,54 @@ def _register_on_current_map(
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
+_runtime_registration_order: Final[dict[str, int]] = {}  # mutable-ok: tells which of a row's registered names came last
+_runtime_registered_names: Final[dict[str, tuple[str, ...]]] = {}  # mutable-ok: names registered onto each live row
+_REGISTRATION_TICKS: Final = itertools.count()
+
+
+@dataclass(frozen=True, slots=True)
+class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
+    catalog: Mapping[str, Mapping[str, object]]
+    registrations: Mapping[str, Mapping[str, object]]
+    registration_order: Mapping[str, int]
+    registered_names: Mapping[str, tuple[str, ...]]
+
+    def __getitem__(self, key: str) -> Mapping[str, object]:
+        catalog_entry: Final = self.catalog.get(key)
+        names: Final = dict.fromkeys((*self.registered_names.get(key, ()), key))
+        present: Final = tuple(name for name in names if name in self.registrations)
+        if not present:
+            return self.catalog[key]
+        oldest_first: Final = sorted(present, key=lambda name: self.registration_order.get(name, -1))
+        registered: Final = (self.registrations[name] for name in oldest_first)
+        return MappingProxyType(
+            dict(itertools.chain.from_iterable(entry.items() for entry in (catalog_entry or {}, *registered)))
+        )
+
+    def __iter__(self) -> Iterator[str]:
+        return iter({**dict.fromkeys(self.catalog), **dict.fromkeys(self.registrations)})
+
+    def __len__(self) -> int:
+        return len(self.catalog.keys() | self.registrations.keys())
+
+
+def _record_registered_name(written_key: str, registered_key: str) -> None:
+    names: Final = _runtime_registered_names.get(written_key, ())
+    if registered_key not in names:
+        _runtime_registered_names[written_key] = (*names, registered_key)
+
+
+def catalog_with_runtime_registrations() -> Mapping[str, Mapping[str, object]]:
+    """The loaded catalog plus ``register_model`` calls, without what routers register for their deployments."""
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    if not _runtime_registered_model_cost:
+        return catalog
+    return _RegistrationsOverCatalog(
+        catalog,
+        MappingProxyType(_runtime_registered_model_cost),
+        MappingProxyType(_runtime_registration_order),
+        MappingProxyType(_runtime_registered_names),
+    )
 
 
 def runtime_model_cost_registrations(
@@ -4291,7 +4346,14 @@ def reapply_runtime_model_cost_registrations() -> None:
     if _LiveDeploymentReplay.callback is not None:
         _LiveDeploymentReplay.callback()
     if _runtime_registered_model_cost:
-        register_model(model_cost=dict(_runtime_registered_model_cost))
+        register_model(
+            model_cost=dict(
+                sorted(
+                    _runtime_registered_model_cost.items(),
+                    key=lambda registration: _runtime_registration_order.get(registration[0], -1),
+                )
+            )
+        )
 
 
 def cost_map_omits_token_price(*keys: object) -> bool:
@@ -4365,9 +4427,12 @@ def register_model(
                 dict(_runtime_registered_model_cost.get(_registered_key, {})),
                 _RATE_TABLE.validate_python(_registered_value),
             )
+            _runtime_registration_order[_registered_key] = next(_REGISTRATION_TICKS)
 
     for key, value in loaded_model_cost.items():
         write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
+        if persist_across_reloads:
+            _record_registered_name(write.key, str(key))
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()
@@ -6103,6 +6168,14 @@ EXTRA_BODY_ROUTING_KEYS: Final = frozenset({"model"})
 LITELLM_ONLY_PARAMS: Final = frozenset(("cache_control_injection_points",))
 
 
+def header_auth_params(custom_llm_provider: str) -> frozenset[str]:
+    if custom_llm_provider != "azure_ai":
+        return frozenset()
+    from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_CREDENTIAL_PARAM_KEYS
+
+    return AZURE_ENTRA_CREDENTIAL_PARAM_KEYS
+
+
 def add_provider_specific_params_to_optional_params(
     optional_params: dict,
     passed_params: dict,
@@ -6137,8 +6210,10 @@ def add_provider_specific_params_to_optional_params(
                 **extra_body,
             }
 
-            dropped_keys: Final = EXTRA_BODY_ROUTING_KEYS | frozenset(
-                param for param in (additional_drop_params or ()) if isinstance(param, str)
+            dropped_keys: Final = (
+                EXTRA_BODY_ROUTING_KEYS
+                | header_auth_params(custom_llm_provider)
+                | frozenset(param for param in (additional_drop_params or ()) if isinstance(param, str))
             )
             ensure_extra_body_is_safe: Final = litellm_utils.ensure_extra_body_is_safe
             optional_params["extra_body"] = ensure_extra_body_is_safe(
@@ -7377,6 +7452,18 @@ def get_model_info_helper(
                 input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_audio_token_flex=_model_info.get("input_cost_per_audio_token_flex", None),
+                input_cost_per_audio_token_above_200k_tokens=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_flex=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_flex", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_priority=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_priority", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_batches=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_batches", None
+                ),
                 input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
@@ -7390,12 +7477,18 @@ def get_model_info_helper(
                 input_cost_per_token_above_200k_tokens_batches=_model_info.get(
                     "input_cost_per_token_above_200k_tokens_batches"
                 ),
+                input_cost_per_token_above_200k_tokens_flex=_model_info.get(
+                    "input_cost_per_token_above_200k_tokens_flex", None
+                ),
                 input_cost_per_token_above_272k_tokens_batches=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_batches"
                 ),
                 output_cost_per_token_batches=_model_info.get("output_cost_per_token_batches"),
                 output_cost_per_token_above_200k_tokens_batches=_model_info.get(
                     "output_cost_per_token_above_200k_tokens_batches"
+                ),
+                output_cost_per_token_above_200k_tokens_flex=_model_info.get(
+                    "output_cost_per_token_above_200k_tokens_flex", None
                 ),
                 output_cost_per_token_above_272k_tokens_batches=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_batches"
@@ -7458,6 +7551,7 @@ def get_model_info_helper(
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
+                output_cost_per_image_token_priority=_model_info.get("output_cost_per_image_token_priority", None),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
@@ -9001,6 +9095,9 @@ def bundled_provider_models(provider: str) -> tuple[str, ...]:
     return tuple(model for model in bundled if not is_hidden_as_retired(cost_map.get(model, {})))
 
 
+AZURE_MODEL_PLACEHOLDER: Final = "Azure-LLM"
+
+
 def get_valid_models(
     check_provider_endpoint: bool | None = None,
     custom_llm_provider: str | None = None,
@@ -9056,7 +9153,7 @@ def get_valid_models(
                 continue
 
             if provider == "azure":
-                valid_models.append("Azure-LLM")
+                valid_models.append(AZURE_MODEL_PLACEHOLDER)
             elif provider_config is not None and check_provider_endpoint and provider is not None:
                 valid_models.extend(
                     _get_valid_models_from_provider_api(

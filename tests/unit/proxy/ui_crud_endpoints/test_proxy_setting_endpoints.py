@@ -19,6 +19,27 @@ client = TestClient(app)
 
 
 @pytest.mark.asyncio
+async def test_sso_settings_without_prisma_reports_database_not_connected(monkeypatch: pytest.MonkeyPatch) -> None:
+    import runpy
+    import sys
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    with patch.dict(sys.modules, {"prisma": None, "prisma.errors": None}):
+        endpoints: Final = runpy.run_path(proxy_setting_endpoints.__file__)
+        with pytest.raises(HTTPException) as error:
+            await endpoints["update_sso_settings"](SSOConfig(), UserAPIKeyAuth())
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": "Database not connected. Please connect a database."}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("config_value,stored_value,expected", [
     (None, None, False), (None, False, False), (None, True, True),
     (False, True, False), (True, False, True), ("false", True, False), ("true", False, True),
@@ -871,6 +892,25 @@ class TestProxySettingEndpoints:
         assert saved["microsoft_client_id"] is None
         assert saved["generic_client_id"] == "stored-client-id"
         assert saved["user_email"] == "new@example.com"
+        env_row_update = prisma_client.db.litellm_config.update.call_args.kwargs
+        assert json.loads(env_row_update["data"]["param_value"]) == {"LANGFUSE_PUBLIC_KEY": "unrelated"}
+
+    def test_update_sso_settings_blank_stored_value_keeps_env_row_secret(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import json
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch,
+            {**self._STORED_GENERIC_SSO, "generic_client_secret": ""},
+            {"user_email": "new@example.com"},
+            environment_variables={"GENERIC_CLIENT_SECRET": "env-row-secret", "LANGFUSE_PUBLIC_KEY": "unrelated"},
+        )
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        assert response.status_code == 200, response.text
+        assert saved["generic_client_secret"] == "env-row-secret", saved
         env_row_update = prisma_client.db.litellm_config.update.call_args.kwargs
         assert json.loads(env_row_update["data"]["param_value"]) == {"LANGFUSE_PUBLIC_KEY": "unrelated"}
 
