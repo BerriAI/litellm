@@ -162,10 +162,14 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _validate_input_param(
         self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
     ) -> str | ResponseInputParam:
-        """Omit reasoning content from Azure input without changing existing status handling."""
+        """Omit reasoning content only for azure without changing existing status handling.
+
+        Azure AI subclasses inherit this method but retain their reasoning content.
+        """
         from typing import cast
 
         validated_input: Final = super()._validate_input_param(input, drops_set_created_by=drops_set_created_by)
+        strips_reasoning_content: Final = self.custom_llm_provider == LlmProviders.AZURE
 
         if isinstance(validated_input, list):
             filtered_input: Final[list[object]] = []
@@ -175,7 +179,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     continue
                 if item.get("type") == "message":
                     filtered_input.append({k: v for k, v in item.items() if k != "status"})
-                elif item.get("type") == "reasoning":
+                elif item.get("type") == "reasoning" and strips_reasoning_content:
                     filtered_input.append({k: v for k, v in item.items() if k != "content"})
                 else:
                     filtered_input.append(item)
