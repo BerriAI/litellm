@@ -14,6 +14,7 @@ from respx import MockRouter
 import litellm
 from litellm import interactions
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.interactions import InteractionsAPIResponse
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -1175,3 +1176,42 @@ async def test_an_agent_only_vertex_deep_research_interaction_is_billed_under_th
         f"vertex_ai/{_DEEP_RESEARCH_AGENT}"
     )
     assert recorder.cost.response_cost == pytest.approx(_deep_research_cost_from_the_vertex_row())
+@pytest.mark.asyncio
+async def test_acreate_qca_runs_managed_session_flow(respx_mock: MockRouter) -> None:
+    base: Final = "https://qca.test/api/v1/cloud"
+    respx_mock.post(f"{base}/sessions").mock(return_value=httpx.Response(200, json={"id": "sess_public"}))
+    respx_mock.post(f"{base}/sessions/sess_public/events").mock(
+        return_value=httpx.Response(202, json={"data": [{"id": "evt_input", "type": "user.message"}]})
+    )
+    respx_mock.get(f"{base}/sessions/sess_public/events/stream").mock(
+        return_value=httpx.Response(
+            200,
+            text=(
+                'data: {"id":"evt_answer","type":"agent.message",'
+                '"content":[{"type":"text","text":"ready"}]}\n\n'
+                'data: {"id":"evt_idle","type":"session.status_idle",'
+                '"stop_reason":{"type":"end_turn"}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    response: Final = await interactions.acreate(
+        model="qca/agent_public",
+        input="run",
+        environment="env_public",
+        api_key="qca-secret",
+        api_base=base,
+    )
+
+    assert isinstance(response, InteractionsAPIResponse)
+    assert response.id == "qca1.sess_public.evt_input"
+    assert response.status == "completed"
+    assert response.steps == [
+        {
+            "type": "message",
+            "id": "evt_answer",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "ready"}],
+        }
+    ]
