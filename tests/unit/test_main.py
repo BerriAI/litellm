@@ -11143,31 +11143,49 @@ def test_completion_with_retries_internal_server_error_500():
         mock_sleep.assert_called_once()
 
 
-async def _with_three_retries(sync_mode: bool, original_function: MagicMock) -> object:
+async def _with_three_retries(
+    sync_mode: bool, original_function: MagicMock, retry_policy: RetryPolicy | None
+) -> object:
     messages: Final = [{"role": "user", "content": "hi"}]
     if sync_mode:
         return completion_with_retries(
-            model="gpt-4o", messages=messages, num_retries=3, original_function=original_function
+            model="gpt-4o",
+            messages=messages,
+            num_retries=3,
+            retry_policy=retry_policy,
+            original_function=original_function,
         )
     return await acompletion_with_retries(
-        model="gpt-4o", messages=messages, num_retries=3, original_function=original_function
+        model="gpt-4o",
+        messages=messages,
+        num_retries=3,
+        retry_policy=retry_policy,
+        original_function=original_function,
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_completion_with_retries_stops_at_a_failed_agentic_follow_up(sync_mode: bool):
+@pytest.mark.parametrize("retry_policy", [None, RetryPolicy(DefaultRetries=2)], ids=["no-policy", "policy"])
+@pytest.mark.parametrize("failures_before_follow_up", [0, 1])
+async def test_completion_with_retries_stops_at_a_failed_agentic_follow_up(
+    sync_mode: bool, retry_policy: RetryPolicy | None, failures_before_follow_up: int
+):
     follow_up_failure: Final = _make_internal_server_error()
     mark_agentic_followup_failure(follow_up_failure, ())
-    outcomes: Final = [_make_internal_server_error(), follow_up_failure, {"status": "recovered"}]
+    outcomes: Final = [
+        *(_make_internal_server_error() for _ in range(failures_before_follow_up)),
+        follow_up_failure,
+        {"status": "recovered"},
+    ]
     mock_completion: Final = MagicMock(side_effect=outcomes) if sync_mode else AsyncMock(side_effect=outcomes)
 
     with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
         with pytest.raises(litellm.InternalServerError) as raised:
-            await _with_three_retries(sync_mode, mock_completion)
+            await _with_three_retries(sync_mode, mock_completion, retry_policy)
 
     assert raised.value is follow_up_failure
-    assert mock_completion.call_count == 2
+    assert mock_completion.call_count == failures_before_follow_up + 1
 
 
 @pytest.mark.asyncio

@@ -6680,6 +6680,8 @@ def _retry_plan_after_first_error(
     first_error: Exception, num_retries: int, retry_policy: RetryPolicy
 ) -> _RetryPlan | None:
     """The retries a direct retry_policy grants after the first error, kept for the whole call like the router's."""
+    if is_agentic_followup_failure(first_error):
+        return None
     policy_retries: Final[int | None] = get_num_retries_from_retry_policy(
         exception=first_error, retry_policy=retry_policy
     )
