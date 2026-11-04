@@ -1,6 +1,8 @@
 import hashlib
 import io
+import stat
 import zipfile
+from typing import Final
 
 from litellm.proxy.discovery_endpoints.agent_skills_archive import (
     MAX_ARCHIVE_ENTRIES,
@@ -16,7 +18,7 @@ Read the PDF, then write the brief.
 """
 
 
-def zip_bytes(files: dict[str, bytes]) -> bytes:
+def zip_bytes(files: dict[str | zipfile.ZipInfo, bytes]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, content in files.items():
@@ -104,3 +106,15 @@ def test_an_upload_over_the_entry_cap_is_not_installable():
     }
 
     assert build_skill_archive(zip_bytes(files)) is None
+
+
+def test_discovery_keeps_its_permission_and_finder_metadata_policy() -> None:
+    executable: Final = zipfile.ZipInfo("scripts/run.sh")
+    executable.create_system = 3
+    executable.external_attr = (stat.S_IFREG | 0o7777) << 16
+    result: Final = build_skill_archive(zip_bytes({"SKILL.md": MANIFEST, executable: b"echo ready\n"}))
+    assert build_skill_archive(zip_bytes({"folder/SKILL.md": MANIFEST, "__MACOSX/._SKILL.md": b"Finder"})) is None
+    assert result is not None
+    with zipfile.ZipFile(io.BytesIO(result.content)) as archive:
+        assert {entry.create_system for entry in archive.infolist()} == {3}
+        assert {entry.external_attr >> 16 for entry in archive.infolist()} == {0o644}
