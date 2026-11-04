@@ -1749,6 +1749,14 @@ def _get_output_multiplier(request_body: dict) -> int:
         value = _to_int(request_body.get(key))
         if value is not None:
             output_multiplier = max(output_multiplier, value)
+
+    # Gemini candidateCount support
+    generation_config = request_body.get("generationConfig")
+    if isinstance(generation_config, Mapping):
+        cand_count = _to_int(generation_config.get("candidateCount"))
+        if cand_count is not None:
+            output_multiplier = max(output_multiplier, cand_count)
+
     return output_multiplier
 
 
