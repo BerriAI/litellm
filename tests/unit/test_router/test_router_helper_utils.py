@@ -3243,7 +3243,8 @@ def test_sync_generic_api_call_preserves_requested_model_group_in_logs():
             original_function=mock_original_function,
         )
 
-        assert response == {"status": "ok"}
+        # the response now goes through the fallback loop, which stamps attempt headers onto it
+        assert response["status"] == "ok"
         assert captured_kwargs["model"] == "bedrock/global.anthropic.claude-sonnet-4-6"
         assert captured_kwargs["litellm_metadata"]["model_group"] == "claude-sonnet-4-6"
         assert captured_kwargs["litellm_metadata"]["deployment"] == "bedrock/global.anthropic.claude-sonnet-4-6"
@@ -3288,7 +3289,7 @@ def test_sync_generic_api_call_uses_request_kwargs_for_deployment_selection():
             allowed_model_region="eu",
         )
 
-        assert response == {"status": "ok"}
+        assert response["status"] == "ok"
         assert captured_kwargs["model"] == "anthropic/eu-model"
     finally:
         router.discard()
