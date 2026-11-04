@@ -11,10 +11,10 @@ pub(super) fn redis_auth(
     provider: Option<ProviderHandle>,
     environment: &dyn Lookup,
 ) -> Result<Auth, RedisError> {
-    match (provider, &options.credential_provider) {
+    match (provider, options.credential_provider) {
         (Some(handle), _) => return Ok(Auth::Provider(handle)),
-        (None, Some(_)) => return Err(RedisError::ProviderWithoutHandle),
-        (None, None) => {}
+        (None, true) => return Err(RedisError::ProviderWithoutHandle),
+        (None, false) => {}
     }
     let gcp = text(options.gcp.service_account.as_ref());
     let azure = text(options.azure.ad_token.as_ref())

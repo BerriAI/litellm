@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use litellm_core_utils::settings::Lookup;
 use litellm_redis_types::{Auth, HealthCheck, ProviderHandle, Resolution, StaticAuth, Target};
@@ -73,6 +76,7 @@ pub struct ConfiguredRedis {
     fields: BTreeMap<String, Value>,
     nulls: Nulls,
     credential_provider: Option<ProviderHandle>,
+    host_objects: BTreeSet<String>,
 }
 
 /// Whether a null setting reaches redis-py as an explicit `None`, which outranks its `REDIS_*` value.
@@ -103,6 +107,7 @@ impl RedisSettings {
             fields: self.fields.clone(),
             nulls: Nulls::Dropped,
             credential_provider: None,
+            host_objects: BTreeSet::new(),
         })
     }
 
@@ -126,6 +131,7 @@ impl RedisSettings {
             fields,
             nulls: Nulls::KeptUnlessNamedByCache,
             credential_provider: None,
+            host_objects: BTreeSet::new(),
         }
     }
 }
@@ -138,6 +144,16 @@ impl ConfiguredRedis {
             fields,
             nulls: Nulls::Kept,
             credential_provider: None,
+            host_objects: BTreeSet::new(),
+        }
+    }
+
+    /// Keys whose value is a host object, which the host keeps instead of handing over. Each one hides
+    /// its `REDIS_*` value like any configured key.
+    pub fn with_host_objects(self, names: BTreeSet<String>) -> Self {
+        Self {
+            host_objects: names,
+            ..self
         }
     }
 
@@ -155,6 +171,7 @@ impl ConfiguredRedis {
             fields: BTreeMap::new(),
             nulls: Nulls::Dropped,
             credential_provider: None,
+            host_objects: BTreeSet::new(),
         }
     }
 
@@ -164,7 +181,7 @@ impl ConfiguredRedis {
         environment: &dyn Lookup,
     ) -> Result<Resolution, RedisError> {
         let kwargs = layers::merged(self, secrets);
-        let (options, unmodeled) = Options::read(kwargs, secrets)?;
+        let (options, unmodeled) = Options::read(kwargs, &self.host_objects, secrets)?;
         let auth = auth::redis_auth(&options, self.credential_provider, environment)?;
         let (target, url_ignored) = endpoint::target(&options, &auth)?;
         let auth = match (&target, auth) {

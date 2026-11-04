@@ -29,7 +29,8 @@ pub(super) struct Options {
     pub(super) sentinel: SentinelOptions,
     pub(super) username: Option<Entry>,
     pub(super) password: Option<Entry>,
-    pub(super) credential_provider: Option<Entry>,
+    /// A `credential_provider` was given, as a plain value or as a host object.
+    pub(super) credential_provider: bool,
     pub(super) gcp: GcpOptions,
     pub(super) azure: AzureOptions,
     pub(super) aws: AwsOptions,
@@ -87,7 +88,7 @@ pub(super) struct Unmodeled {
 }
 
 impl Unmodeled {
-    fn read(kwargs: &Kwargs) -> Result<Self, RedisError> {
+    fn read(kwargs: &Kwargs, declared: &BTreeSet<String>) -> Result<Self, RedisError> {
         let unmodeled = || {
             kwargs
                 .iter()
@@ -107,13 +108,24 @@ impl Unmodeled {
             .collect::<Result<_, _>>()?;
         Ok(Self {
             passthrough: Passthrough::new(passthrough),
-            host_objects: objects.into_iter().map(|(key, _)| key.clone()).collect(),
+            host_objects: objects
+                .into_iter()
+                .map(|(key, _)| key)
+                .chain(declared.iter().filter(|key| *key != "credential_provider"))
+                .cloned()
+                .collect(),
             ignored: unmodeled()
                 .filter(|(key, entry)| {
                     handling(key) == Some(Handling::Warn)
                         && !keys::is_met_by_rustls(key, &entry.value)
                 })
                 .map(|(key, entry)| keys::ignored(entry.source.clone(), key))
+                .chain(
+                    declared
+                        .iter()
+                        .filter(|key| handling(key) == Some(Handling::Warn))
+                        .map(|key| keys::ignored(key.clone(), key)),
+                )
                 .collect(),
         })
     }
@@ -123,9 +135,10 @@ impl Options {
     /// The typed settings and the ones the resolver leaves to the host.
     pub(super) fn read(
         kwargs: Kwargs,
+        declared: &BTreeSet<String>,
         lookup: &dyn Lookup,
     ) -> Result<(Self, Unmodeled), RedisError> {
-        let unmodeled = Unmodeled::read(&kwargs)?;
+        let unmodeled = Unmodeled::read(&kwargs, declared)?;
         let get = |key: &str| {
             kwargs
                 .get(key)
@@ -147,7 +160,8 @@ impl Options {
             },
             username: get("username"),
             password: get("password"),
-            credential_provider: get("credential_provider"),
+            credential_provider: get("credential_provider").is_some()
+                || declared.contains("credential_provider"),
             gcp: GcpOptions {
                 service_account: get("gcp_service_account"),
                 ssl_ca_certs: get("gcp_ssl_ca_certs"),

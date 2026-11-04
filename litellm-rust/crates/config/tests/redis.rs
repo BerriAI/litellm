@@ -873,6 +873,45 @@ fn the_breaker_reads_the_environment_like_python(
     assert_eq!(breaker, expected);
 }
 
+#[rstest]
+fn host_objects_the_host_keeps_are_named_warned_and_hide_their_environment_value() {
+    let environment: HashMap<String, String> =
+        HashMap::from([("REDIS_RETRY_ON_ERROR".to_owned(), "true".to_owned())]);
+    let configured = redis_cache_kwargs(json!({"host": "redis"}))
+        .with_host_objects(["retry".to_owned(), "retry_on_error".to_owned()].into());
+
+    let resolved = resolution(&configured, &environment).unwrap();
+
+    assert_eq!(
+        resolved
+            .host_objects
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["retry", "retry_on_error"]
+    );
+    let ignored: Vec<&str> = resolved
+        .ignored
+        .iter()
+        .map(|ignored| ignored.setting.as_str())
+        .collect();
+    assert_eq!(ignored, ["retry", "retry_on_error"]);
+    assert!(resolved.passthrough.get("retry_on_error").is_none());
+}
+
+#[rstest]
+fn a_credential_provider_object_without_a_handle_fails() {
+    let configured = redis_cache_kwargs(json!({"host": "redis"}))
+        .with_host_objects(["credential_provider".to_owned()].into());
+
+    let error = resolution(&configured, &HashMap::new()).unwrap_err();
+
+    assert!(
+        matches!(error, RedisError::ProviderWithoutHandle),
+        "{error}"
+    );
+}
+
 fn tls_view(tls: Option<&TlsOptions>) -> serde_json::Value {
     tls.map_or(serde_json::Value::Null, |tls| {
         serde_json::json!({

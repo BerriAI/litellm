@@ -45,6 +45,7 @@ pub(super) fn merged(configured: &ConfiguredRedis, lookup: &dyn Lookup) -> Kwarg
     let drop_environment_url = names_a_target && !is_set(&block, "url");
     environment(lookup)
         .filter(|(key, _)| !(key == "url" && drop_environment_url))
+        .filter(|(key, _)| !configured.host_objects.contains(key))
         .chain(block)
         .collect()
 }
