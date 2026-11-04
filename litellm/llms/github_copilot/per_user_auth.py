@@ -46,6 +46,7 @@ _LLM_PROVIDER: Final = "github_copilot"
 _DEVICE_FLOW_SCOPE: Final = "read:user"
 _SESSION_CACHE_MAX_SIZE: Final = 1000
 _SYNC_LOCK_COUNT: Final = 64
+_ACCOUNT_LOOKUP_TTL_SECONDS: Final = 1800
 
 
 class _SessionCache(Protocol):
@@ -126,11 +127,19 @@ class _CopilotEndpointsPayload(TypedDict):
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
+class _CopilotAccountPayload(TypedDict):
+    access_type_sku: ReadOnly[NotRequired[object]]
+    chat_enabled: ReadOnly[NotRequired[object]]
+    endpoints: ReadOnly[NotRequired[object]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
 class _GithubUserPayload(TypedDict):
     login: ReadOnly[str]
 
 
 _COPILOT_TOKEN: Final = TypeAdapter(_CopilotTokenPayload)
+_COPILOT_ACCOUNT: Final = TypeAdapter(_CopilotAccountPayload)
 _DEVICE_CODE: Final = TypeAdapter(_DeviceCodePayload)
 _ACCESS_TOKEN_POLL: Final = TypeAdapter(_AccessTokenPollPayload)
 _GITHUB_USER: Final = TypeAdapter(_GithubUserPayload)
@@ -273,6 +282,8 @@ def _session_from_response(
             llm_provider=_LLM_PROVIDER,
             model="",
         )
+    if not endpoints.exchanges_copilot_token:
+        return _session_from_account(response, github_token, credential_name, cache_key, endpoints)
     try:
         payload: Final = _COPILOT_TOKEN.validate_python(response.json())
     except Exception as e:
@@ -282,18 +293,47 @@ def _session_from_response(
             model="",
         ) from e
 
-    payload_endpoints: Final[object] = payload.get("endpoints")
-    endpoints_api: Final[object] = (
-        _COPILOT_ENDPOINTS.validate_python(payload_endpoints).get("api")
-        if isinstance(payload_endpoints, Mapping)
-        else None
-    )
-    api_base: Final = validated_copilot_api_base(endpoints_api, endpoints)
+    api_base: Final = validated_copilot_api_base(_endpoints_api(payload.get("endpoints")), endpoints)
     session: Final = GithubCopilotUserSession(token=payload["token"], api_base=api_base)
     expires_at: Final = _expires_at_seconds(payload.get("expires_at"))
     if expires_at > 0:
         _cache_session(cache_key, github_token, session, expires_at)
     return session
+
+
+def _session_from_account(
+    response: httpx.Response,
+    github_token: str,
+    credential_name: str,
+    cache_key: str,
+    endpoints: GithubHostEndpoints,
+) -> GithubCopilotUserSession:
+    try:
+        payload: Final = _COPILOT_ACCOUNT.validate_python(response.json())
+    except Exception as e:
+        raise ServiceUnavailableError(
+            message="GitHub Copilot account lookup returned an invalid response",
+            llm_provider=_LLM_PROVIDER,
+            model="",
+        ) from e
+    if payload.get("chat_enabled") is False or payload.get("access_type_sku") == "no_access":
+        _SESSION_CACHE.delete_cache(cache_key)
+        raise _reject_connection(credential_name)
+
+    api_base: Final = validated_copilot_api_base(_endpoints_api(payload.get("endpoints")), endpoints)
+    session: Final = GithubCopilotUserSession(token=github_token, api_base=api_base)
+    _cache_session(cache_key, github_token, session, time.time() + _ACCOUNT_LOOKUP_TTL_SECONDS)
+    return session
+
+
+def _endpoints_api(payload_endpoints: object) -> object:
+    if not isinstance(payload_endpoints, Mapping):
+        return None
+    return _COPILOT_ENDPOINTS.validate_python(payload_endpoints).get("api")
+
+
+def _session_lookup_url(endpoints: GithubHostEndpoints) -> str:
+    return endpoints.api_key_url if endpoints.exchanges_copilot_token else endpoints.copilot_user_url
 
 
 def _to_int(raw: object) -> int:
@@ -337,7 +377,7 @@ def _do_exchange(
             _SyncGetClient, litellm.module_level_client
         )
         response: Final = client.get(
-            endpoints.api_key_url,
+            _session_lookup_url(endpoints),
             headers=github_api_headers(github_token),
         )
     except Exception as e:
@@ -367,7 +407,7 @@ async def _do_aexchange(
     client: Final = _new_async_github_client()
     try:
         response: Final = await client.get(
-            endpoints.api_key_url,
+            _session_lookup_url(endpoints),
             headers=github_api_headers(github_token),
         )
     except Exception as e:
