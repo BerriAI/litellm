@@ -197,10 +197,13 @@ def _build_info(
         return None
 
     days_until: Final = (resolved.deprecation_date - today).days
-    configured: Final = _checked_successor(model_name, _mapping_field(deployment, "model_info"), llm_router)
+    model_info: Final = _mapping_field(deployment, "model_info")
+    configured: Final = _checked_successor(model_name, model_info, llm_router)
+    team_public_model_name: Final = model_info.get("team_public_model_name")
     return _DeploymentInfo(
         info=ModelDeprecationInfo(
             model_name=model_name,
+            team_public_model_name=team_public_model_name if isinstance(team_public_model_name, str) else None,
             litellm_model=resolved.litellm_model,
             deprecation_date=resolved.deprecation_date,
             days_until_deprecation=days_until,

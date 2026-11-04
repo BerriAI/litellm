@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   useModelDeprecations,
@@ -79,6 +80,7 @@ describe("ModelDeprecationBanner", () => {
   it("shows deprecated and imminent entries with a link to Logging & Alerts", () => {
     const deprecatedInfo: ModelDeprecationInfo = {
       model_name: "gpt-4",
+      team_public_model_name: null,
       litellm_provider: "openai",
       deprecation_date: "2026-06-01",
       days_until_deprecation: -152,
@@ -87,6 +89,7 @@ describe("ModelDeprecationBanner", () => {
     };
     const imminentInfo: ModelDeprecationInfo = {
       model_name: "gpt-4o",
+      team_public_model_name: null,
       litellm_provider: "openai",
       deprecation_date: "2026-11-30",
       days_until_deprecation: 26,
@@ -107,20 +110,28 @@ describe("ModelDeprecationBanner", () => {
     expect(entries[1]).toHaveTextContent("gpt-4o (openai) deprecates on 2026-11-30, in 26 days, migrate to X");
     expect(screen.getByRole("link", { name: "Get Slack alerts for deprecations" })).toHaveAttribute(
       "href",
-      uiHref("logging-and-alerts"),
+      `${uiHref("logging-and-alerts")}?tab=alerting-types`,
     );
   });
 
-  it("shows at most five entries followed by the number remaining", () => {
+  it("expands all entries and collapses back to the first five", async () => {
     const imminent = Array.from({ length: 7 }, (_value, index) => makeInfo({ model_name: `model-${index + 1}` }));
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent })));
+    const user = userEvent.setup();
 
     render(<ModelDeprecationBanner />);
 
     const entries = within(screen.getByRole("list")).getAllByRole("listitem");
-    expect(entries).toHaveLength(6);
+    expect(entries).toHaveLength(5);
     expect(entries[4]).toHaveTextContent("model-5 deprecates");
-    expect(entries[5]).toHaveTextContent("and 2 more");
+    expect(screen.queryByText(/model-6/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Show all 7" }));
+    expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(7);
+    expect(screen.getByText(/model-6 deprecates/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Show fewer" }));
+    expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(5);
     expect(screen.queryByText(/model-6/)).not.toBeInTheDocument();
   });
 });

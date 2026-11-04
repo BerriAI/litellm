@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ModelDeprecationInfo } from "@/app/(dashboard)/hooks/models/useModelDeprecations";
-import { deprecationBannerTitle, deprecationEntryText } from "./modelDeprecationBanner";
+import { deprecationBannerTitle, deprecationEntryText } from "./deprecationBannerText";
 
 const makeInfo = (overrides: Partial<ModelDeprecationInfo> = {}): ModelDeprecationInfo => ({
   model_name: "gpt-4o",
@@ -59,5 +59,27 @@ describe("deprecationEntryText", () => {
         }),
       ),
     ).toBe("gpt-4o deprecates on 2026-11-30, in 1 day");
+  });
+
+  it("says an imminent model deprecates today", () => {
+    expect(
+      deprecationEntryText(
+        makeInfo({
+          days_until_deprecation: 0,
+          deprecation_date: "2026-11-04",
+        }),
+      ),
+    ).toBe("gpt-4o deprecates today (2026-11-04)");
+  });
+
+  it("uses the team-visible model name when present", () => {
+    expect(
+      deprecationEntryText(
+        makeInfo({
+          model_name: "internal-name",
+          team_public_model_name: "team-name",
+        }),
+      ),
+    ).toBe("team-name deprecates on 2026-11-30, in 26 days");
   });
 });

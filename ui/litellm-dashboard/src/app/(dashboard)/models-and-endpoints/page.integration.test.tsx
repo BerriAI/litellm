@@ -293,5 +293,6 @@ describe("ModelsAndEndpointsPage ?team drill-in", () => {
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Refresh models" }));
     await waitForElementToBeRemoved(() => screen.queryByRole("alert"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

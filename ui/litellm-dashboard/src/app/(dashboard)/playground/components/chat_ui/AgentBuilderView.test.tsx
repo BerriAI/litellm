@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AgentBuilderView from "./AgentBuilderView";
 import type { AgentModel } from "../../llm_calls/fetch_agents";
@@ -70,7 +71,12 @@ const props = {
 const controlUnder = (label: string): HTMLElement =>
   within(screen.getByText(label).parentElement!).getByRole("combobox");
 
-const renderView = () => render(<AgentBuilderView {...props} />);
+const renderWithQueryClient = (children: ReactNode) => {
+  const queryClient = new QueryClient();
+  return render(<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>);
+};
+
+const renderView = () => renderWithQueryClient(<AgentBuilderView {...props} />);
 
 const waitForRoster = async () => {
   await screen.findByRole("button", { name: "support-agent litellm_agent" });
@@ -99,7 +105,7 @@ beforeEach(() => {
 
 describe("AgentBuilderView", () => {
   it("asks the visitor to sign in when there is no session", () => {
-    render(<AgentBuilderView accessToken={null} token={null} userID={null} userRole={null} />);
+    renderWithQueryClient(<AgentBuilderView accessToken={null} token={null} userID={null} userRole={null} />);
 
     expect(screen.getByText("Sign in to use Agent Builder.")).toBeInTheDocument();
     expect(fetchAvailableAgentModels).not.toHaveBeenCalled();

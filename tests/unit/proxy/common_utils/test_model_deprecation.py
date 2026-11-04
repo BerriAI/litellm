@@ -572,6 +572,10 @@ class TestSuccessorModel:
             "typo-old": "gpt-nwe",
             "wildcard-old": "anthropic/x",
         }
+        team_deprecation: Final = next(
+            info for info in snapshot.imminent if info.model_name == "model_name_t1_old"
+        )
+        assert team_deprecation.team_public_model_name == "team-old"
         warnings = [record.getMessage() for record in caplog.records if "names successor" in record.getMessage()]
         assert len(warnings) == 2
         assert any("global-old names successor team-new" in warning for warning in warnings)

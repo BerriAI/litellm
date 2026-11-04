@@ -2,6 +2,7 @@ import PriceDataReload from "@/components/price_data_reload";
 import React from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useQueryClient } from "@tanstack/react-query";
+import { modelDeprecationKeys } from "../../hooks/models/useModelDeprecations";
 import { modelCostMapKeys } from "../../hooks/models/useModelCostMap";
 
 const PriceDataManagementTab = () => {
@@ -20,7 +21,10 @@ const PriceDataManagementTab = () => {
         <PriceDataReload
           accessToken={accessToken}
           onReloadSuccess={() => {
-            queryClient.invalidateQueries({ queryKey: modelCostMapKeys.all });
+            void Promise.all([
+              queryClient.invalidateQueries({ queryKey: modelCostMapKeys.all }),
+              queryClient.invalidateQueries({ queryKey: modelDeprecationKeys.all }),
+            ]);
           }}
           buttonText="Reload Price Data"
           size="middle"

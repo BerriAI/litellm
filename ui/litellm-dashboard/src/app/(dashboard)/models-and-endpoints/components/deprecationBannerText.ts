@@ -15,11 +15,15 @@ export const deprecationBannerTitle = (
 };
 
 export const deprecationEntryText = (info: ModelDeprecationInfo): string => {
-  const model = `${info.model_name}${info.litellm_provider ? ` (${info.litellm_provider})` : ""}`;
+  const model = `${info.team_public_model_name ?? info.model_name}${info.litellm_provider ? ` (${info.litellm_provider})` : ""}`;
   const successor = info.successor_model ? `, migrate to ${info.successor_model}` : "";
 
   if (info.status === "deprecated") {
     return `${model} was deprecated on ${info.deprecation_date}${successor}`;
+  }
+
+  if (info.days_until_deprecation === 0) {
+    return `${model} deprecates today (${info.deprecation_date})${successor}`;
   }
 
   const dayLabel = info.days_until_deprecation === 1 ? "day" : "days";
