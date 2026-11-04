@@ -198,7 +198,7 @@ def _detect_loop(history: list[str], new_calls: Sequence[Mapping[str, object]]) 
     return False
 
 
-_EXHAUSTION_STATUSES: Final = {408, 413, 429, 503, 504}
+_EXHAUSTION_STATUSES: Final = {408, 413, 429, 503, 504, 529}
 
 _EXHAUSTION_KEYWORDS: Final = (
     "context length",

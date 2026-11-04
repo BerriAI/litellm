@@ -530,6 +530,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
+from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -1672,6 +1673,8 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             decoded_worker_config: Final = as_str_mapping(_UNTYPED_VALUE.validate_python(json.loads(worker_config)))
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
+
+    enforce_fips_mode(general_settings_view())
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
@@ -2928,9 +2931,15 @@ def configured_max_request_size_mb() -> int | float | None:
     return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
 
 
+_ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProxyType(
+    {("POST", "/claude-code/plugins/upload"): 11}
+)
+
+
 app.add_middleware(
     RequestBodyDecompressionMiddleware,
     get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -13910,7 +13919,7 @@ async def audio_transcriptions(
             api_base=api_base,
             version=version,
             response_cost=response_cost,
-            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            model_region=user_api_key_dict.allowed_model_region,
             call_id=response_call_id,
             request_data=data,
             hidden_params=hidden_params,
@@ -17000,9 +17009,6 @@ async def _apply_search_filter_to_models(
         team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
         if search_lower in team_public_model_name.lower():
             return True
-        # Also match the underlying LiteLLM model name (e.g.
-        # "openrouter/deepseek/deepseek-chat"), so users can find
-        # deployments by typing the provider or the upstream model id.
         litellm_params: Final[Mapping[str, object]] = m.get("litellm_params") or MappingProxyType({})
         litellm_model: Final = litellm_params.get("model")
         return isinstance(litellm_model, str) and search_lower in litellm_model.lower()
@@ -18611,8 +18617,9 @@ async def model_deprecations(
 
     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
     (and any per-deployment `model_info.deprecation_date` overrides) for the
-    models configured on this proxy. An entry also names its `successor_model`
-    when the deployment sets `model_info.successor_model`.
+    models configured on this proxy. An entry also names its `successor_model`:
+    `model_info.successor_model` when the deployment sets one, else the
+    replacement the cost map records from the provider's deprecation notice.
 
     Parameters:
         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -22416,6 +22423,7 @@ app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     AdmissionControlMiddleware,

@@ -7454,6 +7454,31 @@
   "claude_code_marketplace": {
     "components": {
       "schemas": {
+        "Body_upload_plugin_claude_code_plugins_upload_post": {
+          "properties": {
+            "file": {
+              "contentMediaType": "application/octet-stream",
+              "description": "Skill ZIP containing SKILL.md and supporting files, up to 10 MiB",
+              "title": "File",
+              "type": "string"
+            },
+            "metadata": {
+              "contentMediaType": "application/json",
+              "contentSchema": {
+                "$ref": "#/components/schemas/UploadPluginRequest"
+              },
+              "description": "JSON skill metadata without a source URL",
+              "title": "Metadata",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "metadata"
+          ],
+          "title": "Body_upload_plugin_claude_code_plugins_upload_post",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -8057,6 +8082,137 @@
           "title": "UpdatePluginRequest",
           "type": "object"
         },
+        "UploadPluginRequest": {
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin author"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin category",
+              "title": "Category"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin description",
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill domain (e.g., 'Productivity')",
+              "title": "Domain"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin homepage URL",
+              "title": "Homepage"
+            },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
+              "title": "Installation Preference"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search keywords",
+              "title": "Keywords"
+            },
+            "name": {
+              "description": "Skill name (kebab-case)",
+              "pattern": "^[a-z0-9-]+$",
+              "title": "Name",
+              "type": "string"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill namespace within domain (e.g., 'workflows')",
+              "title": "Namespace"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "1.0.0",
+              "description": "Semantic version",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "UploadPluginRequest",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -8242,6 +8398,53 @@
           ]
         }
       },
+      "/claude-code/plugins/upload": {
+        "post": {
+          "description": "Create a skill and its uploaded ZIP atomically. Duplicate names return 409.",
+          "operationId": "upload_plugin_claude_code_plugins_upload_post",
+          "requestBody": {
+            "content": {
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_upload_plugin_claude_code_plugins_upload_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RegisterPluginResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Upload Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
       "/claude-code/plugins/{plugin_name}": {
         "delete": {
           "description": "Delete a plugin from the marketplace.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: The name of the plugin to delete",
@@ -8383,6 +8586,59 @@
             }
           ],
           "summary": "Update Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/plugins/{plugin_name}/archive/{digest}.zip": {
+        "get": {
+          "description": "Download an uploaded ZIP under the same visibility policy as its skill.",
+          "operationId": "download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "digest",
+              "required": true,
+              "schema": {
+                "title": "Digest",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/zip": {
+                  "schema": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Download Plugin Archive",
           "tags": [
             "claude_code_marketplace"
           ]

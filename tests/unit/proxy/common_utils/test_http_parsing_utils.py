@@ -66,6 +66,24 @@ def _starlette_request(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path, path_params", [
+    ("/claude-code/plugins/skill/archive/digest.zip", {"plugin_name": "skill"}),
+    ("/vector_stores/vs-safe/files", {}),
+])
+async def test_request_vector_store_values_cannot_forge_debug_log_lines(
+    path: str, path_params: Mapping[str, str], caplog: pytest.LogCaptureFixture,
+) -> None:
+    untrusted: Final = "private-value\r\nFORGED LOG LINE"
+    request: Final = _starlette_request(b"{}", "application/json", path)
+    request.scope["path_params"] = dict(path_params)
+    with caplog.at_level("DEBUG", logger=http_parsing_utils.verbose_proxy_logger.name):
+        result: Final = populate_request_with_path_params({"vector_store_ids": [untrusted]}, request)
+    assert untrusted in result["vector_store_ids"]
+    assert "private-value" not in caplog.text
+    assert "FORGED LOG LINE" not in caplog.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
     [b"[]", b'[["model", "test"]]', b"null", b'"s"', b"1", b"true", b"false"],
@@ -377,7 +395,7 @@ async def test_form_data_with_json_metadata():
 
 
 @pytest.mark.asyncio
-async def test_form_data_with_invalid_json_metadata():
+async def test_form_data_with_invalid_json_metadata() -> None:
     """
     Test that form data with invalid JSON in metadata field raises an exception.
 
@@ -398,9 +416,10 @@ async def test_form_data_with_invalid_json_metadata():
     mock_request.scope = {}
     mock_request.state._cached_headers = None
 
-    # Should raise JSONDecodeError when trying to parse invalid JSON metadata
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(ProxyException) as exc_info:
         await read_request_body(mock_request)
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "metadata"
 
 
 @pytest.mark.asyncio
