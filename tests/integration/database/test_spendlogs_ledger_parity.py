@@ -1477,3 +1477,48 @@ async def test_worker_drains_recovered_and_expired_work_at_its_configured_capaci
              ).fetchone() == ((3 - min(batch_size, 3)) if backlog == "retries" else max(0, 1100 - batch_size * 2),)
     finally:
         await client.db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_analytics_overflow_across_requests_still_applies_every_charge(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.accounting.worker import flush_accounting_deliveries
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": True})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    client.spend_log_transactions = []
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    writer = DBSpendUpdateWriter()
+    await client.db.connect()
+    try:
+        assert await _retrieve_batch(writer, 0.25)
+        stored = await client.writer_db.query_raw('SELECT to_jsonb(s) AS row FROM "LiteLLM_SpendLogs" s')
+        delivery = (await client.writer_db.query_raw('SELECT accounting_payload FROM "LiteLLM_SpendLogDelivery"'))[0][
+            "accounting_payload"
+        ]
+        oversized_savings = {**delivery["metadata"], "compression_savings": {"tokens_saved": 2**62}}
+        assert await SpendLogsRepository(client).insert_with_deliveries(
+            tuple(
+                {
+                    **stored[0]["row"],
+                    "request_id": f"overflow-{index}",
+                    "accounting_payload": {**delivery, "request_id": f"overflow-{index}", "metadata": oversized_savings},
+                }
+                for index in range(3)
+            )
+        ) == 3
+        await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute(
+                'SELECT state::text, COUNT(*) FROM "LiteLLM_SpendLogDelivery" GROUP BY state'
+            ).fetchall() == [("applied", 4)]
+            assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (1.0,)
+            assert connection.execute(
+                'SELECT api_requests, compression_saved_tokens FROM "LiteLLM_DailyUserSpend"'
+            ).fetchone() == (4, 3 * 2**40)
+    finally:
+        await client.db.disconnect()

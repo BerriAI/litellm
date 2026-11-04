@@ -1,5 +1,5 @@
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from itertools import chain
 from types import MappingProxyType
@@ -28,8 +28,7 @@ _VALUES: Final = TypeAdapter(tuple[object, ...])
 _ROWS: Final = TypeAdapter(tuple[dict[str, object], ...])
 _TASK_TYPES: Final = frozenset(load_model_insight_tasks())
 _MAX_INDEXED_TEXT_BYTES: Final = 2000
-_BIGINT_MIN: Final = -(2**63)
-_BIGINT_MAX: Final = 2**63 - 1
+_MAX_COUNTER: Final = 2**40
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,16 +202,23 @@ def project(row: Mapping[str, object]) -> tuple[Contribution, ...]:
         *_model_contributions(row, metadata),
         *_guardrail_contributions(row, metadata),
     )
-    return tuple(contribution for contribution in contributions if _storable(contribution))
+    return tuple(_capped(contribution) for contribution in contributions if _indexable(contribution))
 
 
-def _storable(contribution: Contribution) -> bool:
-    """Caller-supplied ids and counters reach every destination, and one Postgres refuses would roll back the
-    request's other charges with it, so a row Postgres cannot index or store is left out on its own."""
+def _indexable(contribution: Contribution) -> bool:
     texts: Final = (value for _, value in (*contribution.key, *contribution.values) if value is not None)
-    numbers: Final = (value for _, value in contribution.increments if isinstance(value, int))
-    return all(len(text.encode("utf-8", "surrogatepass")) <= _MAX_INDEXED_TEXT_BYTES for text in texts) and all(
-        _BIGINT_MIN <= number <= _BIGINT_MAX for number in numbers
+    return all(len(text.encode("utf-8", "surrogatepass")) <= _MAX_INDEXED_TEXT_BYTES for text in texts)
+
+
+def _capped(contribution: Contribution) -> Contribution:
+    """Counters are summed into bigint columns in the charge's transaction, so one capped far below that range
+    can never overflow a day's total."""
+    return replace(
+        contribution,
+        increments=tuple(
+            (name, max(-_MAX_COUNTER, min(_MAX_COUNTER, value)) if isinstance(value, int) else value)
+            for name, value in contribution.increments
+        ),
     )
 
 

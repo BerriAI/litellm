@@ -469,8 +469,9 @@ def test_untrusted_analytics_values_never_block_the_charge(
     assert {"LiteLLM_VerificationToken", "LiteLLM_TeamTable", "LiteLLM_UserTable"} <= {
         item.table for item in contributions
     }
+    assert "LiteLLM_DailyUserSpend" in {item.table for item in contributions}
     assert all(len(text.encode()) <= 2000 for text in texts)
-    assert all(-(2**63) <= number < 2**63 for number in numbers)
+    assert all(abs(number) <= 2**40 for number in numbers)
 
 
 def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> None:
