@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import io
 import socket
 import ssl
 import time
@@ -49,18 +50,46 @@ def _self_signed_server_context(directory: Path) -> ssl.SSLContext:
     return context
 
 
+def _trusting() -> ssl.SSLContext:
+    context: Final = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def _client(url: str) -> HTTPConnection:
     address: Final = urlsplit(url)
     if address.scheme == "http":
         return HTTPConnection(address.hostname or "", address.port)
-    trusting: Final = ssl.create_default_context()
-    trusting.check_hostname = False
-    trusting.verify_mode = ssl.CERT_NONE
-    return HTTPSConnection(address.hostname or "", address.port, context=trusting)
+    return HTTPSConnection(address.hostname or "", address.port, context=_trusting())
+
+
+def _tls_socket(url: str) -> ssl.SSLSocket:
+    address: Final = urlsplit(url)
+    return _trusting().wrap_socket(socket.create_connection((address.hostname or "", address.port or 0)))
 
 
 def _echo(request: Request) -> Reply:
     return Reply(body=request.body)
+
+
+def _answer_slowly(request: Request) -> Reply:
+    time.sleep(HANDLER_READ_SECONDS)
+    return Reply(body=request.body)
+
+
+def _answer_in_paused_chunks(request: Request) -> Reply:
+    return Reply(chunks=(request.body[:1], request.body[1:]), pause_between_chunks=HANDLER_READ_SECONDS)
+
+
+def _hold_first(request: Request) -> Reply:
+    if request.target == "/first":
+        time.sleep(HANDLER_READ_SECONDS)
+    return Reply(body=request.body)
+
+
+def _post(target: str, body: bytes) -> bytes:
+    return b"POST %s HTTP/1.1\r\nhost: peer\r\ncontent-length: %d\r\n\r\n%s" % (target.encode(), len(body), body)
 
 
 def _pause_then_send(connection: HTTPConnection, body: bytes) -> HTTPResponse:
@@ -114,13 +143,13 @@ def test_a_request_cut_off_by_teardown_never_reaches_respond() -> None:
 @pytest.mark.timeout(60)
 def test_a_reply_its_client_stopped_reading_fails_teardown_instead_of_hanging() -> None:
     peer: Final = ExitStack()
-    wire: Final = peer.enter_context(wire_server(lambda _: Reply(body=UNREAD), keep_alive=True, write_grace=0.5))
+    wire: Final = peer.enter_context(wire_server(lambda _: Reply(body=UNREAD), keep_alive=True, teardown_grace=0.5))
     address: Final = urlsplit(wire.url)
     with socket.create_connection((address.hostname or "", address.port or 0)) as client:
         client.sendall(b"GET /large HTTP/1.1\r\nhost: peer\r\n\r\n")
         while wire.received.empty():
             time.sleep(0.01)
-        with pytest.raises(AssertionError, match="still being written"):
+        with pytest.raises(AssertionError, match="still blocked"):
             peer.close()
 
 
@@ -151,3 +180,61 @@ def test_a_reply_still_being_written_at_teardown_reaches_its_client_whole(secure
         head: Final = response.read(len(b"first"))
     assert head + response.read() == b"firstsecond"
     connection.close()
+
+
+def test_a_complete_request_queued_behind_a_busy_handler_is_still_answered() -> None:
+    with wire_server(_hold_first, keep_alive=True) as wire:
+        address: Final = urlsplit(wire.url)
+        client: Final = socket.create_connection((address.hostname or "", address.port or 0))
+        client.sendall(_post("/first", FIRST))
+        while wire.received.empty():
+            time.sleep(0.01)
+        client.sendall(_post("/second", LATE))
+    with client, client.makefile("rb") as stream:
+        replies: Final = stream.read()
+    assert (
+        tuple(request.target for request in wire.drain()),
+        replies.count(b"HTTP/1.1 200"),
+        replies[-len(LATE) :],
+    ) == (
+        ("/first", "/second"),
+        2,
+        LATE,
+    )
+
+
+@pytest.mark.parametrize("respond", (_answer_slowly, _answer_in_paused_chunks), ids=("slow-respond", "paused-chunks"))
+def test_a_reply_that_takes_longer_than_the_teardown_grace_still_reaches_its_client(
+    respond: Callable[[Request], Reply],
+) -> None:
+    with wire_server(respond, keep_alive=True, teardown_grace=HANDLER_READ_SECONDS / 2) as wire:
+        connection: Final = _client(wire.url)
+        connection.request("POST", "/slow", FIRST)
+        while wire.received.empty():
+            time.sleep(0.01)
+    response: Final = connection.getresponse()
+    assert (response.status, response.read()) == (200, FIRST)
+    connection.close()
+
+
+@pytest.mark.timeout(60)
+def test_a_tls_request_larger_than_the_read_buffer_is_answered(tmp_path: Path) -> None:
+    large: Final = b"x" * (3 * io.DEFAULT_BUFFER_SIZE // 2)
+    with wire_server(_echo, tls=_self_signed_server_context(tmp_path), keep_alive=True) as wire:
+        client: Final = _tls_socket(wire.url)
+        client.sendall(_post("/large", large))
+        response: Final = HTTPResponse(client)
+        response.begin()
+        assert (response.status, response.read()) == (200, large)
+    client.close()
+
+
+@pytest.mark.timeout(60)
+def test_a_tls_record_cut_off_by_teardown_closes_its_connection_instead_of_hanging(tmp_path: Path) -> None:
+    tls: Final = _self_signed_server_context(tmp_path)
+    with wire_server(_echo, tls=tls, keep_alive=True, teardown_grace=HANDLER_READ_SECONDS) as wire:
+        client: Final = _tls_socket(wire.url)
+        socket.socket.sendall(client, b"\x17\x03\x03\x40\x00" + b"x" * 16)
+        time.sleep(HANDLER_READ_SECONDS)
+    assert wire.drain() == ()
+    client.close()
