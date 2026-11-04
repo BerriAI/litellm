@@ -4,7 +4,7 @@ Claude Code Marketplace endpoint types for LiteLLM Proxy
 
 from typing import Final, Literal, TypeAlias
 
-from pydantic import AliasChoices, Field, TypeAdapter, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, model_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -27,20 +27,11 @@ class PluginOwner(LiteLLMBaseModel):
     email: str | None = Field(None, description="Owner email")
 
 
-class PluginSpec(LiteLLMBaseModel):
+class PluginMetadata(LiteLLMBaseModel):
     """Mutable fields shared by plugin create and update requests."""
 
-    source: dict[str, str] = Field(
-        ...,
-        description=(
-            "Plugin source reference. Supported formats:\n"
-            "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
-            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
-            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n"
-            "- Zip archive on any https host (e.g. S3): "
-            "{'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}"
-        ),
-    )
+    model_config = ConfigDict(frozen=True)
+
     version: str | None = Field("1.0.0", description="Semantic version")
     description: str | None = Field(None, description="Plugin description")
     author: PluginAuthor | None = Field(None, description="Plugin author")
@@ -75,6 +66,20 @@ class PluginSpec(LiteLLMBaseModel):
         }
 
 
+class PluginSpec(PluginMetadata):
+    source: dict[str, str] = Field(
+        ...,
+        description=(
+            "Plugin source reference. Supported formats:\n"
+            "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
+            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
+            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n"
+            "- Zip archive on any https host (e.g. S3): "
+            "{'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}"
+        ),
+    )
+
+
 class RegisterPluginRequest(PluginSpec):
     """
     Request body for registering a plugin in the marketplace.
@@ -88,6 +93,10 @@ class RegisterPluginRequest(PluginSpec):
         description="Plugin name (kebab-case, e.g., 'my-plugin')",
         pattern=r"^[a-z0-9-]+$",
     )
+
+
+class UploadPluginRequest(PluginMetadata):
+    name: str = Field(..., pattern=r"^[a-z0-9-]+$", description="Skill name (kebab-case)")
 
 
 class UpdatePluginRequest(PluginSpec):

@@ -2931,9 +2931,15 @@ def configured_max_request_size_mb() -> int | float | None:
     return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
 
 
+_ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProxyType(
+    {("POST", "/claude-code/plugins/upload"): 11}
+)
+
+
 app.add_middleware(
     RequestBodyDecompressionMiddleware,
     get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -22420,6 +22426,7 @@ app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     AdmissionControlMiddleware,

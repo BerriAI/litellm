@@ -467,6 +467,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/skills/{skill_id}",
         "/claude-code/marketplace.json",
         "/claude-code/plugins",
+        "/claude-code/plugins/upload",
+        "/claude-code/plugins/{plugin_name}/archive/{digest}.zip",
         "/claude-code/plugins/{plugin_name}",
     ]
 

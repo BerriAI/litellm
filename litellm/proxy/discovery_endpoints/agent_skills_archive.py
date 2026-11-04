@@ -8,8 +8,11 @@ SHA-256 digest published in the index reproducible for identical uploads.
 
 import hashlib
 import io
+import lzma
 import re
+import stat
 import zipfile
+import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -23,7 +26,7 @@ MAX_ARCHIVE_ENTRIES: Final = 1000
 SKILL_MANIFEST_FILENAME: Final = "SKILL.md"
 
 _ZIP_ENTRY_TIMESTAMP: Final = (1980, 1, 1, 0, 0, 0)
-_ZIP_ENTRY_PERMISSIONS: Final = 0o644 << 16
+_ZIP_ENTRY_MODE: Final = 0o644
 _FRONTMATTER_PATTERN: Final = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL)
 _WINDOWS_DRIVE_PATTERN: Final = re.compile(r"^[A-Za-z]:")
 _EMPTY_FRONTMATTER: Final[Mapping[str, object]] = MappingProxyType({})
@@ -38,19 +41,26 @@ class SkillArchive:
     declared_description: str | None
 
 
-def build_skill_archive(stored_content: bytes) -> SkillArchive | None:
-    """Return the installable archive for an upload, or None when it holds no root SKILL.md."""
+def read_skill_archive_members(
+    stored_content: bytes, *, for_upload: bool = False
+) -> tuple[tuple[str, bytes, int], ...] | None:
     try:
         with zipfile.ZipFile(io.BytesIO(stored_content)) as uploaded:
-            members: Final = _flattened_members(uploaded)
-    except (zipfile.BadZipFile, OSError, RuntimeError):
+            return _flattened_members(uploaded, for_upload=for_upload)
+    except (zipfile.BadZipFile, OSError, RuntimeError, EOFError, lzma.LZMAError, zlib.error):
         return None
 
+
+def build_skill_archive(stored_content: bytes) -> SkillArchive | None:
+    """Return the installable archive for an upload, or None when it holds no root SKILL.md."""
+    members: Final = read_skill_archive_members(stored_content)
     if members is None:
         return None
 
-    frontmatter: Final = _manifest_frontmatter(next(data for name, data in members if name == SKILL_MANIFEST_FILENAME))
-    content: Final = _repack(members)
+    frontmatter: Final = _manifest_frontmatter(
+        next(data for name, data, _ in members if name == SKILL_MANIFEST_FILENAME)
+    )
+    content: Final = pack_skill_archive(members)
     return SkillArchive(
         content=content,
         digest=f"sha256:{hashlib.sha256(content).hexdigest()}",
@@ -59,24 +69,58 @@ def build_skill_archive(stored_content: bytes) -> SkillArchive | None:
     )
 
 
-def _flattened_members(uploaded: zipfile.ZipFile) -> tuple[tuple[str, bytes], ...] | None:
-    infos: Final = tuple(info for info in uploaded.infolist() if not info.is_dir())
+def _flattened_members(uploaded: zipfile.ZipFile, *, for_upload: bool) -> tuple[tuple[str, bytes, int], ...] | None:
+    infos: Final = tuple(info for info in uploaded.infolist() if for_upload or not info.is_dir())
     if not infos or len(infos) > MAX_ARCHIVE_ENTRIES:
         return None
     if sum(info.file_size for info in infos) > MAX_ARCHIVE_UNPACKED_BYTES:
         return None
 
-    normalized: Final = tuple((info, _normalized_path(info.filename)) for info in infos)
+    normalized: Final = tuple(
+        (info, _normalized_path(info.orig_filename if for_upload else info.filename)) for info in infos
+    )
     if any(path is None for _, path in normalized):
         return None
+    if for_upload and (
+        len(frozenset(path for _, path in normalized)) != len(normalized)
+        or any(not _safe_upload_entry(info) for info in infos)
+    ):
+        return None
 
-    prefix: Final = _common_root_prefix(tuple(path for _, path in normalized if path is not None))
-    flattened: Final = tuple((info, path[len(prefix) :]) for info, path in normalized if path is not None)
+    kept: Final = tuple(
+        (info, path)
+        for info, path in normalized
+        if path is not None and not info.is_dir() and (not for_upload or not _is_macos_metadata(path))
+    )
+    prefix: Final = _common_root_prefix(tuple(path for _, path in kept))
+    flattened: Final = tuple((info, path[len(prefix) :]) for info, path in kept)
     names: Final = frozenset(name for _, name in flattened)
     if SKILL_MANIFEST_FILENAME not in names or len(names) != len(flattened):
         return None
 
-    return tuple((name, uploaded.read(info)) for info, name in sorted(flattened, key=lambda member: member[1]))
+    return tuple(
+        (name, uploaded.read(info), _entry_mode(info, preserve_executable_bits=for_upload))
+        for info, name in sorted(flattened, key=lambda member: member[1])
+    )
+
+
+def _entry_mode(info: zipfile.ZipInfo, *, preserve_executable_bits: bool) -> int:
+    if not preserve_executable_bits or info.create_system != 3:
+        return _ZIP_ENTRY_MODE
+    mode: Final = info.external_attr >> 16
+    if stat.S_IFMT(mode) not in (0, stat.S_IFREG):
+        return _ZIP_ENTRY_MODE
+    return _ZIP_ENTRY_MODE | (mode & 0o111)
+
+
+def _safe_upload_entry(info: zipfile.ZipInfo) -> bool:
+    return not info.flag_bits & 1 and (
+        info.create_system != 3 or stat.S_IFMT(info.external_attr >> 16) in (0, stat.S_IFREG, stat.S_IFDIR)
+    )
+
+
+def _is_macos_metadata(path: str) -> bool:
+    return path.split("/", 1)[0] == "__MACOSX" or path.rsplit("/", 1)[-1] == ".DS_Store"
 
 
 def _common_root_prefix(paths: tuple[str, ...]) -> str:
@@ -117,16 +161,16 @@ def _frontmatter_text(frontmatter: Mapping[str, object], key: str) -> str | None
     return value.strip() or None
 
 
-def _zip_entry(name: str) -> zipfile.ZipInfo:
+def _zip_entry(name: str, mode: int) -> zipfile.ZipInfo:
     entry: Final = zipfile.ZipInfo(filename=name, date_time=_ZIP_ENTRY_TIMESTAMP)
-    entry.compress_type = zipfile.ZIP_DEFLATED
-    entry.external_attr = _ZIP_ENTRY_PERMISSIONS
+    entry.create_system = 3
+    entry.external_attr = mode << 16
     return entry
 
 
-def _repack(members: tuple[tuple[str, bytes], ...]) -> bytes:
+def pack_skill_archive(members: tuple[tuple[str, bytes, int], ...], compression: int = zipfile.ZIP_DEFLATED) -> bytes:
     buffer: Final = io.BytesIO()
-    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as repacked:
-        for name, data in members:
-            repacked.writestr(_zip_entry(name), data)
+    with zipfile.ZipFile(buffer, mode="w") as repacked:
+        for name, data, mode in members:
+            repacked.writestr(_zip_entry(name, mode), data, compress_type=compression)
     return buffer.getvalue()
