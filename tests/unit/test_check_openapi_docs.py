@@ -1,6 +1,9 @@
 """Tests for scripts/check_openapi_docs.py, the scan behind scripts/openapi_docs_gate.py."""
 
+from collections.abc import Mapping
 from typing import Final
+
+import pytest
 
 import check_openapi_docs as checker
 
@@ -9,8 +12,23 @@ _RESPONSES: Final = {"200": {"content": {"application/json": {"schema": {"$ref":
 _DOCUMENTED: Final = {"description": "Does a thing", "requestBody": _BODY, "responses": _RESPONSES}
 
 
-def test_a_fully_documented_post_has_no_findings() -> None:
-    assert checker.violations({"paths": {"/v1/thing": {"post": _DOCUMENTED}}}) == ()
+def _post_with_media_types(request_media_type: str, response_media_type: str) -> Mapping[str, object]:
+    return {
+        **_DOCUMENTED,
+        "requestBody": {"content": {request_media_type: {"schema": {"type": "string"}}}},
+        "responses": {"200": {"content": {response_media_type: {"schema": {"type": "string"}}}}},
+    }
+
+
+@pytest.mark.parametrize("media_type", ("application/json", "application/sdp"))
+def test_a_fully_documented_post_has_no_findings(media_type: str) -> None:
+    operation: Final = _post_with_media_types(media_type, media_type)
+    assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == ()
+
+
+def test_a_schema_under_another_media_type_still_counts_as_undocumented() -> None:
+    operation: Final = _post_with_media_types("multipart/form-data", "audio/wav")
+    assert {v.code for v in checker.violations({"paths": {"/v1/thing": {"post": operation}}})} == {"OA001", "OA003"}
 
 
 def test_each_missing_piece_is_its_own_rule() -> None:

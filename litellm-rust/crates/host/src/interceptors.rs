@@ -28,6 +28,28 @@ pub struct RequestContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawResponse {
     pub body: String,
+    /// The provider's HTTP status and headers, when the route forwards them to logging.
+    pub head: Option<ResponseHead>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResponseHead {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+}
+
+impl RawResponse {
+    pub fn new(body: String) -> Self {
+        Self { body, head: None }
+    }
+
+    #[must_use]
+    pub fn with_head(self, head: ResponseHead) -> Self {
+        Self {
+            head: Some(head),
+            ..self
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,7 +208,7 @@ mod tests {
                 .await?;
                 Interceptors::after_provider_response(
                     &channel.interceptors,
-                    RawResponse { body: "raw".into() },
+                    RawResponse::new("raw".into()),
                 )
                 .await?;
                 Ok((sent, ()))

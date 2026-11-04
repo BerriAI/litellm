@@ -32,7 +32,7 @@ reflect production.
 
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -205,9 +205,7 @@ def test_video_edit__dispatch_and_provider_from_id(seams):
 
 
 def test_video_extension__dispatch_and_provider_from_id(seams):
-    result = videos_main.video_extension(
-        video_id=AZURE_VIDEO_ID, prompt="continue", seconds="5"
-    )
+    result = videos_main.video_extension(video_id=AZURE_VIDEO_ID, prompt="continue", seconds="5")
 
     seams.assert_only("video_extension_handler")
     assert result is seams.handler.video_extension_handler.return_value
@@ -285,9 +283,7 @@ def test_generation__mock_response_short_circuits(seams):
 
 
 def test_list__mock_response_short_circuits(seams):
-    resp = videos_main.video_list(
-        mock_response=[{"id": "v1", "object": "video", "status": "completed"}]
-    )
+    resp = videos_main.video_list(mock_response=[{"id": "v1", "object": "video", "status": "completed"}])
 
     assert isinstance(resp, list)
     assert resp[0].id == "v1"
@@ -318,7 +314,7 @@ def test_get_character__mock_response_short_circuits(seams):
 def test_unsupported_provider_raises_without_dispatch(seams):
     seams.get_config.return_value = None
 
-    with pytest.raises(litellm.APIConnectionError):
+    with pytest.raises(litellm.BadRequestError, match="video status is not supported for azure"):
         videos_main.video_status(video_id=AZURE_VIDEO_ID)
 
     seams.handler.video_status_handler.assert_not_called()
@@ -333,9 +329,7 @@ def test_unsupported_provider_raises_without_dispatch(seams):
 async def test_avideo_generation__delegates_with_async_flag():
     sentinel = VideoObject(id="v-async", object="video", status="queued")
     with (
-        patch.object(
-            videos_main, "video_generation", MagicMock(return_value=sentinel)
-        ) as sync,
+        patch.object(videos_main, "video_generation", MagicMock(return_value=sentinel)) as sync,
         patch.object(
             litellm,
             "get_llm_provider",
@@ -352,9 +346,7 @@ async def test_avideo_generation__delegates_with_async_flag():
 @pytest.mark.asyncio
 async def test_avideo_status__delegates_untouched():
     sentinel = VideoObject(id="v-async", object="video", status="queued")
-    with patch.object(
-        videos_main, "video_status", MagicMock(return_value=sentinel)
-    ) as sync:
+    with patch.object(videos_main, "video_status", MagicMock(return_value=sentinel)) as sync:
         result = await videos_main.avideo_status(video_id="video_plain")
 
     assert result is sentinel
@@ -367,9 +359,7 @@ async def test_avideo_content__pre_decodes_provider_before_delegating():
     """avideo_content resolves the provider from the encoded id itself before
     handing off, so the sync worker receives the decoded provider, not None."""
     sentinel = b"mp4-bytes"
-    with patch.object(
-        videos_main, "video_content", MagicMock(return_value=sentinel)
-    ) as sync:
+    with patch.object(videos_main, "video_content", MagicMock(return_value=sentinel)) as sync:
         result = await videos_main.avideo_content(video_id=AZURE_VIDEO_ID)
 
     assert result is sentinel
@@ -393,9 +383,7 @@ DB_YAML_CREDS = {
 CREDENTIAL_OPERATIONS = [
     (
         "video_generation_handler",
-        lambda: videos_main.video_generation(
-            prompt="p", model="sora-2", **DB_YAML_CREDS
-        ),
+        lambda: videos_main.video_generation(prompt="p", model="sora-2", **DB_YAML_CREDS),
     ),
     (
         "video_status_handler",
@@ -407,21 +395,15 @@ CREDENTIAL_OPERATIONS = [
     ),
     (
         "video_remix_handler",
-        lambda: videos_main.video_remix(
-            video_id=AZURE_VIDEO_ID, prompt="p", **DB_YAML_CREDS
-        ),
+        lambda: videos_main.video_remix(video_id=AZURE_VIDEO_ID, prompt="p", **DB_YAML_CREDS),
     ),
     (
         "video_edit_handler",
-        lambda: videos_main.video_edit(
-            video_id=AZURE_VIDEO_ID, prompt="p", **DB_YAML_CREDS
-        ),
+        lambda: videos_main.video_edit(video_id=AZURE_VIDEO_ID, prompt="p", **DB_YAML_CREDS),
     ),
     (
         "video_extension_handler",
-        lambda: videos_main.video_extension(
-            video_id=AZURE_VIDEO_ID, prompt="p", seconds="5", **DB_YAML_CREDS
-        ),
+        lambda: videos_main.video_extension(video_id=AZURE_VIDEO_ID, prompt="p", seconds="5", **DB_YAML_CREDS),
     ),
     (
         "video_list_handler",
@@ -429,9 +411,7 @@ CREDENTIAL_OPERATIONS = [
     ),
     (
         "video_create_character_handler",
-        lambda: videos_main.video_create_character(
-            name="hero", video=MagicMock(name="vid"), **DB_YAML_CREDS
-        ),
+        lambda: videos_main.video_create_character(name="hero", video=MagicMock(name="vid"), **DB_YAML_CREDS),
     ),
     (
         "video_get_character_handler",
@@ -453,3 +433,33 @@ def test_db_yaml_credentials_reach_every_handler(seams, handler_name, invoke):
     assert litellm_params.get("api_base") == DB_YAML_CREDS["api_base"]
     assert litellm_params.get("api_version") == DB_YAML_CREDS["api_version"]
     assert litellm_params.get("vertex_project") == DB_YAML_CREDS["vertex_project"]
+
+
+def test_video_generation__custom_provider_map_base_video_config_is_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+
+    class QueueVideoConfig(OpenAIVideoConfig):
+        pass
+
+    video_config: Final = QueueVideoConfig()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "queue-video", "custom_handler": video_config}])
+    monkeypatch.setattr(litellm, "_custom_providers", ["queue-video"])
+    handler: Final = MagicMock(spec=BaseLLMHTTPHandler)
+    with patch.object(videos_main, "base_llm_http_handler", handler):
+        videos_main.video_generation(model="queue-video/seedance-1", prompt="a cat", api_base="http://backend.test")
+    kw: Final = handler.video_generation_handler.call_args.kwargs
+    assert kw["video_generation_provider_config"] is video_config
+    assert kw["custom_llm_provider"] == "queue-video"
+    assert kw["model"] == "seedance-1"
+
+
+def test_video_generation__custom_provider_without_a_video_config_is_a_400(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.custom_llm import CustomLLM
+
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "image-only", "custom_handler": CustomLLM()}])
+    monkeypatch.setattr(litellm, "_custom_providers", ["image-only"])
+    handler: Final = MagicMock(spec=BaseLLMHTTPHandler)
+    with patch.object(videos_main, "base_llm_http_handler", handler):
+        with pytest.raises(litellm.BadRequestError, match="video generation is not supported for image-only"):
+            videos_main.video_generation(model="image-only/seedance-1", prompt="a cat")
+    handler.video_generation_handler.assert_not_called()

@@ -5,28 +5,33 @@ Helper functions to handle images passed in messages
 import asyncio
 import base64
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from itertools import chain
+from functools import partial
+from itertools import accumulate, chain, takewhile, tee
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeVar
+from urllib.parse import urlparse
 
 import httpx
-from httpx import Response
+from httpx import USE_CLIENT_DEFAULT, Response
 
 import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
-from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, NON_LLM_CONNECTION_TIMEOUT
 from litellm.litellm_core_utils.prompt_templates.common_utils import infer_content_type_from_url_and_content
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
 
 MAX_IMGS_IN_MEMORY: Final = 10
 MAX_CONCURRENT_REMOTE_MEDIA_FETCHES: Final = 20
+_Fetched = TypeVar("_Fetched")
 _FETCH_ATTEMPTS: Final = 3
 
 in_memory_cache: Final = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
+pdf_probe_verdicts: Final = InMemoryCache()
 
 
 def _header_value(response: Response, name: str) -> str | None:
@@ -209,6 +214,173 @@ def inline_remote_image_urls(media: RemoteMedia) -> bool:
     return media.part_type == "image_url"
 
 
+_PDF_MEDIA_TYPES: Final = frozenset({"application/pdf", "application/x-pdf"})
+_GENERIC_MEDIA_TYPES: Final = frozenset({"application/octet-stream", "binary/octet-stream"})
+_PDF_SIGNATURE: Final = b"%PDF-"
+_PDF_SIGNATURE_WINDOW: Final = 1024
+_PDF_PROBE_HEADERS: Final = MappingProxyType({"Range": f"bytes=0-{_PDF_SIGNATURE_WINDOW - 1}"})
+_PDF_PROBE_STATUSES: Final = frozenset({200, 206})
+_PDF_PROBE_FAILURES: Final = (httpx.HTTPError, httpx.InvalidURL, ValueError)
+_ASYNC_PDF_PROBE_FAILURES: Final = (*_PDF_PROBE_FAILURES, asyncio.TimeoutError)
+_PDF_PROBE_VERDICT_TTL: Final = 600
+_PDF_PROBE_FAILURE_TTL: Final = 60
+_DECODED_BODY_HEADERS: Final = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+
+
+def _bare_media_type(media_type: str) -> str:
+    return media_type.split(";", 1)[0].strip().lower()
+
+
+def is_pdf_media_type(media_type: str) -> bool:
+    return _bare_media_type(media_type) in _PDF_MEDIA_TYPES
+
+
+def is_unformatted_pdf_link(url: str, image_format: str | None) -> bool:
+    lowered: Final = url.lower()
+    return not image_format and (urlparse(lowered).path.endswith(".pdf") or lowered.endswith(".pdf"))
+
+
+def is_unformatted_pdf_link_image(media: RemoteMedia) -> bool:
+    image_format: Final = media.fields.get("format")
+    return inline_remote_image_urls(media) and is_unformatted_pdf_link(
+        media.url, image_format if isinstance(image_format, str) else None
+    )
+
+
+def _serves_pdf(response: Response) -> bool:
+    if response.status_code not in _PDF_PROBE_STATUSES:
+        return False
+    served_type: Final = _bare_media_type(_header_value(response, "Content-Type") or "")
+    if served_type and served_type not in _GENERIC_MEDIA_TYPES:
+        return served_type in _PDF_MEDIA_TYPES
+    return _PDF_SIGNATURE in response.content[:_PDF_SIGNATURE_WINDOW]
+
+
+def _signature_window_chunks(chunks: Iterable[bytes], deadline: float) -> Iterator[bytes]:
+    reading, counting = tee(chunks)
+    read_so_far: Final = chain((0,), accumulate(map(len, counting)))
+    still_reading: Final = takewhile(
+        lambda total: total < _PDF_SIGNATURE_WINDOW and time.monotonic() < deadline, read_so_far
+    )
+    return (chunk for _, chunk in zip(still_reading, reading))
+
+
+def _with_body_prefix(response: Response, prefix: bytes) -> Response:
+    return Response(
+        response.status_code,
+        headers=[(name, value) for name, value in response.headers.multi_items() if name not in _DECODED_BODY_HEADERS],
+        content=prefix,
+        request=response.request,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _BodyPrefixReader:
+    client: httpx.Client
+    deadline: float
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Response:
+        with self.client.stream(
+            "GET",
+            url,
+            headers=headers,
+            follow_redirects=follow_redirects,
+            timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
+        ) as response:
+            prefix: Final = b"".join(_signature_window_chunks(response.iter_bytes(), self.deadline))
+            return _with_body_prefix(response, prefix[:_PDF_SIGNATURE_WINDOW])
+
+
+@dataclass(frozen=True, slots=True)
+class _AsyncBodyPrefixReader:
+    client: httpx.AsyncClient
+
+    async def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
+    ) -> Response:
+        async with self.client.stream(
+            "GET",
+            url,
+            headers=headers,
+            follow_redirects=follow_redirects,
+            timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
+        ) as response:
+            return _with_body_prefix(response, await anext(response.aiter_bytes(max_response_bytes), b""))
+
+
+def _cached_pdf_verdict(url: str) -> bool | None:
+    cached: Final = pdf_probe_verdicts.get_cache(url)
+    return cached if isinstance(cached, bool) else None
+
+
+def _remember_pdf_verdict(url: str, verdict: bool, ttl: int) -> bool:
+    pdf_probe_verdicts.set_cache(url, verdict, ttl=ttl)
+    return verdict
+
+
+def _remember_probe_response(url: str, response: Response) -> bool:
+    ttl: Final = _PDF_PROBE_VERDICT_TTL if response.status_code in _PDF_PROBE_STATUSES else _PDF_PROBE_FAILURE_TTL
+    return _remember_pdf_verdict(url, _serves_pdf(response), ttl)
+
+
+def _failed_pdf_probe(url: str, error: Exception) -> bool:
+    verbose_logger.debug("PDF probe of %s failed, sending it as an image link: %s", url, error)
+    return _remember_pdf_verdict(url, False, _PDF_PROBE_FAILURE_TTL)
+
+
+def serves_pdf(url: str, timeout: float = NON_LLM_CONNECTION_TIMEOUT) -> bool:
+    if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
+        return False
+    cached: Final = _cached_pdf_verdict(url)
+    if cached is not None:
+        return cached
+    try:
+        response: Final = safe_get(
+            _BodyPrefixReader(litellm.module_level_client.client, deadline=time.monotonic() + timeout),
+            url,
+            headers=dict(_PDF_PROBE_HEADERS),
+            timeout=timeout,
+        )
+    except _PDF_PROBE_FAILURES as e:
+        return _failed_pdf_probe(url, e)
+    return _remember_probe_response(url, response)
+
+
+async def async_serves_pdf(url: str, timeout: float = NON_LLM_CONNECTION_TIMEOUT) -> bool:
+    if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
+        return False
+    cached: Final = _cached_pdf_verdict(url)
+    if cached is not None:
+        return cached
+    try:
+        response: Final = await asyncio.wait_for(
+            async_safe_get(
+                _AsyncBodyPrefixReader(litellm.module_level_aclient.client),
+                url,
+                headers=dict(_PDF_PROBE_HEADERS),
+                timeout=timeout,
+                max_response_bytes=_PDF_SIGNATURE_WINDOW,
+            ),
+            timeout,
+        )
+    except _ASYNC_PDF_PROBE_FAILURES as e:
+        return _failed_pdf_probe(url, e)
+    return _remember_probe_response(url, response)
+
+
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:
     if fields.get("type") != "image_url":
         return None
@@ -292,15 +464,40 @@ def _inline_part(part: object, data_urls: Mapping[str, str], should_inline: Call
     return _inline(remote, data_url) if data_url is not None else part
 
 
-def _inline_message(
-    message: AllMessageValues, data_urls: Mapping[str, str], should_inline: Callable[[RemoteMedia], bool]
-) -> AllMessageValues:
+def _with_parts(message: AllMessageValues, rewrite: Callable[[object], object]) -> AllMessageValues:
     parts: Final = _content_parts(message)
     if not parts:
         return message
-    inlined_parts: Final = [_inline_part(part, data_urls, should_inline) for part in parts]
-    inlined_message: Final = {**message, "content": inlined_parts}
-    return inlined_message  # pyright: ignore[reportReturnType]  # the same message with its remote parts inlined
+    rewritten: Final = {**message, "content": [rewrite(part) for part in parts]}
+    return rewritten  # pyright: ignore[reportReturnType]  # the same message with some of its parts rewritten
+
+
+def _inline_message(
+    message: AllMessageValues, data_urls: Mapping[str, str], should_inline: Callable[[RemoteMedia], bool]
+) -> AllMessageValues:
+    return _with_parts(message, partial(_inline_part, data_urls=data_urls, should_inline=should_inline))
+
+
+def _pdf_formatted_part(part: object, pdf_links: frozenset[str], should_probe: Callable[[RemoteMedia], bool]) -> object:
+    remote: Final = _parse_remote_part(part)
+    match remote:
+        case _RemoteImage(fields, image_url, url) if url in pdf_links and should_probe(_remote_media(remote)):
+            image_url_fields: Final = image_url if image_url is not None else _NO_FIELDS
+            return {**fields, "image_url": {**image_url_fields, "url": url, "format": "application/pdf"}}
+        case _:
+            return part
+
+
+def _with_pdf_formats(
+    messages: Iterable[AllMessageValues],
+    probed: Iterable[tuple[str, bool]],
+    should_probe: Callable[[RemoteMedia], bool],
+) -> tuple[AllMessageValues, ...]:
+    pdf_links: Final = frozenset(url for url, is_pdf in probed if is_pdf)
+    if not pdf_links:
+        return tuple(messages)
+    rewrite: Final = partial(_pdf_formatted_part, pdf_links=pdf_links, should_probe=should_probe)
+    return tuple(_with_parts(message, rewrite) for message in messages)
 
 
 async def _fetch_data_url(url: str, in_flight: asyncio.Semaphore, timeout: float | httpx.Timeout | None) -> str:
@@ -308,11 +505,12 @@ async def _fetch_data_url(url: str, in_flight: asyncio.Semaphore, timeout: float
         return await async_convert_url_to_base64(url, timeout=timeout)
 
 
-async def async_convert_urls_to_base64(
-    remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None = None
-) -> tuple[str, ...]:
-    in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
-    fetches: Final = tuple(asyncio.create_task(_fetch_data_url(url, in_flight, timeout)) for url in remote_urls)
+async def _serves_pdf_within(url: str, in_flight: asyncio.Semaphore) -> bool:
+    async with in_flight:
+        return await async_serves_pdf(url)
+
+
+async def _gather_or_cancel_all(fetches: tuple["asyncio.Task[_Fetched]", ...]) -> tuple[_Fetched, ...]:
     try:
         return tuple(await asyncio.gather(*fetches))
     except BaseException:
@@ -320,6 +518,15 @@ async def async_convert_urls_to_base64(
             fetch.cancel()
         await asyncio.gather(*fetches, return_exceptions=True)
         raise
+
+
+async def async_convert_urls_to_base64(
+    remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None = None
+) -> tuple[str, ...]:
+    in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
+    return await _gather_or_cancel_all(
+        tuple(asyncio.create_task(_fetch_data_url(url, in_flight, timeout)) for url in remote_urls)
+    )
 
 
 def _remote_urls_to_inline(
@@ -351,3 +558,27 @@ async def async_inline_remote_media(
     data_urls: Final = await async_convert_urls_to_base64(remote_urls)
     inlined: Final = MappingProxyType(dict(zip(remote_urls, data_urls, strict=True)))
     return [_inline_message(message, inlined, should_inline) for message in messages]
+
+
+def format_pdf_links(
+    messages: Sequence[AllMessageValues], should_probe: Callable[[RemoteMedia], bool]
+) -> tuple[AllMessageValues, ...]:
+    links: Final = _remote_urls_to_inline(messages, should_probe)
+    if not links:
+        return tuple(messages)
+    with ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES, len(links))) as probes:
+        verdicts: Final = tuple(probes.map(serves_pdf, links))
+    return _with_pdf_formats(messages, zip(links, verdicts, strict=True), should_probe)
+
+
+async def async_format_pdf_links(
+    messages: Sequence[AllMessageValues], should_probe: Callable[[RemoteMedia], bool]
+) -> tuple[AllMessageValues, ...]:
+    links: Final = _remote_urls_to_inline(messages, should_probe)
+    if not links:
+        return tuple(messages)
+    in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
+    verdicts: Final = await _gather_or_cancel_all(
+        tuple(asyncio.create_task(_serves_pdf_within(url, in_flight)) for url in links)
+    )
+    return _with_pdf_formats(messages, zip(links, verdicts, strict=True), should_probe)

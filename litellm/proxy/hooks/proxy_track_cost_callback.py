@@ -64,7 +64,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     _sanitize_error_information_for_spend_logs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     deployment_params_provider,
     get_request_model_access_groups,
-    sanitize_error_information_for_spend_logs,
+    sanitize_error_information_for_spend_logs,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.spend_tracking.usage_capture import CapturedUsage, capture_callback, captured_callback_kwargs
@@ -79,7 +79,6 @@ from litellm.types.utils import (
     CallTypes,
     LiteLLMBatch,
     StandardLoggingPayload,
-    StandardLoggingPayloadErrorInformation,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -492,13 +491,6 @@ class _ProxyDBLogger(CustomLogger):
             # ``.get("traceback")`` / truthy checks, and the TypedDict marks
             # the field as optional, so omitting is type-safe.
             _error_information.pop("traceback", None)
-        # Strip echoed request input + apply DB-size cap before storing in
-        # the spend-log metadata column (LIT-2992). Result is never None
-        # here because the input above is constructed non-None.
-        _error_information = cast(
-            StandardLoggingPayloadErrorInformation,
-            sanitize_error_information_for_spend_logs(_error_information, original_exception=original_exception),
-        )
         _metadata["error_information"] = _error_information
 
         _metadata = (  # rebind-ok: enriched identity is shared with the earlier immutable capture

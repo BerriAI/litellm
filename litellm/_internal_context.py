@@ -53,6 +53,18 @@ def internal_sub_call(parent_request_id: str | None = None) -> Generator[None]:
 
 
 @contextmanager
+def billed_separately() -> Generator[None]:
+    """A call that writes its own spend row even inside a sub-call whose parent bills the model response."""
+    token: Final = is_internal_call.set(False)
+    parent_token: Final = internal_parent_request_id.set(None)
+    try:
+        yield
+    finally:
+        is_internal_call.reset(token)
+        internal_parent_request_id.reset(parent_token)
+
+
+@contextmanager
 def post_response_phase() -> Generator[None]:
     """Work the caller no longer waits for (success callbacks, response-cache writes), including tasks it spawns."""
     token: Final = _post_response.set(True)

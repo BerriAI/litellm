@@ -63,10 +63,16 @@ class TestCreateErrorResponse:
         )
         assert response["request_id"] == "req_123"
 
-    def test_unknown_status_defaults_to_api_error(self):
-        """Test unknown status code defaults to api_error."""
-        response = AnthropicExceptionMapping.create_error_response(418, "I'm a teapot")
+    @pytest.mark.parametrize("status_code", [402, 405, 409, 418, 422, 504])
+    def test_a_status_outside_the_table_stays_an_api_error_for_the_sdk_and_stream_frames(self, status_code: int):
+        response: Final = AnthropicExceptionMapping.create_error_response(status_code, "scripted status")
+        frame: Final = anthropic_error_sse_frame(status_code=status_code, raw_message="scripted status")
         assert response["error"]["type"] == "api_error"
+        assert frame.error_response["error"]["type"] == "api_error"
+
+    def test_an_explicit_error_type_wins_over_the_status_table(self):
+        response: Final = AnthropicExceptionMapping.create_error_response(402, "Budget exceeded", error_type="billing_error")
+        assert response["error"]["type"] == "billing_error"
 
 
 class TestExtractErrorMessage:

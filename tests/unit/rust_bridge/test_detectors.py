@@ -334,6 +334,17 @@ def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -
     assert not messages_detectors.stream_cost_injection(call())
 
 
+def test_foundry_beta_row_reads_the_api_base_the_anthropic_handler_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    assert messages_detectors.foundry_beta_row(call(api_base="https://team.services.ai.azure.com/anthropic"))
+    assert messages_detectors.foundry_beta_row(call(base_url="https://team.cognitiveservices.azure.com/anthropic"))
+    assert not messages_detectors.foundry_beta_row(call(api_base="https://api.anthropic.com"))
+    assert not messages_detectors.foundry_beta_row(call())
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://team.services.ai.azure.com/anthropic")
+    assert messages_detectors.foundry_beta_row(call())
+
+
 def test_model_alias_map_applies_only_to_the_requested_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_alias_map", {"fast": "openai/gpt-5-mini"})
     assert chat_detectors.model_alias_map(call(model="fast"))

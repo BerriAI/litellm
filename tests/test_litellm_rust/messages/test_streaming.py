@@ -6,7 +6,6 @@ import pytest
 from tests.test_litellm_rust.messages.data import MESSAGES_EVENTS, MESSAGES_RESPONSE, call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
-from tests.test_litellm_rust.support.results import consume
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -46,16 +45,14 @@ async def test_stream_relays_provider_events_and_logs_success_once_after_the_las
 
 
 @pytest.mark.asyncio
-async def test_sync_stream_relays_provider_events_and_logs_success_once(server: RecordingServer) -> None:
-    server.enqueue(STREAM)
+async def test_sync_stream_raises_like_python_before_sending(server: RecordingServer) -> None:
     recorder: Final = RecordingLogger()
 
-    stream: Final = await call(server, asynchronous=False, stream=True, callbacks=[recorder])
-    chunks: Final = await consume(stream)
+    with pytest.raises(ValueError, match="anthropic_messages_handler is not implemented for sync calls"):
+        await call(server, asynchronous=False, stream=True, callbacks=[recorder])
 
-    assert_served_natively(server)
-    assert b"".join(chunks) == b"".join(STREAM.payloads())
-    assert len(await recorder.wait_for_async("async_log_success_event")) == 1
+    assert not server.requests
+    assert not recorder.names
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,8 @@ from typing import Final
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from litellm.proxy.common_utils.anthropic_error_payload import route_error_content
+
 MaxRequestSizeGetter = Callable[[], int | float | None]
 RequestSizeLimitEnabledGetter = Callable[[], bool]
 
@@ -44,7 +46,7 @@ class RequestSizeLimitMiddleware:
 
         content_length: Final = _get_content_length(scope=scope)
         if content_length is not None and content_length > max_request_size_bytes:
-            await send_request_too_large(send=send, max_request_size_mb=max_request_size_mb)
+            await send_request_too_large(scope=scope, send=send, max_request_size_mb=max_request_size_mb)
             return
 
         received_body_bytes = 0
@@ -74,7 +76,7 @@ class RequestSizeLimitMiddleware:
         except RequestEntityTooLarge:
             if response_started:
                 raise
-            await send_request_too_large(send=send, max_request_size_mb=max_request_size_mb)
+            await send_request_too_large(scope=scope, send=send, max_request_size_mb=max_request_size_mb)
 
 
 def _mb_to_bytes(max_request_size_mb: float | None) -> int | None:
@@ -98,11 +100,13 @@ def _get_content_length(scope: Scope) -> int | None:
 
 
 async def send_request_too_large(
+    scope: Scope,
     send: Send,
     max_request_size_mb: float | None,
 ) -> None:
+    message: Final = f"Request size is too large. Max size is {max_request_size_mb} MB"
     body: Final = json.dumps(
-        {"error": f"Request size is too large. Max size is {max_request_size_mb} MB"},
+        route_error_content(scope, "request_too_large", message, {"error": message}),
         separators=(",", ":"),
     ).encode("utf-8")
     await send(

@@ -1,5 +1,7 @@
 
 import asyncio, importlib, litellm, pytest
+import respx
+from httpx import Response
 from typing import Final
 
 
@@ -580,6 +582,188 @@ def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_mode
     assert bedrock_model_accepts_cache_points(converse_arn) is False
     assert bedrock_model_accepts_cache_points(unflagged_arn) is True
 
+
+
+_CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
+}
+_CACHE_MARK: Final = {"type": "ephemeral"}
+_MARKED_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+    "cache_control": _CACHE_MARK,
+}
+_COMPUTER_TOOL: Final = {
+    "type": "computer_20250124",
+    "name": "computer",
+    "display_width_px": 1024,
+    "display_height_px": 768,
+}
+_MARKED_TOOL_CONVERSATION: Final = (
+    {"role": "system", "content": "stable"},
+    {"role": "user", "content": [{"type": "text", "text": "Weather in Paris and Rome?", "cache_control": _CACHE_MARK}]},
+    {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Checking both.", "cache_control": _CACHE_MARK}],
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}{"city": "Rome"}'},
+                "cache_control": _CACHE_MARK,
+            }
+        ],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": "Sunny", "cache_control": _CACHE_MARK}]},
+    {"role": "tool", "tool_call_id": "call_1_1", "content": "Cloudy"},
+    {"role": "assistant", "content": "Paris is sunny, Rome is cloudy.", "cache_control": _CACHE_MARK},
+    {"role": "user", "content": "Thanks"},
+)
+
+
+@pytest.mark.parametrize(
+    ("model", "flagged", "declared", "tools"),
+    [
+        pytest.param("moonshotai.kimi-k3", "opted-in", True, (_MARKED_WEATHER_TOOL,), id="kimi-opted-in"),
+        pytest.param(
+            "us.anthropic.claude-sonnet-5-5",
+            "opted-out",
+            False,
+            (_COMPUTER_TOOL, _MARKED_WEATHER_TOOL),
+            id="claude-opted-out-next-to-computer-use",
+        ),
+    ],
+)
+@pytest.mark.parametrize("entrypoint", ["completion", "acompletion"])
+@pytest.mark.parametrize("flagless_registers_first", [False, True])
+async def test_a_bedrock_deployment_sends_cache_points_by_its_own_flag_not_a_siblings_on_the_same_model(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    model: str,
+    flagged: str,
+    declared: bool,
+    tools: tuple[dict[str, object], ...],
+    entrypoint: str,
+    flagless_registers_first: bool,
+) -> None:
+    from litellm import Router
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    converse: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/converse").mock(
+        return_value=Response(200, json=_CONVERSE_REPLY)
+    )
+    flags: Final = {flagged: {"supports_prompt_cache_breakpoint": declared}}
+    registration_order: Final = ("flagless", flagged) if flagless_registers_first else (flagged, "flagless")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": f"bedrock/{model}",
+                    "aws_access_key_id": "bedrock-test-key",
+                    "aws_secret_access_key": "bedrock-test-secret",
+                    "aws_region_name": "us-east-1",
+                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                },
+                "model_info": {"id": f"{name}-id", **flags.get(name, {})},
+            }
+            for name in registration_order
+        ],
+        num_retries=0,
+    )
+    messages: Final = [dict(message) for message in _MARKED_TOOL_CONVERSATION]
+
+    async def sends_a_cache_point(name: str) -> bool:
+        match entrypoint:
+            case "completion":
+                router.completion(model=name, messages=messages, tools=list(tools))
+            case "acompletion":
+                await router.acompletion(model=name, messages=messages, tools=list(tools))
+        return b"cachePoint" in converse.calls.last.request.content
+
+    assert {name: await sends_a_cache_point(name) for name in registration_order} == {
+        flagged: declared,
+        "flagless": not declared,
+    }
+
+async def test_a_routed_bedrock_deployment_sends_cache_points_when_register_model_opted_its_model_in(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    from litellm import Router
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    converse: Final = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/moonshotai.kimi-k3/converse"
+    ).mock(return_value=Response(200, json=_CONVERSE_REPLY))
+    litellm.register_model({"bedrock/moonshotai.kimi-k3": {"supports_prompt_cache_breakpoint": True}})
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "flagless",
+                "litellm_params": {
+                    "model": "bedrock/moonshotai.kimi-k3",
+                    "aws_access_key_id": "bedrock-test-key",
+                    "aws_secret_access_key": "bedrock-test-secret",
+                    "aws_region_name": "us-east-1",
+                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                },
+                "model_info": {"id": "flagless-id"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(model="flagless", messages=[{"role": "system", "content": "stable"}, {"role": "user", "content": "hi"}])
+
+    assert b"cachePoint" in converse.calls.last.request.content
+
+
+@pytest.mark.parametrize(
+    ("catalog_caching", "deployment_caching", "expected"),
+    [(None, True, True), (True, False, False), (True, None, True), (None, None, False)],
+)
+def test_a_routed_deployments_own_prompt_caching_flag_decides_cache_points_for_a_catalogued_model(
+    catalog_caching: bool | None, deployment_caching: bool | None, expected: bool, local_model_cost_map: None
+) -> None:
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    model: Final = f"qa-catalogued-model-{catalog_caching}-{deployment_caching}"
+    catalog_flag: Final = {} if catalog_caching is None else {"supports_prompt_caching": catalog_caching}
+    deployment_flag: Final = {} if deployment_caching is None else {"supports_prompt_caching": deployment_caching}
+    litellm.register_model({model: {"litellm_provider": "bedrock", "mode": "chat", **catalog_flag}})
+
+    assert bedrock_model_accepts_cache_points(model, model_info={"id": "qa-deployment", **deployment_flag}) is expected
+
+
+@pytest.mark.parametrize(
+    ("declared", "catalog_caching", "expected"),
+    [
+        ("true", False, True),
+        (1, False, True),
+        (" TRUE ", False, True),
+        ("false", True, False),
+        (0, True, False),
+        ("maybe", True, True),
+        ("maybe", False, False),
+    ],
+)
+def test_a_deployments_prompt_caching_flag_written_as_a_string_or_number_decides_cache_points_as_the_bool_it_spells(
+    declared: object, catalog_caching: bool, expected: bool, local_model_cost_map: None
+) -> None:
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    model: Final = f"qa-catalogued-model-lax-{catalog_caching}"
+    litellm.register_model(
+        {model: {"litellm_provider": "bedrock", "mode": "chat", "supports_prompt_caching": catalog_caching}}
+    )
+
+    assert (
+        bedrock_model_accepts_cache_points(model, model_info={"id": "qa-deployment", "supports_prompt_caching": declared})
+        is expected
+    )
 
 def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment_has_static_credentials():
     from litellm.llms.bedrock.common_utils import merge_bedrock_aws_request_params

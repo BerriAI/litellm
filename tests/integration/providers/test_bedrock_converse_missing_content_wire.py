@@ -547,7 +547,7 @@ def test_r21_responses_stream_input_item_without_content_after_an_assistant_item
         assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_ANSWERED], received
         (row,) = _success_rows(marker, 1)
         assert row["call_type"] == "aresponses" and row["end_user"] == marker, row
-        assert row["request_id"] == _inner_response_id(str(completed["response"]["id"])), (row, completed)
+        assert row["request_id"] == str(completed["response"]["id"]), (row, completed)
 
 
 def test_r22_passthrough_converse_forwards_a_message_without_content_verbatim(gateway: Gateway) -> None:

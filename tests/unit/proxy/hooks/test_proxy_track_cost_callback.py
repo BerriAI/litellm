@@ -3491,6 +3491,40 @@ async def test_sidecar_ignores_an_undecodable_event():  # test-quality-ok: a dis
     mock_proxy_logging.db_spend_update_writer.update_database.assert_not_awaited()
 
 
+def _spend_row_error_information(update_database_kwargs: Mapping[str, object]) -> dict[str, object]:
+    row: Final = get_logging_payload(
+        kwargs=cast(dict, update_database_kwargs["kwargs"]),
+        response_obj=update_database_kwargs["completion_response"],
+        start_time=cast(datetime, update_database_kwargs["start_time"]),
+        end_time=cast(datetime, update_database_kwargs["end_time"]),
+    )
+    return json.loads(row["metadata"])["error_information"]
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_spend_row_truncates_a_long_provider_error_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "100")
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
+    provider_error: Final = "upstream failure " + "x" * 1000
+
+    await logger.async_post_call_failure_hook(
+        request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        original_exception=litellm.InternalServerError(message=provider_error, llm_provider="openai", model="gpt-4o"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    stored_message: Final = _spend_row_error_information(writer.update_database.call_args.kwargs)["error_message"]
+    assert isinstance(stored_message, str)
+    assert stored_message.count("skipped") == 1
+    kept_chars: Final = len(stored_message.split("... (")[0]) + len(stored_message.rsplit(") ...", 1)[1])
+    skipped_chars: Final = int(stored_message.split("skipped ", 1)[1].split(" chars", 1)[0])
+    assert kept_chars + skipped_chars > len(provider_error)
+
+
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_model_rejection():
     raw_model: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
@@ -3504,9 +3538,7 @@ async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_
         user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
     )
 
-    error_information: Final = writer.update_database.call_args.kwargs["kwargs"]["litellm_params"]["metadata"][
-        "error_information"
-    ]
+    error_information: Final = _spend_row_error_information(writer.update_database.call_args.kwargs)
     assert "medical records" not in json.dumps(error_information)
     assert (
         error_information["error_message"]

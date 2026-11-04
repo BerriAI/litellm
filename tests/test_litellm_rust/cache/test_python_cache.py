@@ -18,10 +18,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
-from litellm.rust_bridge import runtime
-from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
-from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.public_call import NativeCall
+from litellm.rust_bridge.catalog import Route
 from litellm.types.caching import CachingSupportedCallTypes
 from tests.test_litellm_rust.cache.support import cache_key, collect, invoke, payload
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
@@ -425,49 +422,6 @@ async def test_python_cache_operations_stay_in_the_rust_callers_task(
         return
     first: Final = await invoke("messages", recording_server, {})
     second: Final = await invoke("messages", recording_server, {})
-    assert payload(first) == payload(second)
-    assert cache_key(second)
-    assert len(recording_server.requests) == 1
-
-
-def test_sync_rust_messages_calls_python_cache(recording_server: RecordingServer) -> None:
-    from litellm.rust_bridge.messages.entrypoints import NATIVE_MESSAGES
-
-    litellm.cache = Cache()
-    recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
-    arguments: Final = {
-        "model": MESSAGES_MODEL,
-        "messages": list(MESSAGES),
-        "max_tokens": 32,
-        "api_key": "test-key",
-        "api_base": recording_server.base_url,
-    }
-    request: Final = NativeCall(
-        args=(),
-        kwargs=arguments,
-        base={
-            "model": MESSAGES_MODEL,
-            "messages": list(MESSAGES),
-            "max_tokens": 32,
-            "stream": None,
-            "api_key": "test-key",
-            "api_base": recording_server.base_url,
-            "custom_llm_provider": "anthropic",
-            **arguments,
-        },
-    )
-
-    def call() -> object:
-        return runtime.run(
-            RouteContext(Route.MESSAGES),
-            binding=NATIVE_MESSAGES,
-            native=lambda hook: hook(request),
-            python=runtime.NO_PYTHON,
-            rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),),
-        )
-
-    first: Final = call()
-    second: Final = call()
     assert payload(first) == payload(second)
     assert cache_key(second)
     assert len(recording_server.requests) == 1

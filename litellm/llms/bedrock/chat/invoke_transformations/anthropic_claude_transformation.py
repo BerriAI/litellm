@@ -13,8 +13,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    RemoteMedia,
     async_inline_remote_media,
     convert_url_to_base64,
+    inline_every_remote_url,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import (
@@ -117,6 +119,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def inlines_remote_media(self, media: RemoteMedia) -> bool:
+        return inline_every_remote_url(media)
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
@@ -129,9 +134,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         json_schema: Mapping[str, object] | None,
         request_params: Mapping[str, object],
     ) -> bool:
-        return bedrock_chat_uses_native_structured_output(
-            model, self.is_thinking_requested(request_params), model_info=self._deployment_model_info
+        return self.chat_uses_native_structured_output(
+            model, self.is_thinking_requested(request_params), self._deployment_model_info
         ) and (json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None)
+
+    def chat_uses_native_structured_output(
+        self, model: str, thinking_requested: bool, model_info: Mapping[str, object] | None
+    ) -> bool:
+        return bedrock_chat_uses_native_structured_output(model, thinking_requested, model_info=model_info)
 
     def uses_opt_in_native_output(
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
@@ -335,10 +345,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
+        model_info: Final = deployment_model_info(_LITELLM_PARAMS.validate_python(litellm_params))
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_request,
-            model_info=deployment_model_info(_LITELLM_PARAMS.validate_python(litellm_params)),
+            model_info=model_info,
+            chat_uses_native_output=lambda: self.chat_uses_native_structured_output(
+                model, self.is_thinking_requested(_NON_DEFAULT_PARAMS.validate_python(filtered_params)), model_info
+            ),
         )
         strip_unsupported_bedrock_invoke_output_config_keys(
             model=model,

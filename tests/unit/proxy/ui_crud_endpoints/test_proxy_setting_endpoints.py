@@ -19,6 +19,27 @@ client = TestClient(app)
 
 
 @pytest.mark.asyncio
+async def test_sso_settings_without_prisma_reports_database_not_connected(monkeypatch: pytest.MonkeyPatch) -> None:
+    import runpy
+    import sys
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    with patch.dict(sys.modules, {"prisma": None, "prisma.errors": None}):
+        endpoints: Final = runpy.run_path(proxy_setting_endpoints.__file__)
+        with pytest.raises(HTTPException) as error:
+            await endpoints["update_sso_settings"](SSOConfig(), UserAPIKeyAuth())
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": "Database not connected. Please connect a database."}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("config_value,stored_value,expected", [
     (None, None, False), (None, False, False), (None, True, True),
     (False, True, False), (True, False, True), ("false", True, False), ("true", False, True),

@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
@@ -216,10 +217,13 @@ def scenario(rig: _Rig) -> Iterator[Scenario]:
         yield opened
 
 
-def _deploy(rig: _Rig, scenario: Scenario, mode: iv.Mode, *, api_key: str = iv.AZURE_KEY) -> _Deployment:
+def _deploy(
+    rig: _Rig, scenario: Scenario, mode: iv.Mode, *, api_key: str = iv.AZURE_KEY, priced: bool = False
+) -> _Deployment:
     name: Final = iv.deployment(mode)
+    pricing: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002} if priced else {}
     model: Final = scenario.model(
-        model=f"azure/{name}", api_base=rig.wire.url, api_key=api_key, api_version=iv.API_VERSION
+        model=f"azure/{name}", api_base=rig.wire.url, api_key=api_key, api_version=iv.API_VERSION, **pricing
     )
     return _Deployment(model, name)
 
@@ -325,6 +329,46 @@ def _assert_response_landed_once(model: str, identity: str) -> None:
     assert row["status"] == "success" and rv.same_response(string_value(row["request_id"]), identity), row
 
 
+def _assert_single_model_spend_for_key(key: str, call_type: str, *, expected_searches: int = 1) -> None:
+    digest: Final = sha256(key.encode()).hexdigest()
+    observed: Final = eventually(
+        lambda: (
+            read_rows(
+                "SELECT status, spend, request_id, call_type, model_group, session_id "
+                'FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND status = %s',
+                (digest, "success"),
+            ),
+            read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token = %s', (digest,)),
+        ),
+        lambda values: (
+            bool(values[0])
+            and (
+                len(values[0]) > expected_searches + 1
+                or (
+                    len(values[0]) == expected_searches + 1
+                    and len(values[1]) == 1
+                    and values[1][0]["spend"] is not None
+                    and float(str(values[1][0]["spend"]))
+                    == pytest.approx(sum(float(str(row["spend"])) for row in values[0]))
+                )
+            )
+        ),
+        seconds=70,
+    )
+    rows, balance = observed
+    model_rows: Final = [row for row in rows if row["call_type"] == call_type]
+    search_rows: Final = [row for row in rows if row["call_type"] == "asearch"]
+    spend: Final = sum(float(str(row["spend"])) for row in rows)
+    assert (
+        len(rows) == expected_searches + 1
+        and len(model_rows) == 1
+        and len(search_rows) == expected_searches
+        and float(str(model_rows[0]["spend"])) > 0
+        and all(float(str(row["spend"])) > 0 for row in search_rows)
+        and float(str(balance[0]["spend"])) == pytest.approx(spend)
+    ), (rows, balance)
+
+
 def _openai(rig: _Rig) -> openai.OpenAI:
     return openai.OpenAI(base_url=f"{rig.base_url}/v1", api_key=rig.gateway.key, max_retries=0)
 
@@ -402,6 +446,31 @@ def test_raw_chat_stream_without_stream_options_answers_without_a_usage_chunk(ri
     _assert_search_turn(rig, deployment, identity)
 
 
+def test_chat_stream_through_web_search_has_single_spend_owner(rig: _Rig, scenario: Scenario) -> None:
+    deployment: Final = _deploy(rig, scenario, "search", priced=True)
+    key: Final = scenario.key(models=[deployment.model])
+    stream: Final = _post(rig, "/v1/chat/completions", _chat_body(deployment), key=key)
+    identity: Final = _assert_restreamed(stream, iv.answer(deployment.name), usage=None)
+    _assert_search_turn(rig, deployment, identity)
+    _assert_single_model_spend_for_key(key, "acompletion")
+
+
+def test_multi_round_chat_stream_through_web_search_bills_each_search(
+    rig: _Rig, scenario: Scenario
+) -> None:
+    deployment: Final = _deploy(rig, scenario, "multi-search", priced=True)
+    key: Final = scenario.key(models=[deployment.model])
+    stream: Final = _post(rig, "/v1/chat/completions", _chat_body(deployment), key=key)
+    identity: Final = _assert_restreamed(stream, iv.answer(deployment.name), usage=None)
+    received: Final = _upstream(rig, deployment)
+    _assert_upstream(received, model_calls=3, searches=2)
+    assert [search["query"] for search in received.searches] == [
+        iv.query(deployment.name),
+        iv.query(deployment.name, turn=2),
+    ], received.searches
+    _assert_single_model_spend_for_key(key, "acompletion", expected_searches=2)
+
+
 def test_openai_sdk_responses_stream_through_web_search_keeps_stream_options_off_azure(
     rig: _Rig, scenario: Scenario
 ) -> None:
@@ -452,6 +521,31 @@ def test_raw_responses_stream_without_stream_options_answers(rig: _Rig, scenario
     )
     _assert_upstream(_upstream(rig, deployment), model_calls=2, searches=1)
     _assert_response_landed_once(deployment.model, identity)
+
+
+def test_responses_stream_through_web_search_has_single_spend_owner(rig: _Rig, scenario: Scenario) -> None:
+    deployment: Final = _deploy(rig, scenario, "search", priced=True)
+    key: Final = scenario.key(models=[deployment.model])
+    stream: Final = _post(rig, "/v1/responses", _responses_body(deployment), key=key)
+    _assert_responses_restreamed(stream, iv.answer(deployment.name))
+    _assert_upstream(_upstream(rig, deployment), model_calls=2, searches=1)
+    _assert_single_model_spend_for_key(key, "aresponses")
+
+
+def test_multi_round_responses_stream_through_web_search_bills_each_search(
+    rig: _Rig, scenario: Scenario
+) -> None:
+    deployment: Final = _deploy(rig, scenario, "multi-search", priced=True)
+    key: Final = scenario.key(models=[deployment.model])
+    stream: Final = _post(rig, "/v1/responses", _responses_body(deployment), key=key)
+    _assert_responses_restreamed(stream, iv.answer(deployment.name))
+    received: Final = _upstream(rig, deployment)
+    _assert_upstream(received, model_calls=3, searches=2)
+    assert [search["query"] for search in received.searches] == [
+        iv.query(deployment.name),
+        iv.query(deployment.name, turn=2),
+    ], received.searches
+    _assert_single_model_spend_for_key(key, "aresponses", expected_searches=2)
 
 
 def test_openai_sdk_chat_without_streaming_through_web_search_answers_in_json(rig: _Rig, scenario: Scenario) -> None:

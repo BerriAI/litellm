@@ -1,19 +1,24 @@
 import { z } from "zod";
 
+import i18n from "@/i18n/i18n";
+
 const isBlank = (value: string): boolean => value.trim() === "";
 
 const amountOrEmpty = z
   .string()
-  .refine(
-    (value) => isBlank(value) || (Number.isFinite(Number(value)) && Number(value) >= 0),
-    "Must be a non-negative number",
-  );
+  .refine((value) => isBlank(value) || (Number.isFinite(Number(value)) && Number(value) >= 0), {
+    error: () => i18n.t("users.defaultSettings.errors.nonNegative"),
+  });
 
 const defaultTeamRowSchema = z.object({
   team_id: z
     .string()
     .nullable()
-    .pipe(z.string({ error: "Select a team" }).min(1, "Select a team")),
+    .pipe(
+      z
+        .string({ error: () => i18n.t("users.defaultSettings.errors.selectTeam") })
+        .min(1, { error: () => i18n.t("users.defaultSettings.errors.selectTeam") }),
+    ),
   max_budget_in_team: amountOrEmpty,
   user_role: z.enum(["user", "admin"]),
 });
@@ -38,7 +43,7 @@ export const defaultUserSettingsSchema = z.object(defaultUserSettingsShape).supe
   repeatedRows.forEach((index) =>
     ctx.addIssue({
       code: "custom",
-      message: "This team is already listed",
+      message: i18n.t("users.defaultSettings.errors.duplicateTeam"),
       path: ["teams", index, "team_id"],
     }),
   );

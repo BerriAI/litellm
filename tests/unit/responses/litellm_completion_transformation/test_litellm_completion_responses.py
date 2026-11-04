@@ -6564,6 +6564,31 @@ def test_an_application_inference_profile_gets_no_item_marks_under_drop_params()
     assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 0
 
 
+
+def test_a_bedrock_deployment_keeps_item_marks_by_its_own_flag_not_a_siblings_on_the_same_model(
+    local_model_cost_map: None,
+):
+    from litellm import Router
+
+    Router(
+        model_list=[
+            {
+                "model_name": "opted-in",
+                "litellm_params": {"model": "bedrock/moonshotai.kimi-k3", "aws_region_name": "us-east-1"},
+                "model_info": {"id": "opted-in-id", "supports_prompt_cache_breakpoint": True},
+            }
+        ]
+    )
+    marked_system: Final = {"role": "system", "content": "House rules", "cache_control": _EPHEMERAL}
+
+    def bridged_system(model_info: Mapping[str, object]) -> Mapping[str, object]:
+        return _bridged_request(marked_system, model="bedrock/moonshotai.kimi-k3", model_info=model_info)[1]
+
+    assert (
+        bridged_system({"id": "flagless-id"}),
+        bridged_system({"id": "opted-in-id", "supports_prompt_cache_breakpoint": True}),
+    ) == ({"role": "system", "content": "House rules"}, marked_system)
+
 def test_the_shared_input_transform_keeps_every_item_mark_for_a_request_it_sends():
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=cast(ResponseInputParam, list(_marked_turns(5))),  # cast-ok: cache_control is not an input TypedDict key
