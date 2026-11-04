@@ -910,6 +910,60 @@ class TestLiteLLMCompletionResponsesConfig:
         assert tool_calls[0].namespace == "collaboration"
         assert tool_calls[0].arguments == '{"message":"hello"}'
 
+    def test_transform_chat_completion_response_deferred_top_level_tool_call_has_namespace_equal_to_name(self):
+        """A deferred top-level function (defer_loading=True) comes back with namespace == name,
+        the shape the OpenAI Agents SDK reserves for it. Without it the SDK raises
+        "Tool get_reporting_categories not found" after a native tool search."""
+        tool_call_id = "call_deferred_top_level"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="bedrock/invoke/anthropic.claude-opus-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name="get_reporting_categories", arguments='{"market":"TR-TITCK"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        try:
+            responses_api_response = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input="Is CHG-TR-0042 Type IB in TR-TITCK?",
+                    responses_api_request={
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "get_reporting_categories",
+                                "defer_loading": True,
+                                "parameters": {"type": "object", "properties": {"market": {"type": "string"}}},
+                            }
+                        ]
+                    },
+                    chat_completion_response=chat_completion_response,
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [item for item in responses_api_response.output if item.type == "function_call"]
+        assert [(c.name, c.namespace, c.arguments) for c in tool_calls] == [
+            ("get_reporting_categories", "get_reporting_categories", '{"market":"TR-TITCK"}')
+        ]
+
     def test_transform_chat_completion_response_plain_tool_call_has_no_namespace(self):
         """A non-namespace function call must not gain a namespace attribute, matching
         the streaming path which only sets it when a namespace was restored."""
@@ -2877,6 +2931,22 @@ class TestToolTransformation:
         )
 
         assert messages[0]["tool_calls"][0]["function"]["name"] == "mcp__everything__get_sum"
+
+    def test_function_call_echo_with_namespace_equal_to_name_keeps_bare_name(self):
+        """The Agents SDK echoes a deferred top-level call with namespace == name. The provider
+        was given the bare tool name, so the outbound chat tool_call must not become
+        "get_reporting_categories__get_reporting_categories"."""
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "function_call",
+                "name": "get_reporting_categories",
+                "namespace": "get_reporting_categories",
+                "call_id": "call_3",
+                "arguments": '{"market": "KR-MFDS"}',
+            }
+        )
+
+        assert messages[0]["tool_calls"][0]["function"]["name"] == "get_reporting_categories"
 
     def test_custom_tool_call_echo_keeps_short_name(self):
         """Custom tools stay advertised under their short name, so a namespace on
