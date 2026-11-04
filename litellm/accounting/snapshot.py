@@ -2,7 +2,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.proxy._types import SpendLogsPayload
@@ -102,6 +102,7 @@ def build_accounting_payload(
     )
 
 
+_GUARDRAIL_ENTRIES: Final = TypeAdapter(tuple[dict[str, object], ...])
 _GUARDRAIL_METADATA_FIELDS: Final = frozenset({"guardrail_information", "standard_logging_guardrail_information"})
 _GUARDRAIL_ACCOUNTING_FIELDS: Final = frozenset(
     {"guardrail_id", "guardrail_name", "guardrail_usage", "guardrail_cost_by_unit", "guardrail_cost_in_spend"}
@@ -109,13 +110,15 @@ _GUARDRAIL_ACCOUNTING_FIELDS: Final = frozenset(
 
 
 def _accounting_guardrail_entries(value: object) -> object:
-    if not isinstance(value, list):
-        return value
-    return [_accounting_guardrail_entry(entry) for entry in value if isinstance(entry, Mapping)]
+    try:
+        entries: Final = _GUARDRAIL_ENTRIES.validate_python(value)
+    except ValidationError:
+        return None
+    return [_accounting_guardrail_entry(entry) for entry in entries]
 
 
-def _accounting_guardrail_entry(entry: Mapping[object, object]) -> Mapping[str, object]:
-    return {key: item for key, item in entry.items() if isinstance(key, str) and key in _GUARDRAIL_ACCOUNTING_FIELDS}
+def _accounting_guardrail_entry(entry: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: item for key, item in entry.items() if key in _GUARDRAIL_ACCOUNTING_FIELDS}
 
 
 def _accounting_metadata_field(key: str, value: object) -> object:

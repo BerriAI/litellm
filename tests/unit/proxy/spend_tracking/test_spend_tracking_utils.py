@@ -47,7 +47,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
     is_master_key,
-    _redact_logged_api_key,
+    redact_logged_api_key,
     _redact_prompt_leaks_in_error_string,
     sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
@@ -4038,7 +4038,7 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
     assert REDACTED_BY_LITELM_STRING in sanitized["error_message"]
 
 
-# ── _redact_logged_api_key unit tests ──────────────────────────────────────
+# ── redact_logged_api_key unit tests ──────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -4067,16 +4067,16 @@ def test_sanitize_error_information_persists_no_raw_model_for_an_unknown_model_r
 
 
 def test_redact_logged_api_key_none_returns_none():
-    assert _redact_logged_api_key(None) is None
+    assert redact_logged_api_key(None) is None
 
 
 def test_redact_logged_api_key_empty_string_returns_none():
-    assert _redact_logged_api_key("") is None
+    assert redact_logged_api_key("") is None
 
 
 def test_redact_logged_api_key_sk_key_is_hashed():
     raw = "sk-9876secret"
-    result = _redact_logged_api_key(raw)
+    result = redact_logged_api_key(raw)
     assert result == hash_token(raw)
     assert result is not None
     assert not result.startswith("sk-")
@@ -4085,15 +4085,15 @@ def test_redact_logged_api_key_sk_key_is_hashed():
 
 def test_redact_logged_api_key_bearer_sk_equals_sk_hash():
     raw = "sk-9876secret"
-    result_plain = _redact_logged_api_key(raw)
-    result_bearer = _redact_logged_api_key(f"Bearer {raw}")
+    result_plain = redact_logged_api_key(raw)
+    result_bearer = redact_logged_api_key(f"Bearer {raw}")
     assert result_bearer == result_plain
 
 
 def test_redact_logged_api_key_bearer_case_insensitive():
     raw = "sk-9876secret"
-    result_lower = _redact_logged_api_key(f"bearer {raw}")
-    result_upper = _redact_logged_api_key(f"BEARER {raw}")
+    result_lower = redact_logged_api_key(f"bearer {raw}")
+    result_upper = redact_logged_api_key(f"BEARER {raw}")
     expected = hash_token(raw)
     assert result_lower == expected
     assert result_upper == expected
@@ -4101,7 +4101,7 @@ def test_redact_logged_api_key_bearer_case_insensitive():
 
 def test_redact_logged_api_key_non_sk_raw_key_is_hashed():
     raw = "anthropic-raw-key-xyz"
-    result = _redact_logged_api_key(raw)
+    result = redact_logged_api_key(raw)
     assert result is not None
     assert result != raw
     assert len(result) == 64
@@ -4111,7 +4111,7 @@ def test_redact_logged_api_key_non_sk_raw_key_is_hashed():
 def test_redact_logged_api_key_already_valid_sha256_passes_through_with_flag():
     already_hashed = hash_token("sk-some-key")
     assert len(already_hashed) == 64
-    result = _redact_logged_api_key(already_hashed, already_redacted=True)
+    result = redact_logged_api_key(already_hashed, already_redacted=True)
     assert result == already_hashed
     assert hash_token(already_hashed) != result  # no double-hash
 
@@ -4119,7 +4119,7 @@ def test_redact_logged_api_key_already_valid_sha256_passes_through_with_flag():
 def test_redact_logged_api_key_sha256_without_flag_is_hashed():
     already_hashed = hash_token("sk-some-key")
     assert len(already_hashed) == 64
-    result = _redact_logged_api_key(already_hashed)
+    result = redact_logged_api_key(already_hashed)
     assert result is not None
     assert result != already_hashed
     assert len(result) == 64
@@ -4129,7 +4129,7 @@ def test_redact_logged_api_key_sha256_without_flag_is_hashed():
 def test_redact_logged_api_key_long_opaque_token_is_hashed():
     raw = "x1" * 450
     assert len(raw) == 900
-    result = _redact_logged_api_key(raw)
+    result = redact_logged_api_key(raw)
     assert result is not None
     assert result != raw
     assert raw not in result
@@ -4139,27 +4139,27 @@ def test_redact_logged_api_key_long_opaque_token_is_hashed():
 
 def test_redact_logged_api_key_hashed_jwt_passes_through():
     jwt_hash = "hashed-jwt-" + "a" * 64
-    result = _redact_logged_api_key(jwt_hash, already_redacted=True)
+    result = redact_logged_api_key(jwt_hash, already_redacted=True)
     assert result == jwt_hash
 
 
 def test_redact_logged_api_key_hashed_jwt_shape_without_provenance_is_hashed():
     lookalike = "hashed-jwt-" + "a" * 64
-    result = _redact_logged_api_key(lookalike)
+    result = redact_logged_api_key(lookalike)
     assert result == hash_token(lookalike)
     assert result != lookalike
 
 
 def test_redact_logged_api_key_hashed_jwt_trailing_newline_is_hashed():
     trailing = "hashed-jwt-" + "a" * 64 + "\n"
-    result = _redact_logged_api_key(trailing, already_redacted=True)
+    result = redact_logged_api_key(trailing, already_redacted=True)
     assert result == hash_token(trailing)
     assert result != trailing
 
 
 def test_redact_logged_api_key_hashed_jwt_short_suffix_is_hashed():
     short_jwt = "hashed-jwt-tooshort"
-    result = _redact_logged_api_key(short_jwt)
+    result = redact_logged_api_key(short_jwt)
     assert result is not None
     assert result != short_jwt
     assert len(result) == 64
@@ -4169,14 +4169,14 @@ def test_redact_logged_api_key_hashed_jwt_short_suffix_is_hashed():
 def test_redact_logged_api_key_master_key_alias_passes_through():
     from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 
-    result = _redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS, already_redacted=True)
+    result = redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS, already_redacted=True)
     assert result == LITELLM_PROXY_MASTER_KEY_ALIAS
 
 
 def test_redact_logged_api_key_master_key_alias_without_provenance_is_hashed():
     from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 
-    result = _redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS)
+    result = redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS)
     assert result == hash_token(LITELLM_PROXY_MASTER_KEY_ALIAS)
     assert result != LITELLM_PROXY_MASTER_KEY_ALIAS
 
@@ -4282,9 +4282,9 @@ def test_get_logging_payload_reads_used_client_oauth_token_from_the_bucket_the_p
 
 def test_redact_logged_api_key_bearer_only_returns_none():
     # "bearer " with nothing after stripping is equivalent to no key
-    assert _redact_logged_api_key("bearer ") is None
-    assert _redact_logged_api_key("Bearer ") is None
-    assert _redact_logged_api_key("BEARER ") is None
+    assert redact_logged_api_key("bearer ") is None
+    assert redact_logged_api_key("Bearer ") is None
+    assert redact_logged_api_key("BEARER ") is None
 
 
 # ── _get_spend_logs_metadata key-hash invariant tests ─────────────────────
@@ -4645,7 +4645,7 @@ class TestSpendLogKeyRedaction:
 
     def test_bearer_prefixed_sk_key_is_hashed(self):
         raw = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
-        result = _redact_logged_api_key(raw)
+        result = redact_logged_api_key(raw)
         assert result is not None
         assert not result.startswith("Bearer")
         assert not result.startswith("sk-")
@@ -4653,14 +4653,14 @@ class TestSpendLogKeyRedaction:
 
     def test_bare_sk_key_is_hashed(self):
         raw = "sk-WLi4iRn4JmbVlTaYw12IOA"
-        result = _redact_logged_api_key(raw)
+        result = redact_logged_api_key(raw)
         assert result is not None
         assert not result.startswith("sk-")
         assert len(result) == 64
 
     def test_bearer_lowercase_is_handled(self):
         raw = "bearer sk-WLi4iRn4JmbVlTaYw12IOA"
-        result = _redact_logged_api_key(raw)
+        result = redact_logged_api_key(raw)
         assert result is not None
         assert not result.startswith("bearer")
         assert not result.startswith("sk-")
@@ -4668,11 +4668,11 @@ class TestSpendLogKeyRedaction:
 
     def test_already_hashed_key_unchanged(self):
         hashed = "bcfe8173f5447f10be0e7fb37aaa8b97829d5c9e0498232152f9d123456789ab"
-        assert _redact_logged_api_key(hashed, already_redacted=True) == hashed
+        assert redact_logged_api_key(hashed, already_redacted=True) == hashed
 
     def test_bearer_prefixed_non_sk_key_is_hashed(self):
         raw = "Bearer some-other-token-format"
-        result = _redact_logged_api_key(raw)
+        result = redact_logged_api_key(raw)
         assert result == hash_token("some-other-token-format")
         assert result is not None
         assert not result.startswith("Bearer")
@@ -4680,7 +4680,7 @@ class TestSpendLogKeyRedaction:
     def test_bearer_and_bare_produce_same_hash(self):
         bare = "sk-WLi4iRn4JmbVlTaYw12IOA"
         bearer = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
-        assert _redact_logged_api_key(bare) == _redact_logged_api_key(bearer)
+        assert redact_logged_api_key(bare) == redact_logged_api_key(bearer)
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -4777,7 +4777,7 @@ def test_get_logging_payload_keeps_internal_service_account_key_readable(service
 
 
 def test_redact_logged_api_key_service_account_name_without_provenance_is_hashed():
-    result = _redact_logged_api_key(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME)
+    result = redact_logged_api_key(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME)
     assert result == hash_token(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME)
 
 
@@ -5790,7 +5790,7 @@ def test_get_logging_payload_empty_key_slp_none_is_empty_string_not_none_literal
 
     assert payload["api_key"] == "", (
         f"Expected empty string but got {payload['api_key']!r}; "
-        "dropping _redact_logged_api_key's 'or \"\"' guard would yield 'None' here"
+        "dropping redact_logged_api_key's 'or \"\"' guard would yield 'None' here"
     )
 
 
@@ -5841,7 +5841,7 @@ def test_get_logging_payload_stores_user_email_in_spend_log_metadata(user_email,
 
 def test_redact_logged_api_key_partial_sha256_is_hashed():
     partial_hex = "a" * 63
-    result = _redact_logged_api_key(partial_hex)
+    result = redact_logged_api_key(partial_hex)
     assert result is not None
     assert result != partial_hex
     assert len(result) == 64
@@ -5851,7 +5851,7 @@ def test_redact_logged_api_key_partial_sha256_is_hashed():
 def test_redact_logged_api_key_bearer_already_hashed_passes_through_with_flag():
     already_hashed = hash_token("sk-some-key")
     assert len(already_hashed) == 64
-    result = _redact_logged_api_key(f"Bearer {already_hashed}", already_redacted=True)
+    result = redact_logged_api_key(f"Bearer {already_hashed}", already_redacted=True)
     assert result == already_hashed
     assert hash_token(already_hashed) != result
 
@@ -5859,7 +5859,7 @@ def test_redact_logged_api_key_bearer_already_hashed_passes_through_with_flag():
 def test_redact_logged_api_key_bearer_sha256_without_flag_is_hashed():
     already_hashed = hash_token("sk-some-key")
     assert len(already_hashed) == 64
-    result = _redact_logged_api_key(f"Bearer {already_hashed}")
+    result = redact_logged_api_key(f"Bearer {already_hashed}")
     assert result is not None
     assert result != already_hashed
     assert result == hash_token(already_hashed)
@@ -6471,12 +6471,12 @@ def test_get_logging_payload_never_lands_a_raw_cli_session_token(call_type: str)
 
 
 def test_redact_logged_api_key_cli_session_alias_needs_alias_provenance():
-    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True, key_alias=_CLI_SESSION_ALIAS) == (
+    assert redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True, key_alias=_CLI_SESSION_ALIAS) == (
         _CLI_SESSION_ALIAS
     )
-    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True) == hash_token(_CLI_SESSION_ALIAS)
-    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, key_alias=_CLI_SESSION_ALIAS) == hash_token(_CLI_SESSION_ALIAS)
-    assert _redact_logged_api_key("alice", already_redacted=True, key_alias="alice") == hash_token("alice")
+    assert redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True) == hash_token(_CLI_SESSION_ALIAS)
+    assert redact_logged_api_key(_CLI_SESSION_ALIAS, key_alias=_CLI_SESSION_ALIAS) == hash_token(_CLI_SESSION_ALIAS)
+    assert redact_logged_api_key("alice", already_redacted=True, key_alias="alice") == hash_token("alice")
 
 
 def test_azure_spillover_stamped_from_response_headers():

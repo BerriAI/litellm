@@ -154,9 +154,7 @@ def _is_non_secret_key_value(value: str, *, key_alias: object = None) -> bool:
     )
 
 
-def _redact_logged_api_key(
-    value: str | None, *, already_redacted: bool = False, key_alias: object = None
-) -> str | None:
+def redact_logged_api_key(value: str | None, *, already_redacted: bool = False, key_alias: object = None) -> str | None:
     if not isinstance(value, str) or not value:
         return None
     stripped: Final = re.sub(r"(?i)^bearer ", "", value)
@@ -320,7 +318,7 @@ def _get_spend_logs_metadata(
         and _is_non_secret_key_value(_trusted_hash, key_alias=_key_alias)
         and _trusted_hash == _raw_key
     )
-    clean_metadata["user_api_key"] = _redact_logged_api_key(
+    clean_metadata["user_api_key"] = redact_logged_api_key(
         _raw_key, already_redacted=_already_redacted, key_alias=_key_alias
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
@@ -678,14 +676,14 @@ def get_logging_payload(
         and _is_non_secret_key_value(_trusted_hash, key_alias=_key_alias)
         and _trusted_hash == api_key
     )
-    api_key = _redact_logged_api_key(api_key, already_redacted=_key_already_redacted, key_alias=_key_alias) or ""
+    api_key = redact_logged_api_key(api_key, already_redacted=_key_already_redacted, key_alias=_key_alias) or ""
 
     if (
         standard_logging_payload is not None
     ):  # [TODO] migrate completely to sl payload. currently missing pass-through endpoint data
         api_key = (
             api_key
-            or _redact_logged_api_key(
+            or redact_logged_api_key(
                 standard_logging_payload["metadata"].get("user_api_key_hash"),
                 already_redacted=True,
                 key_alias=standard_logging_payload["metadata"].get("user_api_key_alias"),
