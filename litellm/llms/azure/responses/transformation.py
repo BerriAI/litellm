@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import prompt_cach
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.llms.base_llm.responses.transformation import SUMMARY_ONLY_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
@@ -71,18 +72,15 @@ def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[st
     return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
 
 
-_AZURE_FAMILY_REJECTED_INPUT_FIELDS: Final = MappingProxyType(
-    {"message": frozenset({"status"}), "reasoning": frozenset({"status"})}
-)
-_AZURE_OPENAI_REJECTED_INPUT_FIELDS: Final = MappingProxyType(
+_AZURE_REJECTED_INPUT_FIELDS: Final = MappingProxyType(
     {"message": frozenset({"status"}), "reasoning": frozenset({"status", "content"})}
 )
 
 
-def _without_rejected_fields(
-    item: Mapping[str, object], rejected_by_type: Mapping[str, frozenset[str]]
-) -> Mapping[str, object]:
-    rejected: Final = rejected_by_type.get(str(item.get("type")), frozenset())
+def _without_fields_azure_rejects(item: object) -> object:
+    if not is_str_keyed_mapping(item):
+        return item
+    rejected: Final = _AZURE_REJECTED_INPUT_FIELDS.get(str(item.get("type")), frozenset())
     return {key: value for key, value in item.items() if key not in rejected} if rejected else item
 
 
@@ -142,12 +140,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         validated_input: Final = super()._validate_input_param(input, drops_set_created_by=drops_set_created_by)
         if not isinstance(validated_input, list):
             return validated_input
-        rejected_by_type: Final = (
-            _AZURE_OPENAI_REJECTED_INPUT_FIELDS
-            if self.custom_llm_provider == LlmProviders.AZURE
-            else _AZURE_FAMILY_REJECTED_INPUT_FIELDS
-        )
-        sanitized_items: Final = [_without_rejected_fields(item, rejected_by_type) for item in validated_input]
+        sanitized_items: Final = [_without_fields_azure_rejects(item) for item in validated_input]
         return cast("ResponseInputParam", sanitized_items)  # cast-ok: items keep their shape minus rejected fields
 
     def transform_responses_api_request(

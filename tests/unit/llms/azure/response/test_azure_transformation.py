@@ -1552,10 +1552,19 @@ def test_openai_gpt5_resolves_to_responses_config_with_temperature() -> None:
     assert "temperature" in config.get_supported_openai_params("gpt-5")
 
 
-@pytest.mark.parametrize("config", [AzureOpenAIResponsesAPIConfig(), AzureOpenAIOSeriesResponsesAPIConfig()])
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        (AzureOpenAIResponsesAPIConfig(), "gpt-6.1-sol"),
+        (AzureOpenAIOSeriesResponsesAPIConfig(), "gpt-6.1-sol"),
+        (AzureAIResponsesAPIConfig(), "gpt-6.1-sol"),
+        (AzureAIAgentResponsesAPIConfig(), "agents/replay-test"),
+    ],
+    ids=["azure", "o_series", "azure_ai", "azure_ai_agent"],
+)
 @pytest.mark.parametrize("as_model", [False, True], ids=["dict", "pydantic"])
 def test_azure_reasoning_replay_removes_output_content_without_changing_history(
-    config: AzureOpenAIResponsesAPIConfig, as_model: bool
+    config: AzureOpenAIResponsesAPIConfig, model: str, as_model: bool
 ) -> None:
     replayable_reasoning: Final = {
         "id": "rs_saved_reasoning",
@@ -1591,7 +1600,7 @@ def test_azure_reasoning_replay_removes_output_content_without_changing_history(
     original: Final = deepcopy(history)
 
     request: Final = config.transform_responses_api_request(
-        model="gpt-6.1-sol",
+        model=model,
         input=history,
         response_api_optional_request_params={},
         litellm_params=GenericLiteLLMParams(),
@@ -1602,19 +1611,8 @@ def test_azure_reasoning_replay_removes_output_content_without_changing_history(
     assert history == original
 
 
-@pytest.mark.parametrize(
-    ("config", "model", "preserve_message_status"),
-    [
-        (OpenAIResponsesAPIConfig(), "gpt-6.1-sol", True),
-        (AzureAIResponsesAPIConfig(), "gpt-6.1-sol", False),
-        (AzureAIAgentResponsesAPIConfig(), "agents/replay-test", False),
-    ],
-    ids=["openai", "azure_ai", "azure_ai_agent"],
-)
 @pytest.mark.parametrize("as_model", [False, True], ids=["dict", "pydantic"])
-def test_azure_reasoning_content_filter_does_not_change_other_providers_replay(
-    config: OpenAIResponsesAPIConfig, model: str, preserve_message_status: bool, as_model: bool
-) -> None:
+def test_openai_replay_keeps_reasoning_content_and_message_status(as_model: bool) -> None:
     saved_reasoning: Final = {
         "id": "rs_saved_reasoning",
         "type": "reasoning",
@@ -1622,28 +1620,53 @@ def test_azure_reasoning_content_filter_does_not_change_other_providers_replay(
         "content": [{"type": "reasoning_text", "text": "Inspect the file."}],
         "encrypted_content": "opaque-saved-reasoning",
     }
-    message: Final = {
+    saved_message: Final = {
         "type": "message",
         "role": "assistant",
+        "status": "completed",
         "content": [{"type": "output_text", "text": "The file is ready.", "annotations": []}],
     }
-    saved_message: Final = {**message, "status": "completed"}
     history: Final = [
         ResponseReasoningItem.model_validate(saved_reasoning) if as_model else saved_reasoning,
         saved_message,
     ]
     original: Final = deepcopy(history)
 
-    request: Final = config.transform_responses_api_request(
-        model=model,
+    request: Final = OpenAIResponsesAPIConfig().transform_responses_api_request(
+        model="gpt-6.1-sol",
         input=history,
         response_api_optional_request_params={},
         litellm_params=GenericLiteLLMParams(),
         headers={},
     )
 
-    assert request["input"] == [saved_reasoning, saved_message if preserve_message_status else message]
+    assert request["input"] == [saved_reasoning, saved_message]
     assert history == original
+
+
+@pytest.mark.parametrize(
+    "config",
+    [AzureOpenAIResponsesAPIConfig(), AzureOpenAIOSeriesResponsesAPIConfig(), AzureAIResponsesAPIConfig()],
+    ids=["azure", "o_series", "azure_ai"],
+)
+def test_azure_family_forwards_input_items_that_are_not_objects_for_the_provider_to_judge(
+    config: AzureOpenAIResponsesAPIConfig,
+) -> None:
+    saved_reasoning: Final = {"type": "reasoning", "summary": [], "status": "completed", "encrypted_content": "opaque"}
+
+    request: Final = config.transform_responses_api_request(
+        model="gpt-6.1-sol",
+        input=["Continue.", saved_reasoning, ["nested"]],
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["input"] == [
+        "Continue.",
+        {"type": "reasoning", "summary": [], "encrypted_content": "opaque"},
+        ["nested"],
+    ]
 
 
 @pytest.mark.asyncio
