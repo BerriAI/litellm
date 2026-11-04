@@ -72,3 +72,14 @@ Source 007a2569b273e6be8d22cc318327581645206cce. The shared Aria icon now uses L
 ![Light](aria-sparkle-light.png)
 
 ![Dark](aria-sparkle-dark.png)
+
+## Workspace menu without icon column
+
+Source 58120baf64cc37e45e36696dbdf77a8a989e7e1f. Menu rows share one text edge and retain descriptions and the selection check. The collapsed trigger and navigation behavior are unchanged. Before was captured at 007a2569b2
+
+![workspace-menu-before-dark.png](workspace-menu-before-dark.png)
+
+![workspace-menu-after-dark.png](workspace-menu-after-dark.png)
+
+![workspace-menu-after-light.png](workspace-menu-after-light.png)
+
