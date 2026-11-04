@@ -1,4 +1,5 @@
 import React, { useId } from "react";
+import { useTranslation } from "react-i18next";
 import { Controller } from "react-hook-form";
 import { z } from "zod";
 import { FormField } from "@/components/shared/form/FormField";
@@ -16,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import i18n from "@/i18n/i18n";
 import { useZodForm } from "@/lib/forms/useZodForm";
 
 const budgetShape = {
@@ -54,19 +56,23 @@ const numberProps = <T extends { value?: number | null; onChange: (value: number
   ...field,
   type: "number",
   value: value ?? "",
-  placeholder: "No limit",
+  placeholder: i18n.t("budgets.form.noLimit"),
   onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
     onChange(event.target.value === "" ? null : event.target.valueAsNumber),
 });
 
-const OptionalBadge = () => <Badge variant="secondary">Optional</Badge>;
+const OptionalBadge = () => {
+  const { t } = useTranslation();
+  return <Badge variant="secondary">{t("budgets.form.optional")}</Badge>;
+};
 
 function SpendLimitField({ form }: { form: BudgetForm }) {
+  const { t } = useTranslation();
   const amountId = useId();
   return (
     <Field className="gap-2">
       <FieldLabel htmlFor={amountId}>
-        Spend limit
+        {t("budgets.form.spendLimit")}
         <OptionalBadge />
       </FieldLabel>
       <ButtonGroup className="w-full">
@@ -91,7 +97,7 @@ function SpendLimitField({ form }: { form: BudgetForm }) {
               value={field.value ?? NO_RESET}
               onValueChange={(next) => field.onChange(next === NO_RESET ? null : next)}
             >
-              <SelectTrigger aria-label="Reset period" className="w-32">
+              <SelectTrigger aria-label={t("budgets.form.resetPeriod")} className="w-32">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -124,13 +130,14 @@ function RateLimitField({ form, name, label }: { form: BudgetForm; name: NumberF
 }
 
 export function BudgetFormFields({ form, isEditing }: { form: BudgetForm; isEditing: boolean }) {
+  const { t } = useTranslation();
   return (
     <FieldGroup className="gap-4">
       <FormField
         control={form.control}
         name="budget_id"
-        label="Budget ID"
-        description={isEditing ? "Budget ID cannot be changed after creation" : undefined}
+        label={t("budgets.form.budgetId")}
+        description={isEditing ? t("budgets.form.budgetIdLocked") : undefined}
         className="gap-2"
       >
         {({ ref, ...field }) => <Input {...field} ref={ref} value={field.value ?? ""} disabled={isEditing} />}
@@ -139,15 +146,13 @@ export function BudgetFormFields({ form, isEditing }: { form: BudgetForm; isEdit
       <FieldSeparator />
       <FieldSet className="gap-3">
         <FieldLegend className="mb-4 flex items-center gap-2 text-[15px] leading-[22px] font-semibold">
-          Rate limits
+          {t("budgets.form.rateLimits")}
           <OptionalBadge />
         </FieldLegend>
-        <RateLimitField form={form} name="tpm_limit" label="Tokens per minute" />
-        <RateLimitField form={form} name="rpm_limit" label="Requests per minute" />
-        <RateLimitField form={form} name="tpd_limit" label="Batch tokens per day" />
-        <FieldDescription>
-          Batches count against the daily limit instead of the per-minute ones. Provider rate limits still apply.
-        </FieldDescription>
+        <RateLimitField form={form} name="tpm_limit" label={t("budgets.form.tpmLimit")} />
+        <RateLimitField form={form} name="rpm_limit" label={t("budgets.form.rpmLimit")} />
+        <RateLimitField form={form} name="tpd_limit" label={t("budgets.form.tpdLimit")} />
+        <FieldDescription>{t("budgets.form.batchNote")}</FieldDescription>
       </FieldSet>
     </FieldGroup>
   );
