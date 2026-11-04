@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 ROSTER_TX_TIMEOUT: Final = timedelta(seconds=60)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _TEAM_DEFAULTS: Final[TypeAdapter[DefaultTeamSSOParams | Mapping[str, object] | None]] = TypeAdapter(
-    DefaultTeamSSOParams | Mapping[str, object] | None
+    DefaultTeamSSOParams | dict[str, object] | None
 )
 
 
