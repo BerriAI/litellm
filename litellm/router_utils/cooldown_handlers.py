@@ -866,18 +866,22 @@ def is_caller_entra_credential_failure(
     call_params: Final = _CREDENTIAL_VALUES_ADAPTER.validate_python(model_call_details.get("litellm_params") or {})
 
     credential_name: Final = deployment.litellm_params.litellm_credential_name
-    configured: Final[tuple[Mapping[str, object], ...]] = (
+    configured_by_precedence: Final[tuple[Mapping[str, object], ...]] = (
+        router_defaults,
         _CREDENTIAL_VALUES_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True)),
         _CREDENTIAL_VALUES_ADAPTER.validate_python(
             CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
         ),
-        router_defaults,
         azure_entra_environment_defaults(),
     )
     return any(
-        call_params.get(key) not in (None, "") and all(call_params.get(key) != values.get(key) for values in configured)
+        call_params.get(key) not in (None, "") and call_params.get(key) != _first_set(configured_by_precedence, key)
         for key in AZURE_ENTRA_LITELLM_PARAM_KEYS
     )
+
+
+def _first_set(sources: tuple[Mapping[str, object], ...], key: str) -> object:
+    return next((value for source in sources if (value := source.get(key)) not in (None, "")), None)
 
 
 def is_caller_scoped_auth_failure(deployment: Deployment | None, exception_status: str | int) -> bool:

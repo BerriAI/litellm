@@ -25520,6 +25520,61 @@ async def test_router_caller_entra_credential_rejection_leaves_the_shared_deploy
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize(
+    "caller_field",
+    [
+        pytest.param({"client_secret": "environment-secret"}, id="environment_secret"),
+        pytest.param({"client_id": "environment-client"}, id="environment_client_id"),
+        pytest.param({"azure_scope": "https://cognitiveservices.azure.com/.default"}, id="default_scope"),
+    ],
+)
+async def test_router_caller_entra_field_matching_a_default_the_deployment_overrides_leaves_it_routable(
+    caller_field, monkeypatch
+):
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "environment-secret")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "environment-client")
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "tenant_id": "configured-tenant",
+                    "client_id": "configured-client",
+                    "client_secret": "configured-secret",
+                    "azure_scope": "api://configured-app/.default",
+                },
+                "model_info": {"id": "configured-deployment"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=_caused_by_an_entra_rejection(
+                litellm.AuthenticationError(
+                    message="Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
+                    llm_provider="azure",
+                    model="gpt-4.1",
+                )
+            ),
+            **caller_field,
+        )
+
+    response: Final = await router.acompletion(
+        model="entra-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+    )
+
+    assert response.choices[0].message.content == "hi"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
     ("deployment_secret", "router_default_secret"),
     [
         pytest.param({"client_secret": "configured-secret"}, None, id="deployment"),
