@@ -377,7 +377,9 @@ async def test_proxy_route_rejects_legacy_resource_subscription_before_setup(met
 
     from litellm.proxy.mcp_server import server
 
-    params = (SubscribeRequestParams if method == "subscribe_resource" else UnsubscribeRequestParams)(uri="test://value")
+    params = (SubscribeRequestParams if method == "subscribe_resource" else UnsubscribeRequestParams)(
+        uri="test://value"
+    )
     token = server._mcp_proxy_mode.set(True)
     try:
         with pytest.raises(MCPError, match="/mcp/proxy"):
@@ -506,17 +508,13 @@ async def test_all_failed_tools_listing_keeps_empty_catalog_digest(monkeypatch: 
 
     listener_context: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="listener"))
     empty_gateway: Final = _ListingGateway(result=ListToolsResult(tools=[]))
-    monkeypatch.setattr(
-        "litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway
-    )
+    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway)
     empty_digest: Final = await subscriptions._listing(ToolsListChanged(), listener_context)
 
     failed_gateway: Final = _ListingGateway(
         error=ToolListingFailedOutright(code=-32603, message="Every MCP server in scope failed")
     )
-    monkeypatch.setattr(
-        "litellm.proxy.mcp_server.operations.GatewayOperations", lambda: failed_gateway
-    )
+    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: failed_gateway)
     failed_digest: Final = await subscriptions._listing(ToolsListChanged(), listener_context)
 
     assert failed_digest == empty_digest
@@ -534,3 +532,92 @@ async def test_tools_listing_propagates_other_mcp_errors(monkeypatch: pytest.Mon
         await subscriptions._listing(ToolsListChanged(), listener_context)
 
     assert exc_info.value is failure
+
+
+@pytest.mark.asyncio
+async def test_upstream_targets_started_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from mcp.types import ServerCapabilities, ToolsCapability
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server import operations
+
+    caller: Final = UserAPIKeyAuth(api_key="concurrent-key", user_id="alice")
+    servers = [
+        MCPServer(
+            server_id=f"target-{i}",
+            name=f"target-{i}",
+            url=f"http://localhost/{i}",
+            transport="http",
+            protocol_version="2026-07-28",
+        )
+        for i in range(3)
+    ]
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        SimpleNamespace(enforce_mcp_server_rate_limits=AsyncMock()),
+    )
+
+    empty_gateway: Final = _ListingGateway(result=ListToolsResult(tools=[]))
+    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway)
+    monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {s.server_id: s for s in servers})
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=servers))
+
+    start_times: list[float] = []
+
+    def make_client(idx: int) -> Mock:
+        upstream = Mock()
+        upstream.server_capabilities = ServerCapabilities(tools=ToolsCapability(list_changed=True))
+        upstream.protocol_version = "2025-11-25"
+        upstream.send_ping = AsyncMock()
+
+        async def run_with_session(connected, **_: object) -> None:
+            start_times.append(time.monotonic())
+            await asyncio.sleep(0.25)
+            await connected(upstream)
+
+        client = Mock(spec=MCPClient)
+        client.run_with_session = AsyncMock(side_effect=run_with_session)
+        return client
+
+    targets = tuple(
+        subscriptions.SubscriptionTarget(s, make_client(i), f"fingerprint-{i}") for i, s in enumerate(servers)
+    )
+
+    async def resolve(_: OperationContext) -> tuple[subscriptions.SubscriptionTarget, ...]:
+        return targets
+
+    initial: Final = operations.prepare_context(user_api_key_auth=caller, mcp_servers=[s.server_id for s in servers])
+    authorize: Final = AsyncMock(return_value=initial)
+    session: Final = Mock(spec=ServerSession)
+    session.client_params = Mock()
+    session.send_notification = AsyncMock()
+
+    service: Final = subscriptions.GatewaySubscriptions(resolve_targets=resolve)
+    key: Final = id(session.client_params)
+    ready: Final = asyncio.Event()
+    service._initializing = {key: ready}
+
+    t0 = time.monotonic()
+    listener: Final = asyncio.create_task(
+        service.legacy_session(
+            context(session, "2025-11-25"),
+            subscriptions.SubscriptionAuthorization(initial, authorize, lambda *_: "alice"),
+        )
+    )
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=3.0)
+        elapsed = time.monotonic() - t0
+
+        assert len(start_times) == 3
+        # Concurrency verification:
+        # All 3 targets should start concurrently within 0.1s of each other.
+        max_start_diff = max(start_times) - min(start_times)
+        assert max_start_diff < 0.1, f"Expected starts within 0.1s, got {max_start_diff:.2f}s"
+        # Total initialization elapsed time should be bounded by single target latency (~0.25s), not 3 * 0.25s = 0.75s.
+        assert elapsed < 0.50, f"Expected concurrent startup (<0.50s), got {elapsed:.2f}s"
+    finally:
+        listener.cancel()
+        await asyncio.gather(listener, return_exceptions=True)
