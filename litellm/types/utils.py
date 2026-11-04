@@ -5253,6 +5253,27 @@ class ServiceTier(Enum):
     ULTRAFAST = "ultrafast"
 
 
+_CUSTOM_PRICE_VARIANT_SUFFIXES: Final = re.compile(
+    rf"^(?:_above_\d+k?_tokens|_batches|_(?:{'|'.join(tier.value for tier in ServiceTier)}))+$"
+)
+
+
+def is_price_variant_of(key: str, base_key: str) -> bool:
+    """Whether ``key`` is ``base_key`` at a token threshold, in a service tier or for batches
+    (``_above_200k_tokens``, ``_flex``, ``_batches`` and their combinations)."""
+    return key.startswith(base_key) and _CUSTOM_PRICE_VARIANT_SUFFIXES.fullmatch(key[len(base_key) :]) is not None
+
+
+def without_price_variants_of(entry: Mapping[str, object], priced: Mapping[str, object]) -> Mapping[str, object]:
+    """``entry`` without the threshold, tier and batch variants of each price ``priced`` sets, so a caller's rate for
+    a modality is its rate above every token threshold, in every service tier and for batches, unless the caller
+    priced that variant too."""
+    base_keys: Final = tuple(key for key, value in priced.items() if value is not None)
+    return MappingProxyType(
+        {key: value for key, value in entry.items() if not any(is_price_variant_of(key, base) for base in base_keys)}
+    )
+
+
 class DataResidency(Enum):
     """
     OpenAI data-residency / regional-processing regions.

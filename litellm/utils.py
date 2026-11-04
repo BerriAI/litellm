@@ -280,6 +280,7 @@ from litellm.types.utils import (
     Usage,
     credential_api_key_secret_reference,
     is_litellm_owned_kwarg,
+    without_price_variants_of,
 )
 from litellm.types.utils import (
     TextChoices as _TextChoices,
@@ -3878,7 +3879,7 @@ def _replace_cost_map_entry(
     cost_map: dict[str, Mapping[str, object]], key: str, entry: Mapping[str, object], registration: Mapping[str, object]
 ) -> None:
     current: Final = cost_map.get(key)
-    merged: Final = {**(current or {}), **entry}
+    merged: Final = {**without_price_variants_of(current or {}, registration), **entry}
     names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
     previous_fields: Final[frozenset[str]] = (
         current.registered_fields if isinstance(current, AliasedCostEntry) else frozenset()
@@ -4194,7 +4195,7 @@ def _registration_write(
     # custom pricing on subsequent cost lookups.
     existing_model: Final = {
         name: field_value
-        for name, field_value in base.entry.items()
+        for name, field_value in without_price_variants_of(base.entry, value).items()
         if name != "litellm_provider" or field_value is not None
     }
     return _RegistrationWrite(

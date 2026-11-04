@@ -7,7 +7,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
-from litellm.types.utils import CustomPricingLiteLLMParams, ModelInfo
+from litellm.types.utils import CustomPricingLiteLLMParams, ModelInfo, without_price_variants_of
 
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO: Final = TypeAdapter(ModelInfo)
@@ -61,7 +61,7 @@ def per_call_model_info(
     zeroed: Final = zeroed_ptu_pricing(deployment, custom) if deployment is not None else None
     return _MODEL_INFO.validate_python(
         {
-            **catalog,
+            **without_price_variants_of(catalog, custom),
             **_token_rates_cleared_for_per_second_overrides(custom),
             **custom,
             **_tiers_with_flat_overrides(catalog, custom),

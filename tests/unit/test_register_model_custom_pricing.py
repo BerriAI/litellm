@@ -1699,3 +1699,121 @@ def test_direct_call_flat_rate_applies_to_the_callers_own_tiers_not_the_catalogs
     finally:
         litellm.model_cost.pop(model_key, None)
         _invalidate_model_cost_lowercase_map()
+
+
+_AUDIO_TIER_CATALOG_KEY: Final = "openai/lit-audio-tier-catalog-model"
+_AUDIO_TIER_CATALOG_ROW: Final = {
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "input_cost_per_token": 3e-07,
+    "output_cost_per_token": 2.5e-06,
+    "input_cost_per_token_above_200k_tokens": 6e-07,
+    "input_cost_per_audio_token": 1e-06,
+    "input_cost_per_audio_token_above_200k_tokens": 3e-07,
+    "input_cost_per_audio_token_flex": 5e-07,
+}
+_CUSTOM_AUDIO_RATES: Final = {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "input_cost_per_audio_token": 1e-09,
+}
+_CUSTOM_TEXT_RATES: Final = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
+
+
+def _prompt_only_reply(prompt_tokens: int, audio_tokens: int) -> ModelResponse:
+    usage: Final = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=0,
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=audio_tokens, text_tokens=prompt_tokens - audio_tokens
+        ),
+    )
+    return ModelResponse(
+        model="lit-audio-tier-catalog-model", choices=[Choices(message=Message(content="hi"))], usage=usage
+    )
+
+
+def _cost_over_the_audio_tier_catalog_row(
+    custom_prices: Mapping[str, float], priced_by: str, reply: ModelResponse, service_tier: str | None
+) -> float:
+    """The response cost of one call to the catalog row, with ``custom_prices`` set either on the call itself or by
+    a ``register_model`` write onto the row."""
+    litellm.register_model({_AUDIO_TIER_CATALOG_KEY: dict(_AUDIO_TIER_CATALOG_ROW)}, persist_across_reloads=False)
+    try:
+        if priced_by == "register_model":
+            litellm.register_model({_AUDIO_TIER_CATALOG_KEY: dict(custom_prices)}, persist_across_reloads=False)
+        response: Final = litellm.completion(
+            model=_AUDIO_TIER_CATALOG_KEY,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            mock_response=reply,
+            service_tier=service_tier,
+            **(custom_prices if priced_by == "per_call" else {}),
+        )
+        return response._hidden_params["response_cost"]
+    finally:
+        litellm.model_cost.pop(_AUDIO_TIER_CATALOG_KEY, None)
+        _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize("priced_by", ["per_call", "register_model"])
+@pytest.mark.parametrize(
+    ("audio_tokens", "service_tier"),
+    [
+        pytest.param(100_000, None, id="under-the-threshold"),
+        pytest.param(250_000, None, id="above-the-threshold"),
+        pytest.param(1_000, "flex", id="flex-tier"),
+    ],
+)
+def test_a_custom_audio_rate_wins_over_the_catalogs_audio_threshold_and_tier_rates(
+    priced_by: str, audio_tokens: int, service_tier: str | None
+) -> None:
+    cost: Final = _cost_over_the_audio_tier_catalog_row(
+        _CUSTOM_AUDIO_RATES, priced_by, _prompt_only_reply(audio_tokens, audio_tokens), service_tier
+    )
+    assert cost == pytest.approx(audio_tokens * 1e-09)
+
+
+@pytest.mark.parametrize("priced_by", ["per_call", "register_model"])
+def test_a_custom_flat_rate_wins_over_the_catalogs_long_context_rate(priced_by: str) -> None:
+    cost: Final = _cost_over_the_audio_tier_catalog_row(
+        _CUSTOM_TEXT_RATES, priced_by, _prompt_only_reply(250_000, 0), None
+    )
+    assert cost == pytest.approx(250_000 * 1e-06)
+
+
+@pytest.mark.parametrize("priced_by", ["per_call", "register_model"])
+def test_without_a_custom_audio_rate_the_catalogs_audio_threshold_rate_still_applies(priced_by: str) -> None:
+    cost: Final = _cost_over_the_audio_tier_catalog_row(
+        _CUSTOM_TEXT_RATES, priced_by, _prompt_only_reply(250_000, 250_000), None
+    )
+    assert cost == pytest.approx(250_000 * 3e-07)
+
+
+@pytest.mark.parametrize("audio_tokens", [100_000, 250_000])
+def test_a_router_deployments_custom_audio_rate_wins_over_the_catalogs_audio_threshold_rate(audio_tokens: int) -> None:
+    from litellm import Router
+
+    deployment_id: Final = "lit-audio-tier-deployment"
+    litellm.register_model({_AUDIO_TIER_CATALOG_KEY: dict(_AUDIO_TIER_CATALOG_ROW)}, persist_across_reloads=False)
+    try:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "lit-audio-tiers",
+                    "litellm_params": {"model": _AUDIO_TIER_CATALOG_KEY, "api_key": "fake-key", **_CUSTOM_AUDIO_RATES},
+                    "model_info": {"id": deployment_id},
+                }
+            ]
+        )
+        response: Final = router.completion(
+            model="lit-audio-tiers",
+            messages=[{"role": "user", "content": "hello"}],
+            mock_response=_prompt_only_reply(audio_tokens, audio_tokens),
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(audio_tokens * 1e-09)
+    finally:
+        litellm.model_cost.pop(_AUDIO_TIER_CATALOG_KEY, None)
+        litellm.model_cost.pop(deployment_id, None)
+        _invalidate_model_cost_lowercase_map()
