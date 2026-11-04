@@ -16,7 +16,7 @@ from litellm.llms.anthropic.messages.utils import (
     json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
-from litellm.llms.bedrock.common_utils import is_bedrock_application_inference_profile_arn
+from litellm.llms.bedrock.common_utils import bedrock_capability_model, is_bedrock_application_inference_profile_arn
 from litellm.responses.utils import auto_reasoning_summary
 
 # OpenAI has a 64-character limit for function/tool names
@@ -256,7 +256,12 @@ class AnthropicAdapter:
         return result
 
     def translate_completion_input_params_with_tool_mapping(
-        self, kwargs, *, custom_llm_provider: str | None = None, drop_params: bool = True
+        self,
+        kwargs,
+        *,
+        custom_llm_provider: str | None = None,
+        drop_params: bool = True,
+        base_model: str | None = None,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
         Translate Anthropic request params to OpenAI format, returning tool name mapping.
@@ -291,6 +296,7 @@ class AnthropicAdapter:
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
             drop_params=drop_params,
+            base_model=base_model,
         )
 
         return translated_body, tool_name_mapping
@@ -369,8 +375,8 @@ _BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
 _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.value})
 UNRESOLVED_ARN_EFFORT_WITHOUT_THINKING_WARNING: Final = (
     "Dropping `output_config` for model=%s under drop_params: an application inference profile ARN does not name "
-    "its model, so LiteLLM cannot tell whether it takes an effort without a `thinking` block. Turn off drop_params "
-    "on the deployment to send it."
+    "its model, so LiteLLM cannot tell whether it takes an effort without a `thinking` block. Set `base_model` on "
+    "the deployment (for example `us.anthropic.claude-opus-4-8`) to send it."
 )
 
 
@@ -1210,6 +1216,7 @@ class LiteLLMAnthropicMessagesAdapter:
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
         drop_params: bool,
+        base_model: str | None,
     ) -> None:
         """Forward the effort-bearing part of ``output_config`` to a Bedrock Claude target.
 
@@ -1231,7 +1238,7 @@ class LiteLLMAnthropicMessagesAdapter:
         if (
             drop_params
             and not anthropic_message_request.get("thinking")
-            and is_bedrock_application_inference_profile_arn(model)
+            and is_bedrock_application_inference_profile_arn(bedrock_capability_model(model, base_model))
         ):
             litellm.verbose_logger.warning(UNRESOLVED_ARN_EFFORT_WITHOUT_THINKING_WARNING, model)
             return
@@ -1283,6 +1290,7 @@ class LiteLLMAnthropicMessagesAdapter:
         custom_llm_provider: str | None = None,
         preserve_midturn_system: bool = False,
         drop_params: bool = True,
+        base_model: str | None = None,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
@@ -1341,6 +1349,7 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
             drop_params=drop_params,
+            base_model=base_model,
         )
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(

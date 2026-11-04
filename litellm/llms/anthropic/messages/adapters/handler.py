@@ -646,6 +646,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data["output_config"] = extra_kwargs["output_config"]
 
         custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
+        base_model: Final = extra_kwargs.get("base_model")
         (
             openai_request,
             tool_name_mapping,
@@ -653,6 +654,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data,
             custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
             drop_params=drops_unsupported_params(extra_kwargs.get("drop_params")),
+            base_model=base_model if isinstance(base_model, str) else None,
         )
 
         if openai_request is None:

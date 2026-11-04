@@ -5560,17 +5560,19 @@ _APPLICATION_INFERENCE_PROFILE: Final = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("thinking", "drop_params", "forwards_effort"),
+    ("thinking", "drop_params", "base_model", "forwards_effort"),
     [
-        pytest.param(None, False, True, id="no_thinking"),
-        pytest.param(None, True, False, id="no_thinking_drop_params"),
-        pytest.param({"type": "enabled", "budget_tokens": 1024}, True, True, id="thinking_drop_params"),
+        pytest.param(None, False, None, True, id="no_thinking"),
+        pytest.param(None, True, None, False, id="no_thinking_drop_params"),
+        pytest.param({"type": "enabled", "budget_tokens": 1024}, True, None, True, id="thinking_drop_params"),
+        pytest.param(None, True, _CONVERSE_EFFORT_MODEL, True, id="no_thinking_drop_params_base_model"),
     ],
 )
-async def test_bedrock_application_inference_profile_loses_the_effort_only_without_thinking_under_drop_params(
+async def test_bedrock_application_inference_profile_loses_the_effort_only_when_unresolved_without_thinking(
     _converse_route: respx.Route,
     thinking: Mapping[str, object] | None,
     drop_params: bool,
+    base_model: str | None,
     forwards_effort: bool,
 ) -> None:
     await litellm.anthropic.messages.acreate(
@@ -5580,6 +5582,7 @@ async def test_bedrock_application_inference_profile_loses_the_effort_only_witho
         output_config={"effort": "high", "format": _CITY_FORMAT},
         drop_params=drop_params,
         **({"thinking": thinking} if thinking else {}),
+        **({"base_model": base_model} if base_model else {}),
     )
 
     sent: Final = _sent_converse_fields(_converse_route)
