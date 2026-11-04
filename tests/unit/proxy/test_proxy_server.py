@@ -2725,6 +2725,125 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_background_health_check_skips_recent_inference_models(monkeypatch):
+    import copy
+    import time
+    from typing import Final
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.health_endpoints.model_activity_tracker import (
+        record_model_activity,
+        reset_model_activity_tracker,
+    )
+
+    reset_model_activity_tracker()
+
+    test_model_list: Final = [
+        {
+            "model_name": "active-model",
+            "litellm_params": {"model": "openai/gpt-4"},
+            "model_info": {"id": "deploy-active"},
+        },
+        {
+            "model_name": "idle-model",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo"},
+            "model_info": {"id": "deploy-idle"},
+        },
+    ]
+    called_model_lists: Final = []
+
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None, **kwargs
+    ):
+        called_model_lists.append(copy.deepcopy(model_list))
+        return ([{"model": "openai/gpt-3.5-turbo", "model_id": "deploy-idle"}], [], {})
+
+    monkeypatch.setattr(proxy_server, "health_check_interval", 100)
+    monkeypatch.setattr(proxy_server, "health_check_details", None)
+    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list))
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    monkeypatch.setattr(proxy_server, "health_check_results", {})
+
+    record_model_activity(model_id="deploy-active", timestamp=time.time() - 5.0)
+
+    async def fake_sleep(sleep_interval):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    try:
+        await proxy_server._run_background_health_check()
+    except asyncio.CancelledError:
+        pass
+
+    assert len(called_model_lists) == 1
+    assert len(called_model_lists[0]) == 1
+    assert called_model_lists[0][0]["model_info"]["id"] == "deploy-idle"
+
+    healthy: Final = proxy_server.health_check_results.get("healthy_endpoints", [])
+    healthy_ids: Final = {ep.get("model_id") for ep in healthy}
+    assert healthy_ids == {"deploy-active", "deploy-idle"}
+    assert proxy_server.health_check_results.get("healthy_count") == 2
+    assert proxy_server.health_check_results.get("unhealthy_count") == 0
+
+    reset_model_activity_tracker()
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_probes_all_when_activity_outside_window(monkeypatch):
+    import copy
+    import time
+    from typing import Final
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.health_endpoints.model_activity_tracker import (
+        record_model_activity,
+        reset_model_activity_tracker,
+    )
+
+    reset_model_activity_tracker()
+
+    test_model_list: Final = [
+        {
+            "model_name": "model-stale",
+            "litellm_params": {"model": "openai/gpt-4"},
+            "model_info": {"id": "deploy-stale"},
+        },
+    ]
+    called_model_lists: Final = []
+
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None, **kwargs
+    ):
+        called_model_lists.append(copy.deepcopy(model_list))
+        return ([{"model": "openai/gpt-4", "model_id": "deploy-stale"}], [], {})
+
+    monkeypatch.setattr(proxy_server, "health_check_interval", 100)
+    monkeypatch.setattr(proxy_server, "health_check_details", None)
+    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list))
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    monkeypatch.setattr(proxy_server, "health_check_results", {})
+
+    record_model_activity(model_id="deploy-stale", timestamp=time.time() - 30.0)
+
+    async def fake_sleep(sleep_interval):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    try:
+        await proxy_server._run_background_health_check()
+    except asyncio.CancelledError:
+        pass
+
+    assert len(called_model_lists) == 1
+    assert len(called_model_lists[0]) == 1
+    assert called_model_lists[0][0]["model_info"]["id"] == "deploy-stale"
+
+    reset_model_activity_tracker()
+
+
+@pytest.mark.asyncio
 async def test_run_direct_health_check_with_instrumentation_legacy_three_arg_stub(
     monkeypatch,
 ):

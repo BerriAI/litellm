@@ -619,6 +619,7 @@ from litellm.proxy.guardrails.init_guardrails import (
     initialize_guardrails,
 )
 from litellm.proxy.health_check import (
+    clean_endpoint_data,
     filter_deployments_to_model_groups,
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
@@ -626,6 +627,9 @@ from litellm.proxy.health_check import (
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
+from litellm.proxy.health_endpoints.model_activity_tracker import (
+    should_skip_model_health_probe,
+)
 from litellm.proxy.hooks.model_max_budget_limiter import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_VirtualKeyModelMaxBudgetLimiter,
     _PROXY_VirtualKeyModelMaxBudgetLimiter,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -4826,6 +4830,21 @@ async def _adaptive_router_flusher_loop():
             verbose_proxy_logger.exception("adaptive_router flusher iteration failed")
 
 
+def _synthesize_skipped_healthy_endpoint(
+    model: Mapping[str, object], details: bool
+) -> dict[str, object]:  # mutable-ok: returns endpoint dict
+    litellm_params_raw: Final = model.get("litellm_params")
+    litellm_params: Final = litellm_params_raw if isinstance(litellm_params_raw, Mapping) else {}
+    cleaned: Final = clean_endpoint_data(litellm_params, details)
+    model_info_raw: Final = model.get("model_info")
+    model_info: Final = model_info_raw if isinstance(model_info_raw, Mapping) else None
+    model_id: Final = model_info.get("id") if model_info is not None else None
+    if model_id:
+        cleaned["model_id"] = model_id
+    cleaned["health_probe_skipped"] = True
+    return cleaned
+
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
@@ -4894,15 +4913,29 @@ async def _run_background_health_check():
                 sorted(scoped_model_groups),
             )
         model_count_enabled = len(_llm_model_list)
-        expected_peak_in_flight = model_count_enabled
-        if isinstance(health_check_concurrency, int) and health_check_concurrency > 0 and model_count_enabled > 0:
-            expected_peak_in_flight = min(model_count_enabled, health_check_concurrency)
+        models_to_probe = [
+            m for m in _llm_model_list if not should_skip_model_health_probe(m, health_check_interval)
+        ]
+        skipped_models = [
+            m for m in _llm_model_list if should_skip_model_health_probe(m, health_check_interval)
+        ]
+        if skipped_models:
+            verbose_proxy_logger.debug(
+                "background_health_check_cycle_skipped_active_models cycle_id=%s skipped_count=%d",
+                cycle_id,
+                len(skipped_models),
+            )
+        model_count_probed = len(models_to_probe)
+        expected_peak_in_flight = model_count_probed
+        if isinstance(health_check_concurrency, int) and health_check_concurrency > 0 and model_count_probed > 0:
+            expected_peak_in_flight = min(model_count_probed, health_check_concurrency)
 
         verbose_proxy_logger.debug(
-            "background_health_check_cycle_start cycle_id=%s model_count_total=%d model_count_enabled=%d interval_seconds=%s max_concurrency=%s expected_peak_in_flight=%d shared=%s thread_count=%d rss_mb=%s",
+            "background_health_check_cycle_start cycle_id=%s model_count_total=%d model_count_enabled=%d model_count_probed=%d interval_seconds=%s max_concurrency=%s expected_peak_in_flight=%d shared=%s thread_count=%d rss_mb=%s",
             cycle_id,
             model_count_total,
             model_count_enabled,
+            model_count_probed,
             health_check_interval,
             health_check_concurrency,
             expected_peak_in_flight,
@@ -4922,50 +4955,62 @@ async def _run_background_health_check():
         details_bool = health_check_details if health_check_details is not None else True
         _hc_filter = health_check_filter_kwargs_from_general_settings(general_settings)
 
-        if shared_health_manager is not None:
-            try:
-                (
-                    healthy_endpoints,
-                    unhealthy_endpoints,
-                    _exceptions_by_model_id,
-                ) = await shared_health_manager.perform_shared_health_check(
-                    model_list=_llm_model_list,
-                    details=details_bool,
-                    max_concurrency=health_check_concurrency,
-                    router=llm_router,
-                    **_hc_filter,
-                )
-            except Exception as e:
-                verbose_proxy_logger.error(
-                    "Error in shared health check, falling back to direct health check: %s",
-                    str(e),
-                )
+        skipped_healthy_endpoints = [
+            _synthesize_skipped_healthy_endpoint(m, details_bool)
+            for m in skipped_models
+        ]
+
+        if models_to_probe:
+            if shared_health_manager is not None:
+                try:
+                    (
+                        healthy_endpoints,
+                        unhealthy_endpoints,
+                        _exceptions_by_model_id,
+                    ) = await shared_health_manager.perform_shared_health_check(
+                        model_list=models_to_probe,
+                        details=details_bool,
+                        max_concurrency=health_check_concurrency,
+                        router=llm_router,
+                        **_hc_filter,
+                    )
+                except Exception as e:  # noqa: BLE001  # fallback to direct health check if shared check fails
+                    verbose_proxy_logger.error(
+                        "Error in shared health check, falling back to direct health check: %s",
+                        str(e),
+                    )
+                    (
+                        healthy_endpoints,
+                        unhealthy_endpoints,
+                        _exceptions_by_model_id,
+                    ) = await _run_direct_health_check_with_instrumentation(
+                        models_to_probe,
+                        details_bool,
+                        health_check_concurrency,
+                        instrumentation_context,
+                    )
+            else:
                 (
                     healthy_endpoints,
                     unhealthy_endpoints,
                     _exceptions_by_model_id,
                 ) = await _run_direct_health_check_with_instrumentation(
-                    _llm_model_list,
+                    models_to_probe,
                     details_bool,
                     health_check_concurrency,
                     instrumentation_context,
                 )
         else:
-            (
-                healthy_endpoints,
-                unhealthy_endpoints,
-                _exceptions_by_model_id,
-            ) = await _run_direct_health_check_with_instrumentation(
-                _llm_model_list,
-                details_bool,
-                health_check_concurrency,
-                instrumentation_context,
-            )
+            healthy_endpoints = []
+            unhealthy_endpoints = []
+            _exceptions_by_model_id = {}
+
+        all_healthy_endpoints = healthy_endpoints + skipped_healthy_endpoints
 
         # Update the global variable with the health check results
-        health_check_results["healthy_endpoints"] = healthy_endpoints
+        health_check_results["healthy_endpoints"] = all_healthy_endpoints
         health_check_results["unhealthy_endpoints"] = unhealthy_endpoints
-        health_check_results["healthy_count"] = len(healthy_endpoints)
+        health_check_results["healthy_count"] = len(all_healthy_endpoints)
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
         cycle_duration_ms = (time.monotonic() - cycle_start_time) * 1000
         verbose_proxy_logger.debug(
@@ -4992,14 +5037,14 @@ async def _run_background_health_check():
             prisma_client,
             shared_health_manager,
             _llm_model_list,
-            healthy_endpoints,
+            all_healthy_endpoints,
             unhealthy_endpoints,
             pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             lock_ttl=health_check_interval,
         )
 
         # Write health state to router cache for health-check-driven routing
-        _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints, _exceptions_by_model_id)
+        _write_health_state_to_router_cache(all_healthy_endpoints, unhealthy_endpoints, _exceptions_by_model_id)
 
         await asyncio.sleep(health_check_interval)
 

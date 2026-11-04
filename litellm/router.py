@@ -8956,6 +8956,15 @@ class Router:
                 litellm_router_instance=self,
                 deployment_id=str(deployment_id),
             )
+            from litellm.proxy.health_endpoints.model_activity_tracker import (
+                record_model_activity,
+            )
+
+            record_model_activity(
+                model_id=str(deployment_id),
+                model_name=str(model_group) if model_group is not None else None,
+                litellm_model=str(litellm_params.get("model")) if litellm_params.get("model") is not None else None,
+            )
 
             total_tokens: Final[float] = standard_logging_object.get("total_tokens", 0)
             counted_tokens: Final = get_counted_usage_tokens(litellm_params)
@@ -9102,6 +9111,17 @@ class Router:
             key: Final = increment_deployment_successes_for_current_minute(
                 litellm_router_instance=self,
                 deployment_id=id,
+            )
+            from litellm.proxy.health_endpoints.model_activity_tracker import (
+                record_model_activity,
+            )
+
+            metadata_raw: Final = kwargs["litellm_params"].get("metadata")
+            metadata_map: Final = metadata_raw if isinstance(metadata_raw, Mapping) else {}
+            group_val: Final = metadata_map.get("model_group")
+            record_model_activity(
+                model_id=str(id),
+                model_name=str(group_val) if group_val is not None else None,
             )
             return key
 

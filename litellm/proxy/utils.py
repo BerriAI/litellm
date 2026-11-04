@@ -3648,6 +3648,19 @@ class ProxyLogging:
         from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
 
+        model_info_raw: Final = data.get("model_info")
+        model_info_map: Final = model_info_raw if isinstance(model_info_raw, Mapping) else None
+        model_id_val: Final = model_info_map.get("id") if model_info_map is not None else None
+        model_name_val: Final = data.get("model")
+        from litellm.proxy.health_endpoints.model_activity_tracker import (
+            record_model_activity,
+        )
+
+        record_model_activity(
+            model_id=str(model_id_val) if model_id_val is not None else None,
+            model_name=str(model_name_val) if model_name_val is not None else None,
+        )
+
         pipeline_response: Final = await self._run_post_call_pipelines(
             data=data,
             user_api_key_dict=user_api_key_dict,
