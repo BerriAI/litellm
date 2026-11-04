@@ -1,0 +1,24 @@
+{
+  "name": "500k to 1M token bodies at rising rates: request parsing CPU, memory and bandwidth",
+  "stages": [
+    {"duration_s": 300, "rps": 0.5},
+    {"duration_s": 300, "rps": 1},
+    {"duration_s": 300, "rps": 2},
+    {"duration_s": 300, "rps": 4},
+    {"duration_s": 300, "rps": 8}
+  ],
+  "nonstream_max_s": 360,
+  "warmup_s": 30,
+  "keys": {"file": "out/keys.txt", "zipf_s": 0},
+  "models": {"chat": {"prefix": "gpt-6-astra-", "count": 10}, "messages": {"prefix": "claude-opus-5-5-", "count": 10}},
+  "classes": [
+    {"name": "huge-messages", "weight": 1, "endpoint": "messages", "stream_fraction": 0.5,
+     "context_tokens": {"dist": "uniform", "min": 500000, "max": 1000000},
+     "ttft_ms": {"dist": "uniform", "min": 1000, "max": 3000},
+     "duration_s": {"dist": "uniform", "min": 5, "max": 60}},
+    {"name": "huge-chat", "weight": 1, "endpoint": "chat", "stream_fraction": 0.5,
+     "context_tokens": {"dist": "uniform", "min": 500000, "max": 900000},
+     "ttft_ms": {"dist": "uniform", "min": 1000, "max": 3000},
+     "duration_s": {"dist": "uniform", "min": 5, "max": 60}}
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "thousands of concurrent 10 to 30 minute streams (2 rps x about 20 min = about 2,400 open streams)",
+  "stages": [{"duration_s": 3600, "rps": 2}],
+  "nonstream_max_s": 360,
+  "warmup_s": 0,
+  "keys": {"file": "out/keys.txt", "zipf_s": 0},
+  "models": {"chat": {"prefix": "gpt-6-astra-", "count": 10}, "messages": {"prefix": "claude-opus-5-5-", "count": 10}},
+  "classes": [
+    {"name": "long-stream-messages", "weight": 1, "endpoint": "messages", "stream_fraction": 1,
+     "context_tokens": {"dist": "loguniform", "min": 10000, "max": 200000},
+     "ttft_ms": {"dist": "uniform", "min": 1000, "max": 5000},
+     "duration_s": {"dist": "uniform", "min": 600, "max": 1800}, "output_tokens_per_s": 30},
+    {"name": "long-stream-chat", "weight": 1, "endpoint": "chat", "stream_fraction": 1,
+     "context_tokens": {"dist": "loguniform", "min": 10000, "max": 200000},
+     "ttft_ms": {"dist": "uniform", "min": 1000, "max": 5000},
+     "duration_s": {"dist": "uniform", "min": 600, "max": 1800}, "output_tokens_per_s": 30}
+  ]
+}
