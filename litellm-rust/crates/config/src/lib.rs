@@ -15,8 +15,8 @@ pub use litellm_router_types::{LitellmParams, Spelled};
 pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::Model;
 pub use redis::{
-    AwsIamAuth, AzureAdAuth, CacheSettings, Expected, RedisAuth, RedisError, RedisSettings,
-    ResolvedRedis, SecretSnapshot, environment_has_target,
+    CacheSettings, ConfiguredRedis, Expected, RedisError, RedisSettings, Resolution,
+    SecretSnapshot, environment_has_target,
 };
 pub use settings::{
     ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, RouterSettings, TracingSettings,

@@ -1,52 +1,22 @@
-use litellm_secret_value::SecretValue;
+use litellm_core_utils::settings::Lookup;
+use litellm_redis_types::{AwsIamAuth, AzureAdAuth, RedisAuth};
 
 use super::{
-    Kwargs, Lookup, RedisError, bool_value, is_set, secret_value, text_or_fallback, text_value,
+    RedisError,
+    options::{self, AwsOptions, Options, flag, secret, text},
 };
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum RedisAuth {
-    Static {
-        username: Option<SecretValue>,
-        password: Option<SecretValue>,
-    },
-    Host,
-    GcpIam {
-        service_account: String,
-    },
-    AzureAd(AzureAdAuth),
-    AwsIam(AwsIamAuth),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct AzureAdAuth {
-    pub client_id: Option<String>,
-    pub tenant_id: Option<String>,
-    pub client_secret: Option<SecretValue>,
-    pub username: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct AwsIamAuth {
-    pub user_name: String,
-    pub cache_name: String,
-    pub region: String,
-    pub serverless: bool,
-}
-
 pub(super) fn redis_auth(
-    merged: &Kwargs,
-    lookup: &dyn Lookup,
+    options: &Options,
     environment: &dyn Lookup,
-    uses_tls: bool,
 ) -> Result<RedisAuth, RedisError> {
-    if is_set(merged, "credential_provider") {
+    if options.credential_provider.is_some() {
         return Ok(RedisAuth::Host);
     }
-    let gcp = text_or_fallback(merged, "gcp_service_account", lookup);
-    let azure = text_or_fallback(merged, "azure_redis_ad_token", lookup)
+    let gcp = text(options.gcp.service_account.as_ref());
+    let azure = text(options.azure.ad_token.as_ref())
         .is_some_and(|enabled| enabled.eq_ignore_ascii_case("true"));
-    let aws = bool_value(merged, "aws_iam_auth");
+    let aws = flag(options.aws.auth.as_ref())?;
     match (gcp, azure, aws) {
         (Some(service_account), azure, aws) => {
             if azure {
@@ -68,37 +38,46 @@ pub(super) fn redis_auth(
                 );
             }
             Ok(RedisAuth::AzureAd(AzureAdAuth {
-                client_id: text_or_fallback(merged, "azure_client_id", lookup),
-                tenant_id: text_or_fallback(merged, "azure_tenant_id", lookup),
-                client_secret: text_or_fallback(merged, "azure_client_secret", lookup)
-                    .map(SecretValue::new),
+                client_id: text(options.azure.client_id.as_ref()),
+                tenant_id: text(options.azure.tenant_id.as_ref()),
+                client_secret: secret(options.azure.client_secret.as_ref()),
                 username: environment
                     .get("REDIS_USERNAME")
                     .filter(|username| !username.is_empty()),
             }))
         }
-        (None, false, true) => aws_iam(merged, lookup, uses_tls).map(RedisAuth::AwsIam),
+        (None, false, true) => aws_iam(&options.aws, uses_tls(options)?).map(RedisAuth::AwsIam),
         (None, false, false) => Ok(RedisAuth::Static {
-            username: secret_value(merged, "username"),
-            password: secret_value(merged, "password"),
+            username: secret(options.username.as_ref()),
+            password: secret(options.password.as_ref()),
         }),
     }
 }
 
-fn aws_iam(merged: &Kwargs, lookup: &dyn Lookup, uses_tls: bool) -> Result<AwsIamAuth, RedisError> {
+// _uses_tls: a url's scheme decides unless cluster nodes are set, otherwise the ssl kwarg does
+fn uses_tls(options: &Options) -> Result<bool, RedisError> {
+    match (&options.startup_nodes, text(options.url.as_ref())) {
+        (None, Some(url)) => Ok(url
+            .split_once("://")
+            .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("rediss"))),
+        _ => flag(options.ssl.as_ref()),
+    }
+}
+
+fn aws_iam(aws: &AwsOptions, uses_tls: bool) -> Result<AwsIamAuth, RedisError> {
     if !uses_tls {
         return Err(RedisError::AwsIamWithoutTls);
     }
-    let user_name = present(merged, "aws_iam_user_name");
-    let cache_name = present(merged, "aws_iam_cache_name");
-    let region =
-        text_or_fallback(merged, "aws_iam_region", lookup).filter(|region| !region.is_empty());
-    match (user_name, cache_name, region) {
+    match (
+        text(aws.user_name.as_ref()),
+        text(aws.cache_name.as_ref()),
+        text(aws.region.as_ref()),
+    ) {
         (Some(user_name), Some(cache_name), Some(region)) => Ok(AwsIamAuth {
             user_name,
             cache_name,
             region,
-            serverless: bool_value(merged, "aws_iam_serverless"),
+            serverless: options::flag(aws.serverless.as_ref())?,
         }),
         (user_name, cache_name, region) => Err(RedisError::AwsIamIncomplete {
             missing: [
@@ -111,8 +90,4 @@ fn aws_iam(merged: &Kwargs, lookup: &dyn Lookup, uses_tls: bool) -> Result<AwsIa
             .collect(),
         }),
     }
-}
-
-fn present(merged: &Kwargs, key: &str) -> Option<String> {
-    text_value(merged, key).filter(|value| !value.is_empty())
 }

@@ -3667,7 +3667,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tracing",
- "tracing-subscriber",
  "url",
  "veil",
 ]
@@ -3784,6 +3783,7 @@ dependencies = [
  "litellm-redis-client",
  "litellm-redis-connect",
  "litellm-redis-testing",
+ "litellm-redis-types",
  "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
@@ -4391,6 +4391,7 @@ dependencies = [
  "litellm-config",
  "litellm-redis-client",
  "litellm-redis-testing",
+ "litellm-redis-types",
  "rstest",
  "rustls 0.23.42",
  "serde_json",

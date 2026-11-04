@@ -1,5 +1,8 @@
 use litellm_core_utils::settings::Lookup;
 
+use super::layers::Entry;
+use crate::Value;
+
 // Every Redis setting litellm/_redis.py reads, with how Rust handles it and where else Python looks for it.
 // environment marks the kwargs _get_redis_env_kwarg_mapping reads as REDIS_<KWARG>, and fallback lists the names
 // _get_redis_client_logic consults with get_secret when the merged kwargs lack the setting
@@ -164,18 +167,15 @@ pub(super) fn setting(kwarg: &str) -> Option<&'static Setting> {
     SETTINGS.iter().find(|setting| setting.kwarg == kwarg)
 }
 
-pub(super) fn fallback(kwarg: &str, lookup: &dyn Lookup) -> Option<(&'static str, String)> {
+pub(super) fn fallback(kwarg: &str, lookup: &dyn Lookup) -> Option<Entry> {
     let names = setting(kwarg).map_or(&[][..], |setting| setting.fallback);
-    let values: Vec<(&'static str, Option<String>)> =
-        names.iter().map(|name| (*name, lookup.get(name))).collect();
-    // Python chains these with `or`, so the first non-empty value wins and an empty one only when it is last
-    values
-        .iter()
-        .find(|(_, value)| value.as_deref().is_some_and(|value| !value.is_empty()))
-        .or(values.last())
-        .and_then(|(name, value)| Some((*name, value.clone()?)))
-}
-
-pub(super) fn fallback_value(kwarg: &str, lookup: &dyn Lookup) -> Option<String> {
-    fallback(kwarg, lookup).map(|(_, value)| value)
+    names.iter().find_map(|name| {
+        lookup
+            .get(name)
+            .filter(|value| !value.is_empty())
+            .map(|value| Entry {
+                value: Value::String(value),
+                source: (*name).to_owned(),
+            })
+    })
 }

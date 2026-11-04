@@ -24,6 +24,7 @@ litellm-error.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
 litellm-redis-connect.workspace = true
+litellm-redis-types.workspace = true
 rustls.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true

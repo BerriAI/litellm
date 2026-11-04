@@ -2,11 +2,12 @@ use std::time::Duration;
 
 use litellm_circuit_breaker::{Breaker, Config as BreakerConfig, State};
 use litellm_config::{
-    CacheSettings, Config, Expected, RedisError, RedisSettings, ResolvedRedis, SecretSnapshot,
-    Value, environment_has_target,
+    CacheSettings, Config, ConfiguredRedis, Expected, RedisError, RedisSettings, Resolution,
+    SecretSnapshot, Value, environment_has_target,
 };
 use litellm_core_utils::settings::Lookup;
 use litellm_redis_client::RedisClient;
+use litellm_redis_types::ResolvedRedis;
 
 use crate::Error;
 
@@ -34,15 +35,13 @@ enum Target {
 
 pub(crate) fn plan(config: &Config, lookup: &dyn Lookup) -> Result<Plan, Error> {
     let response_cache = redis_cache_params(config)
-        .map(|settings| settings.resolve_cache(&snapshot(settings, lookup), lookup))
+        .map(|settings| resolve(&settings.cache_params(), lookup))
         .transpose()?;
     let coordination = match &config.general_settings.coordination_redis {
-        Some(settings) => {
-            settings.validate_coordination()?;
-            Some(Target::Configured(
-                settings.resolve(&snapshot(settings, lookup), lookup)?,
-            ))
-        }
+        Some(settings) => Some(Target::Configured(resolve(
+            &settings.coordination()?,
+            lookup,
+        )?)),
         None => match (&response_cache, config.litellm_settings.cache == Some(true)) {
             (Some(cache), _) => Some(Target::Configured(cache.clone())),
             (None, true) => environment(lookup)?.map(Target::Configured),
@@ -107,16 +106,18 @@ fn redis_cache_params(config: &Config) -> Option<&RedisSettings> {
     }
 }
 
-fn snapshot(settings: &RedisSettings, lookup: &dyn Lookup) -> SecretSnapshot {
-    SecretSnapshot::read(settings.secret_names(), lookup)
+fn resolve(configured: &ConfiguredRedis, lookup: &dyn Lookup) -> Result<Params, RedisError> {
+    let secrets = SecretSnapshot::read(configured.secret_names(), lookup);
+    let Resolution { redis, ignored } = configured.resolve(&secrets, lookup)?;
+    for setting in ignored {
+        tracing::warn!(%setting, "Redis setting is accepted but ignored");
+    }
+    Ok(redis)
 }
 
 fn environment(lookup: &dyn Lookup) -> Result<Option<Params>, Error> {
     match environment_has_target(lookup) {
-        true => RedisSettings::default()
-            .resolve(&snapshot(&RedisSettings::default(), lookup), lookup)
-            .map(Some)
-            .map_err(Into::into),
+        true => Ok(Some(resolve(&ConfiguredRedis::environment_only(), lookup)?)),
         false => Ok(None),
     }
 }
@@ -239,9 +240,10 @@ fn environment_value<T>(
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use litellm_config::{Config, RedisAuth, RedisError};
+    use litellm_config::{Config, RedisError};
     use litellm_redis_client::{Endpoint, HostEndpoint};
     use litellm_redis_testing::RedisServer;
+    use litellm_redis_types::RedisAuth;
     use rstest::rstest;
 
     use super::{Params, Plan, Target, connect, plan};

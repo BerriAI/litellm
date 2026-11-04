@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use litellm_core_utils::settings::Lookup;
 use litellm_secret_value::SecretValue;
 
-use super::{RedisSettings, Value, keys::SETTINGS};
+use super::{ConfiguredRedis, Value, keys::SETTINGS};
 
 #[derive(Clone, Debug, Default)]
 pub struct SecretSnapshot(BTreeMap<String, Option<SecretValue>>);
@@ -31,7 +31,10 @@ impl Lookup for SecretSnapshot {
         match self.0.get(name) {
             Some(value) => value.as_ref().map(|value| value.expose().to_owned()),
             None => {
-                debug_assert!(false, "{name} is missing from RedisSettings::secret_names");
+                debug_assert!(
+                    false,
+                    "{name} is missing from ConfiguredRedis::secret_names"
+                );
                 tracing::error!(
                     name,
                     "a Redis secret was read without being in the snapshot"
@@ -42,15 +45,12 @@ impl Lookup for SecretSnapshot {
     }
 }
 
-impl RedisSettings {
+impl ConfiguredRedis {
     pub fn secret_names(&self) -> BTreeSet<String> {
-        let references = self
-            .kwargs(false)
-            .into_values()
-            .filter_map(|entry| match entry.value {
-                Value::String(text) => text.strip_prefix("os.environ/").map(str::to_owned),
-                _ => None,
-            });
+        let references = self.fields.values().filter_map(|value| match value {
+            Value::String(text) => text.strip_prefix("os.environ/").map(str::to_owned),
+            _ => None,
+        });
         let declared = SETTINGS.iter().flat_map(|setting| {
             setting
                 .environment_name()

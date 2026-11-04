@@ -1,8 +1,8 @@
 use litellm_circuit_breaker::Breaker;
-use litellm_config::{RedisAuth, ResolvedRedis};
 use litellm_redis_client::{
     Credentials, DEFAULT_TIMEOUT, Namespace, RedisClient, RedisConfig, Timeouts,
 };
+use litellm_redis_types::{RedisAuth, ResolvedRedis};
 
 use crate::Error;
 

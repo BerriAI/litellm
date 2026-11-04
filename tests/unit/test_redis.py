@@ -2126,6 +2126,23 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
             id="plaintext_ignores_tls_requirements",
         ),
         pytest.param(
+            {"host": "redis", "ssl": "on"},
+            {},
+            _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
+            id="an_ambiguous_flag_is_refused",
+        ),
+        pytest.param(
+            {"sentinel_nodes": [], "service_name": "primary"},
+            {},
+            {
+                "rejected": {
+                    "message": "Both 'sentinel_nodes' and 'service_name' are required for Redis Sentinel.",
+                    "type": "ValueError",
+                }
+            },
+            id="empty_sentinel_nodes_without_the_environment_name_no_target",
+        ),
+        pytest.param(
             {"host": "redis", "ssl": True, "ssl_ca_path": "/ca"},
             {},
             {
