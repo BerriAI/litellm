@@ -965,8 +965,6 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         self,
         aws_role_name: str,
         ssl_verify: bool | str | None = None,
-        aws_region_name: str | None = None,
-        aws_sts_endpoint: str | None = None,
     ) -> bool:
         """
         Check if the current environment is already running as the target IAM role.
@@ -1000,14 +998,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             import boto3
 
             with tracer.trace("boto3.client(sts).get_caller_identity"):
-                sts_client: Final = boto3.client(
-                    "sts",
-                    **self._build_sts_client_kwargs(
-                        aws_sts_endpoint=aws_sts_endpoint,
-                        ssl_verify=ssl_verify,
-                        aws_region_name=aws_region_name,
-                    ),
-                )
+                sts_client: Final = boto3.client("sts", verify=self._get_ssl_verify(ssl_verify))
                 identity: Final = sts_client.get_caller_identity()
                 caller_arn: Final = identity.get("Arn", "")
 
@@ -1298,12 +1289,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         caller's key skips both. ``aws_session_name`` defaults inside this fetcher rather than in
         ``get_credentials`` so the cache key stays stable when the caller does not supply one.
         """
-        if self._is_already_running_as_role(
-            aws_role_name,
-            ssl_verify=ssl_verify,
-            aws_region_name=aws_region_name,
-            aws_sts_endpoint=aws_sts_endpoint,
-        ):
+        if self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
             verbose_logger.debug(
                 "Already running as target role %s, using ambient credentials",
                 aws_role_name,
@@ -1429,12 +1415,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 # partition, and role name).  This avoids silently using the
                 # wrong identity when there is a genuine trust-policy or
                 # permission misconfiguration.
-                if self._is_already_running_as_role(
-                    aws_role_name,
-                    ssl_verify=ssl_verify,
-                    aws_region_name=aws_region_name,
-                    aws_sts_endpoint=aws_sts_endpoint,
-                ):
+                if self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
                     verbose_logger.warning(
                         "AssumeRole failed for %s (%s). "
                         "Caller is already running as this role; "

@@ -55,6 +55,7 @@ from litellm.constants import (
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
     bug_report_notice,
@@ -134,6 +135,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
     endpoint_unsupported_by_model,
@@ -1906,6 +1908,13 @@ def _response_cost_header_value(hidden_params: Mapping[str, object]) -> float | 
 def cost_headers(
     response_cost: float | str | None, litellm_logging_obj: LiteLLMLoggingObj | None
 ) -> Mapping[str, str | None]:
+    if (
+        response_cost == 0
+        and litellm_logging_obj is not None
+        and litellm_logging_obj.prepared_cost is not None
+        and not litellm_logging_obj.prepared_cost.price_known
+    ):
+        return {}
     cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
         litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
     )
@@ -4401,6 +4410,7 @@ class ProxyBaseLLMRequestProcessing:
         )
         log_llm_api_exception(answered, self.litellm_call_id)
         billing_logging_obj: Final = _REQUEST_FIELDS.validate_python(self.data).get("litellm_logging_obj")
+        failed_in_agentic_follow_up: Final = is_agentic_followup_failure(e)
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -4436,7 +4446,9 @@ class ProxyBaseLLMRequestProcessing:
             model_id=model_id,
             version=version,
             response_cost=(
-                _litellm_logging_obj.finalized_cost.amount
+                failure_row_response_cost(self.data)
+                if failed_in_agentic_follow_up
+                else _litellm_logging_obj.finalized_cost.amount
                 if isinstance(_litellm_logging_obj, LiteLLMLoggingObj)
                 and _litellm_logging_obj.finalized_cost is not None
                 else 0
