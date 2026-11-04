@@ -8417,7 +8417,7 @@ async def enqueue_spend_logs(
     """
     added: Final = sum(spend_log_row_bytes(row) for row in logs)
     async with prisma_client._spend_log_transactions_lock:
-        queued: Final = (
+        queued: Final[tuple[Mapping[str, object], ...]] = (
             tuple(logs) + tuple(prisma_client.spend_log_transactions)
             if at_head
             else tuple(prisma_client.spend_log_transactions) + tuple(logs)
