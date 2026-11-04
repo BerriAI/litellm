@@ -1528,6 +1528,33 @@ def test_custom_provider_map_lookups_take_the_last_entry_for_a_duplicated_provid
     assert ProviderConfigManager.get_custom_provider_video_config("dup") is last_video
 
 
+def test_completion_on_a_duplicated_custom_provider_reaches_the_last_registered_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Appending a second entry with an existing provider name to `custom_provider_map` is how a handler is swapped
+    at runtime, so a chat call on that provider must run the later handler."""
+    from litellm.llms.custom_llm import CustomLLM
+
+    class ReplacementLLM(CustomLLM):
+        def completion(self, *args: object, **kwargs: object) -> ModelResponse:
+            return ModelResponse(choices=[{"message": {"role": "assistant", "content": "from the replacement"}}])
+
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [
+            {"provider": "swapped-llm", "custom_handler": CustomLLM()},
+            {"provider": "swapped-llm", "custom_handler": ReplacementLLM()},
+        ],
+    )
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", [])
+
+    response: Final = litellm.completion(model="swapped-llm/any", messages=[{"role": "user", "content": "hi"}])
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "from the replacement"
+
+
 def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
     """Regression for LIT-6501: mapping vertex Gemini TTS params through Google Cloud TTS
     dropped response_format before the speech_to_completion bridge could honor it."""
