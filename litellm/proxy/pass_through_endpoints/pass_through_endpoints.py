@@ -2313,6 +2313,7 @@ def create_pass_through_route(
     cost_per_request: float | None = None,
     custom_llm_provider: str | None = None,
     is_streaming_request: bool | None = False,
+    answers_as_anthropic: bool = False,
     query_params: dict | None = None,
     default_query_params: dict | None = None,
     guardrails: dict[str, object] | None = None,
@@ -2484,6 +2485,7 @@ def create_pass_through_route(
             return await open_sse_before_first_byte(
                 _relay(),
                 ping_interval_seconds=(litellm.sse_keepalive_ping_interval_seconds if is_stream else None),
+                answers_as_anthropic=answers_as_anthropic,
             )
 
     setattr(endpoint_func, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
