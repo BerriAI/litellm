@@ -365,6 +365,86 @@ async def test_denied_native_request_never_reaches_provider(
     assert upstream.call_count == 0
 
 
+CLAUDE_PLATFORM_PARAMS: Final = {
+    "model": "bedrock/claude_platform/claude-sonnet-4-6",
+    "api_key": "test-provider-key",
+    "api_base": "https://native-provider.example/v1/messages",
+    "workspace_id": "wrkspc_test",
+    "aws_region_name": "us-west-2",
+}
+CLAUDE_PLATFORM_REPLY: Final = {
+    "id": "msg_native",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-6",
+    "content": [{"type": "text", "text": "done"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("routed", [False, True])
+async def test_claude_platform_chat_with_ungranted_provider_tools_never_reaches_bedrock(
+    native_auth: UserAPIKeyAuth, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, stream: bool, routed: bool
+) -> None:
+    """Claude Platform on Bedrock runs MCP servers named in a chat request, so chat must be checked
+    like the Anthropic provider, both before dispatch (routed) and on the final body (direct)."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(url__regex=r"https://native-provider.example/.*").respond(
+        200, json=CLAUDE_PLATFORM_REPLY
+    )
+    request: Final = {
+        "messages": [{"role": "user", "content": "Use the tool"}],
+        "max_tokens": 32,
+        "stream": stream,
+        "metadata": {"user_api_key_auth": native_auth},
+        **_openai(["delete"]),
+    }
+    call: Final = (
+        litellm.Router(
+            model_list=[{"model_name": "platform", "litellm_params": dict(CLAUDE_PLATFORM_PARAMS)}], num_retries=0
+        ).acompletion(model="platform", **request)
+        if routed
+        else litellm.acompletion(**CLAUDE_PLATFORM_PARAMS, **request)
+    )
+    with pytest.raises((ProxyException, litellm.PermissionDeniedError)) as denied:
+        await call
+    assert str(getattr(denied.value, "status_code", getattr(denied.value, "code", ""))) == "403"
+    assert upstream.call_count == 0
+
+
+async def test_claude_platform_chat_with_granted_provider_tools_reaches_bedrock_with_its_mcp_server(
+    native_auth: UserAPIKeyAuth, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    import json
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(url__regex=r"https://native-provider.example/.*").respond(
+        200, json=CLAUDE_PLATFORM_REPLY
+    )
+    await litellm.acompletion(
+        **CLAUDE_PLATFORM_PARAMS,
+        messages=[{"role": "user", "content": "Use the tool"}],
+        max_tokens=32,
+        metadata={"user_api_key_auth": native_auth},
+        **_openai(["search"]),
+    )
+    sent: Final = json.loads(upstream.calls.last.request.content)
+    assert sent["mcp_servers"] == [
+        {
+            "type": "url",
+            "url": "https://native.example/mcp",
+            "name": "arbitrary",
+            "tool_configuration": {"allowed_tools": ["search"]},
+        }
+    ]
+
+
 @pytest.mark.parametrize("api", ["aresponses", "anthropic_messages", "acompletion"])
 async def test_allowed_native_request_reaches_provider_unchanged(
     native_auth: UserAPIKeyAuth,
@@ -540,7 +620,7 @@ class _LateChatMCPAttachment(CustomLogger):
         )
 
 
-@pytest.mark.parametrize("api", ["anthropic_messages", "acompletion"])
+@pytest.mark.parametrize("api", ["anthropic_messages", "acompletion", "claude_platform_chat"])
 @pytest.mark.parametrize("stream", [False, True])
 async def test_final_body_check_blocks_attachment_added_after_deployment_hook(
     native_auth: UserAPIKeyAuth,
@@ -549,20 +629,27 @@ async def test_final_body_check_blocks_attachment_added_after_deployment_hook(
     api: str,
     stream: bool,
 ) -> None:
-    callback: Final = _LateChatMCPAttachment() if api == "acompletion" else _LateMCPAttachment()
+    callback: Final = _LateChatMCPAttachment() if api in ("acompletion", "claude_platform_chat") else _LateMCPAttachment()
     monkeypatch.setattr(litellm, "callbacks", [callback])
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     upstream: Final = respx_mock.post(url__regex=r"https://native-provider.example/.*").respond(500)
-    call: Final = litellm.acompletion if api == "acompletion" else litellm.anthropic_messages
+    call: Final = litellm.anthropic_messages if api == "anthropic_messages" else litellm.acompletion
+    deployment: Final = (
+        CLAUDE_PLATFORM_PARAMS
+        if api == "claude_platform_chat"
+        else {
+            "model": "anthropic/claude-haiku-5-5",
+            "api_key": "test-provider-key",
+            "api_base": "https://native-provider.example/v1",
+        }
+    )
     with pytest.raises((ProxyException, litellm.PermissionDeniedError)) as denied:
         await call(
-            model="anthropic/claude-haiku-5-5",
+            **deployment,
             messages=[{"role": "user", "content": "hello"}],
             max_tokens=32,
             stream=stream,
-            api_key="test-provider-key",
-            api_base="https://native-provider.example/v1",
             litellm_metadata={"user_api_key_auth": native_auth},
         )
     assert str(getattr(denied.value, "status_code", getattr(denied.value, "code", ""))) == "403"
