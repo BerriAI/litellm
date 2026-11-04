@@ -289,6 +289,13 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         cls._background_close_tasks.add(task)
         task.add_done_callback(cls._on_close_task_done)
 
+    def __del__(self) -> None:
+        session: Final = getattr(self, "client", None)
+        if not getattr(self, "_owns_session", False) or not isinstance(session, ClientSession):
+            return
+        with contextlib.suppress(Exception):
+            self._close_recycled_session(session)
+
     def get_valid_client_session(self) -> ClientSession:
         """
         Helper to get a valid ClientSession for the current event loop.
