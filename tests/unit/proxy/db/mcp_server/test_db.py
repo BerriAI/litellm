@@ -90,22 +90,24 @@ async def test_get_runtime_rows_excludes_disabled():
     assert where == {
         "AND": [
             {"OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]},
-            {"OR": [{"enabled": None}, {"enabled": True}]},
+            {"enabled": True},
         ]
     }
-    assert {"enabled": False} not in where["AND"][1]["OR"]
 
 
 @pytest.mark.asyncio
-async def test_get_runtime_rows_includes_null_enabled_legacy():
+async def test_get_runtime_rows_enabled_gate_is_valid_non_null_filter():
+    # ``enabled`` is a NOT NULL column, so the gate must be a plain ``{"enabled": True}``.
+    # A ``{"enabled": None}`` arm is invalid Prisma (null filter on a non-nullable field)
+    # and raised MissingRequiredValueError at runtime against a real client.
     prisma_client = _prisma_client_for_runtime_rows()
 
     await get_runtime_mcp_server_rows(prisma_client)
 
     where = prisma_client.writer_db.litellm_mcpservertable.find_many.call_args.kwargs["where"]
-    enabled_gate = where["AND"][1]["OR"]
-    assert {"enabled": None} in enabled_gate
-    assert {"enabled": True} in enabled_gate
+    enabled_gate = where["AND"][1]
+    assert enabled_gate == {"enabled": True}
+    assert None not in enabled_gate.values()
 
 
 @pytest.mark.asyncio

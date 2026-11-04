@@ -887,8 +887,10 @@ async def get_runtime_mcp_server_rows(
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
         "AND": [
             {"OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]},
-            # NULL (legacy rows) and true are enabled; only an explicit false is gated out.
-            {"OR": [{"enabled": None}, {"enabled": True}]},
+            # ``enabled`` is a NOT NULL column defaulting to true (legacy rows were backfilled
+            # to true by the migration), so only an explicit false is gated out. A ``{"enabled":
+            # None}`` arm is invalid here: Prisma rejects a null filter on a non-nullable field.
+            {"enabled": True},
         ]
     }
     return await MCPServerRepository(prisma_client, use_writer=True).table.find_many(where=where)
