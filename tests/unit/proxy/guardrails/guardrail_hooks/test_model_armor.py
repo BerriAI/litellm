@@ -768,29 +768,62 @@ async def test_model_armor_partial_scan_with_match_still_blocks_when_fail_open()
     assert exc_info.value.status_code == 400
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mask_request_content", [True, False])
-async def test_model_armor_partial_scan_with_only_a_deidentify_match_is_an_error(mask_request_content: bool):
-    """A de-identification match is masked, not blocked, so it must not hide the filters that did not run."""
-    guardrail = _armor_guardrail(mask_request_content=mask_request_content)
-    response = _armor_http_response(
-        {
-            "invocationResult": "PARTIAL",
-            "filterResults": {
-                "sdp": {
-                    "sdpFilterResult": {
-                        "deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": "call me at [REDACTED]"}}
-                    }
-                }
-            },
+_PARTIAL_DEIDENTIFY_ONLY = {
+    "invocationResult": "PARTIAL",
+    "filterResults": {
+        "sdp": {
+            "sdpFilterResult": {
+                "deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": "call me at [REDACTED]"}}
+            }
         }
-    )
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_model_armor_partial_scan_with_masked_deidentify_match_is_an_error():
+    """Where a de-identification match is masked, not blocked, it must not hide the filters that did not run."""
+    guardrail = _armor_guardrail(mask_request_content=True)
+    response = _armor_http_response(_PARTIAL_DEIDENTIFY_ONLY)
 
     with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=response)):
         with pytest.raises(ModelArmorAPIError) as exc_info:
             await guardrail.make_model_armor_request(content="call me at 555-0100", source="user_prompt")
 
     assert exc_info.value.detail == "Model Armor scan incomplete (invocationResult=PARTIAL)"
+
+
+@pytest.mark.asyncio
+async def test_model_armor_partial_scan_with_blocking_deidentify_match_still_blocks_when_fail_open():
+    """With masking off the caller blocks on a de-identification match, so an incomplete scan must not turn it
+    into an error that fail_on_error=False then swallows."""
+    guardrail = _armor_guardrail(fail_on_error=False, mask_request_content=False)
+    response = _armor_http_response(_PARTIAL_DEIDENTIFY_ONLY)
+    request_data = {"model": "gpt-4", "messages": [{"role": "user", "content": "call me at 555-0100"}], "metadata": {}}
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=response)):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_model_armor_partial_file_scan_with_deidentify_match_is_returned_even_with_masking_on():
+    """Files cannot be masked, so the caller blocks on the match whatever the masking setting is."""
+    guardrail = _armor_guardrail(mask_request_content=True)
+    response = _armor_http_response(_PARTIAL_DEIDENTIFY_ONLY)
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=response)):
+        result = await guardrail.make_model_armor_request(file_bytes=b"call me at 555-0100", file_type="PLAINTEXT_UTF8")
+
+    assert result["sanitizationResult"]["invocationResult"] == "PARTIAL"
+    assert guardrail._should_block_content(result, allow_sanitization=False)
 
 
 @pytest.mark.asyncio

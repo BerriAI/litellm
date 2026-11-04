@@ -426,22 +426,30 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             armor_response: Final = _ModelArmorResponseRoot.model_validate(await json_response).root
         else:
             armor_response = _ModelArmorResponseRoot.model_validate(json_response).root
-        self._raise_if_scan_incomplete(armor_response)
+        # What the caller can do with a de-identification match: files and text with masking off are
+        # blocked on it, only masked text is rewritten and let through.
+        if file_bytes is not None:
+            masks_match = False
+        elif source == "user_prompt":
+            masks_match = self.mask_request_content
+        else:
+            masks_match = self.mask_response_content
+        self._raise_if_scan_incomplete(armor_response, allow_sanitization=masks_match)
         return armor_response
 
-    def _raise_if_scan_incomplete(self, armor_response: _ModelArmorResponse) -> None:
+    def _raise_if_scan_incomplete(self, armor_response: _ModelArmorResponse, allow_sanitization: bool) -> None:
         """A 200 whose invocationResult is PARTIAL or FAILURE means some filters did not run.
 
         Accepting it would treat an unfinished scan as a clean one. It is raised like any other API
         failure, so every hook applies fail_on_error. A scan that already matched a filter is still
-        returned, so the caller blocks instead of failing open on content that was flagged. Only a
-        match that blocks even when masking is enabled counts: a de-identification match is masked
-        rather than blocked, so it must not hide the filters that did not run.
+        returned, so the caller blocks instead of failing open on content that was flagged. A
+        de-identification match counts as one only where the caller blocks on it (files, or text with
+        masking off); where it is masked instead, it must not hide the filters that did not run.
         """
         result: Final = armor_response.get("sanitizationResult", {}).get("invocationResult")
         if result not in _INCOMPLETE_INVOCATION_RESULTS:
             return
-        if self._should_block_content(armor_response, allow_sanitization=True):
+        if self._should_block_content(armor_response, allow_sanitization=allow_sanitization):
             return
         verbose_proxy_logger.error("Model Armor scan did not complete - invocationResult: %s", result)
         raise ModelArmorAPIError(f"Model Armor scan incomplete (invocationResult={result})")
