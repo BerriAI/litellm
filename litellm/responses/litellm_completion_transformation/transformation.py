@@ -132,6 +132,7 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
     OutputText,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -169,6 +170,14 @@ from .custom_tools import (
     without_malformed_tool_flags,
 )
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
+from .server_tool_search import (
+    holds_replayed_server_search,
+    response_tool_results,
+    server_search_replay_of,
+    server_search_replays,
+    tool_search_output_for_call,
+    without_replayed_server_searches,
+)
 from .tool_search import (
     CompletionRoute,
     ToolSearchRouting,
@@ -1247,7 +1256,7 @@ class LiteLLMCompletionResponsesConfig:
             request_input, context_management
         ) and provider_takes_compaction_blocks(model, custom_llm_provider)
         numbered_input: Final = request_input if caller_input is None else caller_input
-        bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=request_input,
             responses_api_request=responses_api_request,
             replay_reasoning=True,
@@ -1256,6 +1265,21 @@ class LiteLLMCompletionResponsesConfig:
             native_compaction=native_compaction,
             only_since_compaction=not native_compaction,
             caller_input=numbered_input,
+        )
+        bridged_messages: Final = (
+            input_messages
+            if not holds_replayed_server_search(input_messages)
+            or provider_builds_anthropic_request(model, custom_llm_provider)
+            else cast(
+                list[
+                    AllMessageValues
+                    | GenericChatCompletionMessage
+                    | ChatCompletionMessageToolCall
+                    | ChatCompletionResponseMessage
+                    | Message
+                ],
+                without_replayed_server_searches(input_messages),  # cast-ok: only whole messages are dropped or trimmed
+            )
         )
         malformed_field_error: Final = (
             _first_invalid_input_type(
@@ -1598,7 +1622,30 @@ class LiteLLMCompletionResponsesConfig:
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
             existing_tool_call_ids: Final[set[str]] = set()
+            server_searches: Final = server_search_replays(input)
             for _input in _without_paused_turn_thinking(input):
+                if (search_replay := server_search_replay_of(_input, server_searches)) is not None:
+                    # Claude ran this tool search on the server. Send its server_tool_use and result
+                    # back in the same assistant turn as the tool call that follows it.
+                    existing_tool_call_ids.add(search_replay.call_id)
+                    last_message = messages[-1] if messages else None
+                    if (
+                        isinstance(last_message, dict)
+                        and last_message.get("role") == "assistant"
+                        and last_message.get("tool_calls")
+                    ):
+                        messages[-1] = cast(
+                            ChatCompletionResponseMessage,  # cast-ok: the assistant turn plus the replayed search
+                            search_replay.added_to(last_message),
+                        )
+                    else:
+                        messages.append(
+                            cast(
+                                ChatCompletionResponseMessage,  # cast-ok: a new assistant turn holding the search
+                                search_replay.assistant_message(),
+                            )
+                        )
+                    continue
                 chat_completion_messages = (
                     LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                         input_item=_input,
@@ -3072,7 +3119,13 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
-    ) -> list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]:
+    ) -> list[
+        ResponseFunctionToolCall
+        | ResponseFunctionWebSearch
+        | CustomToolCallOutputItem
+        | OutputToolSearchCall
+        | OutputToolSearchOutput
+    ]:
         """
         Transform a Chat Completion tools into a Responses API tools.
 
@@ -3080,7 +3133,8 @@ class LiteLLMCompletionResponsesConfig:
         with ``type="custom_tool_call"``. For regular function tools, returns
         ``ResponseFunctionToolCall`` with ``type="function_call"``. A provider-side
         tool search call made for a request's ``tool_search`` tool returns
-        ``OutputToolSearchCall`` with ``type="tool_search_call"``.
+        ``OutputToolSearchCall`` with ``type="tool_search_call"``, followed by an
+        ``OutputToolSearchOutput`` when the response also carries the search result.
         """
         all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
         for choice in chat_completion_response.choices:
@@ -3101,8 +3155,15 @@ class LiteLLMCompletionResponsesConfig:
         web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
             chat_completion_response
         )
+        search_results: Final = response_tool_results(chat_completion_response)
         responses_tools: Final[
-            list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]
+            list[
+                ResponseFunctionToolCall
+                | ResponseFunctionWebSearch
+                | CustomToolCallOutputItem
+                | OutputToolSearchCall
+                | OutputToolSearchOutput
+            ]
         ] = []
         for tool in all_chat_completion_tools:
             if tool.type == "function":
@@ -3117,6 +3178,10 @@ class LiteLLMCompletionResponsesConfig:
                     )
                 ) is not None:
                     responses_tools.append(server_tool_call)
+                    if isinstance(server_tool_call, OutputToolSearchCall) and (
+                        search_output := tool_search_output_for_call(server_tool_call, search_results, request_tools)
+                    ):
+                        responses_tools.append(search_output)
                 elif is_custom_tool_call(tool_name, custom_tool_names):
                     # Build custom_tool_call output item
                     input_str = unwrap_custom_tool_arguments(tool_arguments)
@@ -3475,6 +3540,7 @@ class LiteLLMCompletionResponsesConfig:
         | ResponseFunctionWebSearch
         | CustomToolCallOutputItem
         | OutputToolSearchCall
+        | OutputToolSearchOutput
         | ResponseCompactionItem
     ]:
         responses_output: list[
@@ -3486,6 +3552,7 @@ class LiteLLMCompletionResponsesConfig:
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
             | ResponseCompactionItem
         ] = []
 
