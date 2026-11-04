@@ -94,7 +94,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload
+from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload, with_openai_overload_status
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
     is_model_cost_zero,
@@ -4396,18 +4396,20 @@ class ProxyBaseLLMRequestProcessing:
         version: str | None = None,
     ) -> Never:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        log_llm_api_exception(e, self.litellm_call_id)
+        answered: Final = (
+            with_openai_overload_status(e) if self.route_type in _OPENAI_OVERLOAD_ROUTE_TYPES else e
+        )
+        log_llm_api_exception(answered, self.litellm_call_id)
         billing_logging_obj: Final = _REQUEST_FIELDS.validate_python(self.data).get("litellm_logging_obj")
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
-            original_exception=e,
+            original_exception=answered,
             request_data=self.data,
             dispatched_call_type=self.route_type,
         )
         # Use transformed exception if callback returned one, otherwise use original
-        if transformed_exception is not None:
-            e = transformed_exception
+        e = transformed_exception if transformed_exception is not None else answered
         litellm_debug_info: Final = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
             "An error occurred: %s %s",

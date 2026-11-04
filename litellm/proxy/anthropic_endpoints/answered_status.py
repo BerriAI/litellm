@@ -3,6 +3,7 @@ from typing import Final, TypeVar
 from litellm.exceptions import APIError, InternalServerError, MidStreamFallbackError
 
 _PROVIDER_OVERLOAD_STATUS_CODE: Final = 529
+_OPENAI_OVERLOAD_ANSWERED_STATUS_CODE: Final = 503
 
 _Raised = TypeVar("_Raised", bound=Exception)
 
@@ -11,12 +12,26 @@ def is_provider_overload(exc: Exception) -> bool:
     return _provider_status_code(exc) == _PROVIDER_OVERLOAD_STATUS_CODE
 
 
+def with_openai_overload_status(exc: _Raised) -> _Raised:
+    return (
+        _copy_carrying(
+            _copy_carrying(exc, "provider_status_code", _PROVIDER_OVERLOAD_STATUS_CODE),
+            "status_code",
+            _OPENAI_OVERLOAD_ANSWERED_STATUS_CODE,
+        )
+        if is_provider_overload(exc)
+        else exc
+    )
+
+
 def _provider_status_code(exc: Exception) -> int | None:
     unwrapped = exc  # rebind-ok: the recursion gate requires iterative wrapper traversal
     while isinstance(unwrapped, MidStreamFallbackError) and unwrapped.original_exception is not None:
         unwrapped = unwrapped.original_exception
     match unwrapped:
         case InternalServerError(provider_status_code=int() as provider_status):
+            return provider_status
+        case APIError(provider_status_code=int() as provider_status):
             return provider_status
         case APIError(status_code=int() as provider_status):
             return provider_status
