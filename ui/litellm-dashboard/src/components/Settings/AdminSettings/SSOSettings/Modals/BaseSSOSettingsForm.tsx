@@ -229,9 +229,9 @@ export const buildSSOSettingsPatch = (
   variant: SSOFormVariant,
   toPayload: (values: SSOSettingsFormValues) => Record<string, unknown>,
 ): Record<string, unknown> => {
-  const replacedProviderFields =
-    seeded.sso_provider === submitted.sso_provider ? [] : providerFieldNames(seeded.sso_provider);
-  const editedFieldNames = new Set([...mountedSSOFieldNames(submitted, variant), ...replacedProviderFields]);
+  const competingProviderFields =
+    seeded.sso_provider === submitted.sso_provider ? [] : Object.keys(ssoProviderConfigs).flatMap(providerFieldNames);
+  const editedFieldNames = new Set([...mountedSSOFieldNames(submitted, variant), ...competingProviderFields]);
   const seededEditedValues: SSOSettingsFormValues = Object.fromEntries(
     Object.entries(seeded).filter(([name]) => editedFieldNames.has(name)),
   );

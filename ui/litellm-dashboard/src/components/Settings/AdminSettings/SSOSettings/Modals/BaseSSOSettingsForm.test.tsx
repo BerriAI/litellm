@@ -487,6 +487,45 @@ describe("buildSSOSettingsPatch", () => {
       generic_userinfo_endpoint: null,
       generic_scope: null,
     };
-    expect(patch({ ...seeded, ...google })).toEqual({ ...google, ...clearedGeneric });
+    const clearedOthers = {
+      microsoft_client_id: null,
+      microsoft_tenant: null,
+      saml_idp_metadata_url: null,
+      saml_sp_entity_id: null,
+    };
+    expect(patch({ ...seeded, ...google })).toEqual({ ...google, ...clearedGeneric, ...clearedOthers });
+  });
+
+  it("clears a stored provider that would outrank the new one at sign-in, not only the one the form showed", () => {
+    const googleAndMicrosoft = {
+      ...emptySSOSettingsFormValues,
+      sso_provider: "google",
+      google_client_id: "g-id",
+      microsoft_client_id: "ms-id",
+      user_email: "admin@example.com",
+      proxy_base_url: "https://gateway.example.com",
+    };
+    const generic = {
+      ...googleAndMicrosoft,
+      sso_provider: "generic",
+      generic_client_id: "client-id",
+      generic_client_secret: "secret",
+      generic_authorization_endpoint: "https://idp.example.com/authorize",
+      generic_token_endpoint: "https://idp.example.com/token",
+      generic_userinfo_endpoint: "https://idp.example.com/userinfo",
+    };
+    const result = buildSSOSettingsPatch(
+      googleAndMicrosoft,
+      pickMountedSSOValues(generic, "sso-settings"),
+      "sso-settings",
+      processSSOSettingsPayload,
+    );
+    expect(result).toMatchObject({ google_client_id: null, microsoft_client_id: null, generic_client_id: "client-id" });
+  });
+
+  it("keeps the shared generic credentials when the admin switches between okta and generic", () => {
+    const result = patch({ ...seeded, sso_provider: "okta" });
+    expect(result.sso_provider).toBe("okta");
+    expect(Object.keys(result).filter((key) => key.startsWith("generic_"))).toEqual([]);
   });
 });
