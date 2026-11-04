@@ -31638,7 +31638,7 @@
         "cache_read_input_token_cost_priority": 5.4e-08,
         "deprecation_date": "2026-12-01",
         "deprecation_source": "https://ai.google.dev/gemini-api/docs/deprecations",
-        "successor_model": "gemini/gemini-3-flash-preview",
+        "successor_model": "gemini/gemini-3.5-flash-lite",
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_audio_token_flex": 5e-07,
         "input_cost_per_token": 3e-07,
@@ -32230,7 +32230,7 @@
         "cache_read_input_token_cost_above_200k_tokens_batches": 2.5e-07,
         "deprecation_date": "2026-12-01",
         "deprecation_source": "https://ai.google.dev/gemini-api/docs/deprecations",
-        "successor_model": "gemini/gemini-3.1-pro-preview",
+        "successor_model": "gemini/gemini-3.8-flash",
         "input_cost_per_token_above_200k_tokens_batches": 1.25e-06,
         "output_cost_per_token_above_200k_tokens_batches": 7.5e-06
     },
