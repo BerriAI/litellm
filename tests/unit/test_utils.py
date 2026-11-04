@@ -972,6 +972,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_audio_token_cost_batches": {"type": "number"},
                 "cache_read_input_audio_token_cost_flex": {"type": "number"},
                 "cache_read_input_audio_token_cost_priority": {"type": "number"},
+                "input_cost_per_audio_token_above_200k_tokens": {"type": "number"},
+                "input_cost_per_audio_token_above_200k_tokens_batches": {"type": "number"},
+                "input_cost_per_audio_token_above_200k_tokens_flex": {"type": "number"},
+                "input_cost_per_audio_token_above_200k_tokens_priority": {"type": "number"},
+                "input_cost_per_token_above_200k_tokens_flex": {"type": "number"},
+                "output_cost_per_image_token_priority": {"type": "number"},
+                "output_cost_per_token_above_200k_tokens_flex": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
@@ -1373,6 +1380,27 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         error_message = "Cost validation failed:\n" + "\n".join(violations)
         error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
         raise AssertionError(error_message)
+
+
+def test_cost_map_schema_accepts_vertex_modality_and_context_tiers() -> None:
+    row: Final = {
+        "litellm_provider": "vertex_ai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_200k_tokens_flex": 3e-6,
+        "output_cost_per_token_above_200k_tokens_flex": 4e-6,
+        "input_cost_per_token_above_200k_tokens_batches": 3e-6,
+        "output_cost_per_token_above_200k_tokens_batches": 4e-6,
+        "input_cost_per_audio_token_above_200k_tokens": 5e-6,
+        "input_cost_per_audio_token_above_200k_tokens_flex": 6e-6,
+        "input_cost_per_audio_token_above_200k_tokens_priority": 7e-6,
+        "input_cost_per_audio_token_above_200k_tokens_batches": 8e-6,
+        "output_cost_per_image_token_priority": 9e-6,
+        "output_cost_per_image_token_batches": 10e-6,
+    }
+
+    assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-vertex-tier-model": row})
 
 
 def test_max_tokens_consistency():
@@ -10014,3 +10042,24 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
+
+
+def test_cost_map_schema_accepts_vertex_modality_and_context_tiers() -> None:
+    row: Final = {
+        "litellm_provider": "vertex_ai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_200k_tokens_flex": 3e-6,
+        "output_cost_per_token_above_200k_tokens_flex": 4e-6,
+        "input_cost_per_token_above_200k_tokens_batches": 3e-6,
+        "output_cost_per_token_above_200k_tokens_batches": 4e-6,
+        "input_cost_per_audio_token_above_200k_tokens": 5e-6,
+        "input_cost_per_audio_token_above_200k_tokens_flex": 6e-6,
+        "input_cost_per_audio_token_above_200k_tokens_priority": 7e-6,
+        "input_cost_per_audio_token_above_200k_tokens_batches": 8e-6,
+        "output_cost_per_image_token_priority": 9e-6,
+        "output_cost_per_image_token_batches": 10e-6,
+    }
+
+    assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-vertex-tier-model": row})

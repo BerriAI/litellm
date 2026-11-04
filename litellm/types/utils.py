@@ -352,6 +352,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
     input_cost_per_audio_token_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_priority: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_batches: ReadOnly[float | None]
     input_cost_per_audio_token_priority: ReadOnly[float | None]
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
@@ -377,10 +381,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
     input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    input_cost_per_token_above_200k_tokens_flex: ReadOnly[float | None]
     input_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
     input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
     output_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    output_cost_per_token_above_200k_tokens_flex: ReadOnly[float | None]
     output_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
@@ -413,6 +419,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
     output_cost_per_image_token_batches: ReadOnly[float | None]
+    output_cost_per_image_token_priority: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
@@ -3981,6 +3988,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_audio_token_flex: float | None = None
+    input_cost_per_audio_token_above_200k_tokens: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_flex: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_priority: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_batches: float | None = None
     input_cost_per_audio_token_priority: float | None = None
     input_cost_per_token_cache_hit: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
@@ -3991,6 +4002,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_above_272k_tokens_flex: float | None = None
     input_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     input_cost_per_token_above_200k_tokens_batches: float | None = None
+    input_cost_per_token_above_200k_tokens_flex: float | None = None
     input_cost_per_token_above_100k_tokens_batches: float | None = None
     input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
@@ -4020,12 +4032,14 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_272k_tokens_flex: float | None = None
     output_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     output_cost_per_token_above_200k_tokens_batches: float | None = None
+    output_cost_per_token_above_200k_tokens_flex: float | None = None
     output_cost_per_token_above_100k_tokens_batches: float | None = None
     output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
     output_cost_per_image_token: float | None = None
     output_cost_per_image_token_batches: float | None = None
+    output_cost_per_image_token_priority: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
