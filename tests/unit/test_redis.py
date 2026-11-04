@@ -2148,6 +2148,17 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
             id="ssl_password_is_unsupported",
         ),
         pytest.param(
+            {"host": "redis", "ssl": True, "ssl_validate_ocsp": True},
+            {},
+            {
+                "rejected": {
+                    "message": "Redis.__init__() got an unexpected keyword argument 'ssl_validate_ocsp'",
+                    "type": "TypeError",
+                }
+            },
+            id="ssl_validate_ocsp_is_unsupported",
+        ),
+        pytest.param(
             {
                 "db": 2,
                 "host": "redis",

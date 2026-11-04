@@ -187,6 +187,46 @@ fn unsupported_settings_resolve_and_are_named_by_their_source(
     assert!(!ignored.consequence.is_empty());
 }
 
+#[rstest]
+#[case::kwarg(
+    "general_settings:\n  coordination_redis:\n    host: redis\n    ssl: true\n    ssl_validate_ocsp: true",
+    &[],
+    "ssl_validate_ocsp"
+)]
+#[case::stapled_from_environment(
+    "model_list: []",
+    &[("REDIS_HOST", "redis"), ("REDIS_SSL", "true"), ("REDIS_SSL_VALIDATE_OCSP_STAPLED", "yes")],
+    "REDIS_SSL_VALIDATE_OCSP_STAPLED"
+)]
+#[case::rediss_url_query(
+    "general_settings:\n  coordination_redis:\n    url: rediss://cache:6380/0?ssl_validate_ocsp=true",
+    &[],
+    "url ?ssl_validate_ocsp"
+)]
+fn an_ocsp_check_fails_instead_of_connecting_without_it(
+    #[case] yaml: &str,
+    #[case] environment: &[(&str, &str)],
+    #[case] setting: &str,
+) {
+    let error = coordination_resolution(yaml, environment).unwrap_err();
+
+    assert!(
+        matches!(&error, RedisError::Unenforceable { setting: named } if named == setting),
+        "{error:?}"
+    );
+}
+
+#[rstest]
+#[case::kwarg("    host: redis\n    ssl: true\n    ssl_validate_ocsp: false")]
+#[case::rediss_url_query("    url: rediss://cache:6380/0?ssl_validate_ocsp=false")]
+fn an_ocsp_flag_set_to_false_asks_for_nothing(#[case] block: &str) {
+    let yaml = format!("general_settings:\n  coordination_redis:\n{block}");
+
+    let resolution = coordination_resolution(&yaml, &[]).unwrap();
+
+    assert!(resolution.ignored.is_empty(), "{:?}", resolution.ignored);
+}
+
 fn static_auth(username: Option<&str>, password: Option<&str>) -> Auth {
     Auth::Static(StaticAuth {
         username: username.map(litellm_secret_value::SecretValue::new),
@@ -974,6 +1014,11 @@ fn expected_view(fields: serde_json::Value) -> serde_json::Value {
     json!({"host": "redis", "ssl": true, "ssl_ca_path": "/ca"}),
     &[],
     Ok(expected_view(json!({"mode": "host", "host": "redis", "port": 6379, "db": 0, "tls": {"ca_certs": null, "ca_data": null, "ca_path": "/ca", "certfile": null, "keyfile": null, "verify_certificate": true, "check_hostname": false}}))),
+)]
+#[case::ssl_validate_ocsp_is_unsupported(
+    json!({"host": "redis", "ssl": true, "ssl_validate_ocsp": true}),
+    &[],
+    Err("ssl_validate_ocsp asks for OCSP revocation checks, which rustls cannot perform, so Redis is not connected without them"),
 )]
 #[case::ssl_password_is_unsupported(
     json!({"host": "redis", "ssl": true, "ssl_certfile": "/client.pem", "ssl_password": "key-secret"}),

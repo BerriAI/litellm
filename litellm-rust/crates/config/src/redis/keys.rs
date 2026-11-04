@@ -6,12 +6,14 @@ use crate::Value;
 
 // Every Redis setting litellm/_redis.py reads, with how Rust handles it and where else Python looks for it.
 // Warn rows are read by Python and dropped here with a warning naming the consequence, never an error.
+// Reject rows are security checks Rust cannot perform, so asking for one fails instead of connecting without it.
 // environment marks the kwargs _get_redis_env_kwarg_mapping reads as REDIS_<KWARG>, and fallback lists the names
 // _get_redis_client_logic consults with get_secret when the merged kwargs lack the setting
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Handling {
     Read,
     Warn,
+    Reject,
 }
 
 pub(super) struct Setting {
@@ -150,8 +152,8 @@ pub(super) const SETTINGS: &[Setting] = &[
     Setting::new("ssl_ocsp_context", Handling::Warn, true, &[]),
     Setting::new("ssl_ocsp_expected_cert", Handling::Warn, true, &[]),
     Setting::new("ssl_password", Handling::Read, true, &[]),
-    Setting::new("ssl_validate_ocsp", Handling::Warn, true, &[]),
-    Setting::new("ssl_validate_ocsp_stapled", Handling::Warn, true, &[]),
+    Setting::new("ssl_validate_ocsp", Handling::Reject, true, &[]),
+    Setting::new("ssl_validate_ocsp_stapled", Handling::Reject, true, &[]),
     Setting::new(
         "startup_nodes",
         Handling::Read,
@@ -162,6 +164,10 @@ pub(super) const SETTINGS: &[Setting] = &[
     Setting::new("url", Handling::Read, true, &[]),
     Setting::new("username", Handling::Read, true, &[]),
 ];
+
+pub(super) fn is_refused_when_set(kwarg: &str) -> bool {
+    setting(kwarg).is_some_and(|setting| setting.handling == Handling::Reject)
+}
 
 pub(super) fn ignored(setting: String, kwarg: &str) -> Ignored {
     Ignored {
@@ -215,11 +221,8 @@ pub(super) fn is_host_object(kwarg: &str) -> bool {
 /// rather than only the key name.
 fn consequence(kwarg: &str) -> &'static str {
     match kwarg {
-        "ssl_validate_ocsp"
-        | "ssl_validate_ocsp_stapled"
-        | "ssl_ocsp_context"
-        | "ssl_ocsp_expected_cert" => {
-            "rustls has no client-side OCSP, so the connection is made without revocation checks"
+        "ssl_ocsp_context" | "ssl_ocsp_expected_cert" => {
+            "it only configures ssl_validate_ocsp, which the Rust client refuses when set"
         }
         "ssl_ciphers" | "ssl_min_version" => {
             "rustls negotiates TLS 1.2+ with its own ECDHE AEAD suites"

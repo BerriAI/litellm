@@ -88,6 +88,7 @@ pub(super) struct Unmodeled {
 
 impl Unmodeled {
     fn read(kwargs: &Kwargs) -> Result<Self, RedisError> {
+        refuse_unenforceable(kwargs.iter())?;
         let unmodeled = || {
             kwargs
                 .iter()
@@ -183,6 +184,21 @@ impl Options {
         };
         Ok((options, unmodeled))
     }
+}
+
+/// A `Reject` row that is set to true asks for a check Rust cannot perform. One set to false asks for nothing.
+pub(super) fn refuse_unenforceable<'a>(
+    entries: impl IntoIterator<Item = (&'a String, &'a Entry)>,
+) -> Result<(), RedisError> {
+    entries
+        .into_iter()
+        .filter(|(key, _)| keys::is_refused_when_set(key))
+        .try_for_each(|(_, entry)| match flag(Some(entry))? {
+            true => Err(RedisError::Unenforceable {
+                setting: entry.source.clone(),
+            }),
+            false => Ok(()),
+        })
 }
 
 fn handling(key: &str) -> Option<Handling> {

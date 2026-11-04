@@ -5,7 +5,7 @@ use litellm_secret_value::SecretValue;
 use super::{
     Expected, RedisError, keys,
     layers::Entry,
-    options::{TlsInput, flag, parsed, secret, text},
+    options::{self, TlsInput, flag, parsed, secret, text},
 };
 use crate::Value;
 
@@ -83,6 +83,7 @@ pub(super) fn url_query(url: &str) -> Result<UrlQuery, RedisError> {
             )
         })
         .collect();
+    options::refuse_unenforceable(query.iter().map(|(name, entry)| (name, entry)))?;
     let (query, ignored): (Vec<_>, Vec<_>) = query.into_iter().partition(|(name, _)| {
         URL_CONNECTION_SETTINGS.contains(&name.as_str())
             || (tls_scheme && URL_TLS_SETTINGS.contains(&name.as_str()))
@@ -118,6 +119,7 @@ pub(super) fn url_query(url: &str) -> Result<UrlQuery, RedisError> {
         password: secret(get("password").as_ref()),
         ignored: ignored
             .into_iter()
+            .filter(|(name, _)| !keys::is_refused_when_set(name))
             .map(|(name, entry)| keys::ignored(entry.source, &name))
             .collect(),
     })
