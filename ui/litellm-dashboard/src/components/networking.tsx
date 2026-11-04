@@ -6942,6 +6942,17 @@ export const registerClaudeCodePlugin = async (accessToken: string, pluginData: 
   }
 };
 
+export const uploadClaudeCodeSkill = async (
+  accessToken: string,
+  file: File,
+  metadata: Omit<SkillRegisterRequest, "source">,
+): Promise<components["schemas"]["RegisterPluginResponse"]> => {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("metadata", JSON.stringify(metadata));
+  return apiClient.post("/claude-code/plugins/upload", { accessToken, rawBody: body });
+};
+
 /**
  * Enable a Claude Code plugin (admin only)
  * @param accessToken - Admin access token
