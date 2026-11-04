@@ -1,6 +1,5 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
 import React from "react";
-import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,17 +8,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Check, ChevronsUpDown, LayoutGrid, MessageCircle } from "lucide-react";
+import { Check, ChevronsUpDown } from "lucide-react";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
-import moyaiHead from "../../../public/assets/moyai/moyai-head.svg";
 
 const GATEWAY = "ai-gateway";
 const CHAT = "chat";
 const MOYAI = "moyai";
-type WorkspaceIconName = typeof GATEWAY | typeof CHAT | typeof MOYAI;
 
 function isWorkspaceRoute(pathname: string, workspace: string): boolean {
   const routes = [uiHref(workspace)];
@@ -27,45 +24,15 @@ function isWorkspaceRoute(pathname: string, workspace: string): boolean {
   return routes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
 }
 
-function activeWorkspaceFor(
+function activeWorkspaceLabel(
   isChatRoute: boolean,
   isMoyaiRoute: boolean,
   pluginLabel: string | undefined,
   gatewayLabel: string,
-): { label: string; icon: WorkspaceIconName } {
-  if (isChatRoute) return { label: "Chat", icon: CHAT };
-  if (isMoyaiRoute) return { label: "Moyai", icon: MOYAI };
-  return { label: pluginLabel ?? gatewayLabel, icon: GATEWAY };
-}
-
-function WorkspaceIcon({ workspace }: { workspace: WorkspaceIconName }) {
-  if (workspace === CHAT) {
-    return (
-      <span
-        data-slot="workspace-icon"
-        aria-hidden="true"
-        className="flex size-6 flex-none items-center justify-center rounded-md bg-primary/10 text-primary ring-1 ring-inset ring-primary/15"
-      >
-        <MessageCircle className="size-4" />
-      </span>
-    );
-  }
-  if (workspace === MOYAI) {
-    return (
-      <span data-slot="workspace-icon" aria-hidden="true" className="flex size-6 flex-none items-center justify-center">
-        <Image src={moyaiHead.src} alt="" width={20} height={20} unoptimized className="size-5 object-contain" />
-      </span>
-    );
-  }
-  return (
-    <span
-      data-slot="workspace-icon"
-      aria-hidden="true"
-      className="flex size-6 flex-none items-center justify-center rounded-md bg-muted text-muted-foreground"
-    >
-      <LayoutGrid className="size-4" />
-    </span>
-  );
+): string {
+  if (isChatRoute) return "Chat";
+  if (isMoyaiRoute) return "Moyai";
+  return pluginLabel ?? gatewayLabel;
 }
 
 interface ViewSwitcherItem {
@@ -95,7 +62,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const isStandaloneRoute = isChatRoute || isMoyaiRoute;
 
   const gatewayLabel = term("AI Gateway");
-  const { label: activeLabel, icon: activeIcon } = activeWorkspaceFor(
+  const activeLabel = activeWorkspaceLabel(
     isChatRoute,
     isMoyaiRoute,
     plugins.find((p) => p.name === mode)?.display_name,
@@ -166,15 +133,9 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       <DropdownMenuTrigger
         aria-label={`Switch workspace, current: ${activeLabel}`}
         render={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className={cn("max-w-[220px] gap-1.5 pl-1.5 pr-2", className)}
-          />
+          <Button type="button" variant="outline" size="sm" className={cn("max-w-[220px] gap-1.5 px-3", className)} />
         }
       >
-        <WorkspaceIcon workspace={activeIcon} />
         <span data-slot="workspace-label" className="truncate">
           {activeLabel}
         </span>

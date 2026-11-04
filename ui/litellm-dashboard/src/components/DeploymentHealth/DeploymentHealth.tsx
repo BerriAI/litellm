@@ -51,7 +51,6 @@ export const DeploymentHealthIcon = ({ handle }: { handle: DeploymentHealthHandl
   );
 };
 
-/** Keeps ignored warnings reachable when the header has no active alerts. */
 export const DeploymentHealthLink = ({ handle }: { handle: DeploymentHealthHandle }) => {
   const { canView } = useDeploymentHealthAccess();
   if (!canView) return null;

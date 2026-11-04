@@ -734,7 +734,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       </SidebarHeader>
 
       <div className="space-y-1 px-3 pt-3 pb-1">
-        <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-chevron]]:hidden" />
+        <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden" />
         <AriaSidebarLink active={currentRoute === "aria"} />
       </div>
       <ScrollArea className="min-h-0 flex-1">

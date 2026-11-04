@@ -2,6 +2,8 @@
 
 import React from "react";
 import { Server } from "lucide-react";
+import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox";
+import { Button } from "@/components/ui/button";
 import {
   Combobox,
   ComboboxContent,
@@ -15,6 +17,7 @@ import { useWorker } from "@/hooks/useWorker";
 
 interface WorkerDropdownProps {
   onWorkerSwitch: (workerId: string) => void;
+  compact?: boolean;
 }
 
 interface WorkerOption {
@@ -23,7 +26,7 @@ interface WorkerOption {
   disabled: boolean;
 }
 
-const WorkerDropdown: React.FC<WorkerDropdownProps> = ({ onWorkerSwitch }) => {
+const WorkerDropdown: React.FC<WorkerDropdownProps> = ({ onWorkerSwitch, compact = false }) => {
   const { isControlPlane, selectedWorker, workers } = useWorker();
 
   if (!isControlPlane || !selectedWorker) return null;
@@ -45,12 +48,23 @@ const WorkerDropdown: React.FC<WorkerDropdownProps> = ({ onWorkerSwitch }) => {
         }
       }}
     >
-      <ComboboxInput className="min-w-[180px]" aria-label="Worker">
-        <InputGroupAddon align="inline-start">
-          <Server className="size-4" />
-        </InputGroupAddon>
-      </ComboboxInput>
-      <ComboboxContent>
+      {compact ? (
+        <ComboboxPrimitive.Trigger
+          render={<Button variant="ghost" size="icon" className="text-muted-foreground" />}
+          aria-label={`Switch worker, current: ${selectedWorker.name}`}
+          title={selectedWorker.name}
+        >
+          <Server className="size-4" aria-hidden />
+        </ComboboxPrimitive.Trigger>
+      ) : (
+        <ComboboxInput className="min-w-[180px]" aria-label="Worker">
+          <InputGroupAddon align="inline-start">
+            <Server className="size-4" />
+          </InputGroupAddon>
+        </ComboboxInput>
+      )}
+      <ComboboxContent align={compact ? "end" : "start"} className={compact ? "w-64" : undefined}>
+        {compact && <ComboboxInput aria-label="Search workers" placeholder="Search workers…" showTrigger={false} />}
         <ComboboxEmpty>No matching workers</ComboboxEmpty>
         <ComboboxList>
           {(option: WorkerOption) => (

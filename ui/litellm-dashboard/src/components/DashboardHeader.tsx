@@ -45,7 +45,16 @@ export function DashboardHeader({
         <CommandPaletteTrigger className="hidden w-56 @min-[640px]:flex @min-[1000px]:w-80" />
         <div className="flex shrink-0 items-center justify-end gap-1">
           <CommandPaletteTrigger mobile className="size-9 @min-[640px]:hidden" />
-          {showWorkerSelector && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
+          {showWorkerSelector && (
+            <>
+              <div className="@min-[840px]:hidden">
+                <WorkerDropdown compact onWorkerSwitch={handleWorkerSwitch} />
+              </div>
+              <div className="hidden @min-[840px]:block">
+                <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
+              </div>
+            </>
+          )}
           <DashboardCommunityLinks
             className={showWorkerSelector ? "hidden @min-[840px]:flex" : "hidden @min-[400px]:flex"}
           />
