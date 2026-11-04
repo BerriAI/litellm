@@ -1598,6 +1598,108 @@ async def test_previous_response_id_keeps_the_tools_an_earlier_codex_tool_search
     assert prisma_client.db.queries == 1
 
 
+_SERVER_TOOL_SEARCH: Final = {"type": "tool_search", "execution": "server"}
+_DEFERRED_WEATHER_TOOL: Final = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    "defer_loading": True,
+}
+_SERVER_SEARCH_TURN: Final = {
+    "request_id": "resp-server-search-turn",
+    "call_type": "aresponses",
+    "session_id": "sdk-session",
+    "proxy_server_request": {
+        "model": _MODEL,
+        "input": "What is the weather in Paris?",
+        "tools": [_SERVER_TOOL_SEARCH, _DEFERRED_WEATHER_TOOL],
+    },
+    "response": {
+        "id": "resp-server-search-turn",
+        "object": "response",
+        "output": [
+            {
+                "type": "tool_search_call",
+                "id": "tsc_srvtoolu_01Search",
+                "call_id": "srvtoolu_01Search",
+                "arguments": {"pattern": "weather"},
+                "execution": "server",
+                "status": "completed",
+            },
+            {
+                "type": "tool_search_output",
+                "id": "tso_srvtoolu_01Search",
+                "call_id": "srvtoolu_01Search",
+                "execution": "server",
+                "status": "completed",
+                "tools": [_DEFERRED_WEATHER_TOOL],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_toolu_01Weather",
+                "call_id": "toolu_01Weather",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+        ],
+    },
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("tools", "assistant_blocks"),
+    [
+        (
+            [_DEFERRED_WEATHER_TOOL],
+            [("tool_use", "toolu_01Weather")],
+        ),
+        (
+            [_SERVER_TOOL_SEARCH, _DEFERRED_WEATHER_TOOL],
+            [
+                ("server_tool_use", "srvtoolu_01Search"),
+                ("tool_search_tool_result", "srvtoolu_01Search"),
+                ("tool_use", "toolu_01Weather"),
+            ],
+        ),
+    ],
+    ids=["request_without_tool_search", "request_with_tool_search"],
+)
+async def test_previous_response_id_replays_a_stored_server_search_only_beside_a_tool_search_tool(
+    tools: list[Mapping[str, object]], assistant_blocks: list[tuple[str, str]]
+) -> None:
+    """A stored server search follows the same rule as one in the input: it goes back to Claude only when this
+    request sends a tool search tool, the tool that adds the tool-search beta. A later turn without that tool (a
+    handoff to an agent without tool search) gets the tool_use alone."""
+    anthropic: Final = _RecordingRawAnthropicMessages()
+    prisma_client: Final = _FakePrismaClient([_SERVER_SEARCH_TURN])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="resp-server-search-turn",
+            input=[
+                {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
+                {"role": "user", "content": "And in Lyon?"},
+            ],
+            tools=tools,
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    sent: Final = json.loads(anthropic.body)
+    assert [
+        [(block["type"], block.get("id") or block.get("tool_use_id")) for block in message["content"]]
+        for message in sent["messages"]
+    ] == [
+        [("text", None)],
+        assistant_blocks,
+        [("tool_result", "toolu_01Weather"), ("text", None)],
+    ]
+
+
 @pytest.mark.asyncio
 async def test_a_codex_additional_tools_item_sends_claude_its_tools_but_not_its_text() -> None:
     anthropic: Final = _RecordingRawAnthropicMessages()

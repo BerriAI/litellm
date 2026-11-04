@@ -2396,6 +2396,7 @@ class TestToolTransformation:
 
         wire: Final = anthropic_messages_pt(messages=request["messages"], model=model, llm_provider="anthropic")
 
+        assert "tool_search_tool" not in json.dumps(request.get("tools") or [])
         assert wire == [
             {
                 "role": "user",

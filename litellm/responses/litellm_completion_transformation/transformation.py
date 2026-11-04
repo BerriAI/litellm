@@ -1517,10 +1517,22 @@ class LiteLLMCompletionResponsesConfig:
             route,
             request_fields.get("context_management"),
         )
-        replayed_messages: Final = (
+        tool_search_kept_messages: Final = (
             LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(stored_messages, route)
             if any(holds_tool_search_use(message) for message in stored_messages)
             else stored_messages
+        )
+        # Stored history follows the same rule as the input: a server search goes back only beside an outbound
+        # tool search tool, the tool that adds the tool-search beta.
+        replayed_messages: Final = (
+            tool_search_kept_messages
+            if not holds_replayed_server_search(tool_search_kept_messages)
+            or any(is_anthropic_tool_search_chat_tool(tool) for tool in litellm_completion_request.get("tools") or ())
+            else tuple(
+                cast(  # cast-ok: only whole stored messages are dropped or have their search trimmed
+                    list[SessionMessage], without_replayed_server_searches(tool_search_kept_messages)
+                )
+            )
         )
         session_messages: Final = (
             _replayed_messages_for_cache_points(
