@@ -150,7 +150,9 @@ from litellm.llms.anthropic.messages.native.mid_conversation_system import (
     is_system_role_message,
 )
 from litellm.llms.anthropic.messages.native.utils import (
-    openai_chat_refusal_text,
+    anthropic_refusal_stop_details,
+    anthropic_stop_reason,
+    refusal_reply_text,
     refusal_stop_details,
 )
 from litellm.types.llms.anthropic import (
@@ -397,6 +399,10 @@ class LiteLLMAnthropicMessagesAdapter:
             return _thought_signature(function_fields)
 
         return None
+
+    def _streamed_tool_call_signature(self, tool_call_id: str, tool_call: object) -> str | None:
+        id_parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+        return id_parts[1] if len(id_parts) > 1 else self._extract_signature_from_tool_call(tool_call)
 
     def _extract_signature_from_tool_use_content(self, content: Mapping[str, object]) -> str | None:
         """
@@ -1467,7 +1473,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_content.append(
                     AnthropicResponseContentBlockText(type="text", text=choice.message.content).model_dump()
                 )
-            if (refusal_text := openai_chat_refusal_text(choice.message)) is not None:
+            if (refusal_text := refusal_reply_text(choice.message)) is not None:
                 new_content.append(AnthropicResponseContentBlockText(type="text", text=refusal_text).model_dump())
             # Handle tool calls (in parallel to text content)
             if choice.message.tool_calls is not None and len(choice.message.tool_calls) > 0:
@@ -1634,7 +1640,15 @@ class LiteLLMAnthropicMessagesAdapter:
             tool_name_mapping=tool_name_mapping,
         )
         refusal_text: Final = next(
-            (text for choice in response.choices if (text := openai_chat_refusal_text(choice.message)) is not None),
+            (text for choice in response.choices if (text := refusal_reply_text(choice.message)) is not None),
+            None,
+        )
+        claude_refusal_stop_details: Final = next(
+            (
+                details
+                for choice in response.choices
+                if (details := anthropic_refusal_stop_details(choice.message)) is not None
+            ),
             None,
         )
 
@@ -1643,8 +1657,10 @@ class LiteLLMAnthropicMessagesAdapter:
 
         ## extract finish reason
         openai_finish_reason: Final = response.choices[0].finish_reason if response.choices else "stop"
-        translated_finish_reason: Final = self._translate_openai_finish_reason_to_anthropic(
-            openai_finish_reason=openai_finish_reason
+        translated_finish_reason: Final = (
+            "pause_turn"
+            if response.choices and anthropic_stop_reason(response.choices[0].message) == "pause_turn"
+            else self._translate_openai_finish_reason_to_anthropic(openai_finish_reason=openai_finish_reason)
         )
         anthropic_finish_reason: Final = (
             "compaction"
@@ -1686,7 +1702,11 @@ class LiteLLMAnthropicMessagesAdapter:
             usage=anthropic_usage,
             content=anthropic_content,
             stop_reason=anthropic_finish_reason,
-            stop_details=(refusal_stop_details(refusal_text) if anthropic_finish_reason == "refusal" else None),
+            stop_details=(
+                (claude_refusal_stop_details or refusal_stop_details(refusal_text))
+                if anthropic_finish_reason == "refusal"
+                else None
+            ),
         )
 
         applied_edits: Final = polyfill_result.applied_edits_for_response() if polyfill_result else None
@@ -1712,10 +1732,7 @@ class LiteLLMAnthropicMessagesAdapter:
             ):
                 raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
                 tool_name = choice.delta.tool_calls[0].function.name or ""
-                thought_sig: str | None = None
-                if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
-                    parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
-                    thought_sig = parts[1] if len(parts) > 1 else None
+                thought_sig = self._streamed_tool_call_signature(raw_id, choice.delta.tool_calls[0])
                 tool_block: dict[str, object] = {
                     "type": "tool_use",
                     "id": normalize_anthropic_tool_use_id(raw_id),
@@ -1727,7 +1744,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         "signature": thought_sig,
                     }
                 return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
-            elif (choice.delta.content is not None and len(choice.delta.content) > 0) or openai_chat_refusal_text(
+            elif (choice.delta.content is not None and len(choice.delta.content) > 0) or refusal_reply_text(
                 choice.delta
             ) is not None:
                 return "text", TextBlock(type="text", text="")
@@ -1810,7 +1827,7 @@ class LiteLLMAnthropicMessagesAdapter:
             return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
         else:
             refusal_text: Final = "".join(
-                refusal for choice in choices if (refusal := openai_chat_refusal_text(choice.delta)) is not None
+                refusal for choice in choices if (refusal := refusal_reply_text(choice.delta)) is not None
             )
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text + refusal_text)
 

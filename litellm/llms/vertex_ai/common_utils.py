@@ -1458,6 +1458,7 @@ class VertexAITokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         import copy
 
+        from litellm.llms.anthropic.common_utils import context_management_with_edits
         from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIError as PartnerVertexAIError,
@@ -1539,6 +1540,9 @@ class VertexAITokenCounter(BaseTokenCounter):
                     system=system,
                     tools=tools,
                     count_options=count_options,
+                    context_management=(
+                        None if context_management is None else context_management_with_edits(context_management.spec)
+                    ),
                 )
             except (PartnerVertexAIError, httpx.HTTPStatusError) as e:
                 status_code: Final = e.response.status_code
@@ -1565,12 +1569,15 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
+            from litellm.llms.anthropic.messages.context_management.inference_view import (
+                InferenceRequestViewError,
+                count_context_edits,
+                inference_request_view,
+            )
             from litellm.llms.vertex_ai.count_tokens.context import (
                 VertexGeminiCountContextError,
-                count_context_edits,
                 count_context_error_response,
                 gemini_count_contents,
-                inference_request_view,
                 malformed_tool_result_text_count_error,
                 provider_error_response,
                 unconvertible_messages_error,
@@ -1584,7 +1591,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 messages_format,
                 count_context_edits(context_management, tools, count_tokens_params_request, model_to_use),
             )
-            if isinstance(request_view, VertexGeminiCountContextError):
+            if isinstance(request_view, InferenceRequestViewError):
                 return count_context_error_response(request_view, request_model, model_to_use)
             count_context: Final = vertex_gemini_count_context(
                 system=request_view.system, tools=tools, model=model_to_use

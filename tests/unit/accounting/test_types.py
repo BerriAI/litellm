@@ -19,7 +19,6 @@ from litellm.accounting import (
     Dimension,
     DimensionFilter,
     DimensionName,
-    EventKind,
     Granularity,
     InboundUsageEvent,
     Metric,
@@ -442,7 +441,6 @@ def test_subset_token_counts_round_trip_without_changing_totals() -> None:
 @pytest.mark.parametrize(
     ("enum_name", "python_enum"),
     [
-        ("AccountingEventKind", EventKind),
         ("AccountingDeliveryState", DeliveryState),
         ("AccountingDeliveryTarget", DeliveryTarget),
     ],

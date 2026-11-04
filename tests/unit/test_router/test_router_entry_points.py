@@ -359,7 +359,7 @@ def test_settings_snapshot_is_frozen(router):
 def test_unset_setting_raises_attribute_error_through_old_name():
     r = _router()
     try:
-        del r.__dict__["_core_kubernetes_pod_discovery"]
+        del r._core.__dict__["_core_kubernetes_pod_discovery"]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             assert getattr(r, "kubernetes_pod_discovery", "missing") == "missing"
@@ -372,14 +372,14 @@ def test_unset_setting_raises_attribute_error_through_old_name():
 
 def test_unset_attribute_error_names_the_public_attribute(router):
     # Reading (or deleting) an old attribute the router never set raises what reading it raised before.
-    router.__dict__.pop("_core_slack_alerting_logger", None)
+    router._core.__dict__.pop("_core_slack_alerting_logger", None)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         with pytest.raises(AttributeError) as read:
             _ = router.slack_alerting_logger
         with pytest.raises(AttributeError) as deleted:
             del router.slack_alerting_logger
-        del router.__dict__["_core_kubernetes_pod_discovery"]
+        del router._core.__dict__["_core_kubernetes_pod_discovery"]
         with pytest.raises(AttributeError) as setting:
             _ = router.kubernetes_pod_discovery
     for caught, name in ((read, "slack_alerting_logger"), (setting, "kubernetes_pod_discovery")):
