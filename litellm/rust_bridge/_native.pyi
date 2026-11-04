@@ -15,6 +15,7 @@ class ProcessReservedForForking(RuntimeError): ...
 
 def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
+def native_redis_breaker_states() -> list[str]: ...
 
 @final
 class NativeClickHouseSpendConfig:
@@ -25,6 +26,23 @@ class NativeClickHouseSpendStorage:
     def __new__(cls, config: NativeClickHouseSpendConfig) -> NativeClickHouseSpendStorage: ...
     def ensure_schema(self) -> Future[None]: ...
     def insert_rows(self, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
+
+@final
+class NativeRedisClient:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+    @staticmethod
+    def connect(
+        redis_kwargs: Mapping[str, object],
+        *,
+        namespace: str | None = None,
+        breaker: tuple[int, float, float] | None = None,
+    ) -> NativeRedisClient | None: ...
+
+@final
+class NativeRequestRedis:
+    def __new__(cls, post_call_deadline_seconds: float) -> NativeRequestRedis: ...
+    def flush_pre(self) -> Future[None]: ...
+    def flush_post(self) -> Future[None]: ...
 
 @final
 class NativeDatabase:
@@ -216,6 +234,8 @@ __all__ = [
     "NativeClickHouseSpendStorage",
     "NativeDatabase",
     "NativeDiagnosticProcessor",
+    "NativeRedisClient",
+    "NativeRequestRedis",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
@@ -233,6 +253,7 @@ __all__ = [
     "embedding",
     "gil_stats",
     "messages",
+    "native_redis_breaker_states",
     "ocr",
     "ocr_health_check_document",
     "ocr_passthrough_response",
