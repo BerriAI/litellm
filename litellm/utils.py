@@ -5471,9 +5471,13 @@ def is_known_non_reasoning_model(model: str, custom_llm_provider: str | None) ->
     return info.get("supports_reasoning") is False or info["key"] in GetModelCostMap.loaded_model_cost_map()
 
 
-def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
+def catalog_entry(model: str, custom_llm_provider: str | None) -> Mapping[str, object] | None:
     info: Final = lookup_catalog_model_info(model, custom_llm_provider)
-    return not isinstance(info, ModelInfoLookupMiss) and info["key"] in GetModelCostMap.loaded_model_cost_map()
+    return None if isinstance(info, ModelInfoLookupMiss) else GetModelCostMap.loaded_model_cost_map().get(info["key"])
+
+
+def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
+    return catalog_entry(model, custom_llm_provider) is not None
 
 
 def _dropped_reasoning_warning(model: str, custom_llm_provider: str | None) -> str:

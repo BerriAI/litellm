@@ -241,16 +241,45 @@ def _mapped_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo
         return None
 
 
-def model_reasoning_efforts(model: str, custom_llm_provider: str | None) -> tuple[str, ...] | None:
+def _deployment_model_info(
+    model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> Mapping[str, object] | None:
+    from litellm.utils import catalog_entry
+
+    own_info: Final = as_str_mapping(deployment_model_info)
+    if own_info is None:
+        return _mapped_model_info(model, custom_llm_provider)
+    declared: Final = {key: value for key, value in own_info.items() if value is not None}
+    return {**(catalog_entry(model, custom_llm_provider) or {}), **declared}
+
+
+def _resolved_reasoning_efforts(
+    model_info: Mapping[str, object] | None, model: str, custom_llm_provider: str | None
+) -> tuple[str, ...] | None:
     from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
     from litellm.utils import has_catalog_entry
 
-    model_info: Final = _mapped_model_info(model, custom_llm_provider)
     if model_info is None:
         return None
     return resolve_supported_reasoning_efforts(
         model_info, deployment_is_mapped=has_catalog_entry(model, custom_llm_provider)
     )
+
+
+def model_reasoning_efforts(model: str, custom_llm_provider: str | None) -> tuple[str, ...] | None:
+    return _resolved_reasoning_efforts(_mapped_model_info(model, custom_llm_provider), model, custom_llm_provider)
+
+
+def deployment_reasoning_efforts(
+    model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> tuple[str, ...] | None:
+    return _resolved_reasoning_efforts(
+        _deployment_model_info(model, custom_llm_provider, deployment_model_info), model, custom_llm_provider
+    )
+
+
+def _declares(model_info: Mapping[str, object] | None, capability: str) -> bool:
+    return model_info is not None and model_info.get(capability) is True
 
 
 def _lowest_tier_instead_of_off(levels: tuple[str, ...] | None) -> str | None:
@@ -260,11 +289,15 @@ def _lowest_tier_instead_of_off(levels: tuple[str, ...] | None) -> str | None:
 
 
 def reasoning_off_level(
-    model: str, custom_llm_provider: str | None, *, drop_params: bool, between_tools: bool
+    model: str,
+    custom_llm_provider: str | None,
+    *,
+    deployment_model_info: object,
+    drop_params: bool,
+    between_tools: bool,
 ) -> str | None:
-    from litellm.utils import supports_none_reasoning_effort, supports_reasoning
-
-    levels: Final = model_reasoning_efforts(model, custom_llm_provider)
+    model_info: Final = _deployment_model_info(model, custom_llm_provider, deployment_model_info)
+    levels: Final = _resolved_reasoning_efforts(model_info, model, custom_llm_provider)
     if levels == () or (between_tools and levels is None):
         return None
     lowest_tier: Final = _lowest_tier_instead_of_off(levels)
@@ -272,8 +305,8 @@ def reasoning_off_level(
         return lowest_tier
     if (
         not drop_params
-        or not supports_reasoning(model, custom_llm_provider)
-        or supports_none_reasoning_effort(model, custom_llm_provider)
+        or not _declares(model_info, "supports_reasoning")
+        or _declares(model_info, "supports_none_reasoning_effort")
     ):
         return REASONING_EFFORT_OFF
     verbose_logger.warning(
@@ -284,10 +317,10 @@ def reasoning_off_level(
     return None
 
 
-def maps_bare_output_effort(model: str, custom_llm_provider: str | None) -> bool:
+def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, deployment_model_info: object) -> bool:
     from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
-    model_info: Final = _mapped_model_info(model, custom_llm_provider)
+    model_info: Final = _deployment_model_info(model, custom_llm_provider, deployment_model_info)
     return (
         model_info is not None
         and model_info.get("default_reasoning_effort") != REASONING_EFFORT_OFF

@@ -346,7 +346,7 @@ def synthetic_model_entry(local_model_cost_map, request):
     ids=["reasons-by-default", "reasoning-off-by-default", "cannot-reason", "no-reasoning-flag"],
 )
 def test_a_bare_output_effort_maps_only_onto_a_model_that_reasons_by_default(synthetic_model_entry, maps):
-    assert maps_bare_output_effort(synthetic_model_entry, "synthetic") is maps
+    assert maps_bare_output_effort(synthetic_model_entry, "synthetic", deployment_model_info=None) is maps
 
 
 @pytest.mark.parametrize(

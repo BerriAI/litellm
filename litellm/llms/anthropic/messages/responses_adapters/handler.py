@@ -53,10 +53,10 @@ from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import (
     REASONING_EFFORT_OFF,
+    deployment_reasoning_efforts,
     litellm_logging_obj_from_kwargs,
     local_model_name,
     maps_bare_output_effort,
-    model_reasoning_efforts,
     normalize_reasoning_effort_value,
     reasoning_off_level,
 )
@@ -278,7 +278,11 @@ def _reasoning_for_target(
         return reasoning
     if effort == REASONING_EFFORT_OFF:
         off_level: Final = reasoning_off_level(
-            model, custom_llm_provider, drop_params=drop_params, between_tools=between_tools
+            model,
+            custom_llm_provider,
+            deployment_model_info=deployment_model_info,
+            drop_params=drop_params,
+            between_tools=between_tools,
         )
         if off_level is None or _responses_api_refuses_reasoning_effort(model, custom_llm_provider):
             return None
@@ -319,7 +323,7 @@ def _model_excludes_effort(
 ) -> bool:
     if deployment_rounds_reasoning_effort(deployment_model_info):
         return False
-    levels: Final = model_reasoning_efforts(model, custom_llm_provider) or ()
+    levels: Final = deployment_reasoning_efforts(model, custom_llm_provider, deployment_model_info) or ()
     return bool(levels) and effort not in levels
 
 
@@ -367,7 +371,8 @@ def _maps_reasoning(
     thinking: Mapping[str, object] | None, model: str, provider: str | None, forwarded_kwargs: Mapping[str, object]
 ) -> bool:
     return bool(thinking) or (
-        forwarded_kwargs.get("reasoning_effort") is None and maps_bare_output_effort(model, provider)
+        forwarded_kwargs.get("reasoning_effort") is None
+        and maps_bare_output_effort(model, provider, deployment_model_info=forwarded_kwargs.get("model_info"))
     )
 
 
@@ -466,7 +471,7 @@ def _build_responses_kwargs(
             custom_llm_provider=provider,
             deployment_model_info=forwarded_kwargs.get("model_info"),
             drop_params=drop_params,
-            between_tools=thinking is not None and thinking.get("type") == "between_tools",
+            between_tools=isinstance(thinking, dict) and thinking.get("type") == "between_tools",
         )
         if _maps_reasoning(thinking, model, provider, forwarded_kwargs)
         else None

@@ -271,6 +271,7 @@ class AnthropicAdapter:
         api_base: str | None = None,
         drop_params: bool = True,
         translate_bare_output_effort: bool = False,
+        deployment_model_info: object = None,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
         Translate Anthropic request params to OpenAI format, returning tool name mapping.
@@ -308,6 +309,7 @@ class AnthropicAdapter:
             drop_params=drop_params,
             report_reasoning_drops=True,
             translate_bare_output_effort=translate_bare_output_effort,
+            deployment_model_info=deployment_model_info,
         )
 
         return translated_body, tool_name_mapping
@@ -1166,10 +1168,13 @@ class LiteLLMAnthropicMessagesAdapter:
         ) and custom_llm_provider not in _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS
 
     @staticmethod
-    def _bare_output_effort(output_effort: object, model: str, custom_llm_provider: str | None) -> str | None:
+    def _bare_output_effort(
+        output_effort: object, model: str, custom_llm_provider: str | None, deployment_model_info: object
+    ) -> str | None:
         return (
             output_effort
-            if isinstance(output_effort, str) and maps_bare_output_effort(model, custom_llm_provider)
+            if isinstance(output_effort, str)
+            and maps_bare_output_effort(model, custom_llm_provider, deployment_model_info=deployment_model_info)
             else None
         )
 
@@ -1188,6 +1193,7 @@ class LiteLLMAnthropicMessagesAdapter:
         drop_params: bool = True,
         report_reasoning_drops: bool = False,
         translate_bare_output_effort: bool = False,
+        deployment_model_info: object = None,
     ) -> None:
         """Translate Anthropic thinking to either thinking or reasoning_effort.
 
@@ -1250,7 +1256,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 report_reasoning_drops=report_reasoning_drops,
             )
             if thinking
-            else self._bare_output_effort(output_effort, model, custom_llm_provider)
+            else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)
             if translate_bare_output_effort and mirrors_responses_bridge
             else None
         )
@@ -1268,6 +1274,7 @@ class LiteLLMAnthropicMessagesAdapter:
             reasoning_off_level(
                 model,
                 custom_llm_provider,
+                deployment_model_info=deployment_model_info,
                 drop_params=drop_params,
                 between_tools=is_between_tools,
             )
@@ -1327,6 +1334,7 @@ class LiteLLMAnthropicMessagesAdapter:
         drop_params: bool = True,
         report_reasoning_drops: bool = False,
         translate_bare_output_effort: bool = False,
+        deployment_model_info: object = None,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
@@ -1383,6 +1391,7 @@ class LiteLLMAnthropicMessagesAdapter:
             drop_params=drop_params,
             report_reasoning_drops=report_reasoning_drops,
             translate_bare_output_effort=translate_bare_output_effort,
+            deployment_model_info=deployment_model_info,
         )
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(

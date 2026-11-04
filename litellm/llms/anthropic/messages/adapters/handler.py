@@ -669,6 +669,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             api_base=api_base if isinstance(api_base, str) else None,
             drop_params=drop_params,
             translate_bare_output_effort=extra_kwargs.get("reasoning_effort") is None,
+            deployment_model_info=extra_kwargs.get("model_info"),
         )
 
         if openai_request is None:

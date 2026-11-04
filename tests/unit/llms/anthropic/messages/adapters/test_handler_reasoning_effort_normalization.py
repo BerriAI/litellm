@@ -690,7 +690,9 @@ class TestAnOpenAIChatRouteRequestGetsTheResponsesBridgeThinkingControls:
             model, "openai", thinking=None, messages=MESSAGES, output_config={"effort": "high"}
         )
 
-        assert sent.get("reasoning_effort") == ("high" if maps_bare_output_effort(model, "openai") else None)
+        assert sent.get("reasoning_effort") == (
+            "high" if maps_bare_output_effort(model, "openai", deployment_model_info=None) else None
+        )
 
     def test_an_explicit_reasoning_effort_beats_a_bare_output_effort(self, local_model_cost_map: None) -> None:
         sent: Final = _chat_completion_kwargs(
@@ -840,3 +842,93 @@ class TestDisabledOnAnOffMapOpenAIDeployment:
         )
 
         assert reasoning_key not in sent
+
+
+async def _bodies_sent_alone_and_beside_a_sibling(
+    respx_mock: respx.MockRouter,
+    litellm_params: Mapping[str, object],
+    sibling_model_info: Mapping[str, object],
+    upstream_url: str,
+    upstream_body: Mapping[str, object],
+    **messages_params: object,
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    route: Final = respx_mock.post(url__regex=upstream_url).mock(return_value=httpx.Response(200, json=upstream_body))
+    deployment: Final = {"model_name": "group", "litellm_params": {**litellm_params}, "model_info": {}}
+    sibling: Final = {"model_name": "sibling", "litellm_params": {**litellm_params}, "model_info": {**sibling_model_info}}
+    await Router(model_list=[deployment]).aanthropic_messages(
+        model="group", messages=MESSAGES, max_tokens=4096, **messages_params
+    )
+    alone: Final = json.loads(route.calls.last.request.read())
+    await Router(model_list=[sibling, deployment]).aanthropic_messages(
+        model="group", messages=MESSAGES, max_tokens=4096, **messages_params
+    )
+    return alone, json.loads(route.calls.last.request.read())
+
+
+class TestASiblingDeploymentLeavesTheOffSwitchAlone:
+    @pytest.fixture(autouse=True)
+    def _httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "litellm_params, api_base",
+        [
+            ({**_OFF_MAP_OPENAI_DEPLOYMENT, "model": "openai/vendor/off-map-hybrid-reasoner"}, r"https://compatible\.example\.test/v1"),
+            ({"model": "openai/gpt-5-mini", "api_key": "fake-key"}, r"https://api\.openai\.com/v1"),
+        ],
+        ids=["off-map", "catalog"],
+    )
+    @pytest.mark.parametrize(
+        "uses_chat_route, reasoning_key", [(True, "reasoning_effort"), (False, "reasoning")], ids=["chat-route", "responses-bridge"]
+    )
+    async def test_a_first_turn_between_tools_sends_what_the_deployment_sends_alone(
+        self,
+        respx_mock: respx.MockRouter,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        litellm_params: Mapping[str, object],
+        api_base: str,
+        uses_chat_route: bool,
+        reasoning_key: str,
+    ) -> None:
+        upstream_url: Final = f"{api_base}/{'chat/completions' if uses_chat_route else 'responses'}"
+        upstream_body: Final = _CHAT_COMPLETION if uses_chat_route else _RESPONSE
+        monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", uses_chat_route)
+
+        alone, beside = await _bodies_sent_alone_and_beside_a_sibling(
+            respx_mock,
+            litellm_params,
+            {"supports_none_reasoning_effort": True},
+            upstream_url,
+            upstream_body,
+            thinking={"type": "between_tools"},
+        )
+
+        assert beside.get(reasoning_key) == alone.get(reasoning_key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "messages_params",
+    [{"thinking": "enabled"}, {"thinking": "", "output_config": {"effort": "low"}}],
+    ids=["truthy", "falsy-with-effort"],
+)
+async def test_a_non_object_thinking_still_reaches_the_responses_bridge(
+    respx_mock: respx.MockRouter,
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    messages_params: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    sent: Final = await _body_sent_upstream(
+        respx_mock,
+        {"model": "openai/gpt-5-mini", "api_key": "fake-key"},
+        {},
+        r"https://api\.openai\.com/v1/responses",
+        _RESPONSE,
+        **messages_params,
+    )
+
+    assert sent["model"] == "gpt-5-mini"
