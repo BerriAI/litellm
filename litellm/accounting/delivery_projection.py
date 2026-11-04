@@ -17,18 +17,6 @@ def _destination(contribution: Contribution) -> tuple[str, tuple[tuple[str, str]
     )
 
 
-def _delta(delivery: DeliveryProjection) -> tuple[Contribution, ...]:
-    return (
-        *project(delivery.row),
-        *(
-            Contribution(
-                item.table, item.key, tuple((column, -value) for column, value in item.increments), item.values
-            )
-            for item in (() if delivery.previous_payload is None else project(delivery.previous_payload))
-        ),
-    )
-
-
 def _sum(contributions: tuple[Contribution, ...]) -> Contribution:
     first: Final = contributions[0]
     increments: Final = tuple(
@@ -49,7 +37,7 @@ def _sum(contributions: tuple[Contribution, ...]) -> Contribution:
 
 
 def project_deliveries(deliveries: Iterable[DeliveryProjection]) -> tuple[Contribution, ...]:
-    ordered: Final = sorted(chain.from_iterable(_delta(delivery) for delivery in deliveries), key=_destination)
+    ordered: Final = sorted(chain.from_iterable(project(delivery.row) for delivery in deliveries), key=_destination)
     return tuple(_sum(tuple(group)) for _, group in groupby(ordered, key=_destination))
 
 

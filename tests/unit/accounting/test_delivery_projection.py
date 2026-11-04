@@ -49,7 +49,7 @@ def test_deliveries_for_one_destination_sum_and_keep_the_earliest_request_start(
     later: Final = _NOW + timedelta(hours=1)
 
     contributions: Final = project_deliveries(
-        (DeliveryProjection(_payload(0.5, started=later), None), DeliveryProjection(_payload(0.25), None))
+        (DeliveryProjection(_payload(0.5, started=later)), DeliveryProjection(_payload(0.25)))
     )
 
     assert _spend(contributions, "LiteLLM_VerificationToken") == (0.75,)
@@ -63,7 +63,7 @@ def test_the_same_window_in_a_new_period_is_charged_to_its_own_row() -> None:
     next_day: Final = _NOW + timedelta(days=1)
 
     contributions: Final = project_deliveries(
-        (DeliveryProjection(_payload(0.25), None), DeliveryProjection(_payload(0.5, window_start=next_day), None))
+        (DeliveryProjection(_payload(0.25)), DeliveryProjection(_payload(0.5, window_start=next_day)))
     )
 
     windows: Final = sorted(
@@ -74,15 +74,8 @@ def test_the_same_window_in_a_new_period_is_charged_to_its_own_row() -> None:
     assert windows == [(_NOW.isoformat(), 0.25), (next_day.isoformat(), 0.5)]
 
 
-def test_a_replaced_payload_applies_only_its_difference_from_the_previous_charge() -> None:
-    contributions: Final = project_deliveries((DeliveryProjection(_payload(0.5), _payload(0.2)),))
-
-    for table in ("LiteLLM_VerificationToken", "LiteLLM_UserTable", "LiteLLM_BudgetWindowSpend"):
-        assert _spend(contributions, table) == (0.5 - 0.2,), table
-
-
 def test_entity_transactions_key_memberships_the_way_the_writer_applies_them() -> None:
-    transactions: Final = entity_transactions(project_deliveries((DeliveryProjection(_payload(0.25), None),)))
+    transactions: Final = entity_transactions(project_deliveries((DeliveryProjection(_payload(0.25)),)))
 
     assert transactions["key_list_transactions"] == {"key": 0.25}
     assert transactions["org_list_transactions"] == {"org::1": 0.25}

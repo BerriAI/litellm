@@ -366,8 +366,8 @@ def test_delivery_migration_replay_preserves_ledger_receipts(delivery_database, 
     if state is not None:
         _insert(delivery_database, (_row("replay"),))
         delivery_database.execute(
-            'UPDATE "LiteLLM_SpendLogDelivery" SET state=%s, attempts=3, last_error=%s, previous_payload=%s',
-            (state, "retained failure", '{"spend": 0}'),
+            'UPDATE "LiteLLM_SpendLogDelivery" SET state=%s, attempts=3, last_error=%s',
+            (state, "retained failure"),
         )
     before = delivery_database.execute('SELECT * FROM "LiteLLM_SpendLogDelivery"').fetchall()
     migration = (_MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql").read_text()
@@ -393,16 +393,11 @@ def test_delivery_migration_preserves_unused_old_receipts(state):
         assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (0,)
 
 
-@pytest.mark.parametrize("column", ["accounting_payload", "previous_payload"])
 @pytest.mark.asyncio
-async def test_malformed_payload_is_parked_without_losing_other_deliveries(delivery_database, delivery_client, column):
+async def test_malformed_payload_is_parked_without_losing_other_deliveries(delivery_database, delivery_client):
     _insert(delivery_database, (_row("bad"), _row("good")))
-    from psycopg import sql
-
     delivery_database.execute(
-        sql.SQL('UPDATE "LiteLLM_SpendLogDelivery" SET {}=$$ [] $$::jsonb WHERE request_id=$$bad$$').format(
-            sql.Identifier(column)
-        )
+        'UPDATE "LiteLLM_SpendLogDelivery" SET accounting_payload=$$ [] $$::jsonb WHERE request_id=$$bad$$'
     )
 
     async def apply(transaction, deliveries):

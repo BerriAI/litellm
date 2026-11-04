@@ -42,13 +42,11 @@ class _Delivery(BaseModel):
     delivery_id: str
     attempts: int
     accounting_payload: JsonValue
-    previous_payload: JsonValue = None
 
 
 @dataclass(frozen=True, slots=True)
 class DeliveryProjection:
     row: Mapping[str, object]
-    previous_payload: Mapping[str, object] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,19 +70,19 @@ class DeliveryMetrics(BaseModel):
 _DELIVERIES: Final = TypeAdapter(tuple[_Delivery, ...])
 _PAYLOAD: Final = TypeAdapter(dict[str, object])
 _TIMEOUT: Final = timedelta(seconds=60)
-_CLAIM: Final = """SELECT delivery_id, attempts, accounting_payload, previous_payload FROM "LiteLLM_SpendLogDelivery"
+_CLAIM: Final = """SELECT delivery_id, attempts, accounting_payload FROM "LiteLLM_SpendLogDelivery"
 WHERE state = 'pending' AND next_attempt_at <= CURRENT_TIMESTAMP
   AND (attempts > 0) = $2::boolean
 ORDER BY next_attempt_at, delivery_id LIMIT $1::integer FOR UPDATE SKIP LOCKED"""
 _APPLIED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
-SET state = 'applied', applied_at = CURRENT_TIMESTAMP, previous_payload = NULL, last_error = NULL
+SET state = 'applied', applied_at = CURRENT_TIMESTAMP, last_error = NULL
 WHERE delivery_id = ANY($1::text[]) AND state = 'pending' """
 _FAILED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET attempts = attempts + 1, last_error = $3,
     next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)))::integer),
     state = $4::"AccountingDeliveryState"
 WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer
-RETURNING delivery_id, attempts, accounting_payload, previous_payload"""
+RETURNING delivery_id, attempts, accounting_payload"""
 
 
 class AccountingDeliveryRepository:
@@ -144,12 +142,7 @@ class AccountingDeliveryRepository:
                 await apply(
                     transaction,
                     tuple(
-                        DeliveryProjection(
-                            _PAYLOAD.validate_python(delivery.accounting_payload),
-                            None
-                            if delivery.previous_payload is None
-                            else _PAYLOAD.validate_python(delivery.previous_payload),
-                        )
+                        DeliveryProjection(_PAYLOAD.validate_python(delivery.accounting_payload))
                         for delivery in claimed
                     ),
                 )

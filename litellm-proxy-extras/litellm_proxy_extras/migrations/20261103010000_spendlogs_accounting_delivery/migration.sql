@@ -9,7 +9,6 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogDelivery" (
     "last_error" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "accounting_payload" JSONB NOT NULL,
-    "previous_payload" JSONB,
     "is_batch" BOOLEAN NOT NULL
 );
 CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogDelivery_state_next_attempt_at_idx"
