@@ -3,11 +3,10 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import urlsplit
 
 import httpx
-from openai.types.responses import ResponseReasoningItem
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
@@ -72,6 +71,16 @@ def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[st
     return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
 
 
+_AZURE_REJECTED_INPUT_FIELDS: Final = MappingProxyType(
+    {"message": frozenset({"status"}), "reasoning": frozenset({"status", "content"})}
+)
+
+
+def _without_azure_rejected_fields(item: Mapping[str, object]) -> Mapping[str, object]:
+    rejected: Final = _AZURE_REJECTED_INPUT_FIELDS.get(str(item.get("type")), frozenset())
+    return {key: value for key, value in item.items() if key not in rejected} if rejected else item
+
+
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     # Parameters not supported by Azure Responses API
     AZURE_UNSUPPORTED_PARAMS = ["context_management"]
@@ -122,66 +131,14 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_stripped_model_name(self, model: str) -> str:
         return model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
 
-    def _handle_reasoning_item(self, item: dict[str, Any]) -> Mapping[str, object]:
-        """
-        Handle reasoning items to filter out the status field.
-        Issue: https://github.com/BerriAI/litellm/issues/13484
-
-        Azure OpenAI API does not accept 'status' field in reasoning input items.
-        """
-        if item.get("type") == "reasoning":
-            try:
-                # Ensure required fields are present for ResponseReasoningItem
-                item_data: Final = dict(item)
-                if "summary" not in item_data:
-                    item_data["summary"] = (
-                        item_data.get("reasoning_content", "")[:100] + "..."
-                        if len(item_data.get("reasoning_content", "")) > 100
-                        else item_data.get("reasoning_content", "")
-                    )
-
-                # Create ResponseReasoningItem object from the item data
-                reasoning_item: Final = ResponseReasoningItem.model_validate(item_data)
-
-                # Convert back to dict with exclude_none=True to exclude None fields
-                dict_reasoning_item: Final = reasoning_item.model_dump(exclude_none=True)
-                dict_reasoning_item.pop("status", None)
-
-                return dict_reasoning_item
-            except Exception as e:
-                verbose_logger.debug("Failed to create ResponseReasoningItem, falling back to manual filtering: %s", e)
-                # Fallback: manually filter out known None fields
-                filtered_item: Final = {
-                    k: v
-                    for k, v in item.items()
-                    if v is not None or k not in {"status", "content", "encrypted_content"}
-                }
-                return filtered_item
-        return item
-
     def _validate_input_param(
         self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
     ) -> str | ResponseInputParam:
-        """Omit reasoning content from Azure input without changing existing status handling."""
-        from typing import cast
-
         validated_input: Final = super()._validate_input_param(input, drops_set_created_by=drops_set_created_by)
-
-        if isinstance(validated_input, list):
-            filtered_input: Final[list[object]] = []
-            for item in validated_input:
-                if not isinstance(item, dict):
-                    filtered_input.append(item)
-                    continue
-                if item.get("type") == "message":
-                    filtered_input.append({k: v for k, v in item.items() if k != "status"})
-                elif item.get("type") == "reasoning":
-                    filtered_input.append({k: v for k, v in item.items() if k != "content"})
-                else:
-                    filtered_input.append(item)
-            return cast(ResponseInputParam, filtered_input)
-
-        return validated_input
+        if not isinstance(validated_input, list):
+            return validated_input
+        sanitized_items: Final = [_without_azure_rejected_fields(item) for item in validated_input]
+        return cast("ResponseInputParam", sanitized_items)  # cast-ok: items keep their shape minus rejected fields
 
     def transform_responses_api_request(
         self,
