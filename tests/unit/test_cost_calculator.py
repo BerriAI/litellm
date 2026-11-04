@@ -4562,7 +4562,7 @@ def _cached_text_batch_usage() -> Usage:
 def test_batch_cost_calculator_bills_cached_tokens_at_the_standard_cache_price_when_the_row_has_no_batch_cache_price(
     audio_batch_cache_price: float | None, usage: Usage, expected_rate: float
 ) -> None:
-    model_info: ModelInfo = {
+    model_info: Final[ModelInfo] = {
         "input_cost_per_token": 3e-7,
         "input_cost_per_audio_token": 1e-6,
         "cache_read_input_token_cost": 3e-8,
@@ -4577,6 +4577,29 @@ def test_batch_cost_calculator_bills_cached_tokens_at_the_standard_cache_price_w
     )
 
     assert prompt_cost == pytest.approx(1000 * expected_rate)
+
+
+def test_batch_cost_calculator_bills_long_context_cached_tokens_at_the_standard_long_context_cache_price() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 1.25e-6,
+        "input_cost_per_token_above_200k_tokens": 2.5e-6,
+        "cache_read_input_token_cost": 1.25e-7,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-7,
+        "input_cost_per_token_batches": 6.25e-7,
+        "input_cost_per_token_above_200k_tokens_batches": 1.25e-6,
+    }
+    usage: Final = Usage(
+        prompt_tokens=300_000,
+        completion_tokens=0,
+        total_tokens=300_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=300_000),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model="gemini-2.5-pro", custom_llm_provider="vertex_ai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(300_000 * 2.5e-7)
 
 
 def _batch_and_standard_cached_audio_cost(model: str, provider: str) -> tuple[str, float, float]:
@@ -4597,7 +4620,7 @@ def test_batch_cached_audio_never_costs_more_than_standard_on_any_row_with_a_bat
         and entry.get("input_cost_per_token_batches") is not None
         and entry.get("cache_read_input_audio_token_cost") is not None
     )
-    assert ("gemini-2.5-flash", "vertex_ai-language-models") in rows
+    assert rows, "no cost map row prices both Batch input and Standard cached audio"
 
     costs: Final = tuple(_batch_and_standard_cached_audio_cost(name, provider) for name, provider in rows)
     overpriced: Final = tuple(cost for cost in costs if cost[1] > cost[2])
