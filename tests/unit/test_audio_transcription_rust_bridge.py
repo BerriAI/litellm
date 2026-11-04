@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import Generator
 from typing import Final
 
@@ -301,3 +302,17 @@ def test_bedrock_transcription_rejects_params_it_cannot_honor(unsupported: dict[
     forwarded: Final = bridge.calls[0].resolved["optional_params"]
     assert forwarded["language"] == "fr"
     assert forwarded.keys().isdisjoint(unsupported)
+
+
+def test_bedrock_transcription_warns_that_a_caller_client_is_ignored() -> None:
+    bridge: Final = SyncBridge()
+    NATIVE_TRANSCRIPTION.override(bridge)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        response: Final = litellm.transcription(model=MODEL, file=AUDIO_FILE, client=object())
+
+    ignored: Final = [warning for warning in caught if "client=" in str(warning.message)]
+    assert response.text == "rust"
+    assert len(bridge.calls) == 1
+    assert [(warning.category, warning.filename) for warning in ignored] == [(DeprecationWarning, __file__)]

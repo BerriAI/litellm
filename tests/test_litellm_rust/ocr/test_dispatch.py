@@ -1,3 +1,4 @@
+import warnings
 from collections.abc import Mapping
 from typing import Final, NoReturn
 
@@ -42,6 +43,26 @@ async def test_ocr_does_not_depend_on_chat_cache(
     response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
     assert response.pages[0].markdown == "native OCR response"
     assert len(server.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_ocr_warns_that_a_caller_client_is_ignored(server: RecordingServer, asynchronous: bool) -> None:
+    arguments: Final = {
+        "model": OCR_MODEL,
+        "document": OCR_DOCUMENT,
+        "api_key": "test-key",
+        "api_base": server.base_url,
+        "client": object(),
+    }
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+
+    ignored: Final = [warning for warning in caught if "client=" in str(warning.message)]
+    assert response.pages[0].markdown == "native OCR response"
+    assert len(server.requests) == 1
+    assert [(warning.category, warning.filename) for warning in ignored] == [(DeprecationWarning, __file__)]
 
 
 @pytest.mark.parametrize("failure", ["invalid", "live", "schema"])

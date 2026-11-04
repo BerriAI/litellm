@@ -8751,7 +8751,10 @@ def transcription(
         )
     elif custom_llm_provider == "bedrock":
         from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
+        from litellm.rust_bridge.ignored_arguments import warn_ignored
 
+        if client is not None:
+            warn_ignored("client")
         dispatch: Final = BedrockAudioTranscriptionRustDispatch()
         if atranscription:
             response = dispatch.async_audio_transcriptions(

@@ -1,9 +1,10 @@
+import warnings
 from collections.abc import Mapping, Sequence
 from typing import Final
 
 import pytest
 
-from litellm.rust_bridge.public_call import AsyncFlag, native_call, signature
+from litellm.rust_bridge.public_call import AsyncFlag, native_call, native_call_hook, signature
 
 
 def _messages(
@@ -76,3 +77,34 @@ def test_flag_keywords_name_positionals_and_drop_only_the_flag() -> None:
 def test_flag_keywords_reject_a_parameter_given_twice() -> None:
     with pytest.raises(TypeError):
         _FLAG.keywords((128,), {"max_tokens": 64})
+
+
+def _hook_kwargs(supplied: Mapping[str, object]) -> tuple[Mapping[str, object], tuple[warnings.WarningMessage, ...]]:
+    call: Final = native_call(_SIGNATURE, (128, [], "model"), supplied)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        seen: Final = native_call_hook(lambda hooked: hooked.kwargs, call, (), {})
+    return seen, tuple(warning for warning in caught if issubclass(warning.category, DeprecationWarning))
+
+
+def test_hook_drops_a_caller_client_and_warns_at_the_callers_line() -> None:
+    extra_body: Final = {"pages": [0]}
+
+    seen, caught = _hook_kwargs({"client": object(), "pages": [1, 2], "extra_body": extra_body})
+
+    assert seen == {"pages": [1, 2], "extra_body": extra_body}
+    assert seen["extra_body"] is extra_body
+    assert len(caught) == 1
+    assert "client=" in str(caught[0].message)
+    assert caught[0].filename == __file__
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    ({"shared_session": object(), "api_key": "k"}, {"client": None, "api_key": "k"}, {"api_key": "k"}),
+)
+def test_hook_drops_internal_or_unset_clients_without_warning(supplied: Mapping[str, object]) -> None:
+    seen, caught = _hook_kwargs(supplied)
+
+    assert seen == {"api_key": "k"}
+    assert caught == ()
