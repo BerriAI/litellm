@@ -5932,7 +5932,7 @@ class PythonCore(DeprecatedRouterMembers):
             return deployments
 
         await self.scheduler.wait_for_turn(
-            request=FlowItem(priority=priority, request_id=str(uuid.uuid4()), model_name=model),
+            request=FlowItem(priority=priority, request_id=str(uuid.uuid7()), model_name=model),
             timeout=self.timeout,
             get_healthy_deployments=healthy_deployments,
         )

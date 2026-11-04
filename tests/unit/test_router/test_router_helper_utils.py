@@ -32,8 +32,17 @@ from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import VertexChirpRealtimeConfig
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
+from litellm.scheduler import FlowItem
 from litellm.types.litellm_params import RoutingStrategyName
-from litellm.types.router import AlertingConfig, Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
+from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.router import (
+    AlertingConfig,
+    Deployment,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    ModelInfo,
+    RouterRateLimitError,
+)
 from litellm.types.utils import (
     CallTypes,
     ModelResponse,
@@ -298,6 +307,43 @@ async def test_router_schedule_factory(model_list):
         )
         mock_atext_completion.assert_awaited_once()
         assert "priority" not in mock_atext_completion.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_router_admits_queued_requests_of_equal_priority_in_arrival_order():
+    rate_limited_deployment: Final = {"api_key": "fake-key", "mock_response": "litellm.RateLimitError"}
+    router: Final = Router(
+        model_list=[
+            {"model_name": "queued", "litellm_params": {"model": "openai/first", **rate_limited_deployment}},
+            {"model_name": "queued", "litellm_params": {"model": "openai/second", **rate_limited_deployment}},
+        ],
+        allowed_fails=0,
+        cooldown_time=60,
+        num_retries=0,
+        polling_interval=0.001,
+    )
+    rate_limited: Final = (litellm.RateLimitError, RouterRateLimitError)
+
+    async def send(priority: int | None) -> None:
+        with pytest.raises(rate_limited):
+            await router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # untyped **kwargs
+                model="queued", messages=[ChatCompletionUserMessage(role="user", content="hi")], priority=priority
+            )
+
+    async def send_in_line(arrival: int) -> int:
+        await send(priority=1)
+        return arrival
+
+    for _ in range(4):
+        await send(priority=None)
+    await router.scheduler.add_request(FlowItem(priority=0, request_id="head-of-line", model_name="queued"))
+    requests: Final = tuple(asyncio.create_task(send_in_line(arrival)) for arrival in range(20))
+    while len(await router.scheduler.get_queue(model_name="queued")) < len(requests) + 1:
+        await asyncio.sleep(0)
+    await router.scheduler.remove_request(request_id="head-of-line", model_name="queued")
+    admitted: Final = tuple([await request for request in asyncio.as_completed(requests)])
+
+    assert admitted == tuple(range(20))
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
