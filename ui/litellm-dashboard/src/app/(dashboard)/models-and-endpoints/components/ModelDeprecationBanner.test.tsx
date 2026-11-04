@@ -157,6 +157,65 @@ describe("ModelDeprecationBanner", () => {
     expect(entries[0]).toHaveTextContent("o4-mini (openai) was deprecated on 2026-10-23");
   });
 
+  it("keeps entries with different successors and renders each migration target", () => {
+    const firstEntryOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "team-model-a",
+      team_public_model_name: "shared-model",
+      litellm_provider: "openai",
+      deprecation_date: "2026-10-23",
+      days_until_deprecation: -1,
+      status: "deprecated",
+      successor_model: "successor-a",
+    };
+    const secondEntryOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "shared-model",
+      litellm_provider: "openai",
+      deprecation_date: "2026-10-23",
+      days_until_deprecation: -1,
+      status: "deprecated",
+      successor_model: "successor-b",
+    };
+    const firstEntry = makeInfo(firstEntryOverrides);
+    const secondEntry = makeInfo(secondEntryOverrides);
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ deprecated: [firstEntry, secondEntry] })));
+
+    render(<ModelDeprecationBanner />);
+
+    const entries = within(screen.getByRole("list")).getAllByRole("listitem");
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toHaveTextContent("shared-model (openai) was deprecated on 2026-10-23, migrate to successor-a");
+    expect(entries[1]).toHaveTextContent("shared-model (openai) was deprecated on 2026-10-23, migrate to successor-b");
+  });
+
+  it("keeps entries with different deprecation dates", () => {
+    const firstEntryOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "shared-model",
+      litellm_provider: "openai",
+      deprecation_date: "2026-10-22",
+      days_until_deprecation: -2,
+      status: "deprecated",
+      successor_model: "successor",
+    };
+    const secondEntryOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "shared-model",
+      litellm_provider: "openai",
+      deprecation_date: "2026-10-23",
+      days_until_deprecation: -1,
+      status: "deprecated",
+      successor_model: "successor",
+    };
+    const firstEntry = makeInfo(firstEntryOverrides);
+    const secondEntry = makeInfo(secondEntryOverrides);
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ deprecated: [firstEntry, secondEntry] })));
+
+    render(<ModelDeprecationBanner />);
+
+    const entries = within(screen.getByRole("list")).getAllByRole("listitem");
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toHaveTextContent("shared-model (openai) was deprecated on 2026-10-22");
+    expect(entries[1]).toHaveTextContent("shared-model (openai) was deprecated on 2026-10-23");
+  });
+
   it("dismisses the banner and keeps it dismissed after remounting the same entries", async () => {
     const info = makeInfo();
     const secondInfo = makeInfo({ model_name: "claude-sonnet-4" });
@@ -236,6 +295,24 @@ describe("ModelDeprecationBanner", () => {
 
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText("1 model is deprecated")).toBeInTheDocument();
+  });
+
+  it("shows the banner again when an entry's successor changes after dismissal", async () => {
+    const entry = makeInfo({ successor_model: "successor-a" });
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent: [entry] })));
+    const user = userEvent.setup();
+    const { rerender } = render(<ModelDeprecationBanner />);
+
+    await user.click(screen.getByRole("button", { name: "Dismiss deprecation warning" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    mockedUseModelDeprecations.mockReturnValue(
+      queryResult(makeResponse({ imminent: [makeInfo({ ...entry, successor_model: "successor-b" })] })),
+    );
+    rerender(<ModelDeprecationBanner />);
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText(/migrate to successor-b/)).toBeInTheDocument();
   });
 
   it("expands all entries and collapses back to the first five", async () => {

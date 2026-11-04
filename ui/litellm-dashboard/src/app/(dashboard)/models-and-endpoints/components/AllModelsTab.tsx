@@ -20,6 +20,7 @@ import { createParser, parseAsInteger, parseAsString, parseAsStringLiteral, useQ
 import { useCallback, useMemo, useState } from "react";
 
 import { useModelsInfo } from "../../hooks/models/useModels";
+import { modelDeprecationKeys } from "../../hooks/models/useModelDeprecations";
 import { invalidateModelQueries } from "../../hooks/models/invalidateModelQueries";
 import { ROUTING_STATUS_FILTER_ID, routingStatusToBlocked } from "../utils/routingStatus";
 import { transformModelData } from "../utils/modelDataTransformer";
@@ -297,8 +298,9 @@ const AllModelsTab = ({
   );
 
   const handleRefresh = useCallback(() => {
-    void invalidateModelQueries(queryClient);
-  }, [queryClient]);
+    refetchModels();
+    void queryClient.invalidateQueries({ queryKey: modelDeprecationKeys.all });
+  }, [queryClient, refetchModels]);
 
   const handleDeleteClick = useCallback((modelId: string) => {
     setDeleteModalModelId(modelId);

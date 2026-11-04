@@ -1,4 +1,5 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
+import { useQuery } from "@tanstack/react-query";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
@@ -207,6 +208,11 @@ const renderModelsWithDeprecationBanner = () =>
       <ModelDeprecationBanner />
     </>,
   );
+
+const ModelListQueryProbe = ({ queryFn }: { queryFn: () => Promise<string> }) => {
+  useQuery({ queryKey: ["models", "list"], queryFn, staleTime: Infinity });
+  return null;
+};
 
 describe("AllModelsTab", () => {
   beforeEach(() => {
@@ -631,6 +637,31 @@ describe("AllModelsTab", () => {
     expect(await screen.findByText("current-model deprecates on 2026-11-30, in 26 days")).toBeInTheDocument();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(screen.queryByText("old-model was deprecated on 2026-06-01")).not.toBeInTheDocument();
+  });
+
+  it("refreshes the table and deprecations once without refetching another models list observer", async () => {
+    const fetchMock = stubDeprecationResponses();
+    const observerQueryFn = vi.fn<() => Promise<string>>().mockResolvedValue("models");
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <AllModelsTab {...defaultProps} />
+        <ModelDeprecationBanner />
+        <ModelListQueryProbe queryFn={observerQueryFn} />
+      </>,
+    );
+
+    expect(await screen.findByText("old-model was deprecated on 2026-06-01")).toBeInTheDocument();
+    await waitFor(() => expect(observerQueryFn).toHaveBeenCalledTimes(1));
+    mockRefetch.mockClear();
+    fetchMock.mockClear();
+
+    await user.click(screen.getByTestId("datatable-refresh"));
+
+    expect(await screen.findByText("current-model deprecates on 2026-11-30, in 26 days")).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(observerQueryFn).toHaveBeenCalledTimes(1);
+    expect(mockRefetch).toHaveBeenCalledTimes(1);
   });
 
   it("opens the model settings modal from the toolbar", async () => {

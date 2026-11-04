@@ -2,22 +2,30 @@ import type { ModelDeprecationInfo } from "@/app/(dashboard)/hooks/models/useMod
 
 const shownModelName = (info: ModelDeprecationInfo): string => info.team_public_model_name ?? info.model_name;
 
+const hasSameDedupeKey = (candidate: ModelDeprecationInfo, info: ModelDeprecationInfo): boolean => {
+  const sameDisplayedModel = shownModelName(candidate) === shownModelName(info);
+  const sameProvider = (candidate.litellm_provider ?? null) === (info.litellm_provider ?? null);
+  const sameDeprecationDate = candidate.deprecation_date === info.deprecation_date;
+  const sameSuccessor = (candidate.successor_model ?? null) === (info.successor_model ?? null);
+  const sameVisibleIdentity = sameDisplayedModel && sameProvider;
+  const sameDeprecationIdentity = sameDeprecationDate && sameSuccessor;
+  return sameVisibleIdentity && sameDeprecationIdentity;
+};
+
 export const dedupeDeprecationEntries = (infos: readonly ModelDeprecationInfo[]): ModelDeprecationInfo[] =>
-  infos.filter(
-    (info, index) =>
-      infos.findIndex(
-        (candidate) =>
-          shownModelName(candidate) === shownModelName(info) &&
-          (candidate.litellm_provider ?? null) === (info.litellm_provider ?? null) &&
-          candidate.deprecation_date === info.deprecation_date,
-      ) === index,
-  );
+  infos.filter((info, index) => infos.findIndex((candidate) => hasSameDedupeKey(candidate, info)) === index);
 
 export const deprecationBannerFingerprint = (infos: readonly ModelDeprecationInfo[]): string =>
   JSON.stringify(
     infos
       .map((info) =>
-        JSON.stringify([shownModelName(info), info.litellm_provider ?? null, info.deprecation_date, info.status]),
+        JSON.stringify([
+          shownModelName(info),
+          info.litellm_provider ?? null,
+          info.deprecation_date,
+          info.status,
+          info.successor_model ?? null,
+        ]),
       )
       .sort(),
   );
