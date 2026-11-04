@@ -1,4 +1,3 @@
-import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
@@ -239,10 +238,6 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
         <Separator />
 
         <div className="py-1">
-          <div className="flex h-[38px] items-center justify-between px-3">
-            <span className="text-[13px]">Appearance</span>
-            <ThemeToggle />
-          </div>
           {toggles.map((toggle) => (
             <div key={toggle.key} className="flex h-[38px] items-center justify-between gap-3 px-3">
               <span className="text-[13px] text-foreground">{toggle.label}</span>

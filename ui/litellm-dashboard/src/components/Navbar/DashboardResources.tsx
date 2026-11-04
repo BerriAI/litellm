@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { BookOpen, Github, Newspaper, ScrollText, Slack } from "lucide-react";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
@@ -58,7 +59,7 @@ export function DashboardCommunityLinks({ className }: { className?: string }) {
   );
 }
 
-export function DashboardResources() {
+export function DashboardResources({ children }: { children?: ReactNode }) {
   const hideBlog = useDisableBlogPosts();
   const hideCommunity = useDisableShowPrompts();
   const { data, isPending, isError, refetch } = useBlogPosts();
@@ -66,7 +67,7 @@ export function DashboardResources() {
   return (
     <>
       {!hideBlog && (
-        <section aria-label="Latest posts" className="border-t border-border p-2">
+        <section aria-label="Latest posts" className="border-t border-border px-2 py-2">
           {isPending && <p className="px-2 py-3 text-xs text-muted-foreground">Loading posts…</p>}
           {isError && (
             <Button variant="ghost" size="sm" onClick={() => void refetch()}>
@@ -79,33 +80,36 @@ export function DashboardResources() {
               href={post.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-baseline justify-between gap-4 rounded-md px-2 py-2 text-sm hover:bg-muted focus-visible:outline-ring"
+              className="flex items-baseline justify-between gap-4 rounded-md px-2 py-2 text-[13px] leading-5 hover:bg-muted focus-visible:outline-ring"
             >
               <span className="line-clamp-2">{post.title}</span>
-              <time dateTime={post.date} className="shrink-0 text-xs text-muted-foreground">
+              <time dateTime={post.date} className="shrink-0 text-[11px] text-muted-foreground">
                 {new Date(`${post.date}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
               </time>
             </a>
           ))}
         </section>
       )}
-      <nav aria-label="Help and resources" className="grid grid-cols-3 gap-1 border-t border-border p-2">
-        {links.map(({ href, label, Icon }) => (
-          <a
-            key={label}
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={cn(
-              buttonVariants({ variant: "ghost", size: "sm" }),
-              "justify-start gap-2 text-xs font-normal text-muted-foreground",
-            )}
-          >
-            <Icon />
-            {label}
-          </a>
-        ))}
-      </nav>
+      <div className="border-t border-border bg-muted/25 p-2">
+        <nav aria-label="Help and resources" className="grid grid-cols-3 gap-1">
+          {links.map(({ href, label, Icon }) => (
+            <a
+              key={label}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn(
+                buttonVariants({ variant: "ghost", size: "sm" }),
+                "justify-start gap-2 text-xs font-normal text-muted-foreground",
+              )}
+            >
+              <Icon />
+              {label}
+            </a>
+          ))}
+        </nav>
+        {children}
+      </div>
     </>
   );
 }

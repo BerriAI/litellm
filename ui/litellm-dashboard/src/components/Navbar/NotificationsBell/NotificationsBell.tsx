@@ -17,7 +17,7 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cva.config";
 import { isNewerVersion } from "@/utils/versionUtils";
-import { Bell } from "lucide-react";
+import { ArrowUpRight, Bell } from "lucide-react";
 import React, { Fragment } from "react";
 
 export const AUTO_ROUTER_DOCS_URL = "https://docs.litellm.ai/docs/proxy/auto_routing";
@@ -70,17 +70,26 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
     <article aria-label={announcement.title} className="flex flex-col gap-2">
       <p className="text-sm font-medium">{announcement.title}</p>
       <p className="text-xs leading-relaxed text-muted-foreground">{announcement.description}</p>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <a
-          className={cn(buttonVariants({ variant: "link", size: "sm" }), "h-auto p-0 text-foreground")}
+          className={cn(
+            buttonVariants({ variant: "link", size: "sm" }),
+            "h-auto gap-1 p-0 text-xs font-normal text-muted-foreground hover:text-foreground",
+          )}
           href={announcement.href}
           target="_blank"
           rel="noopener noreferrer"
         >
           {announcement.linkLabel}
+          <ArrowUpRight className="size-3" aria-hidden />
         </a>
         {read ? null : (
-          <Button variant="link" size="sm" className="px-1!" onClick={() => markAnnouncementRead(announcement.readKey)}>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto px-0! text-xs font-normal text-muted-foreground"
+            onClick={() => markAnnouncementRead(announcement.readKey)}
+          >
             Mark as read
           </Button>
         )}
@@ -90,11 +99,16 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
 };
 
 interface NotificationsBellViewProps {
+  deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
 }
 
-export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({ currentVersion, latestRelease }) => {
+export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
+  currentVersion,
+  latestRelease,
+  deploymentHealthLink,
+}) => {
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
   const announcements = upgrade ? [upgrade, AUTO_ROUTER_ANNOUNCEMENT] : [AUTO_ROUTER_ANNOUNCEMENT];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
@@ -115,7 +129,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({ cu
         aria-label="Notifications"
         className="w-96 max-w-[calc(100vw-1rem)] gap-0 overflow-hidden p-0"
       >
-        <PopoverTitle className="border-b border-border px-4 py-3 text-sm">What&apos;s new</PopoverTitle>
+        <PopoverTitle className="border-b border-border px-4 py-3 text-sm font-semibold">What&apos;s new</PopoverTitle>
         <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
           <div className="space-y-4 p-4">
             {announcements.map((announcement, index) => (
@@ -125,15 +139,24 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({ cu
               </Fragment>
             ))}
           </div>
-          <DashboardResources />
+          <DashboardResources>{deploymentHealthLink}</DashboardResources>
         </div>
       </PopoverContent>
     </Popover>
   );
 };
 
-export const NotificationsBell: React.FC<{ accessToken: string | null }> = ({ accessToken }) => {
+export const NotificationsBell: React.FC<{ accessToken: string | null; deploymentHealthLink?: React.ReactNode }> = ({
+  accessToken,
+  deploymentHealthLink,
+}) => {
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const { data: latestRelease } = useLatestReleaseInfo(accessToken);
-  return <NotificationsBellView currentVersion={healthData?.litellm_version} latestRelease={latestRelease} />;
+  return (
+    <NotificationsBellView
+      currentVersion={healthData?.litellm_version}
+      latestRelease={latestRelease}
+      deploymentHealthLink={deploymentHealthLink}
+    />
+  );
 };

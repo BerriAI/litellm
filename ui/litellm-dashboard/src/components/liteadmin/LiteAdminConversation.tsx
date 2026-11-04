@@ -21,33 +21,15 @@ const ACTION_STATUS: Record<ActionEntry["status"], string> = {
   unknown: "Check result",
 };
 
-const SUGGESTED_QUESTIONS = [
-  "How much have I spent this week?",
-  "Which models are costing the most?",
-  "How can I reduce my spend?",
-];
-
 interface ConversationProps {
   entries: ConversationEntry[];
   thinking: boolean;
-  readOnly?: boolean;
   open: boolean;
   reviewRef: RefObject<HTMLDivElement | null>;
   onAnswer: (id: string, approved: boolean) => void;
-  onQuestion: (question: string) => void;
-  questionsDisabled: boolean;
 }
 
-export function LiteAdminConversation({
-  entries,
-  thinking,
-  open,
-  readOnly = false,
-  reviewRef,
-  onAnswer,
-  onQuestion,
-  questionsDisabled,
-}: ConversationProps) {
+export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAnswer }: ConversationProps) {
   return (
     <MessageScroller.Provider autoScroll>
       <MessageScroller.Root className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -90,28 +72,6 @@ export function LiteAdminConversation({
             )}
           </MessageScroller.Content>
         </MessageScroller.Viewport>
-        {entries.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center overflow-y-auto px-4 py-8 sm:px-6">
-            <div className="w-full max-w-lg space-y-6">
-              <p className="text-xl font-medium tracking-tight">
-                {readOnly ? "Understand your usage." : "What would you like to do?"}
-              </p>
-              <div className="flex flex-col items-start gap-1" aria-label="Suggested questions">
-                {SUGGESTED_QUESTIONS.map((question) => (
-                  <Button
-                    key={question}
-                    variant="ghost"
-                    className="h-auto min-h-10 justify-start whitespace-normal px-0 py-2 text-left font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-                    disabled={questionsDisabled}
-                    onClick={() => onQuestion(question)}
-                  >
-                    {question}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
         <MessageScroller.Button
           aria-label="Jump to latest"
           className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full shadow-sm data-[active=false]:pointer-events-none data-[active=false]:opacity-0"

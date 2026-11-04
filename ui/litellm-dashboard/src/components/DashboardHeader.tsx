@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import { usePathname } from "next/navigation";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { getBreadcrumb } from "@/components/leftnav";
@@ -16,14 +17,17 @@ export function DashboardHeader({
   accessToken,
   navigationTrigger,
   deploymentHealth,
+  deploymentHealthLink,
 }: {
   accessToken: string | null;
   navigationTrigger?: ReactNode;
   deploymentHealth?: ReactNode;
+  deploymentHealthLink?: ReactNode;
 }) {
   const term = useTerminology();
   const { title } = getBreadcrumb(usePathname());
   const { isControlPlane, selectedWorker } = useWorker();
+  const showWorkerSelector = isControlPlane && selectedWorker !== null;
   const handleWorkerSwitch = (workerId: string) => {
     clearTokenCookies();
     clearStoredReturnUrl();
@@ -41,10 +45,13 @@ export function DashboardHeader({
         <CommandPaletteTrigger className="hidden w-56 @min-[640px]:flex @min-[1000px]:w-80" />
         <div className="flex shrink-0 items-center justify-end gap-1">
           <CommandPaletteTrigger mobile className="size-9 @min-[640px]:hidden" />
-          {isControlPlane && selectedWorker !== null && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
-          <DashboardCommunityLinks className="hidden @min-[840px]:flex" />
+          {showWorkerSelector && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
+          <DashboardCommunityLinks
+            className={showWorkerSelector ? "hidden @min-[840px]:flex" : "hidden @min-[400px]:flex"}
+          />
+          <ThemeToggle />
           {deploymentHealth}
-          <NotificationsBell accessToken={accessToken} />
+          <NotificationsBell accessToken={accessToken} deploymentHealthLink={deploymentHealthLink} />
         </div>
       </div>
     </header>

@@ -17,6 +17,7 @@ import {
   createDeploymentHealthHandle,
   DeploymentHealthBanner,
   DeploymentHealthIcon,
+  DeploymentHealthLink,
 } from "@/components/DeploymentHealth/DeploymentHealth";
 import { DeploymentHealthPanel } from "@/components/DeploymentHealth/DeploymentHealthPanel";
 import { UserBanner } from "@/components/UserBanner";
@@ -151,6 +152,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           accessToken={accessToken}
           isPublicPage={false}
           deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+          deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
         />
         <DeploymentHealthBanner handle={deploymentHealthHandle} />
         <DeploymentHealthPanel handle={deploymentHealthHandle} />
@@ -203,6 +205,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
                 </SheetTrigger>
               }
               deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+              deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
             />
             <DeploymentHealthBanner handle={deploymentHealthHandle} />
             <DeploymentHealthPanel handle={deploymentHealthHandle} />
