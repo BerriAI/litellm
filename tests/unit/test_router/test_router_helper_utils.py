@@ -3,8 +3,9 @@ import functools
 import gc
 import json
 import os
+import uuid
 import weakref
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from datetime import datetime, timezone
 from types import MethodType
 from typing import Final
@@ -13,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from websockets.exceptions import ConnectionClosed
+from websockets.frames import Close
 
 import litellm
 from litellm import Router
@@ -21,8 +24,14 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.realtime_errors import close_after_upstream_handshake_refusal
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import VertexChirpRealtimeConfig
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.router import AlertingConfig, Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.types.utils import (
@@ -538,6 +547,242 @@ async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(
     )
     assert realtime_key is None
     assert await router.cache.async_get_cache(key=tpm_key) == 17
+
+
+class _DiscardingLoggingWorker:
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None:
+        async_coroutine.close()
+
+
+async def _client_never_sends() -> str:
+    await asyncio.Event().wait()
+    raise AssertionError("unreachable")
+
+
+def _realtime_client_ws() -> MagicMock:
+    client_ws: Final = MagicMock()
+    client_ws.headers = {}
+    client_ws.receive_text = AsyncMock(side_effect=_client_never_sends)
+    client_ws.send_text = AsyncMock()
+    client_ws.close = AsyncMock()
+    return client_ws
+
+
+def _realtime_session_logging() -> LiteLLMLogging:
+    return LiteLLMLogging(
+        model="gpt-realtime-2.1",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id=str(uuid.uuid4()),
+        function_id="realtime-session",
+    )
+
+
+async def _relay_upstream(
+    litellm_logging_obj: LiteLLMLogging,
+    *upstream_frames: bytes | Exception,
+    client_ws: MagicMock | None = None,
+    provider_config: BaseRealtimeConfig | None = None,
+    upstream_stays_open: bool = False,
+) -> None:
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=_frames_then_silence(*upstream_frames) if upstream_stays_open else list(upstream_frames)
+    )
+    backend_ws.send = AsyncMock()
+    relay: Final = RealTimeStreaming(
+        client_ws or _realtime_client_ws(),
+        backend_ws,
+        litellm_logging_obj,
+        provider_config=provider_config,
+        model="gpt-realtime-2.1",
+        logging_worker=_DiscardingLoggingWorker(),
+    )
+    await asyncio.wait_for(relay.bidirectional_forward(), timeout=2)
+
+
+_REALTIME_SESSION_CREATED: Final = json.dumps({"type": "session.created", "session": {"id": "sess_1"}}).encode()
+
+
+async def _clean_realtime_session(litellm_logging_obj: LiteLLMLogging) -> None:
+    await _relay_upstream(litellm_logging_obj, _REALTIME_SESSION_CREATED, ConnectionClosed(Close(1000, ""), None))
+
+
+async def _upstream_internal_error_after_a_frame(litellm_logging_obj: LiteLLMLogging) -> None:
+    await _relay_upstream(
+        litellm_logging_obj, _REALTIME_SESSION_CREATED, ConnectionClosed(Close(1011, "upstream failed"), None)
+    )
+
+
+async def _upstream_drop_without_close_frame_after_a_frame(litellm_logging_obj: LiteLLMLogging) -> None:
+    await _relay_upstream(litellm_logging_obj, _REALTIME_SESSION_CREATED, ConnectionClosed(None, None))
+
+
+async def _upstream_close_before_any_frame(litellm_logging_obj: LiteLLMLogging) -> None:
+    await _relay_upstream(litellm_logging_obj, ConnectionClosed(Close(1008, "model not found"), None))
+
+
+def _frames_then_silence(*frames: bytes | str) -> Callable[[], Awaitable[bytes | str]]:
+    pending: Final = iter(frames)
+
+    async def _next_frame() -> bytes | str:
+        frame: Final = next(pending, None)
+        if frame is None:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+        return frame
+
+    return _next_frame
+
+
+def _client_ws_sending(*client_frames: str) -> MagicMock:
+    client_ws: Final = _realtime_client_ws()
+    client_ws.receive_text = AsyncMock(side_effect=_frames_then_silence(*client_frames))
+    return client_ws
+
+
+async def _vertex_access_token() -> str:
+    return "token"
+
+
+async def _client_frame_the_provider_rejects(litellm_logging_obj: LiteLLMLogging) -> None:
+    deferred_setup_provider: Final = VertexChirpRealtimeConfig(
+        resolve_access_token=_vertex_access_token, project="proj-1", location="us"
+    )
+    await _relay_upstream(
+        litellm_logging_obj,
+        client_ws=_client_ws_sending(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "transcription", "audio": {"input": {"format": {"type": "audio/pcmu"}}}},
+                }
+            )
+        ),
+        provider_config=deferred_setup_provider,
+        upstream_stays_open=True,
+    )
+
+
+async def _client_hangs_up_after_a_frame(litellm_logging_obj: LiteLLMLogging) -> None:
+    client_ws: Final = _realtime_client_ws()
+    client_ws.receive_text = AsyncMock(side_effect=ConnectionClosed(Close(1000, ""), None))
+    await _relay_upstream(litellm_logging_obj, _REALTIME_SESSION_CREATED, client_ws=client_ws, upstream_stays_open=True)
+
+
+async def _refused_handshake(litellm_logging_obj: LiteLLMLogging) -> None:
+    await close_after_upstream_handshake_refusal(_realtime_client_ws(), 403)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("realtime_session", "counted_successes"),
+    [
+        (_clean_realtime_session, 1),
+        (_upstream_close_before_any_frame, 0),
+        (_refused_handshake, 0),
+        (_upstream_internal_error_after_a_frame, 0),
+        (_upstream_drop_without_close_frame_after_a_frame, 0),
+        (_client_frame_the_provider_rejects, 0),
+        (_client_hangs_up_after_a_frame, 1),
+    ],
+    ids=[
+        "clean-session",
+        "upstream-close-before-any-frame",
+        "refused-handshake",
+        "upstream-1011-after-a-frame",
+        "upstream-1006-after-a-frame",
+        "client-frame-the-provider-rejects",
+        "client-hangs-up-after-a-frame",
+    ],
+)
+async def test_realtime_session_counts_a_router_success_only_when_it_ended_without_a_failure(
+    realtime_session: Callable[[LiteLLMLogging], Awaitable[None]], counted_successes: int
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "realtime-voice",
+                "litellm_params": {"model": "openai/gpt-realtime-2.1"},
+                "model_info": {"id": "realtime-a"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    async def _arealtime(litellm_logging_obj: LiteLLMLogging, **kwargs: object) -> None:
+        await realtime_session(litellm_logging_obj)
+
+    await router._ageneric_api_call_with_fallbacks(
+        model="realtime-voice", original_function=_arealtime, litellm_logging_obj=_realtime_session_logging()
+    )
+
+    assert get_deployment_successes_for_current_minute(router, "realtime-a") == counted_successes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("realtime_model", ["bedrock/amazon.nova-sonic-v1:0", "openai/gpt-realtime-2.1"])
+@pytest.mark.parametrize(("clean_sessions", "cooled_down"), [(10, False), (3, True)])
+async def test_realtime_cooldown_reads_the_failure_rate_of_the_sessions_a_deployment_served(
+    realtime_model: str, clean_sessions: int, cooled_down: bool
+) -> None:
+    import time
+
+    provider, _, provider_model = realtime_model.partition("/")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "realtime-voice",
+                "litellm_params": {"model": realtime_model, "order": order},
+                "model_info": {"id": deployment_id},
+            }
+            for order, deployment_id in ((1, "realtime-a"), (2, "realtime-b"))
+        ],
+        num_retries=0,
+    )
+    drop: Final = litellm.ServiceUnavailableError(
+        message="realtime provider stream ended before the session closed",
+        llm_provider=provider,
+        model=provider_model,
+    )
+
+    def realtime_session(failure: Exception | None):
+        async def _arealtime(litellm_logging_obj: LiteLLMLogging, **kwargs: object) -> None:
+            if failure is not None:
+                raise failure
+            await _clean_realtime_session(litellm_logging_obj)
+
+        return _arealtime
+
+    for _ in range(clean_sessions):
+        await router._ageneric_api_call_with_fallbacks(
+            model="realtime-voice",
+            original_function=realtime_session(None),
+            litellm_logging_obj=_realtime_session_logging(),
+        )
+
+    async def drop_session() -> bool:
+        with pytest.raises(litellm.ServiceUnavailableError):
+            await router._ageneric_api_call_with_fallbacks(
+                model="realtime-voice",
+                original_function=realtime_session(drop),
+                litellm_logging_obj=_realtime_session_logging(),
+            )
+        return router.deployment_callback_on_failure(
+            kwargs={
+                "exception": drop,
+                "litellm_params": {"metadata": {"model_group": "realtime-voice"}, "model_info": {"id": "realtime-a"}},
+            },
+            completion_response=None,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+
+    drop_cooldowns: Final = [await drop_session() for _ in range(5)]
+
+    assert any(drop_cooldowns) is cooled_down
 
 
 async def _kwargs_routed_to(router: Router, model: str, function_name: str, **request: object) -> dict[str, object]:
@@ -1495,6 +1740,51 @@ def test_set_model_group_info(model_list, user_facing_model_group_name):
     )
     assert resp is not None
     assert resp.model_group == user_facing_model_group_name
+
+
+def test_set_model_group_info_reports_supports_continuation_when_any_deployment_has_it():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "long-decode",
+                "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+            },
+            {
+                "model_name": "long-decode",
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "fake"},
+                "model_info": {"supports_continuation": True},
+            },
+            {
+                "model_name": "long-decode",
+                "litellm_params": {"model": "openai/gpt-4.1-nano", "api_key": "fake"},
+            },
+            {
+                "model_name": "plain",
+                "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+            },
+        ]
+    )
+    long_decode: Final = router._set_model_group_info(
+        model_group="long-decode", user_facing_model_group_name="long-decode"
+    )
+    plain: Final = router._set_model_group_info(model_group="plain", user_facing_model_group_name="plain")
+    assert long_decode is not None and long_decode.supports_continuation is True
+    assert plain is not None and plain.supports_continuation is False
+
+
+@pytest.mark.parametrize("value", ["maybe", "", ["x"], "true", 1])
+def test_set_model_group_info_counts_only_a_boolean_true_supports_continuation(value: object) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "long-decode",
+                "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+                "model_info": {"supports_continuation": value},
+            },
+        ]
+    )
+    group: Final = router._set_model_group_info(model_group="long-decode", user_facing_model_group_name="long-decode")
+    assert group is not None and group.supports_continuation is False
 
 
 @pytest.mark.asyncio

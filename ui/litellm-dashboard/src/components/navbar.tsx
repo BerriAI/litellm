@@ -27,6 +27,7 @@ interface NavbarProps {
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
   deploymentHealth?: React.ReactNode;
+  deploymentHealthLink?: React.ReactNode;
 }
 
 const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
@@ -37,6 +38,7 @@ const Navbar: React.FC<NavbarProps> = ({
   sidebarCollapsed = false,
   onToggleSidebar,
   deploymentHealth,
+  deploymentHealthLink,
 }) => {
   const baseUrl = getProxyBaseUrl();
   const { logoUrl, logoUrlDark } = useTheme();
@@ -61,7 +63,7 @@ const Navbar: React.FC<NavbarProps> = ({
   return (
     <nav className="sticky top-0 z-chrome border-b border-border bg-card">
       <div className="w-full">
-        <div className="flex h-14 items-center px-4">
+        <div className={cn("flex h-14 items-center px-4", isPublicPage && "gap-4 sm:px-6")}>
           <div className="flex shrink-0 items-center">
             {onToggleSidebar && (
               <button
@@ -82,7 +84,12 @@ const Navbar: React.FC<NavbarProps> = ({
             <div className="flex items-center gap-2">
               <Link href={uiHref("")} className="flex items-center">
                 <div className="relative">
-                  <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
+                  <div
+                    className={cn(
+                      "flex h-10 max-w-48 items-center justify-center overflow-hidden",
+                      isPublicPage && "h-8 max-w-36 sm:h-10 sm:max-w-48",
+                    )}
+                  >
                     <img src={imageUrl} alt="LiteLLM Brand" className={cn(NAV_LOGO_CLASS_NAME, "dark:hidden")} />
                     <img
                       src={darkImageUrl}
@@ -141,7 +148,7 @@ const Navbar: React.FC<NavbarProps> = ({
             </nav>
 
             {!hideCommunityLinks && (
-              <div className="flex shrink-0 items-center border-l border-border pl-4">
+              <div className="hidden shrink-0 items-center border-l border-border pl-4 sm:flex">
                 <CommunityEngagementButtons />
               </div>
             )}
@@ -152,7 +159,7 @@ const Navbar: React.FC<NavbarProps> = ({
                   <ThemeToggle />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   {deploymentHealth}
-                  <NotificationsBell accessToken={accessToken} />
+                  <NotificationsBell accessToken={accessToken} deploymentHealthLink={deploymentHealthLink} />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   <UserDropdown onLogout={handleLogout} />
                 </div>

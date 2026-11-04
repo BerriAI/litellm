@@ -84,6 +84,8 @@ from litellm.constants import (
     MID_STREAM_FAILURE_LOG_WAIT_SECONDS,
     OUTPUT_TOKEN_CEILING_PARAMS,
     PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
@@ -108,6 +110,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     replace_complexity_router_headers,
     response_total_token_count,
 )
+from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.batch_utils import (
     batch_create_routing,
@@ -133,7 +136,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.dd_tracing import tracer
-from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models
+from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models, deployment_pricing_models
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
@@ -141,6 +144,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     is_registered_custom_provider,
     resolve_model_and_provider_for_metadata,
 )
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
@@ -302,6 +306,7 @@ from litellm.router_utils.cooldown_handlers import (
     get_cooldown_deployment_info,
     get_cooldown_deployments,
     is_background_response_poll_not_found,
+    is_caller_entra_credential_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     is_failure_outside_selected_deployment,
@@ -475,17 +480,21 @@ from litellm.types.router import (
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+    COST_MAP_LOOKUP_KEY,
+    DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
     LlmProviders,
+    LlmProvidersSet,
     ModelInfo,
     ModelResponseStream,
     StandardLoggingPayload,
     StandardLoggingRoutingDecision,
     Usage,
     all_litellm_params,
+    echoed_cost_map_fields,
     is_server_derived_pricing_key,
     shared_backend_model_info,
 )
@@ -501,9 +510,11 @@ from litellm.utils import (
     TextCompletionResponse,
     _restore_correlation_context_if_supported,  # pyright: ignore[reportPrivateUsage]  # same task-local cleanup as the SDK wrapper
     aresolve_api_key_secret_reference,
+    catalog_with_runtime_registrations,
     function_setup,
     get_llm_provider,
     get_non_default_completion_params,
+    get_potential_model_names,
     get_secret,
     get_utc_datetime,
     is_generalized_model_info,
@@ -544,6 +555,7 @@ if TYPE_CHECKING:
         ResponseAPIUsage,
         ResponseIncompleteEvent,
         ResponsesAPIResponse,
+        ResponsesAPIStreamingResponse,
     )
 
     Span = _Span
@@ -669,6 +681,7 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CALL_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
@@ -772,6 +785,17 @@ def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, obj
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
 
 
+def _operator_max_input_tokens(deployment: Mapping[str, object]) -> int | None:
+    model_info: Final = _configured_model_info(deployment)
+    catalog_key: Final = model_info.get(COST_MAP_LOOKUP_KEY)
+    catalog_entry: Final = (
+        GetModelCostMap.loaded_model_cost_map().get(catalog_key) if isinstance(catalog_key, str) else None
+    )
+    if catalog_entry is not None and "max_input_tokens" in echoed_cost_map_fields(model_info, catalog_entry):
+        return None
+    return coerce_token_limit(model_info.get("max_input_tokens"))
+
+
 def _search_tool_support(deployment: DeploymentTypedDict) -> bool | None:
     from litellm.responses.litellm_completion_transformation.tool_search import chat_config_builds_anthropic_request
 
@@ -833,9 +857,11 @@ def _with_router_resolved_session_model(session: object, model_name: str) -> Map
         typed_session: Final = _SESSION_ADAPTER.validate_python(session)
     except ValidationError:
         return _NO_SESSION_KWARGS
-    if "model" not in typed_session:
+    if "model" not in typed_session and typed_session.get("type") != "transcription":
         return _NO_SESSION_KWARGS
-    return MappingProxyType({"session": {**typed_session, "model": model_name}})
+    from litellm.realtime_api.main import with_resolved_session_model
+
+    return MappingProxyType({"session": with_resolved_session_model(dict(typed_session), model_name)})
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
@@ -2851,6 +2877,14 @@ class PythonCore(DeprecatedRouterMembers):
             self._host.invoke("acreate_realtime_transcription_session"),
             call_type="acreate_realtime_transcription_session",
         )
+        self.acreate_realtime_translation_client_secret = self.factory_function(
+            self._host.invoke("acreate_realtime_translation_client_secret"),
+            call_type="acreate_realtime_translation_client_secret",
+        )
+        self.arealtime_translation_calls = self.factory_function(
+            self._host.invoke("arealtime_translation_calls"),
+            call_type="arealtime_translation_calls",
+        )
         self._aresponses_websocket = self.factory_function(
             self._host.invoke("_aresponses_websocket"), call_type="_aresponses_websocket"
         )
@@ -3810,11 +3844,6 @@ class PythonCore(DeprecatedRouterMembers):
         priced_partial._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # no public accessor
             key: value for key, value in get_hidden_params_dict(partial_response).items() if key != "response_cost"
         }
-        if LiteLLMLogging.usage_capture_callback is not None:
-            from litellm._internal_context import internal_sub_call
-
-            with internal_sub_call(cut_logging.litellm_call_id):
-                cut_logging.capture_usage_before_logging(priced_partial)
         return ContinuedPartial(
             usage=BaseTokenUsageProcessor.combine_usage_objects(
                 usage_objects=[partial_usage, inherited_usage]
@@ -4013,6 +4042,8 @@ class PythonCore(DeprecatedRouterMembers):
                         if continuation_output is not None
                         else None
                     )
+                    if cut_partial is not None:
+                        model_response.logging_obj.mark_stash_billed_by_continuation()
                     if continue_after_content:
                         emitted_tokens: Final = int(
                             getattr(complete_response_object_usage, "completion_tokens", 0) or 0
@@ -4386,12 +4417,13 @@ class PythonCore(DeprecatedRouterMembers):
 
             fallback_headers_adopted: bool = False
 
-            def __init__(self, async_generator: AsyncGenerator):
+            def __init__(self, async_generator: "AsyncGenerator[ResponsesAPIStreamingResponse, None]"):
                 import time
                 from datetime import datetime
 
                 self._async_generator = async_generator
                 self._billing_source: object = source_iterator
+                self._last_sequence_number = -1
                 # Mirror every attribute BaseResponsesAPIStreamingIterator.__init__
                 # would have set. The wrapper bypasses super().__init__ (it has no
                 # httpx.Response of its own and no provider config to drive), so
@@ -4498,7 +4530,16 @@ class PythonCore(DeprecatedRouterMembers):
                 if self.completed_response is None and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
                     self.completed_response = chunk
                 self._yielded_first_chunk = True
-                return chunk
+                sequence_number: Final = getattr(chunk, "sequence_number", None)
+                if not isinstance(sequence_number, int):
+                    return chunk
+                if not self.fallback_headers_adopted:
+                    self._last_sequence_number = max(self._last_sequence_number, sequence_number)
+                    return chunk
+                self._last_sequence_number = max(self._last_sequence_number + 1, sequence_number)
+                if self._last_sequence_number == sequence_number:
+                    return chunk
+                return chunk.model_copy(update={"sequence_number": self._last_sequence_number})
 
             async def aclose(self):
                 # async generators always expose aclose — no defensive check needed.
@@ -4560,7 +4601,9 @@ class PythonCore(DeprecatedRouterMembers):
                                 exc,
                             )
 
-        wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
+        wrapper: Final = FallbackResponsesStreamWrapper(
+            stream_with_fallbacks()  # pyright: ignore[reportArgumentType]  # relays response events typed as object
+        )
         return wrapper
 
     def _aresponses_background_stream_can_release(
@@ -5170,8 +5213,19 @@ class PythonCore(DeprecatedRouterMembers):
         # _update_kwargs_with_deployment and stamped into kwargs["model_info"]; stamping
         # the static shared deployment's id instead would let one tenant's bad credentials
         # cool down the deployment every other tenant sharing this config relies on.
+        if getattr(exception, "failed_deployment_id", None):
+            return
         effective_model_info: Final = kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
         self._set_failed_deployment_id_on_exception(exception, MappingProxyType({"model_info": effective_model_info}))
+        configured_deployment_id: Final = _MODEL_INFO_ADAPTER.validate_python(effective_model_info).get(
+            "original_model_id"
+        )
+        if isinstance(configured_deployment_id, str) and configured_deployment_id:
+            exception.failed_configured_deployment_id = configured_deployment_id  # pyright: ignore[reportAttributeAccessIssue]  # rebind-ok: the exception carries the failure to _maybe_run_weighted_failover
+
+    def _stamp_failed_attempt(self, exception: Exception, kwargs: Mapping[str, object], *, picked: bool) -> None:
+        if picked:
+            self._stamp_failed_deployment_id_with_effective_model_info(exception, MappingProxyType({}), kwargs)
 
     @staticmethod
     def _stamp_retry_skip_deployment_id(exception: Exception, kwargs: Mapping[str, object]) -> None:
@@ -6048,9 +6102,10 @@ class PythonCore(DeprecatedRouterMembers):
 
     def _image_generation(self, prompt: str, model: str, **kwargs):
         model_name: Final = ""
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _image_generation()- model: %s", model)
-            deployment: Final = self.get_available_deployment(
+            deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6086,6 +6141,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def aimage_generation(self, prompt: str, model: str, **kwargs):
@@ -6111,11 +6169,12 @@ class PythonCore(DeprecatedRouterMembers):
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
         model_name = model
         start_time: Final = datetime.now()  # noqa: DTZ005  # SDK logging uses naive local timestamps
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _image_generation()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             try:
-                deployment: Final = await self._core_async_get_available_deployment(
+                deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                     model=model,
                     messages=[{"role": "user", "content": "prompt"}],
                     specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6176,6 +6235,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def atranscription(self, file: FileTypes, model: str, **kwargs):
@@ -6222,10 +6284,11 @@ class PythonCore(DeprecatedRouterMembers):
 
     async def _atranscription(self, file: FileTypes, model: str, **kwargs):
         model_name: Final = model
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _atranscription()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
+            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6259,6 +6322,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
@@ -6315,10 +6381,11 @@ class PythonCore(DeprecatedRouterMembers):
 
     async def _aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
         model_name: Final = model
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _aspeech()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
+            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6352,6 +6419,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def arerank(self, model: str, **kwargs):
@@ -6377,9 +6447,10 @@ class PythonCore(DeprecatedRouterMembers):
 
     async def _arerank(self, model: str, **kwargs):
         model_name = None
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _rerank()- model: %s", model)
-            deployment: Final = await self._core_async_get_available_deployment(
+            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
@@ -6411,6 +6482,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     def text_completion(
@@ -6492,10 +6566,11 @@ class PythonCore(DeprecatedRouterMembers):
             raise e
 
     async def _atext_completion(self, model: str, prompt: str, **kwargs):
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _atext_completion()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
+            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6531,6 +6606,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model is not None:
                 self.fail_calls[model] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def aadapter_completion(
@@ -6562,10 +6640,11 @@ class PythonCore(DeprecatedRouterMembers):
             raise e
 
     async def _aadapter_completion(self, adapter_id: str, model: str, **kwargs):
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _aadapter_completion()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
+            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 messages=[{"role": "user", "content": "default text"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6601,6 +6680,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model is not None:
                 self.fail_calls[model] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs) -> object:
@@ -6866,6 +6948,22 @@ class PythonCore(DeprecatedRouterMembers):
                 raise safeguard_refusal_error(model=model, stop_details=refusal_details)
 
             self.success_calls[model_name] += 1
+            realtime_session_logging: Final = (
+                _CALL_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_logging_obj")
+                if generic_function_name == "_arealtime"
+                else None
+            )
+            realtime_session_deployment_id: Final = (
+                _MODEL_INFO_ADAPTER.validate_python(kwargs["model_info"]).get("id")
+                if isinstance(realtime_session_logging, LiteLLMLogging)
+                and realtime_session_logging.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+                and realtime_session_logging.model_call_details.get(REALTIME_SESSION_ENDED_ABNORMALLY_KEY) is not True
+                else None
+            )
+            if realtime_session_deployment_id is not None:
+                increment_deployment_successes_for_current_minute(
+                    ctx=self._core_ctx, deployment_id=str(realtime_session_deployment_id)
+                )
             verbose_router_logger.info("ageneric_api_call_with_fallbacks(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             return response
@@ -7314,6 +7412,8 @@ class PythonCore(DeprecatedRouterMembers):
         last_error = e  # rebind-ok: the newest failure is what the fallback chain and the caller see
         for attempt in range(attempted_retries_for_request(initial_kwargs), budget):
             trigger = _mid_stream_retry_trigger(last_error)
+            if is_agentic_followup_failure(trigger):
+                return _StreamRetriesExhausted(last_error)
             if not policy_applies and not self._stream_should_retry(
                 trigger, healthy_deployments, all_deployments, initial_kwargs
             ):
@@ -7571,6 +7671,7 @@ class PythonCore(DeprecatedRouterMembers):
         """
         handler_name: Final = original_function.__name__
         metadata_variable_name: Final = get_router_metadata_variable_name(function_name="generic_api_call")
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _generic_api_call() - handler: %s, model: %s", handler_name, model)
             self._update_kwargs_before_fallbacks(
@@ -7579,7 +7680,7 @@ class PythonCore(DeprecatedRouterMembers):
                 metadata_variable_name=metadata_variable_name,
             )
             with self._video_call_pin(handler_name, kwargs), self._route_capability_pin(handler_name):
-                deployment: Final = self.get_available_deployment(
+                deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
                     model=model,
                     messages=kwargs.get("messages", None),
                     input=kwargs.get("input", None),
@@ -7625,6 +7726,9 @@ class PythonCore(DeprecatedRouterMembers):
             verbose_router_logger.info("%s(model=%s)\x1b[31m Exception %s\x1b[0m", handler_name, model, e)
             if model is not None:
                 self.fail_calls[model] += 1
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     def embedding(
@@ -7646,10 +7750,11 @@ class PythonCore(DeprecatedRouterMembers):
 
     def _embedding(self, input: str | list[object], model: str, **kwargs):
         model_name = None
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside embedding()- model: %s", model)
             with embedding_deployment_selection():
-                deployment: Final = self.get_available_deployment(
+                deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
                     model=model,
                     input=input,
                     specific_deployment=kwargs.pop("specific_deployment", None),
@@ -7706,6 +7811,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def aembedding(
@@ -7735,11 +7843,12 @@ class PythonCore(DeprecatedRouterMembers):
 
     async def _aembedding(self, input: str | list[object], model: str, **kwargs):
         model_name = None
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _aembedding()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             with embedding_deployment_selection():
-                deployment: Final = await self._core_async_get_available_deployment(
+                deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                     model=model,
                     input=input,
                     specific_deployment=kwargs.pop("specific_deployment", None),
@@ -7786,6 +7895,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     #### FILES API ####
@@ -8407,6 +8519,8 @@ class PythonCore(DeprecatedRouterMembers):
             "acreate_realtime_client_secret",
             "arealtime_calls",
             "acreate_realtime_transcription_session",
+            "acreate_realtime_translation_client_secret",
+            "arealtime_translation_calls",
             "_aresponses_websocket",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
@@ -8677,6 +8791,8 @@ class PythonCore(DeprecatedRouterMembers):
                 "acreate_realtime_client_secret",
                 "arealtime_calls",
                 "acreate_realtime_transcription_session",
+                "acreate_realtime_translation_client_secret",
+                "arealtime_translation_calls",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -9020,8 +9136,9 @@ class PythonCore(DeprecatedRouterMembers):
             kwargs[metadata_variable_name] = meta
         if not isinstance(meta, dict):
             return None
+        configured_failed_id: Final[str | None] = getattr(exception, "failed_configured_deployment_id", None)
         prev_excluded: Final = set(meta.get("_failover_excluded_ids") or [])
-        excluded: Final = prev_excluded | {failed_id}
+        excluded: Final = prev_excluded | {configured_failed_id or failed_id}
 
         all_ids: Final = {
             (d.get("model_info") or {}).get("id")
@@ -9126,11 +9243,17 @@ class PythonCore(DeprecatedRouterMembers):
         if include_fallback_errors:
             input_kwargs["include_fallback_errors"] = True
 
-        # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
-        # Skip for error types that have their own dedicated fallback handlers
-        _skip_order_fallback: Final = isinstance(
-            e,
-            (litellm_exceptions.ContextWindowExceededError, litellm_exceptions.ContentPolicyViolationError),
+        context_window_fallback_model_group: Final = (
+            self._get_fallback_model_group_for_lookup_groups(
+                fallbacks=context_window_fallbacks,
+                lookup_groups=lookup_groups,
+            )
+            if isinstance(e, litellm_exceptions.ContextWindowExceededError) and context_window_fallbacks is not None
+            else None
+        )
+        _skip_order_fallback: Final = (
+            isinstance(e, litellm_exceptions.ContentPolicyViolationError)
+            or context_window_fallback_model_group is not None
         )
         _request_team_id: Final[str | None] = (kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")
         # Use wildcard-aware lookup so order-based fallback also works for model
@@ -9176,14 +9299,23 @@ class PythonCore(DeprecatedRouterMembers):
                         "original_model_group": original_model_group,
                     }
                 )
-                response = await run_async_fallback(
-                    *args,
-                    **input_kwargs,
-                )
-                return response
+                try:
+                    return await run_async_fallback(
+                        *args,
+                        **input_kwargs,
+                    )
+                except Exception:
+                    if isinstance(original_exception, litellm_exceptions.ContextWindowExceededError):
+                        raise original_exception
+                    raise
 
         # Weighted intra-group failover (simple-shuffle only); see _maybe_run_weighted_failover.
-        if self.enable_weighted_failover and not _skip_order_fallback and original_model_group is not None:
+        if (
+            self.enable_weighted_failover
+            and not _skip_order_fallback
+            and not isinstance(e, litellm_exceptions.ContextWindowExceededError)
+            and original_model_group is not None
+        ):
             response = await self._maybe_run_weighted_failover(
                 exception=e,
                 original_model_group=original_model_group,
@@ -9201,7 +9333,7 @@ class PythonCore(DeprecatedRouterMembers):
             # check if client-side fallbacks are used (e.g. fallbacks = ["gpt-3.5-turbo", "claude-3-haiku"] or fallbacks=[{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey, how's it going?"}]}]
             is_non_standard_fallback_format: Final = check_non_standard_fallback_format(fallbacks=fallbacks)
 
-            if is_non_standard_fallback_format:
+            if is_non_standard_fallback_format and context_window_fallback_model_group is None:
                 input_kwargs.update(
                     {
                         "fallback_model_group": fallbacks,
@@ -9217,16 +9349,7 @@ class PythonCore(DeprecatedRouterMembers):
                 return response
 
             if isinstance(e, litellm_exceptions.ContextWindowExceededError):
-                if context_window_fallbacks is not None:
-                    context_window_fallback_model_group: Final[list[str] | None] = (
-                        self._get_fallback_model_group_for_lookup_groups(
-                            fallbacks=context_window_fallbacks,
-                            lookup_groups=lookup_groups,
-                        )
-                    )
-                    if context_window_fallback_model_group is None:
-                        raise original_exception
-
+                if context_window_fallback_model_group is not None:
                     input_kwargs.update(
                         {
                             "fallback_model_group": context_window_fallback_model_group,
@@ -9240,7 +9363,7 @@ class PythonCore(DeprecatedRouterMembers):
                     )
                     return response
 
-                else:
+                elif context_window_fallbacks is None:
                     error_message = f"model={model_group}. context_window_fallbacks={mask_sensitive_structure(context_window_fallbacks)}. fallbacks={mask_sensitive_structure(fallbacks)}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks"
                     verbose_router_logger.info(
                         msg=f"Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \
@@ -9533,7 +9656,7 @@ class PythonCore(DeprecatedRouterMembers):
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
-            if is_guardrail_intervention(e):
+            if is_guardrail_intervention(e) or is_agentic_followup_failure(e):
                 raise
             current_attempt = None
             original_exception = e
@@ -9628,6 +9751,7 @@ class PythonCore(DeprecatedRouterMembers):
                     # Update retry tracking metadata before each retry attempt
                     _metadata["attempted_retries"] = current_attempt + 1
                     _metadata["max_retries"] = num_retries
+                    carry_superseded_attempt_usage(kwargs)
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await self.make_call(original_function, *args, **kwargs)
                     if coroutine_checker.is_async_callable(response):  # async errors are often returned as coroutines
@@ -9641,6 +9765,8 @@ class PythonCore(DeprecatedRouterMembers):
                     return response
 
                 except Exception as e:
+                    if is_agentic_followup_failure(e):
+                        raise
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
@@ -10185,8 +10311,9 @@ class PythonCore(DeprecatedRouterMembers):
                 return False
 
             exception_status: Final = getattr(exception, "status_code", "")
+            failure_call_details: Final = _CALL_KWARGS_ADAPTER.validate_python(kwargs)
 
-            if is_caller_timeout_408(kwargs, exception_status):
+            if is_caller_timeout_408(failure_call_details, exception_status):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "A timeout the caller set caused this 408, not the deployment's health."
@@ -10208,6 +10335,18 @@ class PythonCore(DeprecatedRouterMembers):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "Caller-scoped OAuth authentication failed, not the deployment."
+                )
+                return False
+            if is_caller_entra_credential_failure(
+                caller_failure_deployment,
+                self._active_default_litellm_params(),
+                failure_call_details,
+                exception_status,
+                exception,
+            ):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Entra ID rejected a credential the caller sent, not the deployment's own."
                 )
                 return False
 
@@ -12094,6 +12233,25 @@ class PythonCore(DeprecatedRouterMembers):
         return (backend_key,)
 
     @staticmethod
+    def _catalog_entry_has_token_limit(catalog_entry: Mapping[str, object], field: str) -> bool:
+        return catalog_entry.get(field) is not None or (
+            field == "max_tokens" and catalog_entry.get("max_output_tokens") is not None
+        )
+
+    @staticmethod
+    def _shared_backend_model_info_for_keys(
+        catalog: Mapping[str, Mapping[str, object]],
+        backend_keys: tuple[str, ...],
+        shared_model_info: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        catalog_token_limit_fields: Final = frozenset(
+            field
+            for field in DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS
+            if any(PythonCore._catalog_entry_has_token_limit(catalog.get(key) or {}, field) for key in backend_keys)
+        )
+        return {field: value for field, value in shared_model_info.items() if field not in catalog_token_limit_fields}
+
+    @staticmethod
     def _deployment_model_cost_payload(deployment: Deployment) -> dict[str, object]:  # mutable-ok: cost-map entry
         """The ``model_info`` a deployment contributes to ``litellm.model_cost``.
 
@@ -12205,6 +12363,31 @@ class PythonCore(DeprecatedRouterMembers):
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
         backend_keys: Final = PythonCore._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
+        model_provider_prefix: Final = model.partition("/")[0]
+        catalog_provider: Final = (
+            custom_llm_provider
+            if custom_llm_provider is not None
+            else model_provider_prefix
+            if model_provider_prefix in LlmProvidersSet
+            else None
+        )
+        potential_names: Final = (
+            get_potential_model_names(model, catalog_provider) if catalog_provider is not None else None
+        )
+        catalog_backend_keys: Final = (
+            (
+                *backend_keys,
+                model,
+                potential_names["split_model"],
+                potential_names["stripped_model_name"],
+                potential_names["combined_model_name"],
+                potential_names["combined_stripped_model_name"],
+                potential_names["provider_prefixed_model_name"],
+                potential_names["region_free_combined_model_name"],
+            )
+            if potential_names is not None
+            else (*backend_keys, model)
+        )
 
         # For the shared backend key, keep only cost-map schema fields
         # (minus custom pricing) so that one deployment's pricing overrides
@@ -12212,7 +12395,12 @@ class PythonCore(DeprecatedRouterMembers):
         # don't pollute another deployment sharing the same backend model
         # name. Each deployment's full model_info is already stored under
         # its unique model_id above.
-        shared_model_info: Final = shared_backend_model_info(model_info)
+        catalog: Final = catalog_with_runtime_registrations()
+        shared_model_info: Final = PythonCore._shared_backend_model_info_for_keys(
+            catalog=catalog,
+            backend_keys=catalog_backend_keys,
+            shared_model_info=shared_backend_model_info(model_info),
+        )
         python_host.invoke("register_model")(
             model_cost={_key: keep_registered_mode(_key, shared_model_info) for _key in backend_keys},
             persist_across_reloads=False,
@@ -12679,6 +12867,24 @@ class PythonCore(DeprecatedRouterMembers):
         return tuple(
             _configured_model_info(deployment).get("service_tiers")
             for deployment in self._routable_deployments(model_name, team_id)
+        )
+
+    def _core_get_configured_max_input_tokens(
+        self, model_name: str, team_id: str | None = None
+    ) -> tuple[int | None, ...]:
+        """
+        Return the max_input_tokens each deployment a request from team_id to
+        model_name can route to (see _routable_deployments) sets in its own
+        model_info, in model_list order, None for a deployment that sets none
+        or a malformed one. Unlike get_model_listing_info, neither the cost map
+        nor a discovered limit is read, so only an operator's own value counts,
+        and a value a saved /model/info response copied from the cost map is
+        skipped too.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            _operator_max_input_tokens(deployment) for deployment in self._routable_deployments(model_name, team_id)
         )
 
     def _core_get_search_tool_support(self, model_name: str, team_id: str | None = None) -> tuple[bool | None, ...]:
@@ -13203,6 +13409,7 @@ class PythonCore(DeprecatedRouterMembers):
                         "providers": [llm_provider],
                         "description": model_group_description,
                         **model_info,
+                        "supports_continuation": model_info.get("supports_continuation") is True,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
                         "supported_endpoints": None,
@@ -13270,6 +13477,8 @@ class PythonCore(DeprecatedRouterMembers):
                     and model_info["supports_url_context"] is True
                 ):
                     model_group_info.supports_url_context = True
+                if model_info.get("supports_continuation") is True:
+                    model_group_info.supports_continuation = True
 
                 if model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True:
                     model_group_info.supports_reasoning = True
@@ -14780,6 +14989,7 @@ class PythonCore(DeprecatedRouterMembers):
         input: str | list[object] | None,
         request_kwargs: Mapping[str, object] | None = None,
         tokenizer_model: str = "",
+        deployments: Sequence[Mapping[str, object]] = (),
     ) -> int:
         """
         Count input tokens for context-window pre-call checks.
@@ -14814,11 +15024,15 @@ class PythonCore(DeprecatedRouterMembers):
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
+            from litellm.litellm_core_utils.token_counter import split_embedding_input_tokens
             from litellm.responses.litellm_completion_transformation.transformation import (
                 LiteLLMCompletionResponsesConfig,
             )
 
-            typed_input: Final = cast(str | ResponseInputParam, input)  # cast-ok: str | list matches transform input
+            text_input, _ = split_embedding_input_tokens(input, partial(deployment_backend_models, deployments))
+            typed_input: Final = cast(  # cast-ok: str | list matches transform input
+                str | ResponseInputParam, text_input
+            )
             input_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=typed_input,
                 responses_api_request={"instructions": instructions} if instructions is not None else {},
@@ -14886,6 +15100,7 @@ class PythonCore(DeprecatedRouterMembers):
                     self.served_openai_models(model) or served_openai_models(healthy_deployments)
                 )
                 or "",
+                deployments=healthy_deployments,
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
@@ -14916,6 +15131,7 @@ class PythonCore(DeprecatedRouterMembers):
                     self.served_openai_models(model) or served_openai_models(deployments)
                 )
                 or "",
+                deployments=deployments,
             )
         except Exception as e:
             verbose_router_logger.error(

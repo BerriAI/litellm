@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     schema_has_unresolvable_ref,
     schema_property_count,
     split_concatenated_json_objects,
+    split_embedding_media_for_tpm,
     split_media_for_tpm,
     strip_encrypted_reasoning_from_messages,
     strip_litellm_response_only_fields,
@@ -2343,7 +2344,8 @@ _MALFORMED_PROMPT_CACHE_BREAKPOINTS: Final = (
     "",
     {},
     {"mode": "bogus"},
-    {"mode": "explicit", "ttl": "1h"},
+    {"mode": "bogus", "ttl": "30m"},
+    {1: "explicit"},
 )
 _MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS: Final = (
     "string",
@@ -2352,7 +2354,8 @@ _MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS: Final = (
     "empty-string",
     "empty-object",
     "bogus-mode",
-    "bad-ttl",
+    "bogus-mode-with-ttl",
+    "non-string-key",
 )
 _VALID_PROMPT_CACHE_BREAKPOINTS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
 
@@ -2380,6 +2383,18 @@ def test_prompt_cache_breakpoint_for_wire_keeps_a_valid_marker(marker: dict[str,
 
 def test_prompt_cache_breakpoint_for_wire_strips_an_unknown_key_under_drop_params() -> None:
     assert prompt_cache_breakpoint_for_wire({"mode": "explicit", "note": "kept"}, True) == {"mode": "explicit"}
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ({"mode": "explicit", "ttl": "1h"}, {"mode": "explicit", "ttl": "1h", "note": "kept"}),
+    ids=("bad-ttl", "bad-ttl-and-unknown-key"),
+)
+def test_prompt_cache_breakpoint_for_wire_drops_an_unsupported_ttl_and_keeps_the_mode_under_drop_params(
+    marker: dict[str, str],
+) -> None:
+    assert prompt_cache_breakpoint_for_wire(marker, True) == {"mode": "explicit"}
+    assert prompt_cache_breakpoint_for_wire(marker, False) is marker
 
 
 def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
@@ -2695,3 +2710,22 @@ def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_unt
 
     assert flattened == [{"role": "user", "content": "Hello world"}, {"role": "assistant", "content": "Hi"}]
     assert messages == messages_before
+
+
+@pytest.mark.parametrize("mime", ["application/pdf", "video/mp4", "audio/wav", "image/png"])
+def test_embedding_media_split_holds_at_most_one_copy_of_a_large_payload(mime: str) -> None:
+    import gc
+    import tracemalloc
+
+    uri: Final = f"data:{mime};base64," + base64.b64encode(bytes(3 * 1024 * 1024)).decode("ascii")
+    split_embedding_media_for_tpm(f"data:{mime};base64,AAAA")
+    gc.collect()
+    tracemalloc.start()
+    try:
+        _, media = split_embedding_media_for_tpm(uri)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert media
+    assert peak < 1.5 * len(uri)

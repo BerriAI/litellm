@@ -155,6 +155,7 @@ GroupField: TypeAlias = Literal[
     "display_name",
     "mode",
     "service_tiers",
+    "max_input_tokens",
     "token_limits",
     "listing_info",
 ]
@@ -860,6 +861,16 @@ class RouterRegistry:
         self,
         name: str,
         *,
+        field: Literal["max_input_tokens"],
+        include_hidden: bool = False,
+        team_id: str | None = None,
+    ) -> tuple[int | None, ...]: ...
+
+    @overload
+    def group(
+        self,
+        name: str,
+        *,
         field: Literal["token_limits"],
         include_hidden: bool = False,
         team_id: str | None = None,
@@ -882,9 +893,7 @@ class RouterRegistry:
         field: GroupField = "info",
         include_hidden: bool = False,
         team_id: str | None = None,
-    ) -> (
-        "ModelGroupInfo | DeploymentModelListingInfo | tuple[int | None, int | None] | tuple[object, ...] | str | None"
-    ):
+    ) -> "ModelGroupInfo | DeploymentModelListingInfo | tuple[int | None, ...] | tuple[object, ...] | str | None":
         """
         What the router knows about a model group. ``field``:
 
@@ -894,6 +903,7 @@ class RouterRegistry:
           (were ``get_configured_display_name``, ``get_configured_mode``,
           ``get_configured_token_limits``, ``get_model_listing_info``)
         - ``service_tiers``: (was ``get_configured_service_tiers``)
+        - ``max_input_tokens``: each routable deployment's own ``model_info.max_input_tokens``
         """
         r: Final = self._router
         if field == "info":
@@ -906,6 +916,8 @@ class RouterRegistry:
             return r._core_get_configured_mode(name)
         if field == "service_tiers":
             return r._core_get_configured_service_tiers(name, team_id=team_id)
+        if field == "max_input_tokens":
+            return r._core_get_configured_max_input_tokens(name, team_id=team_id)
         if field == "token_limits":
             return r._core_get_configured_token_limits(name)
         if field == "listing_info":
@@ -1389,6 +1401,9 @@ class RoutingContext:
 
     def deployment_params(self, request: Mapping[str, object], deployment: "Deployment | None") -> Mapping[str, object]:
         return self._router._params_sent_to_deployment(request, deployment)
+
+    def default_litellm_params(self) -> Mapping[str, object]:
+        return self._router._active_default_litellm_params()
 
     def settings(self) -> RouterSettings:
         return self._router.settings()

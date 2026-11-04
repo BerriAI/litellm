@@ -6,12 +6,13 @@
 
 ## Handwritten 1-3 sentence description
 
-<!-- The PR author rewrites this in their own words before asking for review. Being able to sum up the PR in a few
-     plain sentences proves the author understands what it does, and human-written technical English is far easier
-     for a reviewer to parse than AI-written English
-     An AI agent may draft a starting point here, but always wraps its draft in the make-me-human-readable tags below,
-     backticks included so the tags stay visible on GitHub, so nobody mistakes it for the author's words. The author rewrites it in their own words and deletes the tags.
-     Tags still present at review time mean the summary is AI-written and has not been rewritten yet
+<!-- The author writes a plain summary in their own words before requesting review.
+     Wrap newly AI-written summary text in the make-me-human-readable tags below, including backticks.
+     The author reviews or rewrites the draft and removes the tags.
+     When updating an existing PR, preserve the author's wording and removed tags.
+     Changes elsewhere in the body do not make an unchanged summary an AI draft again.
+     Add tags again only around newly AI-written replacement summary text, never merely to match this template.
+     This preserves author review across later updates (2026-11-02, #49779).
      Say what the PR does for users and why, then anything that keeps it working over time (a sync job, a config someone owns)
      No bullets, tables, or code names here. Everything else goes inside the Details block below -->
 
