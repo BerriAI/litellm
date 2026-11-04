@@ -64,3 +64,11 @@ Notification before/after captures show the intermediate layout immediately befo
 - [usage-page-only-entry.jpg](usage-page-only-entry.jpg)
 - [notifications-before-hierarchy.jpg](notifications-before-hierarchy.jpg)
 - [notifications-after-hierarchy.jpg](notifications-after-hierarchy.jpg)
+
+## Selected Sparkle icon
+
+Source 007a2569b273e6be8d22cc318327581645206cce. The shared Aria icon now uses Lucide Sparkle. Earlier screenshots above predate this icon-only change
+
+![Light](aria-sparkle-light.png)
+
+![Dark](aria-sparkle-dark.png)
