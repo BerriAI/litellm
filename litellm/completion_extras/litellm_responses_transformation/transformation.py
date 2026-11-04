@@ -293,6 +293,14 @@ def _get_reasoning_items(
     return []
 
 
+def _is_string_system_message(msg: "AllMessageValues") -> bool:
+    match msg:
+        case {"role": "system", "content": str()}:
+            return True
+        case _:
+            return False
+
+
 def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]:  # mutable-ok: API message payload
     """Reasoning input items for an assistant message.
 
@@ -944,8 +952,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and isinstance(tool_call.get("custom"), dict)
         )
 
-        leading_system_count: Final = next(
-            (index for index, msg in enumerate(messages) if msg.get("role") != "system"),
+        leading_system_string_count: Final = next(
+            (index for index, msg in enumerate(messages) if not _is_string_system_message(msg)),
             len(messages),
         )
 
@@ -959,7 +967,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(replayed_turn.items)
             elif role == "system":
                 # Extract system message as instructions
-                if isinstance(content, str) and index < leading_system_count:
+                if isinstance(content, str) and index < leading_system_string_count:
                     if instructions:
                         # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"

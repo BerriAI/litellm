@@ -6111,6 +6111,31 @@ def test_transform_request_keeps_a_marked_string_system_message_in_input_and_fol
     assert messages == list(_CLIENT_MARKED_MESSAGES)
 
 
+def test_transform_request_keeps_system_messages_in_order_when_a_marked_one_comes_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="openai.gpt-5.6-sol",
+        messages=[
+            {"role": "system", "content": "Stable prefix", "cache_control": _EPHEMERAL},
+            {"role": "system", "content": "Rules"},
+            {"role": "user", "content": "hi"},
+        ],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "bedrock_mantle"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    items: Final = (_MESSAGE.validate_python(item) for item in cast(list[object], request["input"]))  # cast-ok: wire list
+    assert "instructions" not in request
+    assert [
+        (item.get("role"), [part.get("text") for part in _PARTS.validate_python(item.get("content"))]) for item in items
+    ] == [("system", ["Stable prefix"]), ("system", ["Rules"]), ("user", ["hi"])]
+
+
 def test_transform_request_leaves_client_cache_control_unmapped_for_a_deployment_that_does_not_read_breakpoints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
