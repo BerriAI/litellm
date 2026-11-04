@@ -90,6 +90,17 @@ const savedConfig = () => {
   return payload?.litellm_params?.complexity_router_config;
 };
 
+const renderWithSettledAvailability = async (renderModal: () => unknown) => {
+  vi.useFakeTimers();
+  try {
+    renderModal();
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    await act(() => vi.runOnlyPendingTimersAsync());
+  } finally {
+    vi.useRealTimers();
+  }
+};
+
 describe("EditAutoRouterModal keyword matching", () => {
   beforeEach(() => {
     modelPatchUpdateCall.mockClear();
@@ -461,9 +472,17 @@ describe("EditAutoRouterModal advanced field round trips", () => {
     modelPatchUpdateCall.mockClear();
   });
 
-  it("hydrates housekeeping and reminder fields, then omits the default max-token value after editing", async () => {
+  it("reopens clamp and saves the selected output policy without changing other advanced settings", async () => {
     const user = userEvent.setup();
-    renderAdvancedModal();
+    renderAdvancedModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          complexity_router_config: { ...storedAdvancedConfig, max_tokens_from_tier_model: "clamp" },
+        },
+      },
+    });
 
     openAutoRouterAdvanced("Housekeeping Routing");
     expect(screen.getByRole("switch", { name: "Route housekeeping calls to the cheapest tier" })).not.toBeChecked();
@@ -474,13 +493,17 @@ describe("EditAutoRouterModal advanced field round trips", () => {
     expect(screen.getByLabelText("Closing tag")).toHaveValue("</a>");
 
     openAutoRouterAdvanced("Response Format");
-    const maxTokensSwitch = screen.getByRole("switch", { name: "Cap max_tokens at the tier model's output ceiling" });
-    await user.click(maxTokensSwitch);
+    expect(screen.getByRole("radio", { name: /^Respect caller budget/ })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: /^Pass through caller limit/ }));
+    expect(screen.getByRole("radio", { name: /^Pass through caller limit/ })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: /^Use model ceiling/ }));
+    expect(screen.getByRole("radio", { name: /^Use model ceiling/ })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: /^Respect caller budget/ }));
     await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
 
-    expect(savedConfig()).not.toHaveProperty("max_tokens_from_tier_model");
+    expect(savedConfig().max_tokens_from_tier_model).toBe("clamp");
     expect(savedConfig()).toMatchObject({
       route_housekeeping_to_cheapest_tier: false,
       housekeeping_patterns: ["conversation title"],
@@ -1447,7 +1470,7 @@ describe("EditAutoRouterModal prompt compression", () => {
     { auto_router_model_compression: "model-compressor" },
   ])("should preserve the exact stored compression fields through an untouched save: %j", async (stored) => {
     const user = userEvent.setup();
-    renderWithStoredCompression(stored);
+    await renderWithSettledAvailability(() => renderWithStoredCompression(stored));
 
     await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
     await user.click(await screen.findByRole("button", { name: /save changes/i }));
@@ -1524,7 +1547,7 @@ describe("EditAutoRouterModal classifier vision", () => {
 
   it("hydrates and keeps a stored vision setting through an untouched save", async () => {
     const user = userEvent.setup();
-    renderModal();
+    await renderWithSettledAvailability(renderModal);
 
     openAutoRouterAdvanced("Classification Method");
     expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeChecked();

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 from typing import Final
 
-from setup.event_loop import EventLoopStalls, KnownStall, offenders, parse_stalls, summarize
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+from setup.event_loop import EventLoopStalls, KnownStall, junit_properties, offenders, parse_stalls, summarize
 
 _HANDLER: Final = (
     "Executing <Task pending name='Task-9' coro=<RequestResponseCycle.run_asgi() running at "
@@ -29,6 +31,20 @@ _SPEC: Final = EventLoopStalls(
         KnownStall("garbage collection", max_count=1),
     )
 )
+
+
+class _Slice(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    value: float
+    share: float | None
+    note: str | None
+    over: bool
+
+
+def _breakdown(properties: dict[str, float | str], name: str) -> list[_Slice]:
+    return TypeAdapter(list[_Slice]).validate_json(str(properties[f"perf_event_loop_{name}_breakdown"]))
 
 
 def test_parse_keeps_the_coroutine_its_location_and_the_hold() -> None:
@@ -95,3 +111,72 @@ def test_a_collector_pass_explains_only_the_next_hold_and_only_one_at_least_as_l
         ("RequestResponseCycle.run_asgi()", False),
     ]
     assert summarize(_SPEC, parse_stalls((_GC_PASS,))) == ()
+
+
+def test_junit_properties_count_every_hold_and_only_the_holds_past_their_allowance_as_offending() -> None:
+    rows: Final = summarize(_SPEC, parse_stalls((_STARTUP, _STREAM, _STREAM, _HANDLER, _HANDLER, _HANDLER)))
+    properties: Final = dict(junit_properties(_SPEC, rows))
+    assert properties["perf_event_loop_holds"] == 6
+    assert properties["perf_event_loop_holds_limit"] == 6
+    assert properties["perf_event_loop_offending_holds"] == 3
+    assert properties["perf_event_loop_offending_holds_limit"] == 0
+    assert properties["perf_event_loop_hold_seconds_max"] == 0.731
+    assert math.isclose(float(properties["perf_event_loop_hold_seconds_total"]), 0.302 + 2 * 0.412 + 3 * 0.731)
+    breakdown: Final = _breakdown(properties, "holds")
+    assert [(slice.label, slice.value, slice.note, slice.over) for slice in breakdown] == [
+        (
+            "RequestResponseCycle.run_asgi() uvicorn/protocols/http/h11_impl.py:416",
+            3,
+            "3 of 2 allowed, max 0.73 s",
+            True,
+        ),
+        ("TaskHandle._run_coro() anyio/_core/_tasks.py:275", 2, "not on the allowlist, max 0.41 s", True),
+        ("LifespanOn.main() uvicorn/lifespan/on.py:86", 1, "1 of 3 allowed, max 0.30 s", False),
+    ]
+    assert math.isclose(sum(slice.share or 0.0 for slice in breakdown), 1.0)
+
+
+def test_the_offending_breakdown_lists_only_the_locations_past_their_cap_by_how_far_over_they_are() -> None:
+    rows: Final = summarize(_SPEC, parse_stalls((_STARTUP, _STREAM, _STREAM, _HANDLER, _HANDLER, _HANDLER)))
+    offending: Final = _breakdown(dict(junit_properties(_SPEC, rows)), "offending_holds")
+    assert [(slice.label, slice.value, slice.share, slice.over) for slice in offending] == [
+        ("RequestResponseCycle.run_asgi() uvicorn/protocols/http/h11_impl.py:416", 1, 1 / 3, True),
+        ("TaskHandle._run_coro() anyio/_core/_tasks.py:275", 2, 2 / 3, True),
+    ]
+    clean: Final = dict(junit_properties(_SPEC, summarize(_SPEC, parse_stalls((_HANDLER, _HANDLER)))))
+    assert clean["perf_event_loop_offending_holds"] == 0
+    assert "perf_event_loop_offending_holds_breakdown" not in clean
+
+
+def test_the_seconds_breakdowns_carry_the_time_per_location_and_the_longest_single_holds() -> None:
+    long_handler: Final = _HANDLER.replace("0.731", "0.950")
+    rows: Final = summarize(_SPEC, parse_stalls((_STARTUP, _STREAM, long_handler, _HANDLER)))
+    properties: Final = dict(junit_properties(_SPEC, rows))
+    per_location: Final = _breakdown(properties, "hold_seconds_total")
+    assert [(slice.label.split()[0], slice.value) for slice in per_location] == [
+        ("RequestResponseCycle.run_asgi()", 0.950 + 0.731),
+        ("TaskHandle._run_coro()", 0.412),
+        ("LifespanOn.main()", 0.302),
+    ]
+    assert math.isclose(sum(slice.share or 0.0 for slice in per_location), 1.0)
+    longest: Final = _breakdown(properties, "hold_seconds_max")
+    assert [(slice.label.split()[0], slice.value, slice.share, slice.over) for slice in longest] == [
+        ("RequestResponseCycle.run_asgi()", 0.950, None, False),
+        ("RequestResponseCycle.run_asgi()", 0.731, None, False),
+        ("TaskHandle._run_coro()", 0.412, None, True),
+        ("LifespanOn.main()", 0.302, None, False),
+    ]
+
+
+def test_the_longest_holds_breakdown_stops_at_ten() -> None:
+    rows: Final = summarize(_SPEC, parse_stalls(tuple(_STARTUP for _ in range(12))))
+    longest: Final = _breakdown(dict(junit_properties(_SPEC, rows)), "hold_seconds_max")
+    assert len(longest) == 10
+
+
+def test_junit_properties_without_holds_report_zeros_and_no_breakdown() -> None:
+    properties: Final = dict(junit_properties(_SPEC, ()))
+    assert properties["perf_event_loop_holds"] == 0
+    assert properties["perf_event_loop_offending_holds"] == 0
+    assert properties["perf_event_loop_hold_seconds_max"] == 0
+    assert not [name for name in properties if name.endswith("_breakdown")]

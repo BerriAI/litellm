@@ -1,7 +1,9 @@
 import asyncio
 import json
 import re
+import socket
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +14,7 @@ from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import urlsplit
 
 import anthropic
 import httpx
@@ -20,7 +23,7 @@ import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
-from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from openai import APIError, AsyncOpenAI, OpenAI
@@ -1082,7 +1085,8 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
         mcp_peer() as peer,
         candidate.scenario() as scenario,
     ):
-        identity = register_mcp(scenario, peer, "guardrail" + uuid.uuid4().hex)
+        server = "guardrail" + uuid.uuid4().hex
+        identity = register_mcp(scenario, peer, server)
         permission = {"mcp_servers": [identity], "mcp_tool_search_enabled": True}
         key = scenario.key(object_permission=permission)
         key_selected = scenario.key(object_permission=permission, guardrails=[guardrail])
@@ -1113,8 +1117,10 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
                 )
                 calls = tuple(item for item in peer.drain() if item["body"].get("method") == "tools/call")
                 if expected is None:
-                    assert response.status_code == 400, response.text
-                    assert "integration resolved add denied" in response.text, response.text
+                    assert response.status_code == 403, response.text
+                    assert response.json() == {
+                        "detail": {"error": f"Tool add is unavailable after MCP guardrail checks for server {server}."}
+                    }, response.text
                     assert calls == (), "pre-call denial must prevent upstream execution"
                 else:
                     assert response.status_code == 200, response.text
@@ -1899,11 +1905,20 @@ def test_messages_pre_call_denial_streams_message(gateway: Gateway, tmp_path: Pa
         )
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream"), response.text
-        lines: Final = tuple(line for line in response.text.split("\n") if line.startswith("data: "))
-        assert len(lines) == 1, response.text
-        body: Final = json.loads(lines[0].removeprefix("data: "))
-        assert body["type"] == "message" and body["role"] == "assistant", body
-        assert body["content"] == [{"type": "text", "text": _RESPONSES_DENIAL}], body
+        events: Final = tuple(
+            json.loads(line.removeprefix("data: ")) for line in response.text.split("\n") if line.startswith("data: ")
+        )
+        assert [event["type"] for event in events] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ], response.text
+        assert events[0]["message"]["role"] == "assistant", events[0]
+        assert events[2]["delta"] == {"type": "text_delta", "text": _RESPONSES_DENIAL}, events[2]
+        assert events[4]["delta"]["stop_reason"] == "end_turn", events[4]
 
 
 @pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_writes_zero_spend_row")
@@ -2575,9 +2590,15 @@ def _scanned_while_upstream_is_held(
         rig.gate.set()
 
 
-def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple[tuple[str, ...], ...]:
+def _post_call_rows(
+    rig: _DisconnectRig, model: str, rows: int = 1, call_types: frozenset[str] | None = None
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
     found: Final = eventually(
-        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+        lambda: tuple(
+            row
+            for row in read_rows('SELECT call_type, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,))
+            if call_types is None or row["call_type"] in call_types
+        ),
         lambda values: len(values) == rows,
         seconds=70,
     )
@@ -2592,7 +2613,11 @@ def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple
         )
         return tuple(str(entry["guardrail_status"]) for entry in post_call)
 
-    return tuple(statuses(row["metadata"]) for row in found)
+    return tuple((str(row["call_type"]), statuses(row["metadata"])) for row in found)
+
+
+def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple[tuple[str, ...], ...]:
+    return tuple(statuses for _, statuses in _post_call_rows(rig, model, rows))
 
 
 _ENDPOINT_CLIENTS: Final = (
@@ -2625,7 +2650,7 @@ def test_client_disconnect_mid_stream_still_scans_the_content_it_already_receive
     (
         pytest.param(_chat_httpx, id="chat-httpx"),
         pytest.param(_chat_async_openai_sdk, id="chat-async-openai-sdk"),
-        pytest.param(_responses_httpx, id="responses-httpx", marks=_NO_DISCONNECT_ROW_LIT_8603),
+        pytest.param(_responses_httpx, id="responses-httpx"),
         pytest.param(_messages_anthropic_sdk, id="messages-anthropic-sdk", marks=_NO_DISCONNECT_ROW_LIT_8603),
         pytest.param(
             _gemini_httpx,
@@ -2836,9 +2861,9 @@ def test_client_disconnect_before_any_content_sends_no_response_scan(gateway: Ga
     with _disconnect_rig(gateway, tmp_path, shape="empty") as rig:
         try:
             _stream_and_close(rig, "/v1/chat/completions", _chat_body(rig, 0), "data: ")
+            rows: Final = _post_call_statuses(rig, rig.model)
         finally:
             rig.gate.set()
-        rows: Final = _post_call_statuses(rig, rig.model)
         assert rig.scans.response_scans(rig.secret()) == (), rig.scans.seen
         assert len(rows) == 1 and "success" not in rows[0], rows
 
@@ -3181,10 +3206,10 @@ def test_concurrent_disconnects_during_a_guardrail_outage_each_record_exactly_on
             seconds=20,
         )
         assert scanned == (1,) * 30, scanned
-        chat_rows: Final = _post_call_statuses(rig, rig.model, rows=10)
-        assert sorted(chat_rows) == sorted(
-            ("guardrail_failed_to_respond",) if index % 3 == 0 else ("success",) for index in range(0, 30, 3)
-        ), chat_rows
+        rows: Final = _post_call_rows(rig, rig.model, rows=20, call_types=frozenset({"acompletion", "aresponses"}))
+        assert sorted(rows) == sorted(
+            (("acompletion", ("guardrail_failed_to_respond",)),) * 10 + (("aresponses", ("success",)),) * 10
+        ), rows
 
 
 def test_disconnect_scans_keep_recording_after_a_worker_is_killed(gateway: Gateway, tmp_path: Path) -> None:
@@ -3197,3 +3222,63 @@ def test_disconnect_scans_keep_recording_after_a_worker_is_killed(gateway: Gatew
         assert all(rig.secret(index) in line for index, line in enumerate(received)), received
         assert _post_call_statuses(rig, rig.model, rows=8) == (("success",),) * 8
         assert rig.owned.process.poll() is None
+
+
+def _openai_upstream(request: Request) -> Reply:
+    if request.target.endswith("/vector_stores"):
+        return Reply(body=json.dumps({"id": "vs_" + uuid.uuid4().hex, "object": "vector_store", "name": None}).encode())
+    return Reply(body=_chat_completion_body("control-reply"))
+
+
+def _post_half_of_the_body_then_hang_up(gateway: Gateway, path: str, body: bytes) -> None:
+    address: Final = urlsplit(str(gateway.client.base_url))
+    assert address.hostname is not None and address.port is not None, address
+    head: Final = (
+        f"POST {path} HTTP/1.1\r\nHost: {address.netloc}\r\nAuthorization: Bearer {gateway.key}\r\n"
+        f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n"
+    ).encode()
+    with socket.create_connection((address.hostname, address.port)) as connection:
+        connection.sendall(head + body[: len(body) // 2])
+        time.sleep(0.5)
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    (
+        pytest.param(
+            "/v1/chat/completions",
+            b'{"model": "MODEL", "messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 16}',
+            id="chat-completions-where-an-empty-body-is-invalid",
+        ),
+        pytest.param(
+            "/v1/vector_stores",
+            b'{"name": "integration-store", "metadata": {"owner": "integration", "purpose": "half upload"}}',
+            id="vector-stores-where-an-empty-body-is-valid",
+        ),
+    ),
+)
+def test_client_disconnect_during_the_body_upload_runs_no_endpoint_and_writes_no_spend_row(
+    gateway: Gateway, tmp_path: Path, path: str, body: bytes
+) -> None:
+    with (
+        wire_server(_openai_upstream) as upstream,
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"OPENAI_BASE_URL": upstream.url + "/v1", "OPENAI_API_KEY": "synthetic-openai-key"},
+            state=OwnedState.PRIVATE,
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=upstream.url + "/v1", api_key="synthetic-openai-key")
+        _post_half_of_the_body_then_hang_up(owned.gateway, path, body.replace(b"MODEL", model.encode()))
+        control: Final = owned.gateway.chat(model)
+        rows: Final = eventually(
+            lambda: owned.gateway.rows('SELECT request_id, call_type, status FROM "LiteLLM_SpendLogs"', ()),
+            lambda values: any(row["request_id"] == control["id"] for row in values),
+            seconds=70,
+        )
+        assert [(row["call_type"], row["status"]) for row in rows] == [("acompletion", "success")], rows
+        assert [request.target for request in upstream.drain()] == ["/v1/chat/completions"], (
+            "the half-uploaded request must never reach the provider"
+        )

@@ -18,8 +18,12 @@ that consumes it, running the step's real shell against stubbed `gh`, `git` and
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
+from typing import Final
 
 import pytest
 import yaml
@@ -28,6 +32,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCOPE_SCRIPT = REPO_ROOT / ".github" / "scripts" / "select_ui_test_scope.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-unit.yml"
 STEP_NAME = "Run UI unit tests (Vitest)"
+EXPRESSION = re.compile(r"\$\{\{\s*(.+?)\s*\}\}")
+PULL_REQUEST_EVENT: Final = MappingProxyType(
+    {"number": "1", "base.ref": "main", "base.sha": "basesha", "head.sha": "headsha"}
+)
 
 FULL_SUITE_ARGV = ["run", "test", "--", "--run", "--pool", "forks", "--maxWorkers=14"]
 
@@ -73,13 +81,26 @@ def test_an_empty_change_set_fails_open_to_the_full_suite() -> None:
     assert scope([]) == "full"
 
 
-def _step_script() -> str:
-    workflow = yaml.safe_load(WORKFLOW.read_text())
-    steps = workflow["jobs"]["ui-unit"]["steps"]
-    script = next(step["run"] for step in steps if step.get("name") == STEP_NAME)
-    resolved = script.replace("${{ github.repository }}", "BerriAI/litellm")
-    assert "${{" not in resolved, "the step uses an Actions expression this harness does not resolve"
-    return resolved
+def _resolve(text: str, pull_request: Mapping[str, str] | None) -> str:
+    def value(match: re.Match[str]) -> str:
+        expression: Final = match.group(1)
+        if expression == "github.repository":
+            return "BerriAI/litellm"
+        if expression == "github.token":
+            return "token"
+        field: Final = expression.removeprefix("github.event.pull_request.")
+        assert field != expression, f"the step uses ${{{{ {expression} }}}}, which this harness does not resolve"
+        return "" if pull_request is None else pull_request[field]
+
+    return EXPRESSION.sub(value, text)
+
+
+def _step_script_and_env(pull_request: Mapping[str, str] | None) -> tuple[str, dict[str, str]]:
+    workflow: Final = yaml.safe_load(WORKFLOW.read_text())
+    steps: Final = workflow["jobs"]["ui-unit"]["steps"]
+    step: Final = next(step for step in steps if step.get("name") == STEP_NAME)
+    env: Final = {name: _resolve(str(value), pull_request) for name, value in step.get("env", {}).items()}
+    return _resolve(step["run"], pull_request), env
 
 
 def _stub(bin_dir: Path, name: str, body: str) -> None:
@@ -88,7 +109,9 @@ def _stub(bin_dir: Path, name: str, body: str) -> None:
     stub.chmod(0o755)
 
 
-def _run_step(tmp_path: Path, changed: list[str], base_sha: str = "basesha") -> tuple[int, str, list[list[str]]]:
+def _run_step(
+    tmp_path: Path, changed: list[str], pull_request: Mapping[str, str] | None = PULL_REQUEST_EVENT
+) -> tuple[int, str, list[list[str]]]:
     """Run the workflow step's real shell; return its status, stdout and every npm argv."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -100,20 +123,22 @@ def _run_step(tmp_path: Path, changed: list[str], base_sha: str = "basesha") -> 
     _stub(bin_dir, "git", 'if [ "$1" = diff ]; then cat "$CHANGED_FILES"; fi')
     _stub(bin_dir, "npm", 'printf "%s\\n" "$@" >>"$NPM_LOG"; printf "\\0" >>"$NPM_LOG"')
 
-    step = tmp_path / "step.sh"
-    step.write_text(_step_script())
+    step_script, step_env = _step_script_and_env(pull_request)
+    script: Final = tmp_path / "step.sh"
+    script.write_text(step_script)
 
-    env = dict(os.environ)
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
-    env["BASE_SHA"] = base_sha
-    env["HEAD_SHA"] = "headsha"
-    env["GITHUB_WORKSPACE"] = str(REPO_ROOT)
-    env["GITHUB_REF_NAME"] = "release_branch"
-    env["CHANGED_FILES"] = str(changed_file)
-    env["NPM_LOG"] = str(npm_log)
+    env: Final = {
+        **os.environ,
+        **step_env,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "GITHUB_WORKSPACE": str(REPO_ROOT),
+        "GITHUB_REF_NAME": "release_branch",
+        "CHANGED_FILES": str(changed_file),
+        "NPM_LOG": str(npm_log),
+    }
 
     result = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(step)],
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -155,7 +180,7 @@ def test_step_runs_the_full_suite_when_a_changed_file_is_outside_src(tmp_path: P
 
 
 def test_step_runs_the_full_suite_on_a_push(tmp_path: Path) -> None:
-    returncode, output, invocations = _run_step(tmp_path, ["src/app/page.tsx"], base_sha="")
+    returncode, output, invocations = _run_step(tmp_path, ["src/app/page.tsx"], pull_request=None)
     assert returncode == 0, output
     assert invocations == [FULL_SUITE_ARGV]
 

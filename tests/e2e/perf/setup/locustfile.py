@@ -4,7 +4,8 @@ time to headers, time to first byte, time to first token (streams), total time, 
 and whether it matched. Runs in its own process (`setup/run.py` starts it), never in the gateway's.
 
 Reads `PERF_PLAN_FILE` (JSON list of wire requests), writes `PERF_RECORDS_FILE` (one JSON object per
-line), paces to `PERF_RPS` over `PERF_USERS` users, and quits once the last request is recorded.
+line), paces to `PERF_RPS` over `PERF_USERS` users (or, when the plan carries `send_at_s`, sends each
+request at its scheduled second), and quits once the last request is recorded.
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ _JITTER: Final = 0.25
 _RNG: Final = random.Random(_PLAN[0].marker if _PLAN else "empty-plan")
 _RECORDS: Final = _RECORDS_PATH.open("a", encoding="utf-8")
 _PROGRESS: Final = PlanProgress(len(_PLAN))
+_SCHEDULED: Final = bool(_PLAN) and _PLAN[0].send_at_s is not None
+_RUN_STARTED: Final = time.monotonic()
 _STOP_FILE: Final = os.environ.get("PERF_STOP_FILE")
 BLOCK_REASON: Final = "perf-test-block"
 _TOKEN_MAX_AGE_S: Final = 240.0
@@ -137,6 +140,15 @@ def _header(response: FastResponse, name: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _ms_header(response: FastResponse | None, name: str) -> float | None:
+    """A gateway timing header as a number; the gateway writes the literal `None` when it has no value."""
+    value: Final = _header(response, name) if response is not None else None
+    try:
+        return float(value) if value is not None else None
+    except ValueError:
+        return None
+
+
 def _quit(user: FastHttpUser) -> None:
     """End the run once every record is written. Quitting from a separate greenlet: `runner.quit`
     kills the user greenlets, and the user calling it would be killed mid-shutdown."""
@@ -202,7 +214,8 @@ def _authorization(user: FastHttpUser, item: WireRequest) -> str:
 class PlanUser(FastHttpUser):
     """One simulated client; all users share the plan and together hold the planned rate. Each user starts at
     a random point of its first interval and jitters every later interval by up to `_JITTER` either way, so the
-    users never fire in lockstep; the mean interval is unchanged and `rps` stays the total rate."""
+    users never fire in lockstep; the mean interval is unchanged and `rps` stays the total rate. A scheduled
+    plan (a ramp) is paced by the plan instead: a user takes the next request and sleeps until its second."""
 
     network_timeout = float(os.environ.get("PERF_REQUEST_TIMEOUT", "120"))
     connection_timeout = 30.0
@@ -210,9 +223,12 @@ class PlanUser(FastHttpUser):
     def on_start(self) -> None:
         self._last_run = 0.0
         self._last_wait = 0.0
-        gevent.sleep(_RNG.uniform(0.0, _INTERVAL_S))
+        if not _SCHEDULED:
+            gevent.sleep(_RNG.uniform(0.0, _INTERVAL_S))
 
     def wait_time(self) -> float:
+        if _SCHEDULED:
+            return 0.1
         target: Final = _INTERVAL_S * _RNG.uniform(1.0 - _JITTER, 1.0 + _JITTER)
         now: Final = time.monotonic()
         run_s: Final = now - self._last_run - self._last_wait if self._last_run else 0.0
@@ -228,6 +244,8 @@ class PlanUser(FastHttpUser):
             if _PROGRESS.drained:
                 _quit(self)
             return
+        if item.send_at_s is not None:
+            gevent.sleep(max(0.0, _RUN_STARTED + item.send_at_s - time.monotonic()))
         started_at: Final = time.time()
         started: Final = time.perf_counter()
         first_byte_s: float | None = None
@@ -309,6 +327,8 @@ class PlanUser(FastHttpUser):
                 call_id=_header(response, "x-litellm-call-id") if response is not None else None,
                 error=error,
                 response_id=identifier,
+                litellm_overhead_ms=_ms_header(response, "x-litellm-overhead-duration-ms"),
+                litellm_response_ms=_ms_header(response, "x-litellm-response-duration-ms"),
             )
         )
         if _PROGRESS.drained:

@@ -45,6 +45,7 @@ from litellm.llms.bedrock.passthrough.guardrail_translation.structured_edits imp
     structured_edits,
     tool_edits,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy.guardrails.auto_router_compression import is_compression_guardrail
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -544,7 +545,7 @@ class _StreamFrame(TypedDict):
 
 
 def _unpack_uint32(buffer: bytes) -> int:
-    return struct.unpack("!I", buffer)[0]
+    return int.from_bytes(buffer, "big")
 
 
 def _collect_stream_delta_text_holders(delta: object) -> list[_DeltaHolder]:
@@ -947,7 +948,7 @@ def _invoke_frames(items: Sequence[object]) -> tuple[InvokeStreamFrame, ...]:
 def _sse_events(sse: bytes) -> tuple[Mapping[str, object], ...]:
     return tuple(
         _JSON_OBJECT.validate_python(json.loads(line[len("data:") :]))
-        for line in sse.decode().splitlines()
+        for line in split_sse_lines(sse.decode())
         if line.startswith("data:")
     )
 
@@ -1255,7 +1256,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
 
             try:
-                payload_dict = json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
+                payload_dict = _BODY_BY_REFERENCE.validate_python(
+                    json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
+                )
                 for local_idx, (_, container, key) in enumerate(
                     _collect_stream_delta_text_holders(payload_dict.get("delta"))
                 ):

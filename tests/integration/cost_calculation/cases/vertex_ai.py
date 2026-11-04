@@ -3,7 +3,7 @@
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
 import json
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 from pydantic import JsonValue
 
@@ -41,6 +41,7 @@ from integration.cost_calculation.cases.anthropic import (
 from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
+    Deployment,
     ExactExpected,
     JsonResponse,
     RecountExpected,
@@ -943,6 +944,69 @@ GEMINI_3_1_PRO_FALLBACK_VIDEO_TOKENS_AT_INPUT_RATE: Final = CostTrackingTestCase
     ),
     expected=ExactExpected(
         spend=0.020706, input_cost=0.016926, output_cost=0.00378, prompt_tokens=8060, completion_tokens=300
+    ),
+)
+
+GEMINI_3_1_PRO_FALLBACK_VIDEO_TOKENS_ABOVE_200K: Final = CostTrackingTestCase(
+    name="gemini-3.1-pro-fallback_video_tokens_above_200k",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gemini-3.1-pro",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "a7c1e02d9b44 summarize the attached hour-long recording in one line",
+                    },
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": "data:video/mp4;base64,AAAAGGZ0eXBpc29tAAACAGlzb21pc282AAACCG1kYXQNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL/GzdTb4unw9/4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8/oBCA8WHSQrMjlAR05VXGNqcXh/ho2Um6KpsLe+xczT2uHo7/b9BAsSGSAnLjU8Q0pRWF9mbXR7gomQl56lrLO6wcjP1t3k6/L5AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/AMKERgfJi00O0JJUFdeZWxzeoGIj5adpKuyucDHztXc4+rx+P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3+bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+Lp8Pf+BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O/2/QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy+QAHDhUcIyoxOD9GTVRbYmlwd36FjJOaoaivtr3Ey9LZ4Ofu9fwDChEYHyYtNDtCSVBXXmVsc3qBiI+WnaSrsrnAx87V3OPq8fj/Bg==",
+                            "format": "mp4",
+                        },
+                    },
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "scripted answer a7c1e02d9b44"}], "role": "model"},
+                    "finishReason": "STOP",
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 250000,
+                "candidatesTokenCount": 300,
+                "totalTokenCount": 250300,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 10000},
+                    {"modality": "VIDEO", "tokenCount": 240000},
+                ],
+            },
+            "modelVersion": "gemini-3.1-pro",
+        },
+    ),
+    expected=ExactExpected(
+        spend=1.05567, input_cost=1.05, output_cost=0.00567, prompt_tokens=250000, completion_tokens=300
     ),
 )
 
@@ -2783,7 +2847,7 @@ GEMINI_3_8_FLASH_STREAM_FULL_USAGE: Final = CostTrackingTestCase(
         ),
     ),
     expected=ExactExpected(
-        spend=0.005775328, input_cost=0.001276288, output_cost=0.00449904, prompt_tokens=8314, completion_tokens=1592
+        spend=0.005946928, input_cost=0.001447888, output_cost=0.00449904, prompt_tokens=8314, completion_tokens=1592
     ),
 )
 
@@ -3146,6 +3210,41 @@ VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_READ: Final = _vertex_claude_shape_case(
         cache_read_cost=0.00351039,
     ),
 )
+VERTEX_AI_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K: Final = _vertex_claude_shape_case(
+    VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    "vertex_ai/claude-haiku-5-5-tiered_input_above_100k",
+    "vertex_ai/claude-haiku-5-5",
+    _vertex_claude_usage(input_tokens=150000, output_tokens=480),
+    ExactExpected(
+        spend=0.9906,
+        input_cost=0.975,
+        output_cost=0.0156,
+        prompt_tokens=150000,
+        completion_tokens=480,
+    ),
+    response_content=[
+        {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+        {"type": "text", "text": "scripted answer for cost fixtures"},
+    ],
+)
+VERTEX_AI_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K: Final = _vertex_claude_shape_case(
+    VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
+    "vertex_ai/claude-haiku-5-5-tiered_cache_read_above_100k",
+    "vertex_ai/claude-haiku-5-5",
+    _vertex_claude_usage(input_tokens=4096, output_tokens=480, cache_read_input_tokens=110592),
+    ExactExpected(
+        spend=0.1141088,
+        input_cost=0.0985088,
+        output_cost=0.0156,
+        prompt_tokens=114688,
+        completion_tokens=480,
+        cache_read_cost=0.0718848,
+    ),
+    response_content=[
+        {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+        {"type": "text", "text": "scripted answer for cost fixtures"},
+    ],
+)
 VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M: Final = _vertex_claude_shape_case(
     VERTEX_AI_CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
     "vertex_ai/claude-haiku-5-5-cache_write_5m",
@@ -3288,6 +3387,232 @@ VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS: Final = bridge_pairs(
     ("/v1/responses",),
 )
 
+
+VERTEX_AI_CLAUDE_DEPLOYMENT_RATES: Final = Deployment(
+    input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.01
+)
+
+
+def _vertex_claude_web_search_message(web_search_requests: int) -> JsonResponse:
+    return JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [{"type": "text", "text": "scripted answer for cost fixtures"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 1840,
+                "output_tokens": 412,
+                "server_tool_use": {"web_search_requests": web_search_requests},
+            },
+        },
+    )
+
+
+def _vertex_claude_web_search_stream(web_search_requests: int) -> SseResponse:
+    return SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_$REQUEST_ID",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 1840},
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "scripted answer for cost fixtures"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 412, "server_tool_use": {"web_search_requests": web_search_requests}},
+            },
+            {"type": "message_stop"},
+        ),
+    )
+
+
+def _vertex_claude_deployment_web_search_case(
+    name: str,
+    endpoint: Literal["/v1/chat/completions", "/v1/responses", "/v1/messages"],
+    request: dict[str, JsonValue],
+    response: JsonResponse | SseResponse,
+    tool_usage_cost: float,
+    deployment: Deployment = VERTEX_AI_CLAUDE_DEPLOYMENT_RATES,
+) -> CostTrackingTestCase:
+    return CostTrackingTestCase(
+        name=name,
+        covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+        model="vertex_ai/claude-sonnet-5-5",
+        endpoint=endpoint,
+        deployment=deployment,
+        request={"model": "$MODEL", **request},
+        response=response,
+        expected=ExactExpected(
+            spend=round(0.0039 + tool_usage_cost, 10),
+            input_cost=0.00184,
+            output_cost=0.00206,
+            prompt_tokens=1840,
+            completion_tokens=412,
+            tool_usage_cost=tool_usage_cost,
+        ),
+    )
+
+
+VERTEX_AI_CLAUDE_WEB_SEARCH_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 3,
+}
+
+VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH: Final = _vertex_claude_deployment_web_search_case(
+    "vertex_ai/claude-sonnet-5-5-deployment_rates_messages_web_search_two_requests",
+    "/v1/messages",
+    {
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "vertex claude deployment rates messages web search"}],
+        "tools": [VERTEX_AI_CLAUDE_WEB_SEARCH_TOOL],
+    },
+    _vertex_claude_web_search_message(2),
+    0.02,
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_STREAM: Final = _vertex_claude_deployment_web_search_case(
+    "vertex_ai/claude-sonnet-5-5-deployment_rates_messages_web_search_two_requests_stream",
+    "/v1/messages",
+    {
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "vertex claude deployment rates messages web search stream"}],
+        "stream": True,
+        "tools": [VERTEX_AI_CLAUDE_WEB_SEARCH_TOOL],
+    },
+    _vertex_claude_web_search_stream(2),
+    0.02,
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_ZERO_RATE: Final = (
+    _vertex_claude_deployment_web_search_case(
+        "vertex_ai/claude-sonnet-5-5-deployment_zero_search_rate_messages_two_requests",
+        "/v1/messages",
+        {
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "vertex claude deployment zero search rate messages"}],
+            "tools": [VERTEX_AI_CLAUDE_WEB_SEARCH_TOOL],
+        },
+        _vertex_claude_web_search_message(2),
+        0.0,
+        Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.0),
+    )
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_TOKEN_RATES_ONLY: Final = (
+    _vertex_claude_deployment_web_search_case(
+        "vertex_ai/claude-sonnet-5-5-deployment_token_rates_only_messages_web_search_two_requests",
+        "/v1/messages",
+        {
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "vertex claude deployment token rates only messages web search"}],
+            "tools": [VERTEX_AI_CLAUDE_WEB_SEARCH_TOOL],
+        },
+        _vertex_claude_web_search_message(2),
+        0.034,
+        Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06),
+    )
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_CHAT_WEB_SEARCH: Final = _vertex_claude_deployment_web_search_case(
+    "vertex_ai/claude-sonnet-5-5-deployment_rates_chat_web_search_three_requests",
+    "/v1/chat/completions",
+    {
+        "messages": [{"role": "user", "content": "vertex claude deployment rates chat web search"}],
+        "tools": [VERTEX_AI_CLAUDE_WEB_SEARCH_TOOL],
+        "allowed_openai_params": ["web_search_options"],
+    },
+    _vertex_claude_web_search_message(3),
+    0.03,
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_CHAT_WEB_SEARCH_STREAM: Final = _vertex_claude_deployment_web_search_case(
+    "vertex_ai/claude-sonnet-5-5-deployment_rates_chat_web_search_two_requests_stream",
+    "/v1/chat/completions",
+    {
+        "messages": [{"role": "user", "content": "vertex claude deployment rates chat web search stream"}],
+        "stream": True,
+        "tools": [VERTEX_AI_CLAUDE_WEB_SEARCH_TOOL],
+        "allowed_openai_params": ["web_search_options"],
+    },
+    _vertex_claude_web_search_stream(2),
+    0.02,
+)
+VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_RESPONSES_WEB_SEARCH: Final = _vertex_claude_deployment_web_search_case(
+    "vertex_ai/claude-sonnet-5-5-deployment_rates_responses_web_search_two_requests",
+    "/v1/responses",
+    {"input": "vertex claude deployment rates responses web search", "tools": [{"type": "web_search"}]},
+    _vertex_claude_web_search_message(2),
+    0.02,
+)
+
+GEMINI_3_1_PRO_PREVIEW_DEPLOYMENT_MESSAGES_WEB_SEARCH_STREAM: Final = CostTrackingTestCase(
+    name="vertex_ai/gemini-3.1-pro-preview-deployment_rates_messages_web_search_two_queries_stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="vertex_ai/gemini-3.1-pro-preview",
+    endpoint="/v1/messages",
+    deployment=Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.03),
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "vertex gemini deployment rates messages web search stream"}],
+        "stream": True,
+        "tools": [VERTEX_AI_CLAUDE_WEB_SEARCH_TOOL],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "scripted answer for cost fixtures"}], "role": "model"},
+                        "index": 0,
+                    }
+                ],
+                "modelVersion": "gemini-3.1-pro-preview",
+            },
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": ""}], "role": "model"},
+                        "finishReason": "STOP",
+                        "index": 0,
+                        "groundingMetadata": {"webSearchQueries": ["query 0", "query 1"]},
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 1840,
+                    "candidatesTokenCount": 412,
+                    "totalTokenCount": 2252,
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
+                },
+                "modelVersion": "gemini-3.1-pro-preview",
+            },
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0339,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.03,
+    ),
+)
 
 GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT: Final = _gemini_case(
     GEMINI_3_8_FLASH_INPUT_TEXT, "vertex_ai/gemini-3.1-pro-preview-input_text", "vertex_ai/gemini-3.1-pro-preview",
@@ -3530,6 +3855,10 @@ GEMINI_4_ARGON_ROUTE_BRIDGES: Final = bridge_pairs(
     (GEMINI_4_ARGON_INPUT_TEXT, GEMINI_4_ARGON_STREAM),
     ("/v1/responses", "/v1/messages"),
 )
+GEMINI_3_8_FLASH_ROUTE_BRIDGES: Final = bridge_pairs(
+    (GEMINI_3_8_FLASH_INPUT_TEXT, GEMINI_3_8_FLASH_STREAM),
+    ("/v1/responses", "/v1/messages"),
+)
 GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES: Final = bridge_pairs(
     (GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT, GEMINI_3_1_PRO_PREVIEW_STREAM),
     ("/v1/responses", "/v1/messages"),
@@ -3548,6 +3877,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_WEB_SEARCH_MEDIUM,
     GEMINI_3_1_PRO_GOOGLE_MAPS_GROUNDING,
     GEMINI_3_1_PRO_FALLBACK_VIDEO_TOKENS_AT_INPUT_RATE,
+    GEMINI_3_1_PRO_FALLBACK_VIDEO_TOKENS_ABOVE_200K,
     GEMINI_3_1_PRO_STREAM,
     GEMINI_3_1_PRO_STREAM_NO_USAGE,
     GEMINI_3_1_PRO_STREAM_NO_USAGE_TOOL_CALL,
@@ -3604,6 +3934,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
     VERTEX_AI_CLAUDE_HAIKU_5_5_STREAM,
     VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K,
+    VERTEX_AI_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K,
     VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
     VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
     VERTEX_AI_CLAUDE_HAIKU_5_5_THINKING,
@@ -3620,6 +3952,14 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     VERTEX_AI_CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
     VERTEX_AI_CLAUDE_SONNET_5_5_MESSAGES_STREAM,
     *(pair.bridged for pair in VERTEX_AI_CLAUDE_SONNET_5_5_BRIDGE_PAIRS),
+    VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH,
+    VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_STREAM,
+    VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_ZERO_RATE,
+    VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_TOKEN_RATES_ONLY,
+    VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_CHAT_WEB_SEARCH,
+    VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_CHAT_WEB_SEARCH_STREAM,
+    VERTEX_AI_CLAUDE_SONNET_5_5_DEPLOYMENT_RESPONSES_WEB_SEARCH,
+    GEMINI_3_1_PRO_PREVIEW_DEPLOYMENT_MESSAGES_WEB_SEARCH_STREAM,
     GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT,
     GEMINI_3_1_PRO_PREVIEW_STREAM,
     GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
@@ -3633,6 +3973,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_4_ARGON_REASONING,
     GEMINI_4_ARGON_TOOL_CALL,
     *(pair.bridged for pair in GEMINI_4_ARGON_ROUTE_BRIDGES),
+    *(pair.bridged for pair in GEMINI_3_8_FLASH_ROUTE_BRIDGES),
     *(pair.bridged for pair in GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES),
 )
 
@@ -3700,6 +4041,14 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         streamed=GEMINI_4_ARGON_ROUTE_BRIDGES[3].bridged,
     ),
     StreamParityTestCase(
+        plain=GEMINI_3_8_FLASH_ROUTE_BRIDGES[0].bridged,
+        streamed=GEMINI_3_8_FLASH_ROUTE_BRIDGES[2].bridged,
+    ),
+    StreamParityTestCase(
+        plain=GEMINI_3_8_FLASH_ROUTE_BRIDGES[1].bridged,
+        streamed=GEMINI_3_8_FLASH_ROUTE_BRIDGES[3].bridged,
+    ),
+    StreamParityTestCase(
         plain=GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[0].bridged,
         streamed=GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[2].bridged,
     ),
@@ -3711,9 +4060,10 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     *bridge_pairs(
-        (GEMINI_3_8_FLASH_INPUT_TEXT, GEMINI_3_8_FLASH_CACHE_READ, GEMINI_3_8_FLASH_STREAM),
+        (GEMINI_3_8_FLASH_CACHE_READ, GEMINI_3_8_FLASH_REASONING),
         ("/v1/responses", "/v1/messages"),
     ),
+    *GEMINI_3_8_FLASH_ROUTE_BRIDGES,
     *GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES,
     *GEMINI_4_ARGON_ROUTE_BRIDGES,
     *VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS,

@@ -102,6 +102,7 @@ const AccessGroupBudgetModal: React.FC<AccessGroupBudgetModalProps> = ({
                     id={id}
                     value={value || null}
                     onChange={(next) => onChange(next ?? undefined)}
+                    placeholder="Keep current"
                   />
                 )}
               </FormField>
