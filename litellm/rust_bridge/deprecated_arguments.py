@@ -12,7 +12,11 @@ _LITELLM_ROOT: Final = f"{Path(__file__).parents[1]}{os.sep}"
 
 _DEPRECATED: Final = MappingProxyType(
     {
-        "client": "client= is deprecated: litellm is moving requests to Rust, which ignores it and uses its own HTTP settings"
+        "client": (
+            "client= is deprecated: litellm is moving requests to Rust, which cannot use a caller's HTTP client. "
+            "Set network options with litellm.ssl_verify, litellm.ssl_certificate, or proxy and SSL environment "
+            "variables instead"
+        )
     }
 )
 
