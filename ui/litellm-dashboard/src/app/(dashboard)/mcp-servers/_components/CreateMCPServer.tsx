@@ -1052,7 +1052,14 @@ const GatewayCreateMCPServer: React.FC<CreateMCPServerProps> = ({
 const CreateMCPServer: React.FC<CreateMCPServerProps> = (props) => {
   const [executionMode, setExecutionMode] = useState<"litellm" | "provider">("litellm");
   const selectorId = React.useId();
-  const { setModalVisible } = props;
+  const { setModalVisible, isModalVisible } = props;
+  // A parent can close the modal by flipping isModalVisible without going through setVisible, so
+  // reset on every close; the next open always starts on the gateway form.
+  const [wasModalVisible, setWasModalVisible] = useState(isModalVisible);
+  if (wasModalVisible !== isModalVisible) {
+    setWasModalVisible(isModalVisible);
+    if (!isModalVisible) setExecutionMode("litellm");
+  }
   const setVisible = React.useCallback(
     (visible: boolean) => {
       if (!visible) setExecutionMode("litellm");

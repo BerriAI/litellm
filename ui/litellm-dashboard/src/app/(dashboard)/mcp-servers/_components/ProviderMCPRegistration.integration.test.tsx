@@ -31,6 +31,9 @@ const server: MCPServer = {
   updated_by: "admin",
 };
 
+const DELEGATE_AUTH_LABEL = "Delegate Auth to Upstream";
+const OAUTH_PASSTHROUGH_LABEL = "OAuth Pass-through";
+
 const props = {
   accessToken: "test-token",
   userRole: "Admin",
@@ -88,6 +91,17 @@ describe("provider registration UI", () => {
     expect(screen.queryByLabelText("Authentication Value")).not.toBeInTheDocument();
   });
 
+  it("reopens on the gateway form after the parent closes the modal in provider mode", async () => {
+    const createProps = { ...props, setModalVisible: vi.fn(), onCreateSuccess: vi.fn() };
+    const { rerender } = render(<CreateMCPServer {...createProps} isModalVisible />);
+    await selectOption("Execution mode", "Provider-executed");
+    expect(screen.getByLabelText("Allowed tools")).toBeInTheDocument();
+    rerender(<CreateMCPServer {...createProps} isModalVisible={false} />);
+    rerender(<CreateMCPServer {...createProps} isModalVisible />);
+    expect(await screen.findByText("LiteLLM-executed")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Allowed tools")).not.toBeInTheDocument();
+  });
+
   it("edits stored tools and can deny all without discovery", async () => {
     const onSuccess = vi.fn();
     render(<MCPServerEdit {...props} mcpServer={server} onCancel={vi.fn()} onSuccess={onSuccess} />);
@@ -115,6 +129,24 @@ describe("provider registration UI", () => {
     expect(screen.queryByRole("button", { name: /Test Connection/i })).not.toBeInTheDocument();
     expect(networking.listMCPTools).not.toHaveBeenCalled();
     expect(networking.getMCPOAuthUserCredentialStatus).not.toHaveBeenCalled();
+  });
+
+  it("hides gateway OAuth rows in provider settings even when gateway auth fields are present", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServerView
+          {...props}
+          mcpServer={{ ...server, auth_type: "oauth2", extra_headers: ["Authorization"] }}
+          isProxyAdmin
+          isEditing={false}
+          onBack={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.queryByText(DELEGATE_AUTH_LABEL)).not.toBeInTheDocument();
+    expect(screen.queryByText(OAUTH_PASSTHROUGH_LABEL)).not.toBeInTheDocument();
   });
 
   it("keeps config registrations read-only", () => {

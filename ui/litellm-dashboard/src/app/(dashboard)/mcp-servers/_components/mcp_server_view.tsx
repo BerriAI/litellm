@@ -404,7 +404,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     </div>
                   </div>
                 )}
-                {handleAuth(mcpServer.auth_type) === "oauth2" && (
+                {!isProvider && handleAuth(mcpServer.auth_type) === "oauth2" && (
                   <div className="grid grid-cols-3 gap-4 py-3">
                     <p className="text-sm font-medium text-muted-foreground">
                       {t("mcpServers.serverView.settings.fields.delegateAuth")}
@@ -421,7 +421,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     </div>
                   </div>
                 )}
-                {handleAuth(mcpServer.auth_type) !== "oauth2" &&
+                {!isProvider &&
+                  handleAuth(mcpServer.auth_type) !== "oauth2" &&
                   Array.isArray(mcpServer.extra_headers) &&
                   mcpServer.extra_headers.some((h) => typeof h === "string" && h.toLowerCase() === "authorization") && (
                     <div className="grid grid-cols-3 gap-4 py-3">
