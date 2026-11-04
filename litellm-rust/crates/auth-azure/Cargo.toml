@@ -21,5 +21,6 @@ azure_core = "1.0.0"
 azure_identity = { version = "1.0.0", features = ["tokio"] }
 
 [dev-dependencies]
+litellm-secrets.workspace = true
 rstest.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

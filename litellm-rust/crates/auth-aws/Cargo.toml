@@ -28,6 +28,7 @@ aws-types = "1.4.0"
 aws-smithy-runtime-api = "1.13.0"
 
 [dev-dependencies]
+litellm-secrets.workspace = true
 aws-smithy-types = "1.6.4"
 aws-runtime = { version = "1.9.4", default-features = false }
 rstest.workspace = true

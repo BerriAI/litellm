@@ -1113,22 +1113,44 @@ mod tests {
     #[rstest::rstest]
     #[case::running_with_web_identity("/var/run/token", Some("arn:aws:iam::1:role/current"))]
     #[case::empty_token_file("", None)]
-    fn assume_role_reads_the_ambient_role_from_the_injected_environment(
+    #[tokio::test]
+    async fn assume_role_reads_the_ambient_role_from_the_secret_snapshot(
         #[case] token_file: &str,
         #[case] expected: Option<&str>,
     ) {
-        let env = |key: &str| match key {
-            AWS_WEB_IDENTITY_TOKEN_FILE => Some(token_file.to_string()),
-            AWS_ROLE_ARN => Some("arn:aws:iam::1:role/current".to_string()),
-            _ => None,
-        };
+        use litellm_secrets::source::SecretSource;
+
+        struct WebIdentitySecrets<'a>(&'a str);
+
+        impl SecretSource for WebIdentitySecrets<'_> {
+            fn get_secret_str<'a>(
+                &'a self,
+                name: &'a str,
+            ) -> futures_util::future::BoxFuture<
+                'a,
+                Result<Option<SecretValue>, litellm_secrets::Error>,
+            > {
+                Box::pin(async move {
+                    Ok(match name {
+                        AWS_WEB_IDENTITY_TOKEN_FILE => Some(SecretValue::new(self.0)),
+                        AWS_ROLE_ARN => Some(SecretValue::new("arn:aws:iam::1:role/current")),
+                        _ => None,
+                    })
+                })
+            }
+        }
+
+        let snapshot = WebIdentitySecrets(token_file)
+            .resolve(AwsParams::secret_names())
+            .await
+            .unwrap();
         let config = AwsAuthConfig {
             role_name: Some("arn:aws:iam::1:role/target".into()),
             ..Default::default()
         };
         let AwsAuthFlow::AssumeRole {
             web_identity_role, ..
-        } = classify_auth(config, &env)
+        } = classify_auth(config, &|name| snapshot.get(name))
         else {
             panic!("a role name selects AssumeRole");
         };

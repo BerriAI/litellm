@@ -13,25 +13,31 @@ use std::sync::Arc;
 use super::native::{NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest};
 use super::types::{AzureAuthInputs, AzureCredentialType, ConfigValue, DEFAULT_AZURE_SCOPE};
 
-const AZURE_AD_TOKEN_ENV: &str = "AZURE_AD_TOKEN";
-const AZURE_TENANT_ID_ENV: &str = "AZURE_TENANT_ID";
-const AZURE_CLIENT_ID_ENV: &str = "AZURE_CLIENT_ID";
-const AZURE_CLIENT_SECRET_ENV: &str = "AZURE_CLIENT_SECRET";
-const AZURE_SCOPE_ENV: &str = "AZURE_SCOPE";
-const AZURE_AUTHORITY_HOST_ENV: &str = "AZURE_AUTHORITY_HOST";
-const AZURE_CREDENTIAL_ENV: &str = "AZURE_CREDENTIAL";
-const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
+#[derive(strum::IntoStaticStr, strum::VariantArray, strum::VariantNames)]
+enum AzureSecretName {
+    #[strum(serialize = "AZURE_AD_TOKEN")]
+    AdToken,
+    #[strum(serialize = "AZURE_TENANT_ID")]
+    TenantId,
+    #[strum(serialize = "AZURE_CLIENT_ID")]
+    ClientId,
+    #[strum(serialize = "AZURE_CLIENT_SECRET")]
+    ClientSecret,
+    #[strum(serialize = "AZURE_SCOPE")]
+    Scope,
+    #[strum(serialize = "AZURE_AUTHORITY_HOST")]
+    AuthorityHost,
+    #[strum(serialize = "AZURE_CREDENTIAL")]
+    Credential,
+    #[strum(serialize = "AZURE_FEDERATED_TOKEN_FILE")]
+    FederatedTokenFile,
+    #[strum(serialize = "IDENTITY_ENDPOINT")]
+    IdentityEndpoint,
+    #[strum(serialize = "MSI_ENDPOINT")]
+    MsiEndpoint,
+}
 
-pub const SECRET_NAMES: &[&str] = &[
-    AZURE_AD_TOKEN_ENV,
-    AZURE_TENANT_ID_ENV,
-    AZURE_CLIENT_ID_ENV,
-    AZURE_CLIENT_SECRET_ENV,
-    AZURE_SCOPE_ENV,
-    AZURE_AUTHORITY_HOST_ENV,
-    AZURE_CREDENTIAL_ENV,
-    AZURE_FEDERATED_TOKEN_FILE_ENV,
-];
+pub const SECRET_NAMES: &[&str] = <AzureSecretName as strum::VariantNames>::VARIANTS;
 
 #[derive(Clone, Debug)]
 pub(crate) enum AzureCredentialPlan {
@@ -217,7 +223,7 @@ fn identity_plan(
             .map(|value| Sourced::new(value, InputSource::Environment))
     };
     let scope = deployment(scope);
-    let authority = environment(AZURE_AUTHORITY_HOST_ENV);
+    let authority = environment(AzureSecretName::AuthorityHost.into());
     match identity {
         AzureIdentity::ClientSecret {
             tenant_id,
@@ -240,12 +246,12 @@ fn identity_plan(
             })?,
         )),
         AzureIdentity::Default => {
-            let tenant_id = environment(AZURE_TENANT_ID_ENV);
-            let client_id = environment(AZURE_CLIENT_ID_ENV);
+            let tenant_id = environment(AzureSecretName::TenantId.into());
+            let client_id = environment(AzureSecretName::ClientId.into());
             let from_environment = match (
                 tenant_id.clone(),
                 client_id.clone(),
-                environment(AZURE_CLIENT_SECRET_ENV),
+                environment(AzureSecretName::ClientSecret.into()),
             ) {
                 (Some(tenant_id), Some(client_id), Some(client_secret)) => {
                     Some(NativeAzureRequest::ClientSecret {
@@ -258,8 +264,8 @@ fn identity_plan(
                 }
                 _ => None,
             };
-            let probe_imds =
-                env_lookup("IDENTITY_ENDPOINT").is_none() && env_lookup("MSI_ENDPOINT").is_none();
+            let probe_imds = env_lookup(AzureSecretName::IdentityEndpoint.into()).is_none()
+                && env_lookup(AzureSecretName::MsiEndpoint.into()).is_none();
             let AzureCredentialPlan::Chain(chain) = select_native_plan(
                 Some(Sourced::new(
                     AzureCredentialType::DefaultAzureCredential,
@@ -267,7 +273,7 @@ fn identity_plan(
                 )),
                 tenant_id,
                 client_id,
-                environment(AZURE_FEDERATED_TOKEN_FILE_ENV),
+                environment(AzureSecretName::FederatedTokenFile.into()),
                 scope,
                 authority,
                 InputSource::Environment,
@@ -293,35 +299,58 @@ pub(crate) fn select_auth_plan(
     inputs: &AzureAuthInputs,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<AzureCredentialPlan, Error> {
-    let token = configured_secret(&inputs.azure_ad_token, AZURE_AD_TOKEN_ENV, env_lookup);
-    let tenant_id = configured_string(&inputs.tenant_id, AZURE_TENANT_ID_ENV, env_lookup);
-    let client_id = configured_string(&inputs.client_id, AZURE_CLIENT_ID_ENV, env_lookup);
-    let client_secret =
-        configured_secret(&inputs.client_secret, AZURE_CLIENT_SECRET_ENV, env_lookup);
-    let scope = configured_string(&inputs.azure_scope, AZURE_SCOPE_ENV, env_lookup)
-        .unwrap_or_else(|| Sourced::new(DEFAULT_AZURE_SCOPE.to_string(), InputSource::Environment));
-    let authority = configured_string(
-        &inputs.azure_authority_host,
-        AZURE_AUTHORITY_HOST_ENV,
+    let token = configured_secret(
+        &inputs.azure_ad_token,
+        AzureSecretName::AdToken.into(),
         env_lookup,
     );
-    let selector = configured_string(&inputs.azure_credential, AZURE_CREDENTIAL_ENV, env_lookup)
-        .map(|value| {
-            value
-                .value()
-                .parse::<AzureCredentialType>()
-                .map(|selector| Sourced::new(selector, value.source()))
-        })
-        .transpose()
-        .map_err(|error| {
-            Error::InvalidConfiguration(ErrorDetail::failed(
-                "Azure credential selector parsing",
-                error,
-            ))
-        })?;
+    let tenant_id = configured_string(
+        &inputs.tenant_id,
+        AzureSecretName::TenantId.into(),
+        env_lookup,
+    );
+    let client_id = configured_string(
+        &inputs.client_id,
+        AzureSecretName::ClientId.into(),
+        env_lookup,
+    );
+    let client_secret = configured_secret(
+        &inputs.client_secret,
+        AzureSecretName::ClientSecret.into(),
+        env_lookup,
+    );
+    let scope = configured_string(
+        &inputs.azure_scope,
+        AzureSecretName::Scope.into(),
+        env_lookup,
+    )
+    .unwrap_or_else(|| Sourced::new(DEFAULT_AZURE_SCOPE.to_string(), InputSource::Environment));
+    let authority = configured_string(
+        &inputs.azure_authority_host,
+        AzureSecretName::AuthorityHost.into(),
+        env_lookup,
+    );
+    let selector = configured_string(
+        &inputs.azure_credential,
+        AzureSecretName::Credential.into(),
+        env_lookup,
+    )
+    .map(|value| {
+        value
+            .value()
+            .parse::<AzureCredentialType>()
+            .map(|selector| Sourced::new(selector, value.source()))
+    })
+    .transpose()
+    .map_err(|error| {
+        Error::InvalidConfiguration(ErrorDetail::failed(
+            "Azure credential selector parsing",
+            error,
+        ))
+    })?;
     let federated_token_file = configured_string(
         &inputs.federated_token_file,
-        AZURE_FEDERATED_TOKEN_FILE_ENV,
+        AzureSecretName::FederatedTokenFile.into(),
         env_lookup,
     );
 
@@ -374,8 +403,8 @@ pub(crate) fn select_auth_plan(
     let probe_imds = selector
         .as_ref()
         .is_none_or(|selector| *selector.value() == AzureCredentialType::DefaultAzureCredential)
-        && env_lookup("IDENTITY_ENDPOINT").is_none()
-        && env_lookup("MSI_ENDPOINT").is_none();
+        && env_lookup(AzureSecretName::IdentityEndpoint.into()).is_none()
+        && env_lookup(AzureSecretName::MsiEndpoint.into()).is_none();
     match select_native_plan(
         selector,
         tenant_id,
@@ -926,6 +955,74 @@ mod tests {
         if expect_cli {
             assert_eq!(
                 outcome.unwrap().unwrap().unwrap().value().secret().expose(),
+                "cli-token"
+            );
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::app_service(Some("IDENTITY_ENDPOINT"), false)]
+    #[case::legacy_app_service(Some("MSI_ENDPOINT"), false)]
+    #[case::off_azure(None, true)]
+    #[tokio::test(start_paused = true)]
+    async fn default_chain_uses_endpoints_from_the_secret_snapshot(
+        #[case] endpoint: Option<&str>,
+        #[case] expect_cli: bool,
+        #[values(false, true)] consumer_identity: bool,
+    ) {
+        use litellm_secrets::source::SecretSource;
+
+        struct EndpointSecrets<'a>(Option<&'a str>);
+
+        impl SecretSource for EndpointSecrets<'_> {
+            fn get_secret_str<'a>(
+                &'a self,
+                name: &'a str,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn Future<Output = Result<Option<SecretValue>, litellm_secrets::Error>>
+                        + Send
+                        + 'a,
+                >,
+            > {
+                Box::pin(async move {
+                    Ok((self.0 == Some(name)).then(|| SecretValue::new("http://app-service.test")))
+                })
+            }
+        }
+
+        let snapshot = EndpointSecrets(endpoint)
+            .resolve(SECRET_NAMES)
+            .await
+            .unwrap();
+        let native = super::NativeAzureTokenAcquirer::with_transport(
+            4,
+            azure_core::http::Transport::new(Arc::new(UnavailableImdsClient)),
+        );
+        let service = AzureAuthService::with_acquirer(Arc::new(OfflineChainAcquirer(native)));
+        let lookup = |name: &str| snapshot.get(name);
+        let scope = "https://service.test/.default";
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            if consumer_identity {
+                service
+                    .identity_token(&super::AzureIdentity::Default, scope, &lookup)
+                    .await
+            } else {
+                service
+                    .get_azure_ad_token(
+                        &AzureAuthInputs::default_credential_for_scope(scope),
+                        &lookup,
+                    )
+                    .await
+                    .map(|token| token.map(Sourced::into_value))
+            }
+        })
+        .await;
+
+        assert_eq!(outcome.is_ok(), expect_cli);
+        if expect_cli {
+            assert_eq!(
+                outcome.unwrap().unwrap().unwrap().secret().expose(),
                 "cli-token"
             );
         }
