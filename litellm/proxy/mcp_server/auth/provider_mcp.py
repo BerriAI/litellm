@@ -53,6 +53,9 @@ def _openai_attachment(tool: Mapping[str, object]) -> ProviderMCPAttachment | MC
         return MCPAdmissionError("Provider MCP connector IDs are not supported by URL registrations")
     allowed: Final = tool.get("allowed_tools")
     names: Final = _OBJECT.validate_python(allowed).get("tool_names") if isinstance(allowed, Mapping) else allowed
+    if isinstance(allowed, Mapping) and not names:
+        # OpenAI reads an empty tool_names filter as no filter at all, i.e. every tool on the server.
+        return MCPAdmissionError("Provider MCP tool filters require a nonempty tool_names list")
     return _attachment(tool.get("server_url"), _names(names))
 
 
@@ -144,7 +147,9 @@ async def authorize_provider_mcp(
 
 
 async def _granted_tools(registration: LiteLLM_MCPServerTable, auth: UserAPIKeyAuth) -> frozenset[str]:
-    permitted: Final = await MCPRequestHandler.get_allowed_tools_for_server(registration.server_id, auth)
+    permitted: Final = await MCPRequestHandler.get_allowed_tools_for_server(
+        registration.server_id, auth, fail_closed=True
+    )
     ceiling: Final = frozenset(registration.allowed_tools or ())
     return ceiling if permitted is None else ceiling.intersection(permitted)
 

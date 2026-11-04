@@ -201,6 +201,46 @@ async def test_duplicate_url_registration_neither_shadows_nor_widens_the_granted
     assert denied.value.code == "403"
 
 
+async def test_empty_openai_tool_name_filter_is_denied_because_openai_reads_it_as_every_tool(
+    native_auth: UserAPIKeyAuth,
+) -> None:
+    with pytest.raises(ProxyException) as denied:
+        await authorize_provider_mcp(_openai({"tool_names": []}), native_auth)
+    assert (denied.value.code, denied.value.message) == (
+        "403",
+        "Provider MCP tool filters require a nonempty tool_names list",
+    )
+
+
+async def test_failed_tool_grant_lookup_denies_instead_of_allowing_every_registered_tool(
+    native_auth: UserAPIKeyAuth, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    async def unavailable(*_: object, **__: object) -> list[str] | None:
+        raise RuntimeError("policy store unavailable")
+
+    monkeypatch.setattr(MCPRequestHandler, "_single_credential_tools", staticmethod(unavailable))
+    monkeypatch.setattr(MCPRequestHandler, "resolve_personal_key_team_tools", staticmethod(unavailable))
+    with pytest.raises(ProxyException) as denied:
+        await authorize_provider_mcp(_openai(["fetch"]), native_auth)
+    assert denied.value.code == "403"
+
+
+@pytest.mark.parametrize("tools,admitted", [(["search"], True), (["delete"], False)])
+async def test_mcp_tools_carried_in_responses_input_items_are_admitted_like_top_level_tools(
+    native_auth: UserAPIKeyAuth, tools: list[str], admitted: bool
+) -> None:
+    body: Final = {"input": [{"type": "tool_search_output", "tools": _openai(tools)["tools"]}]}
+    context: Final = {"litellm_metadata": {"user_api_key_auth": native_auth}}
+    if admitted:
+        await authorize_provider_mcp_request(body, context)
+        return
+    with pytest.raises(ProxyException) as denied:
+        await authorize_provider_mcp_request(body, context)
+    assert denied.value.code == "403"
+
+
 async def test_canonical_host_and_default_port_match(native_auth: UserAPIKeyAuth) -> None:
     body: Final = _openai(["search"], "https://NATIVE.example:443/mcp")
     await authorize_provider_mcp(body, native_auth)

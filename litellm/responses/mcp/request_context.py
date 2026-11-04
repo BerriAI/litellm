@@ -11,6 +11,7 @@ still executes the tool, just with no credentials.
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -42,11 +43,11 @@ async def authorize_provider_mcp_request(
     effective: Final = (
         {**body, **TypeAdapter(dict[str, object]).validate_python(extra)} if isinstance(extra, Mapping) else body
     )
-    tools: Final = effective.get("tools")
-    has_native_tools: Final = isinstance(tools, (list, tuple)) and any(
+    tools: Final = (*_tool_list(effective.get("tools")), *_input_item_tools(effective.get("input")))
+    has_native_tools: Final = any(
         isinstance(tool, Mapping)
         and TypeAdapter(dict[str, object]).validate_python(tool).get("type") in ("mcp", "mcp_toolset", "url")
-        for tool in TypeAdapter(tuple[object, ...]).validate_python(tools)
+        for tool in tools
     )
     if not has_native_tools and not effective.get("mcp_servers"):
         return
@@ -56,7 +57,23 @@ async def authorize_provider_mcp_request(
         return
     from litellm.proxy.mcp_server.auth.provider_mcp import authorize_provider_mcp
 
-    await authorize_provider_mcp(effective, auth, provider_bound=provider_bound)
+    await authorize_provider_mcp({**effective, "tools": list(tools)}, auth, provider_bound=provider_bound)
+
+
+def _tool_list(value: object) -> tuple[object, ...]:
+    return TypeAdapter(tuple[object, ...]).validate_python(value) if isinstance(value, (list, tuple)) else ()
+
+
+def _input_item_tools(value: object) -> tuple[object, ...]:
+    """Tool definitions carried inside Responses input items, such as ``tool_search_output``; the provider
+    loads them like top-level tools, so they need the same admission."""
+    return tuple(
+        chain.from_iterable(
+            _tool_list(TypeAdapter(dict[str, object]).validate_python(item).get("tools"))
+            for item in _tool_list(value)
+            if isinstance(item, Mapping)
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
