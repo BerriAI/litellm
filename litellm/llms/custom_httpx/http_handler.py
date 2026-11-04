@@ -13,6 +13,7 @@ from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, Optional, TypeAlias, TypedDict, TypeVar
+from urllib.parse import parse_qsl
 
 import certifi
 import httpx
@@ -536,6 +537,17 @@ def _safe_get_response_text(response: httpx.Response) -> str:
         return ""
 
 
+def url_with_query_params(url: str, params: httpx.QueryParams) -> httpx.URL:
+    """Keep the URL's query bytes as sent and append only params whose keys the URL lacks, so signed URLs stay valid."""
+    target: Final = httpx.URL(url)
+    raw_query: Final = target.query.decode("ascii")
+    url_keys: Final = frozenset(key for key, _ in parse_qsl(raw_query, keep_blank_values=True))
+    extra: Final = str(httpx.QueryParams([(key, value) for key, value in params.multi_items() if key not in url_keys]))
+    if not extra:
+        return target
+    return target.copy_with(query="&".join(part for part in (raw_query, extra) if part).encode("ascii"))
+
+
 def header_value(headers: Mapping[str, str], name: str) -> str | None:
     """Read one header as ``str | None``; ``httpx.Headers.get`` itself is typed ``Any``."""
     return headers.get(name)
@@ -822,18 +834,17 @@ class AsyncHTTPHandler:
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
-        query: Final = httpx.QueryParams(params).merge(HTTPHandler.extract_query_params(url))
+        request_url: Final = url_with_query_params(url, httpx.QueryParams(params))
         request_headers: Final = httpx.Headers(headers)
 
         if stream:
             return await self._send_streaming_get(
-                url, params=query, headers=request_headers, follow_redirects=follow_redirects, timeout=timeout
+                request_url, headers=request_headers, follow_redirects=follow_redirects, timeout=timeout
             )
 
         if max_response_bytes is not None:
             return await self._get_with_response_limit(
-                url,
-                params=query,
+                request_url,
                 headers=request_headers,
                 max_bytes=max_response_bytes,
                 follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
@@ -841,8 +852,7 @@ class AsyncHTTPHandler:
             )
 
         response: Final = await self.client.get(
-            url,
-            params=query,
+            request_url,
             headers=request_headers,
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
@@ -851,16 +861,15 @@ class AsyncHTTPHandler:
 
     async def _send_streaming_get(
         self,
-        url: str,
+        url: httpx.URL,
         *,
-        params: httpx.QueryParams,
         headers: httpx.Headers,
         follow_redirects: bool | None,
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         start_time: Final = time.time()
         request: Final = self.client.build_request(
-            "GET", url, params=params, headers=headers, timeout=USE_CLIENT_DEFAULT if timeout is None else timeout
+            "GET", url, headers=headers, timeout=USE_CLIENT_DEFAULT if timeout is None else timeout
         )
         try:
             response: Final = await self.client.send(
@@ -879,9 +888,8 @@ class AsyncHTTPHandler:
 
     async def _get_with_response_limit(
         self,
-        url: str,
+        url: httpx.URL,
         *,
-        params: httpx.QueryParams,
         headers: httpx.Headers,
         timeout: httpx.Timeout,
         max_bytes: int,
@@ -891,7 +899,6 @@ class AsyncHTTPHandler:
             "GET",
             url,
             headers=MappingProxyType({**headers, "accept-encoding": "identity"}),
-            params=params,
             timeout=timeout,
         )
         response: Final = await self.client.send(request, stream=True, follow_redirects=False)
@@ -1611,16 +1618,15 @@ class HTTPHandler:
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
-        query: Final = httpx.QueryParams(params).merge(self.extract_query_params(url))
+        request_url: Final = url_with_query_params(url, httpx.QueryParams(params))
 
         if stream:
             return self._send_streaming_get(
-                url, params=query, headers=headers, follow_redirects=follow_redirects, timeout=timeout
+                request_url, headers=headers, follow_redirects=follow_redirects, timeout=timeout
             )
 
         response: Final = self.client.get(
-            url,
-            params=query,
+            request_url,
             headers=headers,
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
@@ -1630,16 +1636,15 @@ class HTTPHandler:
 
     def _send_streaming_get(
         self,
-        url: str,
+        url: httpx.URL,
         *,
-        params: httpx.QueryParams,
         headers: Mapping[str, str] | None,
         follow_redirects: bool | None,
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         start_time: Final = time.time()
         request: Final = self.client.build_request(
-            "GET", url, params=params, headers=headers, timeout=USE_CLIENT_DEFAULT if timeout is None else timeout
+            "GET", url, headers=headers, timeout=USE_CLIENT_DEFAULT if timeout is None else timeout
         )
         try:
             response: Final = self.client.send(

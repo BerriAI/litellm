@@ -717,6 +717,58 @@ async def test_async_get_forwards_per_request_timeout():
         await handler.close()
 
 
+
+SIGNED_URL_QUERY: Final = b"X-Amz-Signature=abc&ResponseContentLanguage=&p=a%20b&r=1&r=2&token&t=%7E&s=a%2fb&u=a/b:c"
+SIGNED_URL: Final = "https://bucket.example/photo.png?" + SIGNED_URL_QUERY.decode()
+
+QUERY_MERGE_CASES: Final = (
+    pytest.param(SIGNED_URL, None, SIGNED_URL_QUERY, id="no-params-keeps-signed-query"),
+    pytest.param(SIGNED_URL, {}, SIGNED_URL_QUERY, id="empty-params-keeps-signed-query"),
+    pytest.param(SIGNED_URL, {"limit": 5}, SIGNED_URL_QUERY + b"&limit=5", id="params-append-after-signed-query"),
+    pytest.param(
+        "https://example.com/files?api-version=1",
+        {"api-version": "2", "after": "x"},
+        b"api-version=1&after=x",
+        id="url-value-wins-on-clash",
+    ),
+    pytest.param("https://example.com/files?a=", {"a": "1"}, b"a=", id="blank-url-value-still-wins"),
+    pytest.param("https://example.com/files", {"after": "x/y"}, b"after=x%2Fy", id="params-only"),
+)
+
+
+def _echo_query_transport() -> httpx.MockTransport:
+    return httpx.MockTransport(lambda request: httpx.Response(200, request=request, content=request.url.query))
+
+
+@pytest.mark.parametrize("url,params,expected_query", QUERY_MERGE_CASES)
+@pytest.mark.parametrize("stream", [False, True])
+def test_sync_get_sends_url_query_bytes_unchanged(
+    url: str, params: dict[str, str | int] | None, expected_query: bytes, stream: bool
+):
+    handler: Final = HTTPHandler(client=httpx.Client(transport=_echo_query_transport()))
+    try:
+        response: Final = handler.get(url, params=params, stream=stream)
+        assert response.read() == expected_query
+    finally:
+        handler.client.close()
+
+
+@pytest.mark.parametrize("url,params,expected_query", QUERY_MERGE_CASES)
+@pytest.mark.parametrize(
+    "get_kwargs", [{}, {"stream": True}, {"max_response_bytes": 1000}], ids=["plain", "stream", "bounded"]
+)
+async def test_async_get_sends_url_query_bytes_unchanged(
+    url: str, params: dict[str, str | int] | None, expected_query: bytes, get_kwargs: dict[str, bool | int]
+):
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=_echo_query_transport())
+    try:
+        response: Final = await handler.get(url, params=params, **get_kwargs)
+        assert await response.aread() == expected_query
+    finally:
+        await handler.client.aclose()
+
 class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
     """Cached default httpx clients must fall back to an explicit litellm.request_timeout.
 
