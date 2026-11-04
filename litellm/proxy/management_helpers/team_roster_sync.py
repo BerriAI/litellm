@@ -53,7 +53,9 @@ if TYPE_CHECKING:
 
 ROSTER_TX_TIMEOUT: Final = timedelta(seconds=60)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
-_TEAM_DEFAULTS: Final = TypeAdapter(DefaultTeamSSOParams | dict[str, object] | None)
+_TEAM_DEFAULTS: Final[TypeAdapter[DefaultTeamSSOParams | dict[str, object] | None]] = TypeAdapter(
+    DefaultTeamSSOParams | dict[str, object] | None
+)
 
 
 def new_team_request_with_defaults(

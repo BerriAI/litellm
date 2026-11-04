@@ -3,7 +3,7 @@ import math
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from threading import Event
-from typing import Final, Protocol
+from typing import Final, Protocol, runtime_checkable
 
 from fastapi import Request
 from pydantic import TypeAdapter
@@ -30,6 +30,7 @@ LDAP_SYNC_JOB_ID: Final = "ldap_team_sync"
 _SETTINGS: Final = TypeAdapter(Mapping[str, object])
 
 
+@runtime_checkable
 class LDAPScheduler(Protocol):
     def add_job(
         self,
@@ -190,7 +191,7 @@ class LDAPSync:
 
 
 def initialize_ldap_sync(
-    scheduler: LDAPScheduler,
+    scheduler: object,
     general_settings: Mapping[str, object],
     prisma_client: PrismaClient | None,
     pod_lock_manager: PodLockManager,
@@ -205,6 +206,8 @@ def initialize_ldap_sync(
         raise ValueError("ldap_sync requires a database")
     if pod_lock_manager.redis_cache is None:
         raise ValueError("ldap_sync requires shared Redis for cross-worker coordination")
+    if not isinstance(scheduler, LDAPScheduler):
+        raise TypeError("ldap_sync requires a scheduler with add_job support")
     job: Final = LDAPSync(settings, prisma_client, pod_lock_manager, user_api_key_cache, proxy_logging_obj)
     scheduler.add_job(
         job.run,
