@@ -99,6 +99,12 @@ def _read_slowly(client: socket.socket) -> bytes:
     return b"".join(_paced_pieces(client))
 
 
+def _read_after(client: socket.socket, delay: float) -> bytes:
+    time.sleep(delay)
+    with client.makefile("rb") as stream:
+        return stream.read()
+
+
 def _post(target: str, body: bytes) -> bytes:
     return b"POST %s HTTP/1.1\r\nhost: peer\r\ncontent-length: %d\r\n\r\n%s" % (target.encode(), len(body), body)
 
@@ -175,6 +181,22 @@ def test_a_long_reply_its_client_is_still_reading_at_teardown_is_not_cut() -> No
             time.sleep(0.01)
         reply: Final = pool.submit(_read_slowly, client)
         time.sleep(1)
+        peer.close()
+        received: Final = reply.result()
+    assert (received[: len(b"HTTP/1.1 200")], received[-len(UNREAD) :] == UNREAD) == (b"HTTP/1.1 200", True)
+
+
+@pytest.mark.timeout(60)
+def test_a_reply_its_client_starts_reading_after_teardown_starts_still_arrives_whole() -> None:
+    peer: Final = ExitStack()
+    wire: Final = peer.enter_context(wire_server(lambda _: Reply(body=UNREAD), keep_alive=True, teardown_grace=2))
+    address: Final = urlsplit(wire.url)
+    with socket.create_connection((address.hostname or "", address.port or 0)) as client, ThreadPoolExecutor(1) as pool:
+        client.sendall(b"GET /large HTTP/1.1\r\nhost: peer\r\n\r\n")
+        while wire.received.empty():
+            time.sleep(0.01)
+        time.sleep(2.5)
+        reply: Final = pool.submit(_read_after, client, 0.3)
         peer.close()
         received: Final = reply.result()
     assert (received[: len(b"HTTP/1.1 200")], received[-len(UNREAD) :] == UNREAD) == (b"HTTP/1.1 200", True)

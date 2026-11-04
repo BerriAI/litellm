@@ -154,9 +154,9 @@ class _Connection(io.BufferedIOBase):
         self.selector.close()
         super().close()
 
-    def stalled(self, grace: float) -> _Blocked | None:
+    def stalled(self, grace: float, teardown_started: float) -> _Blocked | None:
         blocked: Final = self.blocked
-        if blocked is None or time.monotonic() - blocked.since < grace:
+        if blocked is None or time.monotonic() - max(blocked.since, teardown_started) < grace:
             return None
         return blocked
 
@@ -186,11 +186,12 @@ class _Connection(io.BufferedIOBase):
 def _close_unless_stalled(
     close: Callable[[], None], connections: SimpleQueue[_Connection], grace: float, errors: SimpleQueue[Exception]
 ) -> None:
+    teardown_started: Final = time.monotonic()
     closer: Final = threading.Thread(target=close)
     closer.start()
     while closer.is_alive():
         for connection in tuple(connections.get_nowait() for _ in range(connections.qsize())):
-            stalled: Final = connection.stalled(grace)
+            stalled: Final = connection.stalled(grace, teardown_started)
             if stalled is None:
                 connections.put(connection)
                 continue
