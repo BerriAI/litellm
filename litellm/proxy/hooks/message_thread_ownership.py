@@ -1,0 +1,171 @@
+import json
+import re
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping
+from typing import TYPE_CHECKING, Final
+
+from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.messages.native.utils import continued_message_id, message_thread_not_found_body
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines_keepends
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
+
+if TYPE_CHECKING:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import InternalUsageCache
+
+_MESSAGES_CALL_TYPES: Final = frozenset({"anthropic_messages", "aanthropic_messages"})
+_OWNER_KEY_PREFIX: Final = "anthropic_message_thread_owner:"
+_OWNER_TTL_SECONDS: Final = 3600
+_SSE_DATA_FIELD: Final = "data:"
+_SSE_FRAME_END_PATTERN: Final = re.compile(rb"\r\n\r\n|\r\r|\n\n")
+_MAX_SCANNED_BYTES: Final = 65536
+_UNOWNED_THREAD_MESSAGE: Final = (
+    "message thread not found for this key. Send the full conversation to start a new thread"
+)
+
+_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _MAPPING_ADAPTER.validate_python(value, strict=True)
+    except ValidationError:
+        return None
+
+
+def _owner_key(message_id: str) -> str:
+    return f"{_OWNER_KEY_PREFIX}{message_id}"
+
+
+def _owner(user_api_key_dict: "UserAPIKeyAuth") -> str:
+    if user_api_key_dict.token:
+        return f"key:{user_api_key_dict.token}"
+    return "identity:" + json.dumps(
+        [
+            user_api_key_dict.user_id,
+            user_api_key_dict.team_id,
+            user_api_key_dict.end_user_id,
+            user_api_key_dict.org_id,
+        ]
+    )
+
+
+def _response_message_id(response: object) -> str | None:
+    message: Final = _as_mapping(response)
+    if message is None or message.get("type") != "message":
+        return None
+    message_id: Final = message.get("id")
+    return message_id if isinstance(message_id, str) and message_id else None
+
+
+def _message_start_id(event: Mapping[str, object]) -> str | None:
+    return _response_message_id(event.get("message")) if event.get("type") == "message_start" else None
+
+
+def _frame_event(frame: bytes) -> Mapping[str, object] | None:
+    data_lines: Final = tuple(
+        line.strip()[len(_SSE_DATA_FIELD) :].strip()
+        for line in split_sse_lines_keepends(frame.decode("utf-8", errors="ignore"))
+        if line.strip().startswith(_SSE_DATA_FIELD)
+    )
+    payload: Final = "".join(data_lines)
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        return _MAPPING_ADAPTER.validate_json(payload)
+    except ValidationError:
+        return None
+
+
+class _StreamedMessageIdScanner:
+    def __init__(self, finished: bool) -> None:
+        self._head = b""
+        self.finished = finished
+
+    def scan(self, chunk: object) -> str | None:
+        if isinstance(chunk, (bytes, bytearray)):
+            return self._scan_encoded(bytes(chunk))
+        if isinstance(chunk, str):
+            return self._scan_encoded(chunk.encode("utf-8"))
+        event: Final = _as_mapping(chunk)
+        if event is None:
+            self.finished = True
+            return None
+        return self._settled(event)
+
+    def _settled(self, event: Mapping[str, object]) -> str | None:
+        if event.get("type") == "ping":
+            return None
+        self.finished = True
+        return _message_start_id(event)
+
+    def _scan_encoded(self, data: bytes) -> str | None:
+        head: Final = self._head + data
+        boundaries: Final = tuple(match.end() for match in _SSE_FRAME_END_PATTERN.finditer(head))
+        frames: Final = tuple(head[start:end] for start, end in zip((0, *boundaries[:-1]), boundaries))
+        events: Final = (event for frame in frames if (event := _frame_event(frame)) is not None)
+        decider: Final = next((event for event in events if event.get("type") != "ping"), None)
+        if decider is not None:
+            return self._settled(decider)
+        self._head = head[boundaries[-1] :] if boundaries else head
+        if len(self._head) > _MAX_SCANNED_BYTES:
+            self.finished = True
+        return None
+
+
+class MessageThreadOwnership(CustomLogger):
+    def __init__(self, internal_usage_cache: "InternalUsageCache") -> None:
+        self._owners: Final = internal_usage_cache
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: "UserAPIKeyAuth",
+        cache: "DualCache",
+        data: Mapping[str, object],
+        call_type: CallTypesLiteral,
+    ) -> None:
+        if call_type not in _MESSAGES_CALL_TYPES:
+            return
+        previous_message_id: Final = continued_message_id(data.get("thread"))
+        if previous_message_id is None:
+            return
+        if await self._owners.async_get_cache(
+            key=_owner_key(previous_message_id),
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        ) == _owner(user_api_key_dict):
+            return
+        raise HTTPException(status_code=404, detail=message_thread_not_found_body(_UNOWNED_THREAD_MESSAGE))
+
+    async def async_post_call_success_hook(
+        self,
+        data: Mapping[str, object],
+        user_api_key_dict: "UserAPIKeyAuth",
+        response: LLMResponseTypes,
+    ) -> LLMResponseTypes:
+        message_id: Final = _response_message_id(response) if data.get("thread") is not None else None
+        if message_id is not None:
+            await self._record_owner(message_id, user_api_key_dict)
+        return response
+
+    async def async_post_call_streaming_iterator_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # the proxy streams bytes, str and dict chunks here, not the base's ModelResponseStream
+        self,
+        user_api_key_dict: "UserAPIKeyAuth",
+        response: AsyncIterable[object],
+        request_data: Mapping[str, object],
+    ) -> AsyncGenerator[object, None]:
+        scanner: Final = _StreamedMessageIdScanner(finished=request_data.get("thread") is None)
+        async for chunk in response:
+            yield chunk
+            if not scanner.finished and (message_id := scanner.scan(chunk)) is not None:
+                await self._record_owner(message_id, user_api_key_dict)
+
+    async def _record_owner(self, message_id: str, user_api_key_dict: "UserAPIKeyAuth") -> None:
+        await self._owners.async_set_cache(
+            key=_owner_key(message_id),
+            value=_owner(user_api_key_dict),
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            ttl=_OWNER_TTL_SECONDS,
+        )

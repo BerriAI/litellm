@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final, cast, get_type_hints
@@ -15,6 +16,7 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
+    MESSAGE_THREAD_NOT_FOUND_ERROR_CODE,
     AnthropicMessagesRequestOptionalParams,
     AnthropicMessageThread,
     AnthropicStopDetails,
@@ -291,6 +293,27 @@ def continues_message_thread(thread: object) -> bool:
         return _THREAD_ADAPTER.validate_python(thread)["type"] == "continue"
     except ValidationError:
         return False
+
+
+def continued_message_id(thread: object) -> str | None:
+    try:
+        validated: Final = _THREAD_ADAPTER.validate_python(thread)
+    except ValidationError:
+        return None
+    return validated.get("previous_message_id") if validated["type"] == "continue" else None
+
+
+def message_thread_not_found_body(message: str) -> str:
+    return json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": "not_found_error",
+                "message": message,
+                "details": {"error_code": MESSAGE_THREAD_NOT_FOUND_ERROR_CODE},
+            },
+        }
+    )
 
 
 def supports_message_threads(custom_llm_provider: str | None, *, has_native_config: bool) -> bool:

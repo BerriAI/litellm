@@ -2723,11 +2723,13 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     ("openai/gpt-5.5", "vertex_ai/claude-opus-4-8", "bedrock/anthropic.claude-opus-4-8-v1:0"),
     ids=("chat_bridge", "vertex_native", "bedrock_native"),
 )
-def test_a_thread_on_a_leg_without_message_threads_is_a_400_before_any_upstream_call(model: str) -> None:
+def test_a_thread_continue_on_a_leg_without_message_threads_is_thread_not_found_before_any_upstream_call(
+    model: str,
+) -> None:
     from litellm.llms.anthropic.common_utils import AnthropicError
     from litellm.llms.anthropic.messages.native.handler import anthropic_messages_handler
 
-    with pytest.raises(AnthropicError, match="thread: message threads are not supported") as raised:
+    with pytest.raises(AnthropicError) as raised:
         anthropic_messages_handler(
             max_tokens=64,
             messages=[{"role": "user", "content": "hi"}],
@@ -2735,4 +2737,34 @@ def test_a_thread_on_a_leg_without_message_threads_is_a_400_before_any_upstream_
             api_key="synthetic-key",
             thread={"type": "continue", "previous_message_id": "msg_01previous"},
         )
-    assert raised.value.status_code == 400
+    assert raised.value.status_code == 404
+    error: Final = _JSON_BODY.validate_json(raised.value.message)["error"]
+    assert isinstance(error, dict)
+    assert error["type"] == "not_found_error"
+    assert error["details"] == {"error_code": "thread_not_found"}
+
+
+@pytest.mark.asyncio
+async def test_a_thread_create_on_a_native_leg_without_message_threads_is_served_without_the_thread(
+    local_beta_headers_config: None,
+) -> None:
+    from litellm.llms.anthropic.messages.native import handler
+
+    captured: Final[dict[str, object]] = {}
+    response: Final = await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="bedrock/us.anthropic.claude-sonnet-5",
+        custom_llm_provider="bedrock",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=_upstream_answering_with([], captured),
+        thread={"type": "create"},
+    )
+
+    body: Final = captured["body"]
+    assert isinstance(body, dict)
+    assert "thread" not in body
+    assert body["messages"] == [{"role": "user", "content": "hi"}]
+    assert _JSON_BODY.validate_python(response)["id"] == "msg_1"

@@ -454,6 +454,7 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
         "_PROXY_BatchRedisRequests",
         "_PROXY_SensitiveDataRoutingHandler",
         "ResponsesIDSecurity",
+        "MessageThreadOwnership",
         "SkillsInjectionHook",
         "_PROXY_LiteLLMManagedFiles",
         "_PROXY_LiteLLMManagedVectorStores",

@@ -17,7 +17,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 ANTHROPIC_MODEL: Final = "threads-anthropic"
 BRIDGED_MODEL: Final = "threads-bridged"
 MESSAGE_THREADS_BETA: Final = "message-threads-2026-08-12"
-STALE_PREVIOUS_MESSAGE_ID: Final = "msg_01stale"
+EXPIRED_THREAD_MARKER: Final = "thread-expired"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _NONCE: Final = re.compile(rb"nonce-([0-9a-f]{32})")
 
@@ -43,28 +43,87 @@ def thread_not_found_reply() -> Reply:
     )
 
 
+def anthropic_message(identity: str) -> dict[str, JsonValue]:
+    return {
+        "id": f"msg_{identity}",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-8",
+        "content": [{"type": "text", "text": f"answered {identity}"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 3},
+    }
+
+
+def sse_event(event: str, data: Mapping[str, JsonValue]) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+def streamed_anthropic_reply(identity: str) -> Reply:
+    message_start: Final = sse_event(
+        "message_start", {"type": "message_start", "message": {**anthropic_message(identity), "content": []}}
+    )
+    return Reply(
+        chunks=(
+            message_start[:40],
+            message_start[40:],
+            sse_event(
+                "content_block_start",
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            ),
+            sse_event(
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}},
+            ),
+            sse_event("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            sse_event(
+                "message_delta",
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+            ),
+            sse_event("message_stop", {"type": "message_stop"}),
+        ),
+        content_type="text/event-stream",
+    )
+
+
+def responses_reply(identity: str) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"resp_{identity}",
+                "object": "response",
+                "created_at": 1789788253,
+                "status": "completed",
+                "model": "gpt-5.5",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": f"msg_{identity}",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": f"answered {identity}", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
+            }
+        ).encode()
+    )
+
+
 def respond(request: Request) -> Reply:
     if request.method != "POST":
         return Reply(body=b'{"object":"list","data":[]}')
     match: Final = _NONCE.search(request.body)
     assert match is not None, request.body[:200]
     identity: Final = match.group(1).decode()
-    if STALE_PREVIOUS_MESSAGE_ID.encode() in request.body:
+    if request.target.startswith("/openai"):
+        return responses_reply(identity)
+    if EXPIRED_THREAD_MARKER.encode() in request.body:
         return thread_not_found_reply()
-    return Reply(
-        body=json.dumps(
-            {
-                "id": f"msg_{identity}",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-opus-4-8",
-                "content": [{"type": "text", "text": f"answered {identity}"}],
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 12, "output_tokens": 3},
-            }
-        ).encode()
-    )
+    if b'"stream": true' in request.body or b'"stream":true' in request.body:
+        return streamed_anthropic_reply(identity)
+    return Reply(body=json.dumps(anthropic_message(identity)).encode())
 
 
 def write_config(directory: Path, wire_url: str) -> Path:
@@ -105,20 +164,36 @@ class Rig:
     gateway: Gateway
     wire: Wire
 
-    def send(self, model: str, request_nonce: str, thread: Mapping[str, str], **fields: JsonValue) -> tuple[int, bytes]:
+    def send(
+        self,
+        model: str,
+        request_nonce: str,
+        thread: Mapping[str, str],
+        *,
+        key: str | None = None,
+        text: str = "hi",
+        **fields: JsonValue,
+    ) -> tuple[int, bytes]:
         response: Final = self.gateway.client.post(
             "/v1/messages",
             json={
                 "model": model,
                 "max_tokens": 64,
-                "messages": [{"role": "user", "content": f"hi {request_nonce}"}],
+                "messages": [{"role": "user", "content": f"{text} {request_nonce}"}],
                 "thread": dict(thread),
                 **fields,
             },
-            headers={"Authorization": f"Bearer {self.gateway.key}"},
+            headers={"Authorization": f"Bearer {self.gateway.key if key is None else key}"},
             timeout=120,
         )
         return response.status_code, response.content
+
+    def create(self, *, key: str | None = None, **fields: JsonValue) -> str:
+        request_nonce: Final = nonce()
+        status, raw = self.send(ANTHROPIC_MODEL, request_nonce, {"type": "create"}, key=key, **fields)
+        assert status == 200, raw[:500]
+        self.received(request_nonce)
+        return f"msg_{request_nonce.removeprefix('nonce-')}"
 
     def received(self, request_nonce: str) -> tuple[Request, ...]:
         return tuple(request for request in self.wire.drain() if request_nonce.encode() in request.body)
@@ -161,7 +236,7 @@ def test_a_create_turn_reaches_anthropic_with_the_thread_field_and_its_beta(rig:
 
 def test_a_continue_turn_reaches_anthropic_with_only_the_new_messages_and_the_same_beta(rig: Rig) -> None:
     request_nonce: Final = nonce()
-    thread: Final = {"type": "continue", "previous_message_id": "msg_01previous"}
+    thread: Final = {"type": "continue", "previous_message_id": rig.create()}
     status, raw = rig.send(ANTHROPIC_MODEL, request_nonce, thread)
     assert status == 200, raw[:500]
     (upstream,) = rig.received(request_nonce)
@@ -172,23 +247,57 @@ def test_a_continue_turn_reaches_anthropic_with_only_the_new_messages_and_the_sa
     assert MESSAGE_THREADS_BETA in beta_header(upstream.headers), upstream.headers
 
 
-def test_a_thread_on_a_translated_leg_is_a_400_and_never_reaches_the_provider(rig: Rig) -> None:
-    request_nonce: Final = nonce()
-    status, raw = rig.send(BRIDGED_MODEL, request_nonce, {"type": "continue", "previous_message_id": "msg_01p"})
-    assert status == 400, raw[:500]
-    error: Final = _JSON_OBJECT.validate_json(raw)
-    assert "message threads are not supported" in json.dumps(error), error
-    assert rig.received(request_nonce) == ()
-
-
-def test_a_thread_not_found_from_anthropic_keeps_its_error_code_for_the_sdk_to_replay_on(rig: Rig) -> None:
-    request_nonce: Final = nonce()
-    status, raw = rig.send(
-        ANTHROPIC_MODEL, request_nonce, {"type": "continue", "previous_message_id": STALE_PREVIOUS_MESSAGE_ID}
-    )
+def assert_thread_not_found(status: int, raw: bytes) -> None:
     assert status == 404, raw[:500]
     error: Final = _JSON_OBJECT.validate_json(raw)
     detail: Final = error["error"]
     assert isinstance(detail, dict), error
     assert detail["type"] == "not_found_error"
     assert detail["details"] == {"error_code": "thread_not_found"}
+
+
+def test_a_create_turn_on_a_translated_leg_is_served_without_the_thread(rig: Rig) -> None:
+    request_nonce: Final = nonce()
+    status, raw = rig.send(BRIDGED_MODEL, request_nonce, {"type": "create"})
+    assert status == 200, raw[:500]
+    (upstream,) = rig.received(request_nonce)
+    assert upstream.target.startswith("/openai"), upstream.target
+    assert "thread" not in _JSON_OBJECT.validate_json(upstream.body)
+
+
+def test_a_continue_turn_on_a_translated_leg_is_thread_not_found_and_never_reaches_the_provider(rig: Rig) -> None:
+    request_nonce: Final = nonce()
+    status, raw = rig.send(BRIDGED_MODEL, request_nonce, {"type": "continue", "previous_message_id": rig.create()})
+    assert_thread_not_found(status, raw)
+    assert rig.received(request_nonce) == ()
+
+
+def test_another_key_cannot_continue_a_thread_and_never_reaches_anthropic(rig: Rig) -> None:
+    with rig.gateway.scenario() as scenario:
+        owner: Final = scenario.key()
+        intruder: Final = scenario.key()
+        thread: Final = {"type": "continue", "previous_message_id": rig.create(key=owner)}
+        intruder_nonce: Final = nonce()
+        assert_thread_not_found(*rig.send(ANTHROPIC_MODEL, intruder_nonce, thread, key=intruder))
+        assert rig.received(intruder_nonce) == ()
+        owner_nonce: Final = nonce()
+        status, raw = rig.send(ANTHROPIC_MODEL, owner_nonce, thread, key=owner)
+        assert status == 200, raw[:500]
+        assert len(rig.received(owner_nonce)) == 1
+
+
+def test_a_streamed_create_turn_can_be_continued_by_its_key(rig: Rig) -> None:
+    previous_message_id: Final = rig.create(stream=True)
+    request_nonce: Final = nonce()
+    status, raw = rig.send(
+        ANTHROPIC_MODEL, request_nonce, {"type": "continue", "previous_message_id": previous_message_id}
+    )
+    assert status == 200, raw[:500]
+    assert len(rig.received(request_nonce)) == 1
+
+
+def test_a_thread_not_found_from_anthropic_keeps_its_error_code_for_the_sdk_to_replay_on(rig: Rig) -> None:
+    request_nonce: Final = nonce()
+    thread: Final = {"type": "continue", "previous_message_id": rig.create()}
+    assert_thread_not_found(*rig.send(ANTHROPIC_MODEL, request_nonce, thread, text=EXPIRED_THREAD_MARKER))
+    assert len(rig.received(request_nonce)) == 1
