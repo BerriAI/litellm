@@ -179,6 +179,13 @@ def _judged_call_names(
     return judged_names.get(returned_name, ())
 
 
+def _pair_namespace(qualified: str, bare: str) -> str | None:
+    suffix: Final = qualified_member_name("", bare)
+    if qualified == bare or not qualified.endswith(suffix):
+        return None
+    return _non_empty_string(qualified.removesuffix(suffix))
+
+
 def _qualified_target(namespace: str | None, target: _ToolTarget) -> _ToolTarget:
     name, tool_type = target
     return (qualified_member_name(namespace, name), tool_type) if namespace is not None and name is not None else target
@@ -737,6 +744,23 @@ class ToolPermissionGuardrail(CustomGuardrail):
             None,
         )
 
+    def _narrower_name(
+        self,
+        name: str,
+        other: str,
+        tool_type: str | None,
+        tool_call: ChatCompletionMessageToolCall | None,
+    ) -> str:
+        rule: Final = self._first_name_rule(name, tool_type, tool_call)
+        other_rule: Final = self._first_name_rule(other, tool_type, tool_call)
+        if other_rule is None or other_rule is rule:
+            return name
+        if rule is None or self._is_name_rule_for(rule, other, tool_type):
+            return other
+        if self._is_name_rule_for(other_rule, name, tool_type):
+            return name
+        return other if other_rule.decision == "deny" else name
+
     def _deciding_member_name(
         self,
         qualified: str,
@@ -744,15 +768,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
         tool_type: str | None,
         tool_call: ChatCompletionMessageToolCall | None = None,
     ) -> str:
-        qualified_rule: Final = self._first_name_rule(qualified, tool_type, tool_call)
-        bare_rule: Final = self._first_name_rule(bare, tool_type, tool_call)
-        if bare_rule is None or bare_rule is qualified_rule:
-            return qualified
-        if qualified_rule is None or self._is_name_rule_for(qualified_rule, bare, tool_type):
-            return bare
-        if self._is_name_rule_for(bare_rule, qualified, tool_type):
-            return qualified
-        return bare if bare_rule.decision == "deny" else qualified
+        member: Final = self._narrower_name(qualified, bare, tool_type, tool_call)
+        namespace: Final = _pair_namespace(qualified, bare)
+        return member if namespace is None else self._narrower_name(member, namespace, tool_type, tool_call)
 
     def _check_target_permission(
         self, target: _ToolTarget, bare_names: Mapping[str, tuple[str, ...]]

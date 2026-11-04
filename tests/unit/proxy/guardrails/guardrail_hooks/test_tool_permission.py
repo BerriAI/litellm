@@ -566,6 +566,78 @@ class TestToolPermissionGuardrail:
         assert "Tool 'exec'" in (message.content or "")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rules", "command", "kept"),
+        [
+            (
+                [
+                    {
+                        "id": "allow_ls",
+                        "tool_name": r"^exec$",
+                        "decision": "allow",
+                        "allowed_param_patterns": {"command": r"^ls$"},
+                    },
+                    {"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"},
+                ],
+                "ls",
+                ["run"],
+            ),
+            (
+                [
+                    {
+                        "id": "allow_ls",
+                        "tool_name": r"^exec$",
+                        "decision": "allow",
+                        "allowed_param_patterns": {"command": r"^ls$"},
+                    },
+                    {"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"},
+                ],
+                "pwd",
+                [],
+            ),
+            (
+                [
+                    {"id": "allow_run", "tool_name": r"^run$", "decision": "allow"},
+                    {"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"},
+                ],
+                "ls",
+                [],
+            ),
+        ],
+        ids=["namespace_rule_allows", "namespace_rule_denies", "namespace_deny_beats_member_allow"],
+    )
+    async def test_post_call_judges_a_returned_namespace_member_by_a_rule_on_its_namespace_name(
+        self, rules: list[dict[str, object]], command: str, kept: list[str]
+    ) -> None:
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="post-exec",
+            rules=rules,
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        namespace = {"type": "namespace", "name": "exec", "tools": [{"type": "function", "name": "run"}]}
+        function = Function(name="run", arguments=json.dumps({"command": command}))
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={"tool_calls": [{"id": "call_run", "type": "function", "function": function}]},
+                )
+            ]
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data={"guardrails": ["post-exec"], "tools": [namespace]},
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+
+        message = response.choices[0].message
+        assert [call.function.name for call in message.tool_calls or ()] == kept
+        assert ("Tool 'exec'" in (message.content or "")) == (not kept)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("namespace_first", [True, False], ids=["namespace_first", "top_level_first"])
     async def test_post_call_judges_a_returned_name_a_top_level_function_carries_as_that_function(
         self, namespace_first: bool
@@ -2285,6 +2357,56 @@ class TestToolPermissionGuardrailAnthropicMessages:
             {"type": "additional_tools", "tools": [get_weather]},
         ]
         assert rewritten["tool_choice"] == "required"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rules", "default_action", "kept"),
+        [
+            ([{"id": "allow_exec", "tool_name": r"^exec$", "decision": "allow"}], "deny", ["run"]),
+            ([{"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"}], "allow", []),
+            (
+                [
+                    {"id": "allow_run", "tool_name": r"^run$", "decision": "allow"},
+                    {"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"},
+                ],
+                "allow",
+                [],
+            ),
+            (
+                [
+                    {"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"},
+                    {"id": "allow_all", "tool_name": r"^.*$", "decision": "allow"},
+                ],
+                "allow",
+                [],
+            ),
+            (
+                [
+                    {"id": "allow_exec", "tool_name": r"^exec$", "decision": "allow"},
+                    {"id": "deny_all", "tool_name": r"^.*$", "decision": "deny"},
+                ],
+                "deny",
+                ["run"],
+            ),
+        ],
+        ids=[
+            "namespace_allowed",
+            "namespace_denied",
+            "namespace_deny_beats_member_allow",
+            "namespace_deny_beats_a_catch_all_allow",
+            "namespace_allow_beats_a_catch_all_deny",
+        ],
+    )
+    async def test_pre_call_judges_a_namespace_member_by_a_rule_on_its_namespace_name(
+        self, rules: list[dict[str, str]], default_action: Literal["allow", "deny"], kept: list[str]
+    ) -> None:
+        namespace = {"type": "namespace", "name": "exec", "tools": [{"type": "function", "name": "run"}]}
+        request = {"model": "gpt-5", "input": "Run pwd", "tools": [namespace]}
+
+        rewritten = await self._run_pre_call(self._pre_call(rules, "rewrite", default_action), request, "responses")
+
+        tools = rewritten.get("tools") or []
+        assert [member["name"] for member in chain.from_iterable(tool["tools"] for tool in tools)] == kept
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
