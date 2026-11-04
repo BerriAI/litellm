@@ -239,6 +239,13 @@ def test_session_key_without_fips_stays_the_scrypt_key_of_the_master_key() -> No
     assert keys.signing_key.get_secret_value() == "990dce331d97862e3af47815b707c42923fc760e6740d4a77a81583a206f339d"
 
 
+@pytest.mark.usefixtures("openssl_enforcing_fips")
+def test_session_key_on_a_fips_openssl_without_fips_mode_stays_the_scrypt_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    keys: Final = session_keys_from_master_key(MASTER_KEY)
+    assert keys.signing_key.get_secret_value() == "990dce331d97862e3af47815b707c42923fc760e6740d4a77a81583a206f339d"
+
+
 def _fips_keys(master_key: str) -> tuple[str, str, str]:
     envelope_keys_from_master_key.cache_clear()
     session_keys_from_master_key.cache_clear()
@@ -257,7 +264,7 @@ _needs_shared_openssl: Final = pytest.mark.skipif(
 
 
 @_needs_shared_openssl
-@pytest.mark.usefixtures("openssl_enforcing_fips")
+@pytest.mark.usefixtures("fips_mode_on")
 def test_keys_under_fips_come_from_the_salt_key_are_distinct_and_the_same_on_every_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -273,7 +280,7 @@ def test_keys_under_fips_come_from_the_salt_key_are_distinct_and_the_same_on_eve
 
 
 @_needs_shared_openssl
-@pytest.mark.usefixtures("openssl_enforcing_fips")
+@pytest.mark.usefixtures("fips_mode_on")
 def test_keys_under_fips_all_change_when_the_master_key_rotates(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + "5a" * 32)
     before: Final = _fips_keys(MASTER_KEY)
@@ -281,7 +288,7 @@ def test_keys_under_fips_all_change_when_the_master_key_rotates(monkeypatch: pyt
     assert set(before).isdisjoint(after), (before, after)
 
 
-@pytest.mark.usefixtures("openssl_enforcing_fips")
+@pytest.mark.usefixtures("fips_mode_on")
 def test_session_key_under_fips_refuses_an_unset_salt_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
     with pytest.raises(ValueError, match="LITELLM_SALT_KEY"):

@@ -1,6 +1,6 @@
 import _hashlib
 import hmac
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
 from typing import Final
 from unittest.mock import Mock
@@ -15,8 +15,15 @@ from litellm.proxy.common_utils.fips import (
     cryptography_enforces_fips,
     derive_key_from_salt_key,
     enforce_fips_mode,
+    fips_mode_active,
     openssl_enforces_fips,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fips_mode_off_after_each_test() -> Iterator[None]:
+    yield
+    enforce_fips_mode({})
 
 
 def _fake_openssl(monkeypatch: pytest.MonkeyPatch, *, fips_flag: int, md5_refused: bool) -> None:
@@ -120,6 +127,27 @@ def test_enforce_fips_mode(
 
     with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
         enforce_fips_mode(general_settings)
+
+
+@pytest.mark.parametrize(
+    "general_settings, active",
+    [({"fips_mode": True}, True), ({"fips_mode": "true"}, True), ({"fips_mode": False}, False), ({}, False)],
+    ids=["on", "on-from-a-string", "off", "unset"],
+)
+def test_fips_mode_active_follows_the_setting_the_gate_accepted(
+    monkeypatch: pytest.MonkeyPatch, general_settings: Mapping[str, object], active: bool
+) -> None:
+    _fake_openssl(monkeypatch, fips_flag=1, md5_refused=True)
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+    enforce_fips_mode(general_settings)
+    assert fips_mode_active() is active
+
+
+def test_fips_mode_stays_inactive_on_a_refused_boot(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_openssl(monkeypatch, fips_flag=0, md5_refused=False)
+    with pytest.raises(FipsModeError):
+        enforce_fips_mode({"fips_mode": True})
+    assert fips_mode_active() is False
 
 
 @pytest.mark.skipif(

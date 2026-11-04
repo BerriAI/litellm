@@ -1,6 +1,7 @@
 import ctypes
 import os
 import re
+import threading
 from collections.abc import Mapping
 from typing import Final
 
@@ -9,6 +10,7 @@ from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_SETTING: Final = "fips_mode"
 _SETTING: Final = f"general_settings.{FIPS_MODE_SETTING}"
+_FIPS_MODE_ACTIVE: Final = threading.Event()
 _SALT_KEY_HEX: Final = re.compile(r"(?:sk-)?((?:[0-9a-fA-F]{2}){32,})")
 _OSSL_PARAM_UTF8_STRING: Final = 4
 _OSSL_PARAM_OCTET_STRING: Final = 5
@@ -103,10 +105,20 @@ def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
 
 
 def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
-    """Raise FipsModeError with the fips_mode_refusal reason, if there is one."""
+    """Raise FipsModeError with the fips_mode_refusal reason, if there is one. Otherwise record whether
+    general_settings.fips_mode is on, for fips_mode_active."""
     refusal: Final = fips_mode_refusal(general_settings)
     if refusal is not None:
         raise FipsModeError(refusal)
+    if _fips_mode_setting(general_settings):
+        _FIPS_MODE_ACTIVE.set()
+    else:
+        _FIPS_MODE_ACTIVE.clear()
+
+
+def fips_mode_active() -> bool:
+    """Whether general_settings.fips_mode was on when enforce_fips_mode last accepted it."""
+    return _FIPS_MODE_ACTIVE.is_set()
 
 
 def _param(name: bytes, data_type: int, data: bytes) -> _OsslParam:
@@ -152,7 +164,7 @@ def derive_key_from_salt_key(label: bytes, context: bytes) -> str:
     salt_key: Final = _SALT_KEY_HEX.fullmatch(os.getenv(SALT_KEY_ENV_VAR, ""))
     if salt_key is None:
         raise ValueError(
-            f"With OpenSSL enforcing FIPS, {SALT_KEY_ENV_VAR} must be at least 32 bytes of hex, such as "
+            f"With {_SETTING} on, {SALT_KEY_ENV_VAR} must be at least 32 bytes of hex, such as "
             "sk-$(openssl rand -hex 32)"
         )
     return _kbkdf_hmac_sha256(bytes.fromhex(salt_key.group(1)), label, context).hex()

@@ -16,7 +16,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, SecretStr
 
-from litellm.proxy.common_utils.fips import derive_key_from_salt_key, openssl_enforces_fips
+from litellm.proxy.common_utils.fips import derive_key_from_salt_key, fips_mode_active
 from litellm.proxy.mcp_server.outbound_credentials.envelope import (
     EnvelopeIdentity,
     EnvelopeKeys,
@@ -63,10 +63,10 @@ def envelope_keys_from_master_key(master_key: str) -> EnvelopeKeys:
     admission path. The derivation is deterministic; rotating ``master_key`` invalidates
     every outstanding envelope, which is the intended behavior for a signing-key change.
 
-    When OpenSSL enforces FIPS, both keys come from :func:`derive_key_from_salt_key` with the master key as context
-    instead.
+    When general_settings.fips_mode is on, both keys come from :func:`derive_key_from_salt_key` with the master key as
+    context instead.
     """
-    if openssl_enforces_fips():
+    if fips_mode_active():
         return EnvelopeKeys(
             signing_key=SecretStr(derive_key_from_salt_key(_SIGNING_KEY_DOMAIN, master_key.encode())),
             encryption_key=SecretStr(derive_key_from_salt_key(_ENCRYPTION_KEY_DOMAIN, master_key.encode())),
