@@ -1,15 +1,22 @@
 use std::time::Duration;
 
 use litellm_circuit_breaker::{Breaker, Config as BreakerConfig, State};
-use litellm_config::{
-    CacheSettings, Config, ConfiguredRedis, Expected, RedisError, RedisSettings, SecretSnapshot,
-    Value, environment_has_target,
-};
+use litellm_config::{CacheSettings, Config, RedisSettings, Value};
 use litellm_core_utils::settings::Lookup;
 use litellm_redis_client::RedisClient;
+use litellm_redis_resolve::{Expected, RedisError};
 use litellm_redis_types::Resolution;
 
 use crate::Error;
+
+mod configured;
+mod layers;
+mod secrets;
+#[cfg(test)]
+mod surface_tests;
+
+use configured::ConfiguredRedis;
+use secrets::SecretSnapshot;
 
 const ENVIRONMENT_PING_TIMEOUT: Duration = Duration::from_secs(2);
 type Params = Resolution;
@@ -35,11 +42,11 @@ enum Target {
 
 pub(crate) fn plan(config: &Config, lookup: &dyn Lookup) -> Result<Plan, Error> {
     let response_cache = redis_cache_params(config)
-        .map(|settings| resolve(&settings.cache_params(), lookup))
+        .map(|settings| resolve(&ConfiguredRedis::cache_params(settings), lookup))
         .transpose()?;
     let coordination = match &config.general_settings.coordination_redis {
         Some(settings) => Some(Target::Configured(resolve(
-            &settings.coordination()?,
+            &ConfiguredRedis::coordination(settings)?,
             lookup,
         )?)),
         None => match (&response_cache, config.litellm_settings.cache == Some(true)) {
@@ -124,6 +131,17 @@ fn environment(lookup: &dyn Lookup) -> Result<Option<Params>, Error> {
         true => Ok(Some(resolve(&ConfiguredRedis::environment_only(), lookup)?)),
         false => Ok(None),
     }
+}
+
+fn environment_has_target(lookup: &dyn Lookup) -> bool {
+    [
+        "REDIS_HOST",
+        "REDIS_URL",
+        "REDIS_CLUSTER_NODES",
+        "REDIS_SENTINEL_NODES",
+    ]
+    .iter()
+    .any(|name| lookup.get(name).is_some())
 }
 
 fn optional_environment(lookup: &dyn Lookup) -> Option<Params> {
@@ -244,8 +262,9 @@ fn environment_value<T>(
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use litellm_config::{Config, RedisError};
+    use litellm_config::Config;
     use litellm_redis_client::{Standalone, StaticAuth};
+    use litellm_redis_resolve::RedisError;
     use litellm_redis_testing::RedisServer;
     use litellm_redis_types::{Auth, HealthCheck, Passthrough};
     use rstest::rstest;

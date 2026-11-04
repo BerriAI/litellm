@@ -3711,10 +3711,7 @@ dependencies = [
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
- "litellm-core-utils",
  "litellm-error",
- "litellm-python-compat",
- "litellm-redis-types",
  "litellm-router-types",
  "litellm-secret-value",
  "rstest",
@@ -3724,8 +3721,6 @@ dependencies = [
  "strum",
  "tempfile",
  "thiserror 2.0.19",
- "tracing",
- "url",
  "veil",
 ]
 
@@ -3840,6 +3835,7 @@ dependencies = [
  "litellm-llms",
  "litellm-redis-client",
  "litellm-redis-connect",
+ "litellm-redis-resolve",
  "litellm-redis-testing",
  "litellm-redis-types",
  "litellm-secret-value",
@@ -3857,6 +3853,7 @@ dependencies = [
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
+ "veil",
 ]
 
 [[package]]
@@ -4448,8 +4445,8 @@ name = "litellm-redis-connect"
 version = "0.1.0"
 dependencies = [
  "litellm-circuit-breaker",
- "litellm-config",
  "litellm-redis-client",
+ "litellm-redis-resolve",
  "litellm-redis-testing",
  "litellm-redis-types",
  "rstest",
@@ -4458,6 +4455,21 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "litellm-redis-resolve"
+version = "0.1.0"
+dependencies = [
+ "litellm-python-compat",
+ "litellm-redis-types",
+ "litellm-secret-value",
+ "rstest",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.19",
+ "tracing",
+ "url",
 ]
 
 [[package]]

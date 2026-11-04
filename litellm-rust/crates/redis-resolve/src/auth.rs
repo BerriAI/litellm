@@ -1,7 +1,6 @@
-use litellm_core_utils::settings::Lookup;
 use litellm_redis_types::{Auth, AwsIamAuth, AzureAdAuth, ProviderHandle, StaticAuth};
 
-use super::{
+use crate::{
     RedisError,
     options::{self, AwsOptions, Options, flag, secret, text},
 };
@@ -9,7 +8,6 @@ use super::{
 pub(super) fn redis_auth(
     options: &Options,
     provider: Option<ProviderHandle>,
-    environment: &dyn Lookup,
 ) -> Result<Auth, RedisError> {
     match (provider, &options.credential_provider) {
         (Some(handle), _) => return Ok(Auth::Provider(handle)),
@@ -44,9 +42,7 @@ pub(super) fn redis_auth(
                 client_id: text(options.azure.client_id.as_ref()),
                 tenant_id: text(options.azure.tenant_id.as_ref()),
                 client_secret: secret(options.azure.client_secret.as_ref()),
-                username: environment
-                    .get("REDIS_USERNAME")
-                    .filter(|username| !username.is_empty()),
+                username: None,
             }))
         }
         (None, false, true) => aws_iam(&options.aws, uses_tls(options)?).map(Auth::AwsIam),

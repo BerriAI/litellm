@@ -23,6 +23,7 @@ from litellm._redis import (
     _get_redis_env_kwarg_mapping,
     _get_redis_kwargs,
     _get_redis_url_kwargs,
+    _merge_redis_kwargs,
     _pretty_print_redis_config,
     _uses_tls,
     get_redis_async_client,
@@ -2057,26 +2058,29 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
 
 @pytest.mark.skipif(
     redis.VERSION != (5, 3, 1),
-    reason="the Rust resolver in litellm-rust/crates/config pins redis-py 5.3.1, per its AGENTS.md",
+    reason="the Rust interpreter in litellm-rust/crates/redis-resolve pins redis-py 5.3.1, per its AGENTS.md",
 )
 @pytest.mark.parametrize(
-    ("kwargs", "environment", "expected"),
+    ("kwargs", "environment", "merged", "expected"),
     [
         pytest.param(
             {"host": "redis"},
             {},
+            {"host": "redis"},
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="host_defaults",
         ),
         pytest.param(
             {"startup_nodes": []},
             {"REDIS_CLUSTER_NODES": '[{"host": "node-a", "port": 7000}]'},
+            {"startup_nodes": '[{"host": "node-a", "port": 7000}]'},
             _expected_view({"health_check_interval": 25.0, "mode": "cluster", "nodes": ["node-a:7000"]}),
             id="empty_cluster_nodes_use_the_environment",
         ),
         pytest.param(
             {"sentinel_nodes": [], "service_name": "primary"},
             {"REDIS_SENTINEL_NODES": '[["sentinel-a", 26379]]'},
+            {"sentinel_nodes": '[["sentinel-a", 26379]]', "service_name": "primary"},
             _expected_view(
                 {
                     "db": 0,
@@ -2091,6 +2095,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"sentinel_nodes": [["sentinel-a", 26379]], "service_name": ""},
             {"REDIS_SERVICE_NAME": "primary"},
+            {"sentinel_nodes": [["sentinel-a", 26379]], "service_name": "primary"},
             _expected_view(
                 {
                     "db": 0,
@@ -2105,18 +2110,21 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "redis", "ssl_cert_reqs": "strict"},
             {},
+            {"host": "redis", "ssl_cert_reqs": "strict"},
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="plaintext_ignores_tls_requirements",
         ),
         pytest.param(
             {"host": "redis", "ssl": "on"},
             {},
+            {"host": "redis", "ssl": "on"},
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="an_ambiguous_flag_is_refused",
         ),
         pytest.param(
             {"sentinel_nodes": [], "service_name": "primary"},
             {},
+            {"sentinel_nodes": [], "service_name": "primary"},
             {
                 "rejected": {
                     "message": "Both 'sentinel_nodes' and 'service_name' are required for Redis Sentinel.",
@@ -2128,6 +2136,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "redis", "ssl": True, "ssl_ca_path": "/ca"},
             {},
+            {"host": "redis", "ssl": True, "ssl_ca_path": "/ca"},
             {
                 "rejected": {
                     "message": "Redis.__init__() got an unexpected keyword argument 'ssl_ca_path'",
@@ -2139,6 +2148,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "redis", "ssl": True, "ssl_certfile": "/client.pem", "ssl_password": "key-secret"},
             {},
+            {"host": "redis", "ssl": True, "ssl_certfile": "/client.pem", "ssl_password": "key-secret"},
             {
                 "rejected": {
                     "message": "Redis.__init__() got an unexpected keyword argument 'ssl_password'",
@@ -2150,6 +2160,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "redis", "ssl": True, "ssl_validate_ocsp": True},
             {},
+            {"host": "redis", "ssl": True, "ssl_validate_ocsp": True},
             {
                 "rejected": {
                     "message": "Redis.__init__() got an unexpected keyword argument 'ssl_validate_ocsp'",
@@ -2169,6 +2180,15 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "username": "user",
             },
             {},
+            {
+                "db": 2,
+                "host": "redis",
+                "password": "pass",
+                "port": 6380,
+                "socket_timeout": 1.5,
+                "ssl": True,
+                "username": "user",
+            },
             _expected_view(
                 {
                     "auth": {"kind": "static", "password": "pass", "username": "user"},
@@ -2199,6 +2219,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "REDIS_PORT": "6390",
                 "REDIS_SSL": "True",
             },
+            {"port": "6390", "ssl": True, "host": "environment", "password": "environment-secret"},
             _expected_view(
                 {
                     "auth": {"kind": "static", "password": "environment-secret", "username": None},
@@ -2222,6 +2243,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"db": "3", "host": "redis", "port": "6380", "socket_timeout": "2.5"},
             {},
+            {"db": "3", "host": "redis", "port": "6380", "socket_timeout": "2.5"},
             _expected_view(
                 {
                     "db": 3,
@@ -2237,6 +2259,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "redis", "port": "6380\n", "db": " 2 ", "socket_timeout": "1_0.5\n"},
             {},
+            {"host": "redis", "port": "6380\n", "db": " 2 ", "socket_timeout": "1_0.5\n"},
             _expected_view(
                 {
                     "db": 2,
@@ -2252,12 +2275,14 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {},
             {"REDIS_HOST": "redis", "REDIS_PORT": "6_380", "REDIS_DB": "3\n"},
+            {"port": "6_380", "host": "redis", "db": "3\n"},
             _expected_view({"db": 3, "host": "redis", "mode": "host", "port": 6380}),
             id="padded_environment_numbers_parse_like_python_int",
         ),
         pytest.param(
             {"host": "redis"},
             {"REDIS_SOCKET_TIMEOUT": "0.75"},
+            {"socket_timeout": "0.75", "host": "redis"},
             _expected_view(
                 {
                     "db": 0,
@@ -2273,24 +2298,28 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {},
             {"REDIS_URL": "redis://environment:6379/1"},
+            {"url": "redis://environment:6379/1"},
             _expected_view({"mode": "url", "url": "redis://environment:6379/1"}),
             id="environment_url",
         ),
         pytest.param(
             {},
             {"REDIS_HOST": "ignored", "REDIS_URL": "redis://from-url:6379"},
+            {"host": "ignored", "url": "redis://from-url:6379"},
             _expected_view({"mode": "url", "url": "redis://from-url:6379"}),
             id="environment_url_beats_the_environment_host",
         ),
         pytest.param(
             {"host": "configured"},
             {"REDIS_URL": "redis://environment:6379"},
+            {"host": "configured"},
             _expected_view({"db": 0, "host": "configured", "mode": "host", "port": 6379}),
             id="an_explicit_host_drops_the_environment_url",
         ),
         pytest.param(
             {"db": 4, "host": "dropped", "password": "dropped", "url": "rediss://cache:6380", "username": "user"},
             {},
+            {"db": 4, "host": "dropped", "password": "dropped", "url": "rediss://cache:6380", "username": "user"},
             _expected_view(
                 {
                     "auth": {"kind": "static", "password": None, "username": "user"},
@@ -2317,6 +2346,12 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "url": "rediss://cache:6380",
             },
             {},
+            {
+                "ssl_ca_certs": "/ca.pem",
+                "ssl_cert_reqs": "none",
+                "ssl_check_hostname": True,
+                "url": "rediss://cache:6380",
+            },
             _expected_view(
                 {
                     "mode": "url",
@@ -2341,6 +2376,11 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "url": "redis://single:6379",
             },
             {},
+            {
+                "password": "cluster-secret",
+                "startup_nodes": [{"host": "node-a", "port": 7000}],
+                "url": "redis://single:6379",
+            },
             _expected_view(
                 {
                     "auth": {"kind": "static", "password": "cluster-secret", "username": None},
@@ -2354,6 +2394,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {},
             {"REDIS_CLUSTER_NODES": '[{"host": "node-a", "port": "7000"}, {"host": "node-b", "port": 7001}]'},
+            {"startup_nodes": '[{"host": "node-a", "port": "7000"}, {"host": "node-b", "port": 7001}]'},
             _expected_view({"health_check_interval": 25.0, "mode": "cluster", "nodes": ["node-a:7000", "node-b:7001"]}),
             id="environment_cluster_nodes",
         ),
@@ -2365,6 +2406,12 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "startup_nodes": [{"host": "node-a", "port": 7000}],
             },
             {},
+            {
+                "ssl": "true",
+                "ssl_ca_certs": "/ca.pem",
+                "ssl_check_hostname": True,
+                "startup_nodes": [{"host": "node-a", "port": 7000}],
+            },
             _expected_view(
                 {
                     "health_check_interval": 25.0,
@@ -2391,6 +2438,12 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "service_name": "primary",
             },
             {},
+            {
+                "password": "data-secret",
+                "sentinel_nodes": [["sentinel-a", 26379], ["sentinel-b", 26380]],
+                "sentinel_password": "sentinel-secret",
+                "service_name": "primary",
+            },
             _expected_view(
                 {
                     "auth": {"kind": "static", "password": "data-secret", "username": None},
@@ -2410,6 +2463,11 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "REDIS_SENTINEL_PASSWORD": "sentinel-secret",
                 "REDIS_SERVICE_NAME": "primary",
             },
+            {
+                "sentinel_nodes": '[["sentinel-a", 26379]]',
+                "sentinel_password": "sentinel-secret",
+                "service_name": "primary",
+            },
             _expected_view(
                 {
                     "db": 0,
@@ -2424,6 +2482,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "ignored", "sentinel_nodes": [["sentinel-a", 26379]], "service_name": "primary"},
             {},
+            {"host": "ignored", "sentinel_nodes": [["sentinel-a", 26379]], "service_name": "primary"},
             {
                 "rejected": {
                     "message": "redis.asyncio.client.Redis() got multiple values for keyword argument 'host'",
@@ -2435,6 +2494,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"sentinel_nodes": [["sentinel-a", 26379]], "service_name": "primary", "url": "redis://single:6379"},
             {},
+            {"sentinel_nodes": [["sentinel-a", 26379]], "service_name": "primary", "url": "redis://single:6379"},
             _expected_view({"mode": "url", "url": "redis://single:6379"}),
             id="a_url_beats_sentinels",
         ),
@@ -2447,12 +2507,26 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "password": "dropped",
             },
             {"REDIS_AZURE_AD_TOKEN": "true"},
+            {
+                "aws_iam_auth": True,
+                "credential_provider": True,
+                "gcp_service_account": "account",
+                "host": "redis",
+                "password": "dropped",
+            },
             _expected_view({"auth": {"kind": "host"}, "db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="an_explicit_credential_provider_beats_cloud_auth",
         ),
         pytest.param(
             {"aws_iam_auth": True, "azure_redis_ad_token": "True", "host": "redis", "password": "dropped"},
             {"REDIS_GCP_SERVICE_ACCOUNT": "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"},
+            {
+                "gcp_service_account": "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com",
+                "aws_iam_auth": True,
+                "azure_redis_ad_token": "True",
+                "host": "redis",
+                "password": "dropped",
+            },
             _expected_view(
                 {
                     "auth": {
@@ -2476,6 +2550,13 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "ssl_ca_certs": "/configured-ca.pem",
             },
             {},
+            {
+                "gcp_service_account": "account",
+                "gcp_ssl_ca_certs": "/gcp-ca.pem",
+                "host": "redis",
+                "ssl": True,
+                "ssl_ca_certs": "/configured-ca.pem",
+            },
             _expected_view(
                 {
                     "auth": {"kind": "gcp_iam", "service_account": "account"},
@@ -2507,6 +2588,15 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "username": "dropped",
             },
             {"REDIS_USERNAME": "environment-user"},
+            {
+                "username": "dropped",
+                "aws_iam_auth": True,
+                "azure_client_id": "client",
+                "azure_client_secret": "secret",
+                "azure_redis_ad_token": True,
+                "azure_tenant_id": "tenant",
+                "host": "redis",
+            },
             _expected_view(
                 {
                     "auth": {"kind": "azure_ad", "username": "environment-user"},
@@ -2527,6 +2617,13 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "host": "redis",
             },
             {},
+            {
+                "azure_client_id": "client",
+                "azure_client_secret": "secret",
+                "azure_redis_ad_token": True,
+                "azure_tenant_id": "tenant",
+                "host": "redis",
+            },
             _expected_view(
                 {"auth": {"kind": "azure_ad", "username": None}, "db": 0, "host": "redis", "mode": "host", "port": 6379}
             ),
@@ -2541,6 +2638,13 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "host": "redis",
             },
             {},
+            {
+                "azure_client_id": "client",
+                "azure_client_secret": "secret",
+                "azure_redis_ad_token": "1",
+                "azure_tenant_id": "tenant",
+                "host": "redis",
+            },
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="azure_needs_the_literal_true",
         ),
@@ -2554,6 +2658,15 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "ssl": True,
             },
             {"AWS_DEFAULT_REGION": "us-east-1"},
+            {
+                "aws_iam_auth": "yes",
+                "aws_iam_cache_name": "cache-1",
+                "aws_iam_user_name": "iam-user",
+                "host": "cache-1",
+                "password": "dropped",
+                "ssl": True,
+                "aws_iam_region": "us-east-1",
+            },
             _expected_view(
                 {
                     "auth": {
@@ -2589,6 +2702,14 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "ssl": True,
             },
             {"AWS_DEFAULT_REGION": "us-east-1", "AWS_REGION": "eu-central-1"},
+            {
+                "aws_iam_auth": True,
+                "aws_iam_cache_name": "cache-1",
+                "aws_iam_user_name": "iam-user",
+                "host": "cache-1",
+                "ssl": True,
+                "aws_iam_region": "eu-central-1",
+            },
             _expected_view(
                 {
                     "auth": {
@@ -2625,6 +2746,14 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "url": "rediss://user:pass@cache-1:6379",
             },
             {},
+            {
+                "aws_iam_auth": True,
+                "aws_iam_cache_name": "cache-1",
+                "aws_iam_region": "eu-west-1",
+                "aws_iam_serverless": True,
+                "aws_iam_user_name": "iam-user",
+                "url": "rediss://user:pass@cache-1:6379",
+            },
             _expected_view(
                 {
                     "auth": {
@@ -2658,6 +2787,13 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "host": "cache-1",
             },
             {},
+            {
+                "aws_iam_auth": True,
+                "aws_iam_cache_name": "cache-1",
+                "aws_iam_region": "us-east-1",
+                "aws_iam_user_name": "iam-user",
+                "host": "cache-1",
+            },
             {"rejected": {"message": "AWS ElastiCache IAM Redis authentication requires TLS", "type": "ValueError"}},
             id="aws_iam_without_tls_fails",
         ),
@@ -2670,6 +2806,13 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "ssl": True,
             },
             {},
+            {
+                "aws_iam_auth": True,
+                "aws_iam_cache_name": "cache-1",
+                "aws_iam_user_name": "iam-user",
+                "host": "cache-1",
+                "ssl": True,
+            },
             {
                 "rejected": {
                     "message": "AWS ElastiCache IAM Redis authentication requires: aws_iam_region",
@@ -2687,6 +2830,13 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "ssl_check_hostname": True,
             },
             {},
+            {
+                "host": "redis",
+                "ssl": True,
+                "ssl_ca_certs": "/ca.pem",
+                "ssl_cert_reqs": "none",
+                "ssl_check_hostname": True,
+            },
             _expected_view(
                 {
                     "db": 0,
@@ -2709,6 +2859,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "redis"},
             {"REDIS_SSL": "true", "REDIS_SSL_CA_CERTS": "/env-ca.pem", "REDIS_SSL_CERT_REQS": "optional"},
+            {"ssl_ca_certs": "/env-ca.pem", "ssl": True, "ssl_cert_reqs": "optional", "host": "redis"},
             _expected_view(
                 {
                     "db": 0,
@@ -2731,6 +2882,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "redis", "socket_connect_timeout": 0.25, "socket_timeout": 2.5},
             {},
+            {"host": "redis", "socket_connect_timeout": 0.25, "socket_timeout": 2.5},
             _expected_view(
                 {
                     "db": 0,
@@ -2746,6 +2898,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "os.environ/COORD_HOST", "password": "os.environ/COORD_PASSWORD"},
             {"COORD_HOST": "referenced", "COORD_PASSWORD": "referenced-secret"},
+            {"host": "referenced", "password": "referenced-secret"},
             _expected_view(
                 {
                     "auth": {"kind": "static", "password": "referenced-secret", "username": None},
@@ -2760,12 +2913,14 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"port": 6379},
             {},
+            {"port": 6379},
             {"rejected": {"message": "Either 'host' or 'url' must be specified for redis.", "type": "ValueError"}},
             id="no_target_fails",
         ),
         pytest.param(
             {"host": "redis", "ssl": True, "ssl_certfile": "/client.pem", "ssl_keyfile": "/client.key"},
             {},
+            {"host": "redis", "ssl": True, "ssl_certfile": "/client.pem", "ssl_keyfile": "/client.key"},
             _expected_view(
                 {
                     "db": 0,
@@ -2788,6 +2943,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"url": "rediss://cache:6380/0?ssl_cert_reqs=none&ssl_ca_certs=/ca.pem&ssl_check_hostname=yes"},
             {},
+            {"url": "rediss://cache:6380/0?ssl_cert_reqs=none&ssl_ca_certs=/ca.pem&ssl_check_hostname=yes"},
             _expected_view(
                 {
                     "mode": "url",
@@ -2808,6 +2964,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"url": "redis://cache:6379/0?socket_timeout=2"},
             {},
+            {"url": "redis://cache:6379/0?socket_timeout=2"},
             _expected_view(
                 {
                     "mode": "url",
@@ -2821,6 +2978,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"db": "99999999999999999999", "ssl_cert_reqs": "strict", "url": "rediss://cache:6380"},
             {},
+            {"db": "99999999999999999999", "ssl_cert_reqs": "strict", "url": "rediss://cache:6380"},
             _expected_view(
                 {
                     "mode": "url",
@@ -2841,6 +2999,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"db": 99999999999, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
+            {"db": 99999999999, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {
                 "rejected": {
                     "message": "Argument 'db' must be 0 or None in cluster mode",
@@ -2852,6 +3011,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"db": True, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
+            {"db": True, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {
                 "rejected": {
                     "message": "Argument 'db' must be 0 or None in cluster mode",
@@ -2863,12 +3023,14 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"db": False, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
+            {"db": False, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             _expected_view({"health_check_interval": 25.0, "mode": "cluster", "nodes": ["node-a:7000"]}),
             id="cluster_db_false",
         ),
         pytest.param(
             {"db": 0.5, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
+            {"db": 0.5, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {
                 "rejected": {
                     "message": "Argument 'db' must be 0 or None in cluster mode",
@@ -2880,12 +3042,14 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"db": 0.0, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
+            {"db": 0.0, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             _expected_view({"health_check_interval": 25.0, "mode": "cluster", "nodes": ["node-a:7000"]}),
             id="cluster_db_float_zero",
         ),
         pytest.param(
             {"db": [1], "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
+            {"db": [1], "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {
                 "rejected": {
                     "message": "Argument 'db' must be 0 or None in cluster mode",
@@ -2897,12 +3061,14 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"db": [], "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
+            {"db": [], "startup_nodes": [{"host": "node-a", "port": 7000}]},
             _expected_view({"health_check_interval": 25.0, "mode": "cluster", "nodes": ["node-a:7000"]}),
             id="cluster_db_empty_list",
         ),
         pytest.param(
             {"host": "redis", "ssl": True, "ssl_ciphers": "HIGH"},
             {},
+            {"host": "redis", "ssl": True, "ssl_ciphers": "HIGH"},
             _expected_view(
                 {
                     "db": 0,
@@ -2925,54 +3091,63 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "redis", "retry_on_timeout": True},
             {},
+            {"host": "redis", "retry_on_timeout": True},
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="retry_on_timeout",
         ),
         pytest.param(
             {"host": "redis", "port": "abc"},
             {},
+            {"host": "redis", "port": "abc"},
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="malformed_port",
         ),
         pytest.param(
             {"db": "first", "host": "redis"},
             {},
+            {"db": "first", "host": "redis"},
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="malformed_db",
         ),
         pytest.param(
             {"host": "redis", "socket_timeout": "slow"},
             {},
+            {"host": "redis", "socket_timeout": "slow"},
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="socket_timeout_not_a_number",
         ),
         pytest.param(
             {},
             {"REDIS_HOST": "redis", "REDIS_PORT": "abc"},
+            {"port": "abc", "host": "redis"},
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="malformed_port_from_the_environment",
         ),
         pytest.param(
             {"host": "redis", "protocol": 3},
             {},
+            {"host": "redis", "protocol": 3},
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="protocol_3",
         ),
         pytest.param(
             {"host": "redis"},
             {"REDIS_RETRY_ON_ERROR": "true"},
+            {"retry_on_error": True, "host": "redis"},
             {"rejected": {"message": "'bool' object is not iterable", "type": "TypeError"}},
             id="retry_on_error_from_the_environment",
         ),
         pytest.param(
             {"host": "redis", "unix_socket_path": "/tmp/redis.sock"},
             {},
+            {"host": "redis", "unix_socket_path": "/tmp/redis.sock"},
             _expected_view({"mode": "unix", "path": "/tmp/redis.sock"}),
             id="unix_socket_path",
         ),
         pytest.param(
             {"host": "redis", "ssl": True, "ssl_ca_certs": "/ca.pem", "unix_socket_path": "/tmp/redis.sock"},
             {},
+            {"host": "redis", "ssl": True, "ssl_ca_certs": "/ca.pem", "unix_socket_path": "/tmp/redis.sock"},
             _expected_view({"mode": "unix", "path": "/tmp/redis.sock"}),
             id="unix_socket_path_keeps_tls_settings_out_of_the_target",
         ),
@@ -2983,6 +3158,11 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
                 "ssl_ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
             },
             {},
+            {
+                "host": "redis",
+                "ssl": True,
+                "ssl_ca_data": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+            },
             _expected_view(
                 {
                     "db": 0,
@@ -3005,6 +3185,7 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"host": "redis"},
             {"REDIS_SSL": "true", "REDIS_SSL_CA_PATH": "/etc/ssl/private-cas"},
+            {"ssl": True, "ssl_ca_path": "/etc/ssl/private-cas", "host": "redis"},
             {
                 "rejected": {
                     "message": "Redis.__init__() got an unexpected keyword argument 'ssl_ca_path'",
@@ -3016,24 +3197,28 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"health_check_interval": "7", "host": "redis"},
             {},
+            {"health_check_interval": "7", "host": "redis"},
             _expected_view({"db": 0, "health_check_interval": 7.0, "host": "redis", "mode": "host", "port": 6379}),
             id="health_check_interval_is_whole_seconds",
         ),
         pytest.param(
             {"health_check_interval": 0, "host": "redis"},
             {},
+            {"health_check_interval": 0, "host": "redis"},
             _expected_view({"db": 0, "host": "redis", "mode": "host", "port": 6379}),
             id="health_check_interval_zero_is_off",
         ),
         pytest.param(
             {"health_check_interval": 0, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
+            {"health_check_interval": 0, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             _expected_view({"mode": "cluster", "nodes": ["node-a:7000"]}),
             id="health_check_interval_zero_keeps_a_cluster_off",
         ),
         pytest.param(
             {"db": 3, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {},
+            {"db": 3, "startup_nodes": [{"host": "node-a", "port": 7000}]},
             {
                 "rejected": {
                     "message": "Argument 'db' must be 0 or None in cluster mode",
@@ -3045,17 +3230,19 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
         pytest.param(
             {"unix_socket_path": "/tmp/redis.sock"},
             {},
+            {"unix_socket_path": "/tmp/redis.sock"},
             {"rejected": {"message": "Either 'host' or 'url' must be specified for redis.", "type": "ValueError"}},
             id="unix_socket_path_without_a_host_fails_like_python",
         ),
     ],
 )
-def test_redis_settings_resolve_like_the_rust_resolver_expects(monkeypatch, kwargs, environment, expected):
+def test_redis_settings_resolve_like_the_rust_resolver_expects(monkeypatch, kwargs, environment, merged, expected):
     for name in [name for name in os.environ if name.startswith(("REDIS_", "AZURE_", "AWS_"))]:
         monkeypatch.delenv(name)
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
+    assert _merge_redis_kwargs(kwargs) == merged
     try:
         outcome = _resolution_view(kwargs)
     except (ValueError, TypeError, RedisClusterException) as error:

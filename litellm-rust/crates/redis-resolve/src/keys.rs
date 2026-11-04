@@ -1,8 +1,5 @@
-use litellm_core_utils::settings::Lookup;
 use litellm_redis_types::Ignored;
-
-use super::layers::Entry;
-use crate::Value;
+use serde_json::Value;
 
 // Every Redis setting litellm/_redis.py reads, with how Rust handles it and where else Python looks for it.
 // Warn rows are read by Python and dropped here with a warning naming the consequence, never an error.
@@ -10,17 +7,17 @@ use crate::Value;
 // environment marks the kwargs _get_redis_env_kwarg_mapping reads as REDIS_<KWARG>, and fallback lists the names
 // _get_redis_client_logic consults with get_secret when the merged kwargs lack the setting
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Handling {
+pub enum Handling {
     Read,
     Warn,
     Reject,
 }
 
-pub(super) struct Setting {
-    pub(super) kwarg: &'static str,
-    pub(super) handling: Handling,
-    pub(super) environment: bool,
-    pub(super) fallback: &'static [&'static str],
+pub struct Setting {
+    pub kwarg: &'static str,
+    pub handling: Handling,
+    pub environment: bool,
+    pub fallback: &'static [&'static str],
 }
 
 impl Setting {
@@ -38,13 +35,13 @@ impl Setting {
         }
     }
 
-    pub(super) fn environment_name(&self) -> Option<String> {
+    pub fn environment_name(&self) -> Option<String> {
         self.environment
             .then(|| format!("REDIS_{}", self.kwarg.to_ascii_uppercase()))
     }
 }
 
-pub(super) const SETTINGS: &[Setting] = &[
+pub const SETTINGS: &[Setting] = &[
     Setting::new("aws_iam_auth", Handling::Read, true, &[]),
     Setting::new("aws_iam_cache_name", Handling::Read, true, &[]),
     Setting::new(
@@ -165,11 +162,11 @@ pub(super) const SETTINGS: &[Setting] = &[
     Setting::new("username", Handling::Read, true, &[]),
 ];
 
-pub(super) fn is_refused_when_set(kwarg: &str) -> bool {
+pub(crate) fn is_refused_when_set(kwarg: &str) -> bool {
     setting(kwarg).is_some_and(|setting| setting.handling == Handling::Reject)
 }
 
-pub(super) fn ignored(setting: String, kwarg: &str) -> Ignored {
+pub(crate) fn ignored(setting: String, kwarg: &str) -> Ignored {
     Ignored {
         setting,
         consequence: consequence(kwarg),
@@ -178,7 +175,7 @@ pub(super) fn ignored(setting: String, kwarg: &str) -> Ignored {
 
 // rustls only speaks TLS 1.2 and 1.3, so a minimum of 1.2 or lower is already met. redis-py takes an
 // ssl.TLSVersion, which reaches Rust as its name or its value
-pub(super) fn is_met_by_rustls(kwarg: &str, value: &Value) -> bool {
+pub(crate) fn is_met_by_rustls(kwarg: &str, value: &Value) -> bool {
     if kwarg != "ssl_min_version" {
         return false;
     }
@@ -213,7 +210,7 @@ const HOST_OBJECTS: &[&str] = &[
     "ssl_ocsp_context",
 ];
 
-pub(super) fn is_host_object(kwarg: &str) -> bool {
+pub(crate) fn is_host_object(kwarg: &str) -> bool {
     HOST_OBJECTS.contains(&kwarg)
 }
 
@@ -237,19 +234,6 @@ fn consequence(kwarg: &str) -> &'static str {
     }
 }
 
-pub(super) fn setting(kwarg: &str) -> Option<&'static Setting> {
+pub fn setting(kwarg: &str) -> Option<&'static Setting> {
     SETTINGS.iter().find(|setting| setting.kwarg == kwarg)
-}
-
-pub(super) fn fallback(kwarg: &str, lookup: &dyn Lookup) -> Option<Entry> {
-    let names = setting(kwarg).map_or(&[][..], |setting| setting.fallback);
-    names.iter().find_map(|name| {
-        lookup
-            .get(name)
-            .filter(|value| !value.is_empty())
-            .map(|value| Entry {
-                value: Value::String(value),
-                source: (*name).to_owned(),
-            })
-    })
 }

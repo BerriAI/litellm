@@ -4,13 +4,13 @@ use litellm_redis_types::{
 };
 use litellm_secret_value::SecretValue;
 
-use super::{
-    Expected, RedisError,
-    layers::Entry,
+use serde_json::Value;
+
+use crate::{
+    Entry, Expected, RedisError,
     options::{Options, as_text, flag, integer, invalid, secret, text},
     tls,
 };
-use crate::Value;
 
 /// The target, first match wins like `get_redis_client`: cluster, url, Sentinel, then host. A
 /// url also returns the query parameters it ignores.
@@ -123,9 +123,7 @@ fn cluster_nodes(entry: Option<&Entry>) -> Result<Option<Vec<Node>>, RedisError>
 
 fn sentinel_nodes(value: &Value) -> Option<Vec<Node>> {
     let nodes = nodes(value, |pair| match pair {
-        Value::Sequence(pair) if pair.len() == 2 => {
-            node_address(as_text(&pair[0]), as_text(&pair[1]))
-        }
+        Value::Array(pair) if pair.len() == 2 => node_address(as_text(&pair[0]), as_text(&pair[1])),
         _ => None,
     })?;
     (!nodes.is_empty()).then_some(nodes)
@@ -138,7 +136,7 @@ fn nodes(value: &Value, parse: impl Fn(&Value) -> Option<Node>) -> Option<Vec<No
             .iter()
             .map(parse)
             .collect(),
-        Value::Sequence(nodes) => nodes.iter().map(parse).collect(),
+        Value::Array(nodes) => nodes.iter().map(parse).collect(),
         _ => None,
     }
 }

@@ -1,24 +1,16 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    time::Duration,
-};
+use std::{collections::BTreeSet, time::Duration};
 
-use litellm_core_utils::settings::Lookup;
 use litellm_python_compat::{BigInt, number};
 use litellm_redis_types::{Ignored, Passthrough};
 use litellm_secret_value::SecretValue;
+use serde_json::Value;
 
-use super::{
-    Expected, RedisError,
+use crate::{
+    Entry, Expected, Kwargs, RedisError,
     keys::{self, Handling},
-    layers::Entry,
 };
-use crate::Value;
 
-pub(super) type Kwargs = BTreeMap<String, Entry>;
-
-/// Every setting the resolver reads, after layering. A setting is `None` when it is unset, null or
-/// empty, and then its environment fallback, if Python has one, stands in for it.
+/// Every setting the resolver reads. A setting is `None` when it is unset, null or empty.
 pub(super) struct Options {
     pub(super) url: Option<Entry>,
     pub(super) host: Option<Entry>,
@@ -98,14 +90,8 @@ impl Unmodeled {
             unmodeled().partition(|(key, _)| keys::is_host_object(key));
         let passthrough = plain
             .into_iter()
-            .map(|(key, entry)| {
-                serde_json::to_value(&entry.value)
-                    .map(|value| (key.clone(), value))
-                    .map_err(|_| RedisError::NotPlainData {
-                        setting: entry.source.clone(),
-                    })
-            })
-            .collect::<Result<_, _>>()?;
+            .map(|(key, entry)| (key.clone(), entry.value.clone()))
+            .collect();
         Ok(Self {
             passthrough: Passthrough::new(passthrough),
             host_objects: objects.into_iter().map(|(key, _)| key.clone()).collect(),
@@ -122,17 +108,13 @@ impl Unmodeled {
 
 impl Options {
     /// The typed settings and the ones the resolver leaves to the host.
-    pub(super) fn read(
-        kwargs: Kwargs,
-        lookup: &dyn Lookup,
-    ) -> Result<(Self, Unmodeled), RedisError> {
-        let unmodeled = Unmodeled::read(&kwargs)?;
+    pub(super) fn read(kwargs: &Kwargs) -> Result<(Self, Unmodeled), RedisError> {
+        let unmodeled = Unmodeled::read(kwargs)?;
         let get = |key: &str| {
             kwargs
                 .get(key)
                 .filter(|entry| is_present(&entry.value))
                 .cloned()
-                .or_else(|| keys::fallback(key, lookup))
         };
         let options = Self {
             url: get("url"),
@@ -206,13 +188,13 @@ fn handling(key: &str) -> Option<Handling> {
 }
 
 // Python reads most of these with `x or fallback`, so an empty value counts as unset everywhere
-fn is_present(value: &Value) -> bool {
+pub fn is_present(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::String(text) => !text.is_empty(),
-        Value::Sequence(items) => !items.is_empty(),
-        Value::Mapping(entries) => !entries.is_empty(),
-        Value::Bool(_) | Value::Number(_) | Value::Tagged(_) => true,
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(entries) => !entries.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
     }
 }
 

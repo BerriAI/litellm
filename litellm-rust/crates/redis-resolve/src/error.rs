@@ -12,7 +12,9 @@ pub enum RedisError {
     DbInCluster { setting: String },
     #[error("credential_provider is a host object, and the host passed no handle for it")]
     ProviderWithoutHandle,
-    #[error("{setting} asks for OCSP revocation checks, which rustls cannot perform, so Redis is not connected without them")]
+    #[error(
+        "{setting} asks for OCSP revocation checks, which rustls cannot perform, so Redis is not connected without them"
+    )]
     Unenforceable { setting: String },
     #[error("Redis setting {setting} is not plain data")]
     NotPlainData { setting: String },

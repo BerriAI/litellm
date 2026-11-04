@@ -1,6 +1,6 @@
 {
   "meta": {
-    "description": "Every kwarg litellm/_redis.py can pass to redis-py, by tested redis-py version, next to how SETTINGS in src/redis/keys.rs handles it",
+    "description": "Every kwarg litellm/_redis.py can pass to redis-py, by tested redis-py version, next to how SETTINGS in litellm-rust/crates/redis-resolve/src/keys.rs handles it",
     "generated": "2026-11-05",
     "redis_py_versions": [
       "5.3.1",
@@ -26,7 +26,7 @@
         "unlisted": "no SETTINGS row, so it lands in passthrough for a redis-py host and the Rust client never uses it, without a warning",
         "unlisted_host_object": "no SETTINGS row and listed in HOST_OBJECTS, so it lands in host_objects and the Rust client never uses it, without a warning"
       },
-      "field": "the Options field in src/redis/options.rs that a Read row fills, null otherwise"
+      "field": "the Options field in litellm-rust/crates/redis-resolve/src/options.rs that a Read row fills, null otherwise"
     },
     "versions": "each entry is a redis-py version whose signatures name the arg, with which ones. An empty array means no signature names it, so it only reaches Python as a litellm key"
   },

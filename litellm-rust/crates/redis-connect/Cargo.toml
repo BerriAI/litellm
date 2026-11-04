@@ -13,7 +13,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-litellm-config.workspace = true
+litellm-redis-resolve.workspace = true
 litellm-redis-testing.workspace = true
 rustls.workspace = true
 serde_json.workspace = true

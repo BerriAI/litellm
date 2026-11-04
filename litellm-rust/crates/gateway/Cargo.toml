@@ -24,6 +24,7 @@ litellm-error.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
 litellm-redis-connect.workspace = true
+litellm-redis-resolve.workspace = true
 litellm-redis-types.workspace = true
 rustls.workspace = true
 litellm-http.workspace = true
@@ -35,6 +36,7 @@ serde.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 uuid.workspace = true
+veil.workspace = true
 tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]

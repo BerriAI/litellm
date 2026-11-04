@@ -1,28 +1,17 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
-use litellm_config::{RedisSettings, SecretSnapshot};
 use litellm_redis_connect::{Error, connect};
 use litellm_redis_testing::{RedisSentinel, RedisServer, RedisTlsServer, SERVICE_NAME, eventually};
 use litellm_redis_types::{ProviderHandle, Resolution};
 use rstest::rstest;
 
-// python-bridge hands a credential_provider object over as a handle, so these tests do the same
-fn resolved(kwargs: serde_json::Value, environment: &[(&str, &str)]) -> Resolution {
-    let kwargs_name_a_provider = kwargs.get("credential_provider").is_some();
-    let settings: RedisSettings = serde_json::from_value(kwargs).unwrap();
-    let environment: HashMap<&str, &str> = environment.iter().copied().collect();
-    let lookup = |name: &str| environment.get(name).map(|value| (*value).to_owned());
-    let configured = settings.coordination().unwrap();
-    let configured = match kwargs_name_a_provider {
-        true => configured.with_credential_provider(ProviderHandle::new(1)),
-        false => configured,
-    };
-    configured
-        .resolve(
-            &SecretSnapshot::read(configured.secret_names(), &lookup),
-            &lookup,
-        )
-        .unwrap()
+// a host hands its credential_provider object over as a handle, so these tests do the same
+fn resolved(kwargs: serde_json::Value) -> Resolution {
+    let provider = kwargs
+        .get("credential_provider")
+        .map(|_| ProviderHandle::new(1));
+    let kwargs = serde_json::from_value::<BTreeMap<String, serde_json::Value>>(kwargs).unwrap();
+    litellm_redis_resolve::interpret(&litellm_redis_resolve::kwargs(kwargs), provider).unwrap()
 }
 
 fn port(url: &str) -> u16 {
@@ -46,21 +35,16 @@ async fn python_tls_kwargs_reach_the_server(#[case] with_ca: bool, #[case] conne
         "socket_timeout": 2,
     });
 
-    let pinged = connect(resolved(kwargs, &[]), None).unwrap().ping().await;
+    let pinged = connect(resolved(kwargs), None).unwrap().ping().await;
 
     assert_eq!(pinged.is_ok(), connects, "{pinged:?}");
 }
 
 #[rstest]
-#[case::configured_password(Some("right"), &[], true)]
-#[case::environment_password(None, &[("REDIS_PASSWORD", "right")], true)]
-#[case::wrong_password(Some("wrong"), &[], false)]
+#[case::right_password("right", true)]
+#[case::wrong_password("wrong", false)]
 #[tokio::test]
-async fn static_credentials_from_kwargs_or_environment_authenticate(
-    #[case] password: Option<&str>,
-    #[case] environment: &[(&str, &str)],
-    #[case] connects: bool,
-) {
+async fn static_credentials_authenticate(#[case] password: &str, #[case] connects: bool) {
     let server = RedisServer::start().await.unwrap();
     server
         .cli(&["CONFIG", "SET", "requirepass", "right"])
@@ -73,10 +57,7 @@ async fn static_credentials_from_kwargs_or_environment_authenticate(
         "socket_timeout": 2,
     });
 
-    let pinged = connect(resolved(kwargs, environment), None)
-        .unwrap()
-        .ping()
-        .await;
+    let pinged = connect(resolved(kwargs), None).unwrap().ping().await;
 
     assert_eq!(pinged.is_ok(), connects, "{pinged:?}");
 }
@@ -91,7 +72,7 @@ async fn python_sentinel_kwargs_follow_the_master_through_a_failover() {
         "service_name": SERVICE_NAME,
         "socket_timeout": 1,
     });
-    let client = connect(resolved(kwargs, &[]), None).unwrap();
+    let client = connect(resolved(kwargs), None).unwrap();
     client
         .set("before", "1", Duration::from_secs(600))
         .await
@@ -115,20 +96,18 @@ async fn python_sentinel_kwargs_follow_the_master_through_a_failover() {
 }
 
 #[rstest]
-#[case::credential_provider(serde_json::json!({"host": "redis", "credential_provider": true}), &[], None)]
-#[case::gcp(serde_json::json!({"host": "redis", "gcp_service_account": "account"}), &[], Some("gcp_service_account"))]
-#[case::azure(serde_json::json!({"host": "redis"}), &[("REDIS_AZURE_AD_TOKEN", "true")], Some("azure_redis_ad_token"))]
+#[case::credential_provider(serde_json::json!({"host": "redis", "credential_provider": true}), None)]
+#[case::gcp(serde_json::json!({"host": "redis", "gcp_service_account": "account"}), Some("gcp_service_account"))]
+#[case::azure(serde_json::json!({"host": "redis", "azure_redis_ad_token": true}), Some("azure_redis_ad_token"))]
 #[case::aws(
     serde_json::json!({"host": "cache", "ssl": true, "aws_iam_auth": true, "aws_iam_user_name": "user", "aws_iam_cache_name": "cache", "aws_iam_region": "us-east-1"}),
-    &[],
     Some("aws_iam_auth")
 )]
 fn auth_this_host_cannot_build_fails_at_boot_naming_the_setting(
     #[case] kwargs: serde_json::Value,
-    #[case] environment: &[(&str, &str)],
     #[case] cloud_setting: Option<&str>,
 ) {
-    let error = connect(resolved(kwargs, environment), None).err().unwrap();
+    let error = connect(resolved(kwargs), None).err().unwrap();
 
     match (error, cloud_setting) {
         (Error::NoHostCredentialProvider, None) => {}

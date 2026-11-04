@@ -3,17 +3,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use litellm_core_utils::settings::Lookup;
 use litellm_secret_value::SecretValue;
 
-use super::{ConfiguredRedis, Value, keys::SETTINGS};
+use litellm_config::Value;
+use litellm_redis_resolve::SETTINGS;
+
+use super::configured::ConfiguredRedis;
 
 #[derive(Clone, Debug, Default)]
-pub struct SecretSnapshot(BTreeMap<String, Option<SecretValue>>);
+pub(crate) struct SecretSnapshot(BTreeMap<String, Option<SecretValue>>);
 
 impl SecretSnapshot {
-    pub fn new(values: BTreeMap<String, Option<SecretValue>>) -> Self {
-        Self(values)
-    }
-
-    pub fn read(names: BTreeSet<String>, lookup: &dyn Lookup) -> Self {
+    pub(crate) fn read(names: BTreeSet<String>, lookup: &dyn Lookup) -> Self {
         Self(
             names
                 .into_iter()
@@ -46,7 +45,7 @@ impl Lookup for SecretSnapshot {
 }
 
 impl ConfiguredRedis {
-    pub fn secret_names(&self) -> BTreeSet<String> {
+    pub(crate) fn secret_names(&self) -> BTreeSet<String> {
         let references = self.fields.values().filter_map(|value| match value {
             Value::String(text) => text.strip_prefix("os.environ/").map(str::to_owned),
             _ => None,

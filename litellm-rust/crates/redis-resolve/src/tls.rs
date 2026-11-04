@@ -2,12 +2,12 @@ use litellm_python_compat::number;
 use litellm_redis_types::{Ignored, TlsOptions};
 use litellm_secret_value::SecretValue;
 
-use super::{
-    Expected, RedisError, keys,
-    layers::Entry,
+use serde_json::Value;
+
+use crate::{
+    Entry, Expected, RedisError, keys,
     options::{self, TlsInput, flag, parsed, secret, text},
 };
-use crate::Value;
 
 // redis-py's parse_url turns every query parameter into a client kwarg. Only these and, on a rediss:// url, the
 // TLS ones have a redis-rs equivalent, so any other parameter is ignored
