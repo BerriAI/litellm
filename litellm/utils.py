@@ -1636,7 +1636,6 @@ def dispatch_success_logging(
     is_litellm_internal_call: bool,
 ) -> None:
     if is_litellm_internal_call:
-        logging_obj.capture_usage_before_logging(result, start_time, end_time)
         return
 
     _schedule_async_success_logging(
@@ -1675,14 +1674,9 @@ def _schedule_async_success_logging(
     if not logging_obj.claim_async_success_log():
         return
 
-    if logging_obj.defer_async_logging and not is_completion_with_fallbacks:
-        logging_obj.capture_usage_before_logging(result, start_time, end_time, freeze_only=True)
-
     def _enqueue_async_logging() -> None:
         from litellm.responses.streaming_iterator import spawn_logging_task
 
-        if not is_completion_with_fallbacks:
-            logging_obj.capture_usage_before_logging(result, start_time, end_time)
         if logging_obj.defer_async_logging:
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result, start_time=start_time, end_time=end_time
@@ -2280,7 +2274,6 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            logging_obj.capture_usage_before_logging(TypeAdapter(object).validate_python(result), start_time, end_time)
             if not is_internal_call.get():
                 # Copy the current context to propagate it to the background thread
                 # This is essential for OpenTelemetry span context propagation
