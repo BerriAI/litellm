@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict, Field
 
 from e2e_config import settle_propagation
-from e2e_http import NoBody, Result, Success, get_external, is_ok
+from e2e_http import NoBody, Result, Success, is_ok
 from e2e_metadata import STEP_FRAMES, step
 from proxy_client import ProxyClient
 
@@ -34,11 +34,6 @@ class A2ASkill(BaseModel):
     description: str
     tags: list[str]
     examples: list[str] | None = None
-
-
-class A2AProvider(BaseModel):
-    organization: str
-    url: str
 
 
 class AgentCardParams(BaseModel):
@@ -57,29 +52,6 @@ class AgentCardParams(BaseModel):
     preferred_transport: str | None = Field(default=None, serialization_alias="preferredTransport")
 
 
-class UpstreamAgentCard(BaseModel):
-    """A real published agent card parsed from a public /.well-known endpoint. Keys on
-    the A2A wire aliases so `model_validate_json` reads the served JSON and
-    `model_dump(by_alias=True)` re-emits it unchanged for verbatim registration; it is
-    only ever fetched-and-validated, never hand-constructed, so aliasing on the wire
-    names does not affect any call site."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    protocol_version: str = Field(alias="protocolVersion")
-    name: str
-    description: str
-    version: str
-    url: str
-    provider: A2AProvider | None = None
-    documentation_url: str | None = Field(default=None, alias="documentationUrl")
-    capabilities: A2ACapabilities = A2ACapabilities()
-    skills: list[A2ASkill]
-    default_input_modes: list[str] = Field(default=["text"], alias="defaultInputModes")
-    default_output_modes: list[str] = Field(default=["text"], alias="defaultOutputModes")
-    preferred_transport: str | None = Field(default=None, alias="preferredTransport")
-
-
 class A2ABridgeParams(BaseModel):
     """litellm_params that route the agent through the completion bridge: an A2A
     message/send is transformed into a litellm.acompletion against this provider."""
@@ -93,7 +65,7 @@ class A2ABridgeParams(BaseModel):
 
 class AgentRegisterBody(BaseModel):
     agent_name: str
-    agent_card_params: AgentCardParams | UpstreamAgentCard
+    agent_card_params: AgentCardParams
     litellm_params: A2ABridgeParams | None = None
 
 
@@ -136,32 +108,9 @@ class A2ATextPart(BaseModel):
     text: str
 
 
-class A2ASearchPropertiesParams(BaseModel):
-    """The strict param schema of the published property agent's `search_properties`
-    skill (unknown keys are rejected upstream), so a natural-language query like
-    "properties for sale in SF under $2M" is expressed as typed fields."""
-
-    un_locode: str | None = None
-    service_type: str | None = None
-    property_type: str | None = None
-    bedrooms_min: int | None = None
-    asking_price_max: float | None = None
-    limit: int | None = None
-
-
-class A2ASkillInvocation(BaseModel):
-    skill: str
-    params: A2ASearchPropertiesParams
-
-
-class A2ADataPart(BaseModel):
-    kind: str = "data"
-    data: A2ASkillInvocation
-
-
 class A2AOutboundMessage(BaseModel):
     role: str = "user"
-    parts: list[A2ATextPart | A2ADataPart]
+    parts: list[A2ATextPart]
     message_id: str = Field(serialization_alias="messageId")
 
 
@@ -189,57 +138,10 @@ class A2AResponseMessage(BaseModel):
     parts: list[A2AResponsePart] = []
 
 
-class A2ATaskStatus(BaseModel):
-    state: str | None = None
-    message: A2AResponseMessage | None = None
-
-
-class A2AListingLocation(BaseModel):
-    """Only the location fields a test reads back off a returned listing."""
-
-    un_locode: str | None = None
-
-
-class A2AListing(BaseModel):
-    """A single property card from the agent's `search_results` artifact; only the
-    identity/location fields a test asserts on are modelled."""
-
-    raia_id: str
-    property_type: str | None = None
-    service_type: str | None = None
-    location: A2AListingLocation = A2AListingLocation()
-
-
-class A2ASearchResults(BaseModel):
-    """The DataPart payload the property agent's `search_properties` skill returns:
-    the run count plus the listing cards themselves. Proof the tool actually ran and
-    matched, not just that the task completed with some text."""
-
-    total: int
-    count: int
-    listings: list[A2AListing] = []
-
-
-class A2AArtifactPart(BaseModel):
-    kind: str | None = None
-    data: A2ASearchResults | None = None
-
-
-class A2AArtifact(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    artifact_id: str | None = Field(default=None, alias="artifactId")
-    name: str | None = None
-    parts: list[A2AArtifactPart] = []
-
-
 class A2AResult(BaseModel):
     """A message/send result. In 0.3 the message fields sit directly on the result
-    (`kind`/`role`/`parts`); in 1.0 they are nested under `message`; a real agent that
-    runs a task replies with a `task` whose agent text lives on `status.message` and
-    whose tool output lives on `artifacts`. `text` reads the agent's reply from
-    whichever shape the served version produced; `search_results` reads the tool's
-    structured output when the agent ran a skill."""
+    (`kind`/`role`/`parts`); in 1.0 they are nested under `message`. `text` reads the
+    agent's reply from whichever shape the served version produced."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -248,8 +150,6 @@ class A2AResult(BaseModel):
     message_id: str | None = Field(default=None, alias="messageId")
     parts: list[A2AResponsePart] = []
     message: A2AResponseMessage | None = None
-    status: A2ATaskStatus | None = None
-    artifacts: list[A2AArtifact] = []
 
     @property
     def text(self) -> str:
@@ -257,8 +157,6 @@ class A2AResult(BaseModel):
             parts = self.message.parts
         elif self.parts:
             parts = self.parts
-        elif self.status is not None and self.status.message is not None:
-            parts = self.status.message.parts
         else:
             parts = []
         return "".join(part.text or "" for part in parts)
@@ -266,14 +164,6 @@ class A2AResult(BaseModel):
     @property
     def is_nested_v1_shape(self) -> bool:
         return self.message is not None
-
-    @property
-    def search_results(self) -> A2ASearchResults | None:
-        for artifact in self.artifacts:
-            for part in artifact.parts:
-                if part.data is not None:
-                    return part.data
-        return None
 
 
 class A2AError(BaseModel):
@@ -380,11 +270,3 @@ class A2AClient:
 
 def build_a2a_client(proxy: ProxyClient) -> A2AClient:
     return A2AClient(proxy=proxy)
-
-
-@step("Fetch a published A2A agent card from its /.well-known endpoint")
-def fetch_agent_card(url: str, *, timeout: float = 20.0) -> Result[UpstreamAgentCard]:
-    """Fetch a live A2A agent card from its /.well-known endpoint and parse it into the
-    registration model, so a test can register a real published card verbatim rather
-    than a hand-rolled one."""
-    return get_external(url, response_type=UpstreamAgentCard, timeout=timeout)

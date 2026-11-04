@@ -64,7 +64,7 @@ vi.mock("@/contexts/ChatShellContext", () => ({
   },
 }));
 
-const ONE_TURN_ARG_COUNT = 25;
+const ONE_TURN_ARG_COUNT = 29;
 const ON_TIMING_DATA_INDEX = 7;
 const ON_USAGE_DATA_INDEX = 8;
 const ON_TOTAL_LATENCY_INDEX = 24;
@@ -72,7 +72,7 @@ const ON_TOTAL_LATENCY_INDEX = 24;
 async function sendOneMessage(onUrlUpdate?: OnUrlUpdateFunction): Promise<void> {
   renderWithProviders(<ChatConversationPage />, { onUrlUpdate });
   expect(await screen.findByRole("button", { name: /gpt-5\.4-mini/ })).toBeInTheDocument();
-  fireEvent.change(screen.getByPlaceholderText("Describe a change, paste an error, or ask a question…"), {
+  fireEvent.change(screen.getByPlaceholderText("Ask a question, attach a file, or paste something to work on…"), {
     target: { value: "How much did this cost?" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));

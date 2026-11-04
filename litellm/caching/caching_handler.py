@@ -9,7 +9,7 @@ This file is a wrapper around caching.py
 
 This class is used to handle caching logic specific for LLM API requests (completion / embedding / text_completion / transcription etc)
 
-It utilizes the (RedisCache, s3Cache, RedisSemanticCache, QdrantSemanticCache, InMemoryCache, DiskCache) based on what the user has setup
+It utilizes the (RedisCache, s3Cache, RedisSemanticCache, QdrantSemanticCache, InMemoryCache) based on what the user has setup
 
 In each method it will call the appropriate method from caching.py
 """
@@ -828,6 +828,13 @@ class LLMCachingHandler:
         An internal sub-call's hit fires nothing, since the parent call that folds it in logs it.
         """
         if is_internal_call.get():
+            return
+
+        if logging_obj.defer_async_logging and not logging_obj.stream:
+            from litellm.utils import dispatch_success_logging
+
+            logging_obj.model_call_details["cache_hit"] = cache_hit  # rebind-ok: capture cache status before deferring
+            dispatch_success_logging(logging_obj, cached_result, start_time, end_time, False, False)
             return
 
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER

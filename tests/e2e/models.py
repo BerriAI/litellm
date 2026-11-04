@@ -45,8 +45,6 @@ class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = Field(default=None, repr=False)
     langfuse_secret_key: str | None = Field(default=None, repr=False)
     langfuse_host: str | None = Field(default=None, repr=False)
-    wandb_api_key: str | None = Field(default=None, repr=False)
-    weave_project_id: str | None = None
 
 
 class KeyLoggingCallback(BaseModel):
@@ -1264,27 +1262,6 @@ class CostMap(RootModel[dict[str, CostMapEntry]]):
     pass
 
 
-class ConfigPatchResponse(BaseModel):
-    status: str
-    values: dict[str, float | dict[str, float]]
-
-
-class CostDiscountConfig(RootModel[dict[str, float]]):
-    pass
-
-
-class CostMarginConfig(RootModel[dict[str, float | dict[str, float]]]):
-    pass
-
-
-class CostDiscountConfigResponse(BaseModel):
-    values: dict[str, float]
-
-
-class CostMarginConfigResponse(BaseModel):
-    values: dict[str, float | dict[str, float]]
-
-
 class BedrockGuardrailParams(BaseModel):
     guardrail: Literal["bedrock"] = "bedrock"
     mode: Literal["pre_call"] = "pre_call"
@@ -1363,6 +1340,7 @@ class LiteLLMParamsBody(BaseModel):
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
     drop_params: bool | None = None
+    thought_signature_in_tool_call_id: bool | None = None
     aws_access_key_id: str | None = Field(default=None, repr=False)
     aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None
@@ -1416,7 +1394,7 @@ class LiteLLMParamsBody(BaseModel):
     order: int | None = None
 
 
-ModelMode = Literal["chat", "batch", "realtime", "image_generation"]
+ModelMode = Literal["chat", "embedding", "batch", "realtime", "image_generation"]
 
 
 class TokenCountModelBody(BaseModel, frozen=True):
@@ -1425,6 +1403,7 @@ class TokenCountModelBody(BaseModel, frozen=True):
 
 
 class ModelInfoBody(BaseModel):
+    enforce_supported_endpoints: bool | None = None
     # id is left unset so the proxy assigns a unique model_id per deployment.
     # Pinning it to the model_name made re-registrations of a fixed-name model
     # (e.g. the batch suite's openai-batch) collide on the model_id unique
