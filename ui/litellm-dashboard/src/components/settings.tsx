@@ -421,16 +421,18 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         setAllCallbacks(data.available_callbacks);
 
         let alerts_data = data.alerts;
-        if (alerts_data) {
-          if (alerts_data.length > 0) {
-            let _alert_info = alerts_data[0];
-            let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
-
-            let active_alerts = _alert_info.active_alerts;
-            setActiveAlerts(active_alerts);
-            setCatchAllWebhookURL(catch_all_webhook);
-            setAlertToWebhooks(_alert_info.alerts_to_webhook);
-          }
+        const slack_alert_info = alerts_data?.find(
+          (alert: {
+            name: string;
+            active_alerts?: string[] | null;
+            variables?: { SLACK_WEBHOOK_URL?: string | null } | null;
+            alerts_to_webhook?: Record<string, string> | null;
+          }) => alert.name === "slack",
+        );
+        if (slack_alert_info) {
+          setActiveAlerts(slack_alert_info.active_alerts ?? []);
+          setCatchAllWebhookURL(slack_alert_info.variables?.SLACK_WEBHOOK_URL ?? "");
+          setAlertToWebhooks(slack_alert_info.alerts_to_webhook ?? {});
         }
 
         setAlerts(alerts_data);
@@ -555,6 +557,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       await setCallbacksCall(accessToken, payload);
     } catch (error) {
       toast.fromError(error);
+      return;
     }
     toast.success(t("loggingAndAlerts.alertTypes.toasts.saved"));
   };

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { FormProvider, useForm } from "react-hook-form";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/lib/toast";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall, setCallbacksCall } from "./networking";
 import Settings, { backendCallbackLogoSrc, CallbackSelector } from "./settings";
 
@@ -12,6 +13,10 @@ vi.mock("./networking", () => ({
   serviceHealthCheck: vi.fn(),
   deleteCallback: vi.fn(),
   alertingSettingsCall: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("@/lib/toast", () => ({
+  toast: { success: vi.fn(), fromError: vi.fn() },
 }));
 
 vi.mock("./alerting/alerting_settings", () => ({
@@ -511,6 +516,79 @@ describe("Settings", () => {
         }),
       });
     });
+  });
+
+  it("should allow alert types to be enabled when Slack alerting is not configured", async () => {
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [],
+      available_callbacks: [],
+      alerts: [
+        { name: "email", variables: { EMAIL_ADDRESS: null } },
+        { name: "ms_teams", variables: { MS_TEAMS_WEBHOOK_URL: null } },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<Settings {...defaultProps} />);
+    await user.click(await screen.findByRole("tab", { name: "Alerting Types" }));
+
+    const deprecationWarningsRow = screen.getByRole("row", { name: "Model Deprecation Warnings" });
+    const deprecationWarningsSwitch = within(deprecationWarningsRow).getByRole("switch");
+    await user.click(deprecationWarningsSwitch);
+
+    expect(deprecationWarningsSwitch).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          general_settings: expect.objectContaining({
+            alert_types: ["model_deprecation_warnings"],
+          }),
+        }),
+      );
+    });
+  });
+
+  it("should load alert types and webhook values from the Slack callback row", async () => {
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [],
+      available_callbacks: [],
+      alerts: [
+        { name: "email", variables: { EMAIL_ADDRESS: null } },
+        {
+          name: "slack",
+          active_alerts: ["llm_exceptions"],
+          variables: { SLACK_WEBHOOK_URL: null },
+          alerts_to_webhook: { model_deprecation_warnings: "https://hooks.example.com/dep" },
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<Settings {...defaultProps} />);
+    await user.click(await screen.findByRole("tab", { name: "Alerting Types" }));
+
+    const llmExceptionsRow = screen.getByRole("row", { name: "LLM Exceptions" });
+    const deprecationWarningsRow = screen.getByRole("row", { name: "Model Deprecation Warnings" });
+    expect(within(llmExceptionsRow).getByRole("switch")).toBeChecked();
+    expect(within(deprecationWarningsRow).getByRole("switch")).not.toBeChecked();
+    expect(screen.getByDisplayValue("https://hooks.example.com/dep")).toBeInTheDocument();
+  });
+
+  it("should show an error toast and no success toast when saving alert types fails", async () => {
+    vi.mocked(setCallbacksCall).mockRejectedValueOnce(new Error("save failed"));
+
+    const user = userEvent.setup();
+    render(<Settings {...defaultProps} />);
+    await user.click(await screen.findByRole("tab", { name: "Alerting Types" }));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.fromError)).toHaveBeenCalledWith(expect.any(Error));
+    });
+    expect(vi.mocked(toast.success)).not.toHaveBeenCalled();
   });
 
   it("should hold the callbacks table in loading state until the fetch settles", async () => {
