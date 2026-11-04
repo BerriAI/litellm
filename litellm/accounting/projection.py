@@ -14,7 +14,7 @@ from litellm.constants import (
     MODEL_INSIGHTS_TASK_TAG_PREFIX,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import GuardrailCostByUnitEntry
-from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids, fits_btree_index
+from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.proxy.db.model_usage_rollup import date_from_start_time
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
@@ -27,6 +27,9 @@ _STRINGS: Final = TypeAdapter(tuple[str, ...])
 _VALUES: Final = TypeAdapter(tuple[object, ...])
 _ROWS: Final = TypeAdapter(tuple[dict[str, object], ...])
 _TASK_TYPES: Final = frozenset(load_model_insight_tasks())
+_MAX_INDEXED_TEXT_BYTES: Final = 2000
+_BIGINT_MIN: Final = -(2**63)
+_BIGINT_MAX: Final = 2**63 - 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,10 +62,6 @@ def _tags(row: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(tag for tag in parsed if isinstance(tag, str))
 
 
-def _indexable(value: object) -> object:
-    return value if not isinstance(value, str) or fits_btree_index(value) else None
-
-
 def _date(row: Mapping[str, object]) -> str | None:
     start: Final = row.get("startTime")
     return date_from_start_time(start) if isinstance(start, (datetime, str)) else None
@@ -81,7 +80,7 @@ def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
         ("LiteLLM_UserTable", "user_id", entities.get("proxy_budget_name")),
         ("LiteLLM_TeamTable", "team_id", entities.get("team_id")),
         ("LiteLLM_OrganizationTable", "organization_id", entities.get("organization_id")),
-        ("LiteLLM_EndUserTable", "user_id", _indexable(entities.get("end_user"))),
+        ("LiteLLM_EndUserTable", "user_id", entities.get("end_user")),
         ("LiteLLM_AgentsTable", "agent_id", entities.get("agent_id")),
         ("LiteLLM_ProjectTable", "project_id", entities.get("project_id")),
     )
@@ -197,12 +196,23 @@ def _window_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
 
 def project(row: Mapping[str, object]) -> tuple[Contribution, ...]:
     metadata: Final = _fields(row.get("metadata"))
-    return (
+    contributions: Final = (
         *_entity_contributions(row, metadata),
         *_daily_contributions(row, metadata),
         *_window_contributions(row, metadata),
         *_model_contributions(row, metadata),
         *_guardrail_contributions(row, metadata),
+    )
+    return tuple(contribution for contribution in contributions if _storable(contribution))
+
+
+def _storable(contribution: Contribution) -> bool:
+    """Caller-supplied ids and counters reach every destination, and one Postgres refuses would roll back the
+    request's other charges with it, so a row Postgres cannot index or store is left out on its own."""
+    texts: Final = (value for _, value in (*contribution.key, *contribution.values) if value is not None)
+    numbers: Final = (value for _, value in contribution.increments if isinstance(value, int))
+    return all(len(text.encode("utf-8", "surrogatepass")) <= _MAX_INDEXED_TEXT_BYTES for text in texts) and all(
+        _BIGINT_MIN <= number <= _BIGINT_MAX for number in numbers
     )
 
 

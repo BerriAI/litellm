@@ -431,30 +431,46 @@ def test_guardrail_usage_is_dated_in_utc() -> None:
     ]
 
 
-def test_ids_too_long_for_an_index_still_charge_every_other_entity() -> None:
-    oversized: Final = "x" * 16384
+@pytest.mark.parametrize(
+    ("untrusted", "metadata"),
+    [
+        ({"request_tags": json.dumps(["x" * 16384, "normal"])}, {}),
+        ({"end_user": "x" * 3072}, {}),
+        ({}, {"compression_savings": {"tokens_saved": 2**63}}),
+    ],
+)
+def test_untrusted_analytics_values_never_block_the_charge(
+    untrusted: Mapping[str, str], metadata: Mapping[str, object]
+) -> None:
     row: Final[Mapping[str, object]] = {
-        "request_id": "oversized-ids",
+        "request_id": "untrusted",
         "startTime": _NOW,
         "api_key": "key",
         "user": "user",
         "team_id": "team",
-        "end_user": oversized,
         "model": "unpriced-projection-test",
         "model_group": "group",
         "custom_llm_provider": "openai",
-        "request_tags": json.dumps([oversized, "normal"]),
         "spend": 0.5,
+        **untrusted,
         "metadata": {
-            "accounting_entities": {"api_key": "key", "user": "user", "team_id": "team", "end_user": oversized}
+            **metadata,
+            "accounting_entities": {
+                "api_key": "key",
+                "user": "user",
+                "team_id": "team",
+                "end_user": untrusted.get("end_user"),
+            },
         },
     }
     contributions: Final = project(row)
-    daily_tag_ids: Final = {dict(item.key)["tag"] for item in contributions if item.table == "LiteLLM_DailyTagSpend"}
-    charged_tables: Final = {item.table for item in contributions}
-    assert daily_tag_ids == {"normal"}
-    assert {"LiteLLM_VerificationToken", "LiteLLM_TeamTable", "LiteLLM_DailyUserSpend"} <= charged_tables
-    assert not {"LiteLLM_EndUserTable", "LiteLLM_DailyEndUserSpend"} & charged_tables
+    texts: Final = tuple(value for item in contributions for _, value in (*item.key, *item.values) if value)
+    numbers: Final = tuple(value for item in contributions for _, value in item.increments)
+    assert {"LiteLLM_VerificationToken", "LiteLLM_TeamTable", "LiteLLM_UserTable"} <= {
+        item.table for item in contributions
+    }
+    assert all(len(text.encode()) <= 2000 for text in texts)
+    assert all(-(2**63) <= number < 2**63 for number in numbers)
 
 
 def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> None:
@@ -479,7 +495,12 @@ def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> N
         "guardrail_response": "card 4111 1111 1111 1111",
         "match_details": [{"matched": "4111 1111 1111 1111"}],
     }
-    metadata: Final = {**_FIELDS.validate_json(payload["metadata"]), "guardrail_information": [guardrail]}
+    headroom: Final = {
+        "guardrail_name": "compress",
+        "guardrail_provider": "headroom",
+        "guardrail_response": {"tokens_saved": 7, "compressed_prompt": "card 4111 1111 1111 1111"},
+    }
+    metadata: Final = {**_FIELDS.validate_json(payload["metadata"]), "guardrail_information": [guardrail, headroom]}
     accounting_input: Final[SpendLogsPayload] = {
         **payload,
         "spend": 0.5,
@@ -495,6 +516,8 @@ def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> N
     assert "4111" not in stored
     assert "\\u0000" not in stored
     assert [dict(item.increments) for item in usage_rows] == [{"units": 1, "cost": 0.25, "untracked_units": 0}]
+    daily_user: Final = next(item for item in project(restored) if item.table == "LiteLLM_DailyUserSpend")
+    assert dict(daily_user.increments)["compression_saved_tokens"] == 7
 
 
 @pytest.mark.parametrize("start", [_NOW, "2026-11-02T12:00:00+00:00", "2026-11-02 12:00:00+00:00"])
