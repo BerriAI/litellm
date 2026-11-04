@@ -102,6 +102,7 @@ function chartSourceId(request: ChatCompletionCreateParamsNonStreaming): string 
 const options = () =>
   ({
     access: { mode: "admin" as const },
+    userId: "signed-in-user",
     model: "selected-model",
     accessToken: "test-session",
     inferenceBaseUrl: "https://inference.example",

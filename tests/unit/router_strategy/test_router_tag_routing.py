@@ -1226,6 +1226,32 @@ def test_chain_tag_filtering_override_falls_back_to_healthy_deployments_on_looku
 
 
 @pytest.mark.asyncio()
+async def test_get_deployments_for_tag_without_a_model_keeps_the_router_wide_setting():
+    # model=None names no group, so no group-level enable_tag_filtering applies: the router-wide
+    # setting (off here) decides, even when a healthy deployment opts in on its own
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "api_key": "sk-test", "tags": ["teamA"]},
+                "model_info": {"id": "a", "enable_tag_filtering": True},
+            }
+        ]
+    )
+    healthy_deployments = router.registry().deployments("gpt-4", source="all")
+
+    picked = await get_deployments_for_tag(
+        router._core_ctx,
+        None,  # pyright: ignore[reportArgumentType]  # a direct caller passing no model
+        healthy_deployments,
+        request_kwargs={"metadata": {"tags": ["zzz"]}},
+        request_deployments=healthy_deployments,
+    )
+
+    assert [d["model_info"]["id"] for d in picked] == ["a"]
+
+
+@pytest.mark.asyncio()
 async def test_chain_enable_tag_filtering_true_overrides_router_level_false():
     # Router-wide tag filtering is off; this model group opts in on its own via
     # model_info.enable_tag_filtering, so tags still apply to requests for it.
@@ -2686,7 +2712,7 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_raises_by_default
     router = _quality_high_cost_low_router()
 
     with patch(
-        "litellm.router.async_get_cooldown_deployments",
+        "litellm.router_python_core.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
     ):
         with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
@@ -2711,7 +2737,7 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_falls_open_when_a
     from unittest.mock import AsyncMock, patch
 
     with patch(
-        "litellm.router.async_get_cooldown_deployments",
+        "litellm.router_python_core.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
     ):
         response = await router.acompletion(

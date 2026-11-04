@@ -29,6 +29,7 @@ from openai.types.responses import (
     ResponseOutputRefusal,
     ResponseOutputText,
 )
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -3349,6 +3350,25 @@ class TestGetStructuredMessages:
         result = handler.get_structured_messages(data)
         assert result is None
 
+    def test_should_return_none_for_a_moderation_style_list_of_strings(self):
+        handler = OpenAIResponsesHandler()
+        data = {"model": "omni-moderation-latest", "input": ["safe text", "more safe text"]}
+        assert handler.get_structured_messages(data) is None
+
+    def test_should_keep_an_image_item_replayed_with_an_sdk_compaction_item(self):
+        handler = OpenAIResponsesHandler()
+        image_url = "https://example.com/cat.png"
+        data = {
+            "model": "gpt-5.5",
+            "input": [
+                ResponseCompactionItem(type="compaction", id="cmp_1", encrypted_content="abc"),
+                {"role": "user", "content": [{"type": "input_image", "image_url": image_url}]},
+            ],
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert image_url in json.dumps(result)
+
 
 class ToolAppendingGuardrail(CustomGuardrail):
     """Guardrail that appends a new function tool, mimicking a guardrail that
@@ -4526,6 +4546,34 @@ class TestBuildBlockSseChunks:
         assert completed["model"] == "gpt-5.4-mini-2026-01-01"
         assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
         assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
+
+    def test_continuation_numbers_every_event_after_the_last_one_relayed(self):
+        yielded: Final = [
+            {"type": "response.created", "sequence_number": 0, "response": {"id": "resp_live", "output": []}},
+            {
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": {"id": "msg_orig", "type": "message", "role": "assistant"},
+            },
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 2,
+                "item_id": "msg_orig",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "partial",
+            },
+        ]
+
+        payloads: Final = self._payloads(
+            OpenAIResponsesHandler().build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+
+        assert payloads[-1]["type"] == "response.completed"
+        assert [payload.get("sequence_number") for payload in payloads] == list(range(3, 3 + len(payloads)))
 
     def test_continuation_reads_usage_from_typed_completed_event(self):
         from litellm.types.llms.openai import (

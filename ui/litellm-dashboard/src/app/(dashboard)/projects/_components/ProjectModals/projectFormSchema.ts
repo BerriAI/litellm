@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import i18n from "@/i18n/i18n";
+
 export const ALL_TEAM_MODELS = "all-team-models";
 
 const repeatsEarlierValue = (values: readonly string[], index: number): boolean =>
@@ -39,14 +41,22 @@ export const projectFormSchema = z
     const models = (values.modelLimits ?? []).map((entry) => entry.model);
     models.forEach((_, index) => {
       if (repeatsEarlierValue(models, index)) {
-        ctx.addIssue({ code: "custom", message: "Duplicate model", path: ["modelLimits", index, "model"] });
+        ctx.addIssue({
+          code: "custom",
+          message: i18n.t("projects.form.errors.duplicateModel"),
+          path: ["modelLimits", index, "model"],
+        });
       }
     });
 
     const keys = (values.metadata ?? []).map((entry) => entry.key);
     keys.forEach((_, index) => {
       if (repeatsEarlierValue(keys, index)) {
-        ctx.addIssue({ code: "custom", message: "Duplicate key", path: ["metadata", index, "key"] });
+        ctx.addIssue({
+          code: "custom",
+          message: i18n.t("projects.form.errors.duplicateKey"),
+          path: ["metadata", index, "key"],
+        });
       }
     });
   });
