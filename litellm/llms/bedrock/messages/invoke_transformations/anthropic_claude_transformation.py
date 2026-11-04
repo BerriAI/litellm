@@ -550,6 +550,19 @@ class AmazonAnthropicClaudeMessagesConfig(
             "edits": retained_edits,
         }
 
+    @staticmethod
+    def _add_compaction_beta_for_bedrock_invoke(anthropic_messages_request: dict, beta_set: set) -> None:
+        """
+        A top-level ``compaction`` request needs the ``compact-2026-09-04``
+        anthropic-beta; without it Bedrock answers 400 "compaction: Extra inputs
+        are not permitted". Later requests that adopt the returned block need the
+        same beta, which the caller sends as a header.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+        """
+        if isinstance(anthropic_messages_request.get("compaction"), dict):
+            beta_set.add("compact-2026-09-04")
+
     def strips_beta_gated_fields_from_final_headers(self) -> bool:
         return False
 
@@ -617,6 +630,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request=anthropic_messages_request,
             beta_set=beta_set,
         )
+        self._add_compaction_beta_for_bedrock_invoke(anthropic_messages_request, beta_set)
 
         self._get_tool_search_beta_header_for_bedrock(
             model=model,
