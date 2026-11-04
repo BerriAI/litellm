@@ -1076,6 +1076,28 @@ def test_build_resource_includes_deployment_environment():
     assert resource.attributes["deployment.environment"] == "prod"
 
 
+@pytest.mark.parametrize("sampler", ["always_on", "always_off", "parentbased_always_on"])
+def test_request_exclusion_preserves_configured_sampling(monkeypatch: pytest.MonkeyPatch, sampler: str) -> None:
+    from opentelemetry.trace import NonRecordingSpan, SpanContext, set_span_in_context
+
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER", sampler)
+    provider: Final = providers.build_tracer_provider(OpenTelemetryV2Config(exporter="in_memory"))
+    tracer: Final = provider.get_tracer("request-exclusions")
+    sampled_parent: Final = set_span_in_context(
+        NonRecordingSpan(SpanContext(trace_id=1, span_id=2, is_remote=True, trace_flags=TraceFlags(1)))
+    )
+    try:
+        with ctx_mod.request_trace_scope(True):
+            excluded: Final = tracer.start_span("excluded", context=sampled_parent)
+            assert not excluded.is_recording()
+            excluded.end()
+        included: Final = tracer.start_span("included", context=sampled_parent)
+        assert included.is_recording() == (sampler != "always_off")
+        included.end()
+    finally:
+        provider.shutdown()
+
+
 def test_build_tracer_provider_processor_selection():
     cfg = OpenTelemetryV2Config(exporter="in_memory")
     simple = providers.build_tracer_provider(cfg, exporter=InMemorySpanExporter())

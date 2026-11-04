@@ -5,7 +5,7 @@ Azure Anthropic messages transformation config - extends AnthropicMessagesConfig
 from collections.abc import Sequence
 from typing import Any, Final
 
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -145,6 +145,8 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._normalize_system_role_messages(
+            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+        )
         self._remove_scope_from_cache_control(anthropic_messages_request)
         return anthropic_messages_request
