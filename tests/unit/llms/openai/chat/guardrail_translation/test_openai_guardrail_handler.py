@@ -1514,23 +1514,33 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         """A buffered stream has no finish_reason yet, so the ended path must key off the opt-in.
 
         Dropping ``deliver_ended_stream_rewrites`` from that condition leaves the buffered
-        caller on the in-flight path, where rewrites are never written back.
+        caller on the in-flight path, where rewrites are never written back and the assembled
+        tool calls are never judged.
         """
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         class PathProbe(CustomGuardrail):
             saw_assembled_response: bool = False
+            saw_tool_calls: object = None
 
             async def apply_guardrail(
                 self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
                 input_type: Literal["request", "response"], logging_obj: object = None,
             ) -> GenericGuardrailAPIInputs:
                 type(self).saw_assembled_response = isinstance(request_data.get("response"), ModelResponse)
+                type(self).saw_tool_calls = inputs.get("tool_calls")
                 return inputs
 
         chunks: Final = [
             ModelResponseStream(
-                choices=[StreamingChoices(index=0, delta=Delta(content="secret"), finish_reason=None)]
+                choices=[StreamingChoices(
+                    index=0,
+                    delta=Delta(content="secret", tool_calls=[
+                        {"index": 0, "id": "call_0", "type": "function",
+                         "function": {"name": "weather", "arguments": '{"city": "Paris"}'}},
+                    ]),
+                    finish_reason=None,
+                )]
             )
         ]
         assert OpenAIChatCompletionsHandler()._first_choice_has_finished(chunks) is False
@@ -1541,6 +1551,9 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
             deliver_ended_stream_rewrites=True,
         )
         assert PathProbe.saw_assembled_response is True
+        assert [
+            call["function"]["arguments"] for call in PathProbe.saw_tool_calls or ()
+        ] == ['{"city": "Paris"}']
 
     @pytest.mark.asyncio
     async def test_diff_mode_keeps_each_choice_holdback_with_two_choices(self) -> None:
