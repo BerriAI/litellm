@@ -75,6 +75,11 @@ SMALL: Final[tuple[AgentCases, ...]] = (
         vertex_ai.CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE,
     ),
     (
+        vertex_ai.CLAUDE_HAIKU_5_5_AGENT_TEST_CASE,
+        vertex_ai.CLAUDE_HAIKU_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
         openai.GPT_5_MINI_TEST_CASE,
         openai.GPT_5_MINI_AGENT_FOLLOWUP_TEST_CASE,
         openai.GPT_5_MINI_AGENT_STREAMING_TEST_CASE,
@@ -270,6 +275,11 @@ HIGH: Final[tuple[AgentCases, ...]] = (
         vertex_ai.GEMINI_4_ARGON_AGENT_TEST_CASE,
         vertex_ai.GEMINI_4_ARGON_AGENT_FOLLOWUP_TEST_CASE,
         vertex_ai.GEMINI_4_ARGON_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        gemini.GEMINI_4_ARGON_AGENT_TEST_CASE,
+        gemini.GEMINI_4_ARGON_AGENT_FOLLOWUP_TEST_CASE,
+        gemini.GEMINI_4_ARGON_AGENT_STREAMING_TEST_CASE,
     ),
     (
         openai.GPT_6_ASTRA_AGENT_TEST_CASE,
