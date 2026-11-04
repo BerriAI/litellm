@@ -1022,7 +1022,11 @@ async def test_usage_based_v2_override_stays_scoped_to_the_request_that_asked_fo
             await _mock_completion(router, routing_strategy="usage-based-routing-v2")
 
 
-def test_sync_usage_based_v2_override_stays_scoped_to_the_request_that_asked_for_it():
+def test_sync_usage_based_v2_override_stays_scoped_to_the_request_that_asked_for_it(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
+        lambda: datetime.datetime(2026, 1, 1, 12, 0, 30, tzinfo=datetime.timezone.utc),
+    )
     router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle", num_retries=0)
     messages = [{"role": "user", "content": "hi"}]
 
