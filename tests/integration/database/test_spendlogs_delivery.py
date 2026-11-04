@@ -655,3 +655,26 @@ def test_downgrade_command_requires_operator_attestations_and_settled_deliveries
     assert delivery_database.execute('SELECT request_id, state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
         ("downgrade", state)
     ]
+
+
+@pytest.mark.parametrize("disabled_logs", [False, True])
+@pytest.mark.asyncio
+async def test_buffered_batch_charge_takes_over_its_zero_cost_receipt(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma, disabled_logs: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.repositories.table_repositories import SpendLogsRepository
+
+    polled: Final = {**_row("buffered_batch"), "spend": 0.0, "call_type": "aretrieve_batch", "status": "success"}
+    _insert(delivery_database, (polled,))
+    delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET state = \'applied\'::"AccountingDeliveryState"')
+    charged: Final = _with_payload({**polled, "spend": 1.0})
+    buffered: Final = {**charged, "accounting_log_disabled": True} if disabled_logs else charged
+    repository: Final = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
+
+    assert await repository.insert_with_deliveries((buffered,)) == 1
+    assert await repository.insert_with_deliveries((buffered,)) == 0
+    assert delivery_database.execute(
+        'SELECT state::text, accounting_payload->>\'spend\' FROM "LiteLLM_SpendLogDelivery"'
+    ).fetchall() == [("pending", "1.0")]
