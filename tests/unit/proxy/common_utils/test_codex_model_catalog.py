@@ -14,6 +14,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockModel,
     CodexStockUpgrade,
     bundled_codex_models,
+    codex_base_instructions,
     codex_catalog_openai_key,
     codex_catalog_rows,
     codex_model_list_body,
@@ -673,6 +674,25 @@ def test_unlimited_body_keeps_every_entry():
     assert CODEX_CATALOG_BYTE_LIMIT == 1024 * 1024
 
 
+@pytest.mark.parametrize(
+    ("client_version", "capped"),
+    [(None, True), ("0.165.0", True), ("0.166.0", False), ("0.167.0-alpha.4", False), ("not-a-version", True)],
+)
+def test_the_catalog_is_cut_at_the_byte_limit_only_for_a_codex_that_enforces_one(
+    client_version: str | None, capped: bool
+) -> None:
+    names: Final = tuple(
+        f"chat-model-{index}" for index in range(CODEX_CATALOG_BYTE_LIMIT // len(codex_base_instructions()) + 2)
+    )
+    listing: Final = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "x", "mode": "chat"} for name in names
+    )
+    body: Final = codex_model_list_body(listing, tuple((name, name) for name in names), None, client_version=client_version)
+    slugs: Final = [entry["slug"] for entry in json.loads(body)["models"]]
+    assert (len(body.encode()) <= CODEX_CATALOG_BYTE_LIMIT) is capped, len(body.encode())
+    assert (slugs == list(names)) is not capped, slugs
+
+
 def test_vendored_codex_catalog_entries_decode_on_codex():
     """Every stock entry served keeps the `model_messages` Codex's `ModelsResponse` decoder
     needs in place of `base_instructions`, and the catalog is read from the vendored file."""
@@ -969,6 +989,21 @@ def test_the_catalog_key_is_the_listed_openai_deployments_key_before_the_environ
     entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(3)]
     assert codex_catalog_openai_key(router, entries) == "sk-from-secret-ref"
     assert codex_catalog_openai_key(router, entries[:1]) == "sk-from-env"
+
+
+def test_a_bare_openai_model_name_supplies_its_key_and_a_bare_alias_of_another_provider_does_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    router: Final = _router_with(
+        {"model": "claude-sonnet-4-5", "api_key": "sk-ant-bare-alias"},
+        {"model": "gpt-5.5", "api_key": "sk-bare-openai"},
+        {"model": "gpt-5.5", "custom_llm_provider": "azure", "api_key": "sk-azure-bare"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(3)]
+    assert codex_catalog_openai_key(router, entries) == "sk-bare-openai"
+    assert codex_catalog_openai_key(router, entries[:1]) is None
+    assert codex_catalog_openai_key(router, entries[2:]) is None
 
 
 def test_the_catalog_key_is_absent_without_an_openai_deployment_or_environment_key(

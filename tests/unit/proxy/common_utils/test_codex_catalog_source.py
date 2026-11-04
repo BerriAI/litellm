@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections import ChainMap
 from collections.abc import Mapping
 from typing import Final
 
@@ -19,6 +20,7 @@ from litellm.proxy.common_utils.codex_catalog_source import (
 from litellm.proxy.common_utils.codex_model_catalog import (
     CodexCatalogRow,
     CodexStockModel,
+    codex_base_instructions,
     codex_models_response_json,
 )
 
@@ -78,6 +80,7 @@ def _fetching_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LITELLM_LOCAL_CODEX_CATALOG", raising=False)
     monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
     monkeypatch.delenv("LITELLM_CODEX_CATALOG_BASE_URL", raising=False)
+    monkeypatch.delenv("LITELLM_CODEX_CATALOG_OPENAI_URL", raising=False)
 
 
 def _source(
@@ -121,29 +124,61 @@ def test_a_release_is_fetched_once_and_concurrent_requests_share_the_fetch() -> 
     source: Final = _source(tree)
 
     async def burst() -> list[str]:
-        stocks = await asyncio.gather(*(source.stock(RELEASE) for _ in range(5)))
-        again = await source.stock(RELEASE)
+        stocks: Final = await asyncio.gather(*(source.stock(RELEASE) for _ in range(5)))
+        again: Final = await source.stock(RELEASE)
         return [stock.source for stock in (*stocks, again)]
 
     assert asyncio.run(burst()) == [f"github rust-v{RELEASE}"] * 6
     assert len(tree.calls) == 2, tree.calls
 
 
-def test_a_release_without_a_tag_serves_the_vendored_pair_and_is_retried_after_the_window() -> None:
+def test_a_release_without_a_tag_serves_the_vendored_pair_and_is_fetched_again_behind_it_after_the_window() -> None:
     tree: Final = _RawTree({})
     clock: Final = _Clock()
     source: Final = _source(tree, clock, retry_seconds=300)
-    first: Final = asyncio.run(source.stock(RELEASE))
-    assert first.source == vendored_codex_stock().source and first.models == vendored_codex_stock().models
-    assert _entry(first.models, first.instructions, FRESH_SLUG)["shell_type"] == "unified_exec"
-    calls_after_first = len(tree.calls)
-    clock.now += 299
-    assert asyncio.run(source.stock(RELEASE)).source == first.source
-    assert len(tree.calls) == calls_after_first, "a failed fetch was retried inside its window"
-    clock.now += 2
-    tree.replies = _tree(RELEASE)
-    assert asyncio.run(source.stock(RELEASE)).source == f"github rust-v{RELEASE}"
-    assert len(tree.calls) > calls_after_first, "a failed fetch was never retried"
+    vendored: Final = vendored_codex_stock().source
+
+    async def scenario() -> tuple[str, ...]:
+        first: Final = await source.stock(RELEASE)
+        assert first.models == vendored_codex_stock().models
+        assert _entry(first.models, first.instructions, FRESH_SLUG)["shell_type"] == "unified_exec"
+        calls_after_first: Final = len(tree.calls)
+        clock.now += 299
+        inside_window: Final = await source.stock(RELEASE)
+        assert len(tree.calls) == calls_after_first, "a failed fetch was retried inside its window"
+        clock.now += 2
+        tree.replies = _tree(RELEASE)
+        past_window: Final = await source.stock(RELEASE)
+        await asyncio.gather(*(asyncio.all_tasks() - {asyncio.current_task()}))
+        refetched: Final = await source.stock(RELEASE)
+        return first.source, inside_window.source, past_window.source, refetched.source
+
+    assert asyncio.run(asyncio.wait_for(scenario(), timeout=30)) == (
+        vendored,
+        vendored,
+        vendored,
+        f"github rust-v{RELEASE}",
+    )
+
+
+def test_fetches_past_the_budget_inside_one_window_serve_the_vendored_pair_without_a_fetch() -> None:
+    tree: Final = _RawTree({})
+    clock: Final = _Clock()
+    source: Final = _source(tree, clock, retry_seconds=300, cached_versions=2)
+
+    async def scenario() -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+        await source.stock("0.150.0")
+        await source.stock("0.151.0")
+        over_budget: Final = await source.stock("0.152.0")
+        calls_inside_window: Final = tuple(tree.calls)
+        clock.now += 301
+        await source.stock("0.152.0")
+        return over_budget.source, calls_inside_window, tuple(tree.calls)
+
+    over_budget, calls_inside_window, calls = asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+    assert over_budget == vendored_codex_stock().source
+    assert not any("0.152.0" in url for url in calls_inside_window), calls_inside_window
+    assert any("0.152.0" in url for url in calls), calls
 
 
 @pytest.mark.parametrize(
@@ -207,7 +242,7 @@ def test_local_and_offline_settings_keep_the_vendored_pair_without_a_fetch(
 
 def test_the_base_url_setting_points_the_fetch_at_a_mirror(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_CODEX_CATALOG_BASE_URL", "http://mirror.internal/codex/")
-    mirrored = {
+    mirrored: Final = {
         url.replace(CODEX_CATALOG_BASE_URL, "http://mirror.internal/codex"): reply
         for url, reply in _tree(RELEASE).items()
     }
@@ -217,19 +252,19 @@ def test_the_base_url_setting_points_the_fetch_at_a_mirror(monkeypatch: pytest.M
 
 
 def test_the_cache_keeps_only_the_newest_releases() -> None:
-    versions = ("0.164.0", "0.165.0", "0.166.0")
-    tree: Final = _RawTree({url: reply for version in versions for url, reply in _tree(version).items()})
-    source: Final = _source(tree, cached_versions=2)
+    versions: Final = ("0.164.0", "0.165.0", "0.166.0")
+    tree: Final = _RawTree(ChainMap(*map(_tree, versions)))
+    clock: Final = _Clock()
+    source: Final = _source(tree, clock, retry_seconds=300, cached_versions=2)
 
     async def walk() -> None:
-        for version in versions:
+        for version in (*versions, versions[-1], versions[0]):
+            clock.now += 301
             await source.stock(version)
-        await source.stock(versions[-1])
-        await source.stock(versions[0])
 
     asyncio.run(walk())
-    oldest_models_url = next(url for url in _tree(versions[0]) if url.endswith("models.json"))
-    newest_models_url = next(url for url in _tree(versions[-1]) if url.endswith("models.json"))
+    oldest_models_url: Final = next(url for url in _tree(versions[0]) if url.endswith("models.json"))
+    newest_models_url: Final = next(url for url in _tree(versions[-1]) if url.endswith("models.json"))
     assert tree.calls.count(oldest_models_url) == 2, tree.calls
     assert tree.calls.count(newest_models_url) == 1, tree.calls
 
@@ -247,7 +282,7 @@ def test_an_openai_key_fetches_the_live_catalog_from_openai_with_that_key_and_sk
     tree: Final = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (200, OPENAI_CATALOG)})
     stock: Final = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
     entry: Final = _entry(stock.models, stock.instructions, FRESH_SLUG)
-    assert stock.source == f"openai {RELEASE}" and stock.instructions == "# OpenAI live prompt", stock.source
+    assert stock.source == f"openai {RELEASE}" and stock.instructions == codex_base_instructions(), stock.source
     assert entry["shell_type"] == "unified_exec", entry
     assert tree.calls == [_openai_url(RELEASE)] and tree.headers == [{"Authorization": f"Bearer {OPENAI_KEY}"}]
 
@@ -258,6 +293,16 @@ def test_a_refused_openai_fetch_falls_back_to_the_release_tag_on_github(status: 
     stock: Final = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
     assert stock.source == f"github rust-v{RELEASE}" and FRESH_SLUG in stock.models
     assert tree.calls[0] == _openai_url(RELEASE) and sorted(tree.calls[1:]) == sorted(_tree(RELEASE)), tree.calls
+
+
+def test_an_empty_openai_url_setting_keeps_the_key_home_and_fetches_from_github(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_CODEX_CATALOG_OPENAI_URL", "")
+    tree: Final = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (200, OPENAI_CATALOG)})
+    stock: Final = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
+    assert stock.source == f"github rust-v{RELEASE}"
+    assert sorted(tree.calls) == sorted(_tree(RELEASE)) and tree.headers == [None, None], tree.calls
 
 
 def test_without_an_openai_key_openai_is_never_asked() -> None:

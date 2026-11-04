@@ -8,9 +8,12 @@ parallel tool calls, a generic prompt). openai/codex publishes every release's e
 fetched once and kept for the life of the process, since a release tag never changes. A version without a
 tag (before 0.120, or not released yet), a fetch that fails, a body that does not parse, a request the
 fetch outlasts by ``CODEX_CATALOG_RESPONSE_DEADLINE_SECONDS`` (Codex gives up on its catalog after five),
-``LITELLM_OFFLINE_MODE`` and ``LITELLM_LOCAL_CODEX_CATALOG=True`` all serve the vendored pair instead, a
-failed fetch again after ``CODEX_CATALOG_RETRY_SECONDS``. ``LITELLM_CODEX_CATALOG_BASE_URL`` points the
-fetch at a mirror of the openai/codex raw tree.
+``LITELLM_OFFLINE_MODE`` and ``LITELLM_LOCAL_CODEX_CATALOG=True`` all serve the vendored pair instead. A
+failed fetch is tried again in the background after ``CODEX_CATALOG_RETRY_SECONDS`` while its vendored pair
+keeps answering, and at most ``CODEX_CATALOG_CACHED_VERSIONS`` fetches start per retry window, so made-up
+versions cannot turn requests into outbound calls. ``LITELLM_CODEX_CATALOG_BASE_URL`` points the fetch at a
+mirror of the openai/codex raw tree, and an empty ``LITELLM_CODEX_CATALOG_OPENAI_URL`` keeps the OpenAI key
+home by skipping OpenAI's catalog.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import asyncio
 import os
 import re
 import time
-from collections import Counter, OrderedDict
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import cache
@@ -44,7 +47,7 @@ CODEX_CATALOG_OPENAI_URL: Final = "https://chatgpt.com/backend-api/codex/models"
 CODEX_CATALOG_BASE_URL: Final = "https://raw.githubusercontent.com/openai/codex"
 CODEX_CATALOG_RETRY_SECONDS: Final = 300.0
 CODEX_CATALOG_FETCH_TIMEOUT_SECONDS: Final = 10.0
-CODEX_CATALOG_RESPONSE_DEADLINE_SECONDS: Final = 4.0
+CODEX_CATALOG_RESPONSE_DEADLINE_SECONDS: Final = 3.0
 CODEX_CATALOG_MAX_BYTES: Final = 16 * 1024 * 1024
 CODEX_CATALOG_CACHED_VERSIONS: Final = 16
 _RELEASE_VERSION: Final = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$")
@@ -139,6 +142,7 @@ class CodexCatalogSource:
         self._cached_versions = cached_versions
         self._cache: OrderedDict[_CacheSlot, _Cached] = OrderedDict()  # mutable-ok: filled as releases are asked for
         self._pending: dict[_CacheSlot, asyncio.Task[CodexStock]] = {}  # mutable-ok: the fetches in flight
+        self._fetch_starts: tuple[float, ...] = ()
 
     async def stock(self, client_version: str | None, *, openai_api_key: str | None = None) -> CodexStock:
         """The catalog for ``client_version``: OpenAI's live one when an OpenAI key is at hand,
@@ -148,24 +152,37 @@ class CodexCatalogSource:
             return vendored_codex_stock()
         slot: Final = (tag, openai_api_key)
         cached: Final = self._cache.get(slot)
-        if cached is not None and (cached.retry_at is None or cached.retry_at > self._clock()):
+        if cached is not None:
             self._cache.move_to_end(slot)
+            if cached.retry_at is not None and cached.retry_at <= self._clock():
+                self._fetching(slot, tag, client_version, openai_api_key)
             return cached.stock
+        fetch: Final = self._fetching(slot, tag, client_version, openai_api_key)
+        return vendored_codex_stock() if fetch is None else await self._within_deadline(tag, fetch)
+
+    def _fetching(
+        self, slot: _CacheSlot, tag: str, version: str, openai_api_key: str | None
+    ) -> asyncio.Task[CodexStock] | None:
         pending: Final = self._pending.get(slot)
         if pending is not None:
-            return await self._within_deadline(tag, pending)
-        if len(self._pending) >= self._cached_versions:
+            return pending
+        now: Final = self._clock()
+        recent: Final = tuple(start for start in self._fetch_starts if start > now - self._retry_seconds)
+        if len(recent) >= self._cached_versions:
             verbose_proxy_logger.warning(
-                "Codex catalog %s not fetched, %d fetches already in flight, serving the %s one",
+                "Codex catalog %s not fetched, %d fetches started in the last %.0fs, serving the %s one",
                 tag,
-                len(self._pending),
+                len(recent),
+                self._retry_seconds,
                 vendored_codex_stock().source,
             )
-            return vendored_codex_stock()
-        task: Final = asyncio.ensure_future(self._resolve(slot, tag, client_version, openai_api_key))
+            self._fetch_starts = recent
+            return None
+        self._fetch_starts = (*recent, now)
+        task: Final = asyncio.ensure_future(self._resolve(slot, tag, version, openai_api_key))
         self._pending[slot] = task
         task.add_done_callback(lambda _: self._pending.pop(slot, None))
-        return await self._within_deadline(tag, task)
+        return task
 
     async def _within_deadline(self, tag: str, fetch: asyncio.Task[CodexStock]) -> CodexStock:
         done, _ = await asyncio.wait((fetch,), timeout=self._response_deadline)
@@ -205,7 +222,7 @@ class CodexCatalogSource:
         return entry.stock
 
     async def _fetch(self, tag: str, version: str, openai_api_key: str | None) -> CodexStock | _FetchFailed:
-        if openai_api_key:
+        if openai_api_key and self._openai_url:
             fetched: Final = await self._fetch_openai(version, openai_api_key)
             if not isinstance(fetched, _FetchFailed):
                 return fetched
@@ -223,12 +240,11 @@ class CodexCatalogSource:
             catalog: Final = CodexStockCatalog.model_validate_json(body)
         except ValidationError as error:
             return _FetchFailed(reason=f"{url} body does not parse: {type(error).__name__}")
-        prompts: Final = Counter(model.base_instructions for model in catalog.models if model.base_instructions.strip())
-        if not catalog.models or not prompts:
+        if not catalog.models:
             return _FetchFailed(reason=f"{url} catalog is empty")
         return CodexStock(
             models=MappingProxyType({model.slug: model for model in catalog.models}),
-            instructions=prompts.most_common(1)[0][0],
+            instructions=codex_base_instructions(),
             source=f"openai {version}",
         )
 

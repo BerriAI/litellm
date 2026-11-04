@@ -56,6 +56,7 @@ _TierId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 _BODY_PREFIX: Final = '{"models":['
 _BODY_SUFFIX: Final = "]}"
 _FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = Version("0.138.0")
+_FIRST_CODEX_WITHOUT_CATALOG_BYTE_LIMIT: Final = Version("0.166.0")
 _EFFORTS_EVERY_CODEX_PARSES: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
 _PREFERRED_DEFAULT_EFFORT: Final = "medium"
 _CODEX_UNSET_EFFORT: Final = "none"
@@ -316,6 +317,18 @@ def _parses_custom_efforts(client_version: str | None) -> bool:
         return False
 
 
+def codex_catalog_byte_limit(client_version: str | None) -> int | None:
+    """The cap the asking Codex puts on a `model_catalog_url` body: 1 MiB through 0.165, none from 0.166.0,
+    which dropped it (openai/codex#56525)."""
+    try:
+        uncapped: Final = (
+            client_version is not None and Version(client_version) >= _FIRST_CODEX_WITHOUT_CATALOG_BYTE_LIMIT
+        )
+    except ValueError:
+        return CODEX_CATALOG_BYTE_LIMIT
+    return None if uncapped else CODEX_CATALOG_BYTE_LIMIT
+
+
 def codex_reasoning_levels(
     efforts: Sequence[str], client_version: str | None
 ) -> tuple[tuple[CodexFallbackReasoningLevel, ...], str | None]:
@@ -511,8 +524,8 @@ def codex_models_response_json(
     """Codex's `ModelsResponse` body for `rows`, in listing order, cut to Codex's byte limit.
 
     Only chat-capable rows are listed (Codex cannot drive an embedding or image model, and a
-    wildcard id is no model), their order is their `priority`. Codex drops a catalog over its
-    byte limit silently and keeps its bundled one, so the body holds only the entries that fit,
+    wildcard id is no model), their order is their `priority`. Codex before 0.166.0 drops a catalog over
+    its byte limit silently and keeps its bundled one, so the body holds only the entries that fit,
     the ones offering a service tier taken first and the rest in listing order, an entry too large
     for the bytes left passed over, every kept entry at its listing position; `byte_limit=None`
     keeps every entry. A row whose deployments set `model_info.max_input_tokens` gets the smallest
@@ -586,13 +599,28 @@ def _is_openai_origin(api_base: object) -> bool:
     return host is not None and (host == OPENAI_API_HOST or host.endswith(f".{OPENAI_HOST_SUFFIX}"))
 
 
+def _deployment_provider(params: Mapping[str, object]) -> str:
+    """The provider litellm routes a deployment to: its `custom_llm_provider`, else its model's prefix, else
+    `openai` for a bare OpenAI model name such as `gpt-5.5`."""
+    import litellm  # noqa: PLC0415  # litellm imports this module while it is initializing
+
+    custom: Final = params.get("custom_llm_provider")
+    model: Final = params.get("model")
+    if isinstance(custom, str) and custom:
+        return custom
+    if not isinstance(model, str):
+        return ""
+    prefix, slash, _ = model.partition("/")
+    if slash:
+        return prefix
+    return "openai" if model in litellm.open_ai_chat_completion_models else ""
+
+
 def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
     params: Final = MappingProxyType[str, object](deployment["litellm_params"])
-    model: Final = params.get("model")
-    provider: Final = params.get("custom_llm_provider") or (model.partition("/")[0] if isinstance(model, str) else "")
     api_key: Final = params.get("api_key")
     if (
-        provider != "openai"
+        _deployment_provider(params) != "openai"
         or not _is_openai_origin(params.get("api_base"))
         or not isinstance(api_key, str)
         or not api_key
@@ -615,7 +643,7 @@ def codex_catalog_openai_key(
     team_id: str | None = None,
 ) -> str | None:
     """The OpenAI API key the catalog fetch authenticates with: the first one among the listed entries'
-    deployments that is `openai/` with no api_base or OpenAI's own, else ``OPENAI_API_KEY`` from the
+    deployments that routes to OpenAI with no api_base or OpenAI's own, else ``OPENAI_API_KEY`` from the
     environment unless ``OPENAI_BASE_URL`` points elsewhere. A key for an OpenAI-compatible server never
     leaves for OpenAI."""
     registry: Final = llm_router.registry() if llm_router is not None else None
@@ -672,6 +700,7 @@ def codex_model_list_body(
         codex_catalog_rows(rows, entries, llm_router, team_id, label_entries),
         stock=stock.models if stock is not None else None,
         instructions=stock.instructions if stock is not None else None,
+        byte_limit=codex_catalog_byte_limit(client_version),
         client_version=client_version,
     )
     if body.left_out:
