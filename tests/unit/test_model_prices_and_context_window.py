@@ -279,6 +279,10 @@ def test_azure_rows_price_web_search_when_their_openai_model_does(prices: dict):
 PRIORITY_SUFFIX: Final = "_priority"
 MIN_PRIORITY_MARKUP: Final = 1.0
 MAX_PRIORITY_MARKUP: Final = 5.0
+# Vertex pricing, verified 2026-11-03: https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing
+VERIFIED_PRIORITY_MARKUP_MAXIMA: Final = MappingProxyType(
+    {("gemini-2.5-flash", "input_cost_per_audio_token_above_200k_tokens_priority"): 6.0}
+)
 
 
 def _rate(value: JsonValue | None) -> float | None:
@@ -312,7 +316,7 @@ def test_priority_rates_stay_within_a_premium_of_their_standard_rate(path: Path)
     overpriced: Final = tuple(
         f"{name}.{key} is {markup:.1f}x its standard rate"
         for name, key, markup in markups
-        if not MIN_PRIORITY_MARKUP <= markup <= MAX_PRIORITY_MARKUP
+        if not MIN_PRIORITY_MARKUP <= markup <= VERIFIED_PRIORITY_MARKUP_MAXIMA.get((name, key), MAX_PRIORITY_MARKUP)
     )
     assert overpriced == (), (
         "a priority rate is a premium on the standard rate, so one below it or far above it was likely copied from "

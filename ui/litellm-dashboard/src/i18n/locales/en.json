@@ -8801,6 +8801,7 @@
         "badGateway": "Bad Gateway",
         "serviceUnavailable": "Service Unavailable",
         "gatewayTimeout": "Gateway Timeout",
+        "overloaded": "Overloaded",
         "notRecorded": "Not recorded",
         "serverError": "Server Error",
         "clientError": "Client Error",
