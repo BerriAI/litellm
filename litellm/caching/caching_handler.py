@@ -1000,6 +1000,7 @@ class LLMCachingHandler:
                 cached_result = convert_to_model_response_object(
                     response_object=cached_result,
                     model_response_object=ModelResponse(),
+                    _preserve_finish_reason=True,
                 )
         if (
             call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value
@@ -1073,6 +1074,7 @@ class LLMCachingHandler:
                     cached_result = convert_to_model_response_object(
                         response_object=cached_result,
                         model_response_object=ModelResponse(),
+                        _preserve_finish_reason=True,
                     )
             else:
                 from litellm.responses.streaming_iterator import (
