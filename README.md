@@ -83,3 +83,29 @@ Source 58120baf64cc37e45e36696dbdf77a8a989e7e1f. Menu rows share one text edge a
 
 ![workspace-menu-after-light.png](workspace-menu-after-light.png)
 
+## Workspace trigger and mobile worker follow-up
+
+Source cd5ad06a0794d425fc3d528efdc4a2b6123c4083
+
+The workspace trigger is now text-only. The collapsed sidebar retains its chevron and accessible workspace name. Removed the redundant DeploymentHealthLink comment
+
+The mobile worker images use an isolated browser fixture rendering the actual DashboardHeader, WorkerDropdown, notification, theme and warning components with synthetic worker and warning data. No real worker connection or authentication switch was performed. Before uses the header at 58120baf64 with equivalent fixture data and CSS. At 390px the document width changed from 423px to 390px; after also fits 320, 680, 880 and 1040px. Browser search filtered to QA worker; the component test verifies the selected worker ID callback and disables the current worker
+
+The 180px worker input minimum also exists on main 527d882508. The old main navbar was inspected in source but was not browser-reproduced under this fixture, so these screenshots establish the fix on the PR rather than the origin of the layout limitation
+
+Validation: 80 focused tests, production TypeScript, make check and outgoing secret scans passed
+
+![workspace-no-icons-dark.png](workspace-no-icons-dark.png)
+
+![workspace-no-icons-light.png](workspace-no-icons-light.png)
+
+![workspace-no-icons-collapsed.png](workspace-no-icons-collapsed.png)
+
+![header-worker-before-mobile.jpg](header-worker-before-mobile.jpg)
+
+![header-worker-after-mobile.jpg](header-worker-after-mobile.jpg)
+
+![header-worker-search-mobile.jpg](header-worker-search-mobile.jpg)
+
+![header-worker-after-mobile-light.jpg](header-worker-after-mobile-light.jpg)
+
