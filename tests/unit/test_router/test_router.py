@@ -10548,7 +10548,12 @@ class TestBackgroundResponseCostPollCooldown:
                     "model_name": "gpt-4.1",
                     "litellm_params": {"model": "openai/gpt-4.1"},
                     "model_info": {"id": "dep-1"},
-                }
+                },
+                {
+                    "model_name": "gpt-4.1",
+                    "litellm_params": {"model": "openai/gpt-4.1"},
+                    "model_info": {"id": "dep-2"},
+                },
             ],
             allowed_fails=0,
         )
@@ -10676,7 +10681,12 @@ class TestCallerTimeoutCooldown:
                     "model_name": "slow-model",
                     "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
                     "model_info": {"id": "dep-1"},
-                }
+                },
+                {
+                    "model_name": "slow-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "dep-2"},
+                },
             ],
             allowed_fails=0,
             cooldown_time=120,
