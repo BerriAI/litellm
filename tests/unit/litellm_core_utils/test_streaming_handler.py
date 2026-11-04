@@ -1256,7 +1256,12 @@ async def test_bridged_stream_mid_stream_fallback_error_is_rebuilt_around_the_pr
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("merge_reasoning", [True, False], ids=["merged_into_content", "kept_as_reasoning"])
-async def test_mid_stream_break_after_reasoning_disqualifies_continuation(logging_obj: Logging, merge_reasoning: bool):
+@pytest.mark.parametrize(
+    "leading_delta", [{"reasoning_content": "Let me think"}, {"refusal": "I can't"}], ids=["reasoning", "refusal"]
+)
+async def test_mid_stream_break_after_reasoning_or_refusal_disqualifies_continuation(
+    logging_obj: Logging, merge_reasoning: bool, leading_delta: dict[str, str]
+):
     import httpx
 
     from litellm.exceptions import MidStreamFallbackError
@@ -1265,7 +1270,7 @@ async def test_mid_stream_break_after_reasoning_disqualifies_continuation(loggin
         def __init__(self) -> None:
             self.chunks = iter(
                 (
-                    ModelResponseStream(choices=[{"index": 0, "delta": {"reasoning_content": "Let me think"}}]),
+                    ModelResponseStream(choices=[{"index": 0, "delta": leading_delta}]),
                     ModelResponseStream(choices=[{"index": 0, "delta": {"content": "The answer"}}]),
                 )
             )
@@ -1646,17 +1651,40 @@ async def test_stream_with_null_choices_chunk_finishes_normally(
     assert [choice.finish_reason for choice in streamed_choices if choice.finish_reason] == ["stop"]
 
 
+_REFUSAL_PIECES: Final = ("I'm", " sorry", ", but", " I can't", " help", " with", " that", ".")
+_REFUSAL_STREAMS: Final = MappingProxyType(
+    {
+        "refusal_only": (
+            ({"role": "assistant", "content": None, "refusal": ""}, None),
+            *(({"refusal": piece}, None) for piece in _REFUSAL_PIECES),
+            ({}, "stop"),
+        ),
+        "empty_refusal_beside_text": (
+            ({"role": "assistant", "content": "", "refusal": ""}, None),
+            ({"content": "", "refusal": ""}, None),
+            ({"content": "Hi", "refusal": ""}, None),
+            ({"content": "", "refusal": ""}, None),
+            ({}, "stop"),
+        ),
+    }
+)
+
+
 @pytest.mark.parametrize("async_stream", [False, True])
 @pytest.mark.parametrize("transport", ["sdk", "http_handler"])
-async def test_stream_with_refusal_only_chunks_delivers_refusal(
-    async_stream: bool, transport: str, logging_obj: Logging
+@pytest.mark.parametrize(
+    "stream_name,expected_refusal,expected_content",
+    [("refusal_only", "".join(_REFUSAL_PIECES), ""), ("empty_refusal_beside_text", "", "Hi")],
+)
+async def test_stream_forwards_refusal_text_without_empty_chunks(
+    async_stream: bool,
+    transport: str,
+    stream_name: str,
+    expected_refusal: str,
+    expected_content: str,
+    logging_obj: Logging,
 ) -> None:
-    refusal_pieces: Final = ("I'm", " sorry", ", but", " I can't", " help", " with", " that", ".")
-    deltas: Final = (
-        ({"role": "assistant", "content": None, "refusal": ""}, None),
-        *(({"refusal": piece}, None) for piece in refusal_pieces),
-        ({}, "stop"),
-    )
+    deltas: Final = _REFUSAL_STREAMS[stream_name]
     body: Final = (
         "".join(
             "data: "
@@ -1709,10 +1737,13 @@ async def test_stream_with_refusal_only_chunks_delivers_refusal(
             client.close()
 
     streamed_choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
-    assert "".join(getattr(choice.delta, "refusal", None) or "" for choice in streamed_choices) == "".join(
-        refusal_pieces
-    )
+    assert "".join(getattr(choice.delta, "refusal", None) or "" for choice in streamed_choices) == expected_refusal
+    assert "".join(choice.delta.content or "" for choice in streamed_choices) == expected_content
     assert [choice.finish_reason for choice in streamed_choices if choice.finish_reason] == ["stop"]
+    assert all(
+        choice.delta.role or choice.delta.content or getattr(choice.delta, "refusal", None) or choice.finish_reason
+        for choice in streamed_choices
+    )
 
 
 def _token_logprobs(token: str) -> dict[str, object]:

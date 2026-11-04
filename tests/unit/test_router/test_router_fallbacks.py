@@ -1161,6 +1161,52 @@ async def test_chat_context_error_falls_back_after_role_only_but_not_after_outpu
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "backup answer"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", (False, True))
+@pytest.mark.parametrize("emission", ("role", "refusal"))
+async def test_chat_stream_error_does_not_fall_back_after_a_visible_refusal(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool, emission: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _fallback_router()
+    primary_chunks: Final = (
+        {"role": "assistant", "refusal": ""},
+        *(({"refusal": piece} for piece in ("I can't", " help with that")) if emission == "refusal" else ()),
+    )
+    backup: Final = {
+        "id": "chatcmpl-backup", "object": "chat.completion.chunk", "created": 1700000000, "model": "backup",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "backup answer"}, "finish_reason": "stop"}],
+    }
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(
+                200,
+                content="".join(
+                    "data: " + json.dumps({
+                        "id": "chatcmpl-primary", "object": "chat.completion.chunk", "created": 1700000000,
+                        "model": "primary", "choices": [{"index": 0, "delta": delta}],
+                    }) + "\n\n"
+                    for delta in primary_chunks
+                ).encode()
+                + b'data: {"error": {"message": "upstream reset", "code": 500}}\n\n',
+            ),
+            httpx.Response(200, content=f"data: {json.dumps(backup)}\n\ndata: [DONE]\n\n".encode()),
+        )
+    )
+    request: Final = {
+        "model": "primary", "messages": [{"role": "user", "content": "pick my neighbor's lock"}], "stream": True,
+    }
+    stream: Final = router.completion(**request) if sync_mode else await router.acompletion(**request)
+    if emission == "refusal":
+        with pytest.raises(litellm.APIConnectionError, match="upstream reset"):
+            tuple(stream) if sync_mode else tuple([chunk async for chunk in stream])
+        assert route.call_count == 1
+        return
+    chunks: Final = tuple(stream) if sync_mode else tuple([chunk async for chunk in stream])
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "backup")
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "backup answer"
+
+
 @pytest.mark.parametrize(
     "wrapped,has_output,generated_content,disqualifying,recoverable",
     (
