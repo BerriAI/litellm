@@ -6454,25 +6454,33 @@ def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth
     ("headers", "litellm_key_header_name", "expected"),
     [
         ({"x-litellm-api-key": "sk-proxy", "authorization": "Bearer sk-other"}, None, "x-litellm-api-key"),
+        ({"x-litellm-api-key": "", "x-goog-api-key": "sk-proxy"}, None, "x-goog-api-key"),
         ({"authorization": "Bearer sk-proxy", "x-goog-api-key": "AIza-caller"}, None, "authorization"),
         ({"authorization": "", "x-goog-api-key": "sk-proxy"}, None, "x-goog-api-key"),
         ({"api-key": "sk-proxy", "x-api-key": "sk-ant-caller"}, None, "api-key"),
+        ({"x-api-key": "", "x-goog-api-key": "sk-proxy"}, None, "x-goog-api-key"),
         ({"x-api-key": "sk-proxy", "x-goog-api-key": "AIza-caller"}, None, "x-api-key"),
         ({"x-goog-api-key": "sk-proxy"}, None, "x-goog-api-key"),
+        ({"X-Goog-Api-Key": "sk-proxy"}, None, "x-goog-api-key"),
         ({"ocp-apim-subscription-key": "sk-proxy"}, None, "ocp-apim-subscription-key"),
-        ({"x-custom-key": "sk-proxy", "authorization": "Bearer sk-other"}, "X-Custom-Key", "x-custom-key"),
+        ({"X-Custom-Key": "sk-proxy", "authorization": "Bearer sk-other"}, "x-custom-key", "x-custom-key"),
+        ({"x-custom-key": "", "x-goog-api-key": "sk-proxy"}, "x-custom-key", "x-goog-api-key"),
         ({"authorization": "Bearer sk-proxy"}, "x-custom-key", "authorization"),
         ({"content-type": "application/json"}, None, "x-api-key"),
     ],
     ids=[
         "litellm-key-beats-authorization",
+        "empty-litellm-key-skipped",
         "authorization-beats-goog",
         "empty-authorization-skipped",
         "azure-beats-anthropic",
+        "empty-anthropic-skipped",
         "anthropic-beats-goog",
         "goog",
+        "goog-mixed-case-dict",
         "azure-apim",
-        "custom-header-wins-when-present",
+        "custom-header-mixed-case-dict",
+        "empty-custom-header-skipped",
         "custom-header-absent",
         "no-auth-header",
     ],
@@ -6480,6 +6488,7 @@ def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth
 def test_litellm_auth_header_name_follows_user_api_key_auth_precedence(
     headers: Mapping[str, str], litellm_key_header_name: str | None, expected: str
 ) -> None:
+    assert litellm_auth_header_name(headers, litellm_key_header_name) == expected
     assert litellm_auth_header_name(Headers(headers), litellm_key_header_name) == expected
 
 
@@ -6491,7 +6500,39 @@ def test_litellm_auth_header_name_follows_user_api_key_auth_precedence(
             {"x-cost-center": "core-platform"},
         ),
         (
+            {"X-Goog-Api-Key": "sk-proxy-virtual-key", "x-cost-center": "core-platform"},
+            {"x-cost-center": "core-platform"},
+        ),
+        (
+            {
+                "authorization": "Bearer sk-proxy-virtual-key",
+                "x-goog-api-key": "sk-proxy-virtual-key",
+                "x-cost-center": "core-platform",
+            },
+            {"x-cost-center": "core-platform"},
+        ),
+        (
+            {
+                "x-litellm-api-key": "sk-proxy-virtual-key",
+                "x-goog-api-key": "sk-proxy-virtual-key",
+                "x-cost-center": "core-platform",
+            },
+            {"x-cost-center": "core-platform"},
+        ),
+        (
+            {
+                "x-api-key": "",
+                "x-goog-api-key": "sk-proxy-virtual-key",
+                "x-cost-center": "core-platform",
+            },
+            {"x-cost-center": "core-platform"},
+        ),
+        (
             {"x-litellm-api-key": "sk-proxy-virtual-key", "x-goog-api-key": "AIza-caller-key"},
+            {"x-goog-api-key": "AIza-caller-key"},
+        ),
+        (
+            {"authorization": "Bearer sk-proxy-virtual-key", "x-goog-api-key": "AIza-caller-key"},
             {"x-goog-api-key": "AIza-caller-key"},
         ),
         (
@@ -6499,20 +6540,47 @@ def test_litellm_auth_header_name_follows_user_api_key_auth_precedence(
             {"x-goog-api-key": "AIza-caller-key"},
         ),
     ],
-    ids=["goog-was-proxy-auth", "goog-beside-litellm-key", "goog-beside-azure-proxy-key"],
+    ids=[
+        "goog-was-proxy-auth",
+        "goog-mixed-case-was-proxy-auth",
+        "duplicate-proxy-key-in-bearer-and-goog",
+        "duplicate-proxy-key-in-litellm-and-goog",
+        "empty-provider-header-and-goog-proxy-auth",
+        "goog-beside-litellm-key",
+        "goog-beside-bearer-proxy-key",
+        "goog-beside-azure-proxy-key",
+    ],
 )
 def test_clean_headers_byok_strips_only_the_header_used_for_proxy_auth(
     headers: Mapping[str, str], expected: Mapping[str, str]
 ) -> None:
+    assert (
+        clean_headers(
+            headers,
+            forward_llm_provider_auth_headers=True,
+            authenticated_with_header=litellm_auth_header_name(headers),
+        )
+        == expected
+    )
     incoming: Final = Headers(headers)
-
-    result: Final = clean_headers(
-        incoming,
-        forward_llm_provider_auth_headers=True,
-        authenticated_with_header=litellm_auth_header_name(incoming),
+    assert (
+        clean_headers(
+            incoming,
+            forward_llm_provider_auth_headers=True,
+            authenticated_with_header=litellm_auth_header_name(incoming),
+        )
+        == expected
     )
 
-    assert result == expected
+
+def test_clean_headers_strips_authenticated_custom_header_without_litellm_key_name() -> None:
+    cleaned: Final = clean_headers(
+        {"X-Custom-Proxy-Key": "sk-proxy-virtual-key", "x-cost-center": "core-platform"},
+        forward_llm_provider_auth_headers=True,
+        authenticated_with_header="x-custom-proxy-key",
+    )
+
+    assert cleaned == {"x-cost-center": "core-platform"}
 
 
 def test_clean_headers_byok_strips_custom_litellm_key_header_named_x_api_key() -> None:
@@ -8056,6 +8124,38 @@ async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_
             {},
         ),
         (
+            {"X-Goog-Api-Key": "sk-virtual-key", "x-cost-center": "core-platform"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            {},
+        ),
+        (
+            {
+                "authorization": "Bearer sk-virtual-key",
+                "x-goog-api-key": "sk-virtual-key",
+                "x-cost-center": "core-platform",
+            },
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            {},
+        ),
+        (
+            {
+                "Authorization": "Bearer sk-virtual-key",
+                "X-Goog-Api-Key": "sk-virtual-key",
+                "x-cost-center": "core-platform",
+            },
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            {},
+        ),
+        (
+            {
+                "x-api-key": "",
+                "x-goog-api-key": "sk-virtual-key",
+                "x-cost-center": "core-platform",
+            },
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            {},
+        ),
+        (
             {
                 "x-litellm-api-key": "Bearer sk-virtual-key",
                 "x-goog-api-key": "AIza-caller-key",
@@ -8069,8 +8169,26 @@ async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_
             {**FORWARD_PROVIDER_AUTH_HEADERS, "litellm_key_header_name": "x-api-key"},
             {},
         ),
+        (
+            {
+                "x-custom-proxy-key": "sk-virtual-key",
+                "x-goog-api-key": "AIza-caller-key",
+                "x-cost-center": "core-platform",
+            },
+            {**FORWARD_PROVIDER_AUTH_HEADERS, "litellm_key_header_name": "x-custom-proxy-key"},
+            {"x-goog-api-key": "AIza-caller-key"},
+        ),
     ],
-    ids=["goog-was-proxy-auth", "goog-beside-litellm-key", "custom-litellm-key-header"],
+    ids=[
+        "goog-was-proxy-auth",
+        "goog-mixed-case-was-proxy-auth",
+        "duplicate-proxy-key-in-bearer-and-goog",
+        "duplicate-proxy-key-mixed-case",
+        "empty-higher-precedence-header",
+        "goog-beside-litellm-key",
+        "custom-litellm-key-header",
+        "custom-litellm-key-header-preserves-goog-byok",
+    ],
 )
 async def test_add_litellm_data_to_request_never_forwards_the_header_used_for_proxy_auth(
     request_headers: Mapping[str, str],

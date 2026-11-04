@@ -1519,17 +1519,16 @@ _PROXY_AUTH_HEADER_PRECEDENCE: Final = tuple(
 )
 
 
-def litellm_auth_header_name(headers: Headers, litellm_key_header_name: str | None = None) -> str:
-    if litellm_key_header_name is not None and litellm_key_header_name in headers:
+def _strip_bearer(value: str) -> str:
+    stripped: Final = value.strip()
+    return stripped[7:].strip() if stripped[:7].lower() == "bearer " else stripped
+
+
+def litellm_auth_header_name(headers: Mapping[str, str], litellm_key_header_name: str | None = None) -> str:
+    present: Final = {name.lower() for name, value in headers.items() if value}
+    if litellm_key_header_name is not None and litellm_key_header_name.lower() in present:
         return litellm_key_header_name.lower()
-    return next(
-        (
-            name
-            for name in _PROXY_AUTH_HEADER_PRECEDENCE
-            if name in headers and (name != "authorization" or headers[name])
-        ),
-        "x-api-key",
-    )
+    return next((name for name in _PROXY_AUTH_HEADER_PRECEDENCE if name in present), "x-api-key")
 
 
 def forwarded_anthropic_oauth_token(headers: Headers) -> str | None:
@@ -1547,11 +1546,11 @@ def forwarded_anthropic_oauth_token(headers: Headers) -> str | None:
 
 
 def clean_headers(
-    headers: Headers,
+    headers: Mapping[str, str],
     litellm_key_header_name: str | None = None,
     forward_llm_provider_auth_headers: bool = False,
     authenticated_with_header: str | None = None,
-) -> dict[str, str]:
+) -> dict[str, str]:  # mutable-ok: downstream callers mutate returned headers dict
     """
     Removes litellm api key from headers
 
@@ -1568,38 +1567,35 @@ def clean_headers(
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
     from litellm.llms.chatgpt.common_utils import is_chatgpt_oauth_key
 
-    clean_headers: Final = {}
     litellm_key_lower: Final = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
-    for header, value in headers.items():
-        header_lower = header.lower()
+    auth_header_lower: Final = authenticated_with_header.lower() if authenticated_with_header is not None else None
+    custom_excluded: Final = frozenset({litellm_key_lower, auth_header_lower})
+    provider_excluded: Final = frozenset({"authorization", "x-litellm-api-key", *custom_excluded})
+    proxy_auth_credential: Final = (
+        next(
+            (
+                credential
+                for name, raw in headers.items()
+                if name.lower() == auth_header_lower and (credential := _strip_bearer(raw))
+            ),
+            None,
+        )
+        if auth_header_lower is not None
+        else None
+    )
 
+    def _keep(header: str, value: str) -> bool:
+        header_lower: Final = header.lower()
         if header_lower == "authorization" and (is_anthropic_oauth_key(value) or is_chatgpt_oauth_key(value)):
-            if authenticated_with_header is None or authenticated_with_header.lower() != "authorization":
-                clean_headers[header] = value
-            continue
-        # Special handling for x-api-key: forward it based on authenticated_with_header
-        elif header_lower == "x-api-key":
-            if forward_llm_provider_auth_headers and (
-                authenticated_with_header is None or authenticated_with_header.lower() != "x-api-key"
-            ):
-                clean_headers[header] = value
-        elif forward_llm_provider_auth_headers and header_lower in _SPECIAL_HEADERS_CACHE:
-            if litellm_key_lower and header_lower == litellm_key_lower:
-                continue
-            if authenticated_with_header is not None and header_lower == authenticated_with_header.lower():
-                continue
-            if header_lower == "authorization":
-                continue
-            # Never forward x-litellm-api-key (it's for proxy auth only)
-            if header_lower == "x-litellm-api-key":
-                continue
-            clean_headers[header] = value
-        # Check if header should be excluded: either in special headers cache or matches custom litellm key
-        elif header_lower not in _SPECIAL_HEADERS_CACHE and (
-            litellm_key_lower is None or header_lower != litellm_key_lower
-        ):
-            clean_headers[header] = value
-    return clean_headers
+            return auth_header_lower != "authorization" and _strip_bearer(value) != proxy_auth_credential
+        if forward_llm_provider_auth_headers and header_lower in _SPECIAL_HEADERS_CACHE:
+            if header_lower in provider_excluded:
+                return False
+            credential: Final = _strip_bearer(value)
+            return bool(credential) and credential != proxy_auth_credential
+        return header_lower not in _SPECIAL_HEADERS_CACHE and header_lower not in custom_excluded
+
+    return {header: value for header, value in headers.items() if _keep(header, value)}
 
 
 def _request_fields(value: object) -> Mapping[str, object]:
