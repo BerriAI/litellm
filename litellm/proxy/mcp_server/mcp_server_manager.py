@@ -7430,7 +7430,11 @@ class MCPServerManager:
         Call list_tools for each server and update the tool name to MCP server name mapping
         Note: This now handles prefixed tool names
         """
-        for server in self.get_registry().values():
+        # get_filtered_registry() (not the raw get_registry()) so an admin-disabled config
+        # server is not probed at startup/reload: iterating the raw registry here would send
+        # upstream discovery requests — with the server's configured global-auth credentials —
+        # to a server the admin has turned off.
+        for server in self.get_filtered_registry().values():
             if self.oauth_discovery_slot(server.server_id) is not None:
                 continue
             if server.needs_user_oauth_token:

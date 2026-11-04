@@ -21999,6 +21999,30 @@ class TestMCPEnableDisableManager:
             manager._disabled_config_server_ids.discard(server_id)
 
     @pytest.mark.asyncio
+    async def test_startup_tool_discovery_skips_disabled_config_server(self):
+        """Startup/reload tool-name mapping must NOT probe an admin-disabled config server
+        (it would send upstream discovery with the server's configured credentials)."""
+        manager = MCPServerManager()
+        server_id = await self._load_config_server(manager)
+
+        probed: list[str] = []
+
+        async def _fake_get_tools(server):
+            probed.append(server.server_id)
+            return []
+
+        with patch.object(manager, "get_tools_from_server", side_effect=_fake_get_tools):
+            # enabled: it is probed
+            await manager._initialize_tool_name_to_mcp_server_name_mapping()
+            assert server_id in probed
+
+            probed.clear()
+            # disabled: it is skipped (not in the filtered registry the loop iterates)
+            manager._disabled_config_server_ids.add(server_id)
+            await manager._initialize_tool_name_to_mcp_server_name_mapping()
+            assert server_id not in probed
+
+    @pytest.mark.asyncio
     async def test_disabled_server_shown_in_admin_unfiltered_with_flag(self, monkeypatch):
         """Admin unfiltered listing shows disabled servers (DB and config) with enabled=False."""
         from litellm.proxy import proxy_server
