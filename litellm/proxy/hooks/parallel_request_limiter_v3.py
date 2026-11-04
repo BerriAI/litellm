@@ -55,7 +55,6 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
-from litellm.litellm_core_utils.audio_utils.utils import estimate_audio_tokens
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -64,7 +63,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
-from litellm.litellm_core_utils.token_counter import estimate_image_tokens, offload_token_count
+from litellm.litellm_core_utils.token_counter import (
+    estimate_media_block_tokens,
+    offload_token_count,
+    split_embedding_input_tokens,
+)
 from litellm.llms.azure.ptu_capacity import normalized_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -154,6 +157,12 @@ def _resolve_media_models(router: "Router | None", model: str, team_id: str | No
     if router is None:
         return (model,)
     return tuple(dict.fromkeys(router.registry().names(model, kind="litellm_base_models", team_id=team_id))) or (model,)
+
+
+def _media_models(
+    resolver: Callable[[str, str | None], tuple[str, ...]] | None, model: str, team_id: str | None
+) -> tuple[str, ...]:
+    return resolver(model, team_id) if resolver is not None else (model,)
 
 
 def _resolve_media_models_via_proxy_router(model: str, team_id: str | None) -> tuple[str, ...]:
@@ -709,7 +718,7 @@ class RequestRateLimiterStash:
     A single mutable instance is shared by every context forked from the
     request task (the SDK call, streaming generators, and the logging worker's
     captured context all see the same object), which is what makes the
-    ``reservation_released`` flag and ``parallel_slot`` clearing effective
+    released flags and ``parallel_slot`` clearing effective
     across sibling callbacks: the first release wins, later callbacks observe
     the cleared state.
 
@@ -746,8 +755,31 @@ class RequestRateLimiterStash:
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
+    io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
     socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
+
+    def clear_reserved_tokens(self) -> None:
+        self.reserved_tokens = 0
+        self.ptu_reserved_tokens = 0
+        self.itpm_reserved_tokens = 0
+        self.otpm_reserved_tokens = 0
+
+    def mark_reservation_released(self) -> None:
+        self.reservation_released = True
+        self.io_reservation_released = True
+
+    def discard_released_tpm_reservation(self) -> None:
+        if self.reservation_released:
+            self.reserved_tokens = 0
+            self.ptu_reserved_tokens = 0
+            self.reservation_released = False
+
+    def discard_released_io_reservation(self) -> None:
+        if self.io_reservation_released:
+            self.itpm_reserved_tokens = 0
+            self.otpm_reserved_tokens = 0
+            self.io_reservation_released = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1355,20 +1387,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         media_source: Final = messages if messages is not None else original_input
+        is_embedding_call: Final = call_type in EMBEDDING_API_CALL_TYPES
         projected, media = (
             split_media_for_tpm(media_source)
             if include_media and (isinstance(messages, list) or call_type in RESPONSES_API_CALL_TYPES)
             else (original_input, ())
         )
-        input_text: Final = projected if call_type in RESPONSES_API_CALL_TYPES else original_input
         fallback_model: Final = request_model if isinstance(request_model, str) else None
         resolved_models: Final = (
-            media_model_resolver(fallback_model or "", team_id)
-            if media and media_model_resolver is not None
-            else (fallback_model or "",)
+            _media_models(media_model_resolver, fallback_model or "", team_id) if media else (fallback_model or "",)
         )
-        media_tokens: Final = sum(
-            self._estimate_media_block_tokens(block, resolved_models, fallback_model) for block in media
+        embedding_text, embedding_media_tokens = (
+            split_embedding_input_tokens(
+                original_input,
+                lambda: _media_models(media_model_resolver, fallback_model or "", team_id),
+                fallback_model,
+            )
+            if include_media and is_embedding_call
+            else (original_input, 0)
+        )
+        input_text: Final = projected if call_type in RESPONSES_API_CALL_TYPES else embedding_text
+        media_tokens: Final = embedding_media_tokens + sum(
+            estimate_media_block_tokens(block, resolved_models, fallback_model) for block in media
         )
 
         total_chars: Final = (
@@ -1412,24 +1452,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         return estimated_input_tokens, max_tokens_estimate * self.get_output_candidate_count(data, call_type)
-
-    @staticmethod
-    def _estimate_media_block_tokens(
-        block: Mapping[str, object], models: tuple[str, ...], fallback_model: str | None
-    ) -> int:
-        if block.get("type") == "input_audio":
-            audio: Final = _callback_kwargs_mapping(block.get("input_audio"))
-            data: Final = audio.get("data")
-            return estimate_audio_tokens(data if isinstance(data, str) else None, models, fallback_model=fallback_model)
-        image: Final = _callback_kwargs_mapping(block.get("image_url"))
-        url: Final = image.get("url")
-        detail: Final = image.get("detail")
-        return estimate_image_tokens(
-            models,
-            url if isinstance(url, str) else "",
-            detail if isinstance(detail, str) else "auto",
-            fallback_model=fallback_model,
-        )
 
     def _is_redis_cluster(self) -> bool:
         """
@@ -4075,12 +4097,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             None if is_responses_request else self._translate_google_genai_native_request(data, call_type)
         )
         is_embedding_request: Final = self._is_embedding_request(data, call_type)
-        embedding_text: Final = data.get("input") if is_embedding_request else None
+        request: Final = as_str_mapping(data)
+        raw_embedding_input: Final = request.get("input") if is_embedding_request and request is not None else None
         pretokenized_input_tokens: Final = (
-            self._count_pretokenized_embedding_input(embedding_text) if is_embedding_request else None
+            self._count_pretokenized_embedding_input(raw_embedding_input) if is_embedding_request else None
         )
         if pretokenized_input_tokens is not None:
             return pretokenized_input_tokens
+        embedding_text, embedding_media_tokens = (
+            split_embedding_input_tokens(
+                raw_embedding_input, lambda: self._media_model_resolver(model or "", team_id), model
+            )
+            if is_embedding_request
+            else (None, 0)
+        )
 
         prompt: Final = data.get("prompt")
         fallback_text: Final = prompt if prompt is not None else data.get("input")
@@ -4130,12 +4160,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     for tokenizer_model in (self._counted_models_resolver(model, team_id) if model else ("",))
                 ),
             )
-            return estimate + audio_token_estimate
+            return estimate + audio_token_estimate + embedding_media_tokens
         except Exception:  # noqa: BLE001  # tokenizer failures degrade to the cheap estimate
             if call_type in RERANK_API_CALL_TYPES and isinstance(selected_text, str):
                 return max(0, len(selected_text) // DEFAULT_CHARS_PER_TOKEN)
             estimated_input_tokens, _ = self._estimate_input_and_output_tokens(
-                data=data, call_type=call_type, include_media=False
+                data=data,
+                call_type=call_type,
+                include_media=is_embedding_request,
+                team_id=team_id,
+                media_model_resolver=self._media_model_resolver,
             )
             return estimated_input_tokens + audio_token_estimate
 
@@ -4238,6 +4272,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 requested_model=requested_model,
             )
 
+        stash.discard_released_io_reservation()
         if itpm_reserved > 0:
             itpm_scopes: Final = tuple(
                 (d["key"], d["value"]) for d in io_token_descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
@@ -4597,6 +4632,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     # incremented so post-call reconciliation only applies
                     # the (actual - reserved) delta to those — unreserved
                     # scopes get charged the full actual usage instead.
+                    stash.discard_released_tpm_reservation()
                     stash.reserved_tokens = estimated_tokens
                     stash.ptu_reserved_tokens = ptu_estimated_tokens
                     stash.ptu_reserved_window_identities = frozenset(
@@ -5140,7 +5176,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self._response_usage(response_obj)
         ) or self._aggregate_only_total_tokens(self._response_usage(kwargs.get("combined_usage_object")))
 
-        if not response_usage[2] and not combined_usage[2] and aggregate_total <= 0 and not stash.reservation_released:
+        if (
+            not response_usage[2]
+            and not combined_usage[2]
+            and aggregate_total <= 0
+            and not stash.io_reservation_released
+        ):
             return ()
         resolved_usage: Final = (
             response_usage
@@ -5153,25 +5194,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         billable_input, completion_tokens, _ = resolved_usage
 
-        if stash.reservation_released or (
+        if stash.io_reservation_released or (
             not stash.itpm_reserved_window_identities and not stash.otpm_reserved_window_identities
         ):
             return self._build_reservation_aware_tpm_ops(
                 targets=tuple(stash.itpm_reserved_scopes),
-                reserved_scopes=frozenset() if stash.reservation_released else stash.itpm_reserved_scopes,
+                reserved_scopes=frozenset() if stash.io_reservation_released else stash.itpm_reserved_scopes,
                 actual_tokens=billable_input,
-                reserved_tokens=0 if stash.reservation_released else itpm_reserved,
+                reserved_tokens=0 if stash.io_reservation_released else itpm_reserved,
             ) + self._build_reservation_aware_tpm_ops(
                 targets=tuple(stash.otpm_reserved_scopes),
-                reserved_scopes=frozenset() if stash.reservation_released else stash.otpm_reserved_scopes,
+                reserved_scopes=frozenset() if stash.io_reservation_released else stash.otpm_reserved_scopes,
                 actual_tokens=completion_tokens,
-                reserved_tokens=0 if stash.reservation_released else otpm_reserved,
+                reserved_tokens=0 if stash.io_reservation_released else otpm_reserved,
             )
 
         itpm_ops: Final[Sequence[ReservationAwareIncrementOperation]] = (
             self._build_project_reservation_ops(
                 targets=tuple(stash.itpm_reserved_scopes),
-                reserved_scopes=frozenset() if stash.reservation_released else stash.itpm_reserved_scopes,
+                reserved_scopes=frozenset() if stash.io_reservation_released else stash.itpm_reserved_scopes,
                 actual_tokens=billable_input,
                 reserved_tokens=itpm_reserved,
                 reservation_window_identities=stash.itpm_reserved_window_identities,
@@ -5182,7 +5223,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         otpm_ops: Final[Sequence[ReservationAwareIncrementOperation]] = (
             self._build_project_reservation_ops(
                 targets=tuple(stash.otpm_reserved_scopes),
-                reserved_scopes=frozenset() if stash.reservation_released else stash.otpm_reserved_scopes,
+                reserved_scopes=frozenset() if stash.io_reservation_released else stash.otpm_reserved_scopes,
                 actual_tokens=completion_tokens,
                 reserved_tokens=otpm_reserved,
                 reservation_window_identities=stash.otpm_reserved_window_identities,
@@ -5402,7 +5443,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             total_tokens = self._aggregate_only_total_tokens(usage=_usage)
 
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-        reserved_tokens: Final = stash.reserved_tokens if stash is not None else 0
+        open_reservation: Final = stash if stash is not None and not stash.reservation_released else None
+        reserved_tokens: Final = open_reservation.reserved_tokens if open_reservation is not None else 0
         reserved_model: Final = stash.reserved_model if stash is not None else None
         reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
         # Reconciliation must target the same model-scoped counter that the
@@ -5464,7 +5506,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reconcile_model=reconcile_model,
                 reserved_scopes=reserved_scopes,
                 reserved_ceiling=stash.ptu_ceiling if stash is not None else None,
-                reserved_tokens=stash.ptu_reserved_tokens if stash is not None else 0,
+                reserved_tokens=open_reservation.ptu_reserved_tokens if open_reservation is not None else 0,
                 reserved_windows=stash.ptu_reserved_window_identities if stash is not None else frozenset(),
                 total_tokens=0 if ptu_skips_socket_usage else total_tokens,
             )
@@ -5561,18 +5603,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else None,
             )
 
-            await self._apply_usage_operations(
-                self._build_success_event_pipeline_operations(
-                    kwargs=kwargs,
-                    response_obj=response_obj,
-                    rate_limit_type=rate_limit_type,
-                ),
-                litellm_parent_otel_span,
+            usage_operations: Final = self._build_success_event_pipeline_operations(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                rate_limit_type=rate_limit_type,
             )
             io_token_operations: Final = self._build_io_token_reservation_ops(
                 kwargs=kwargs,
                 response_obj=response_obj,
             )
+            if stash is not None:
+                stash.clear_reserved_tokens()
+            await self._apply_usage_operations(usage_operations, litellm_parent_otel_span)
             if io_token_operations:
                 if isinstance(io_token_operations, list):
                     await self.async_increment_tokens_with_ttl_preservation(
@@ -5733,10 +5775,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # already released it (proxy-level rejection that also bubbles up
             # here as an LLM-error callback). max_parallel_requests is its
             # own counter and is always decremented per call.
-            reserved_tokens, itpm_reserved, otpm_reserved = (
-                (0, 0, 0)
-                if stash is None or stash.reservation_released
-                else (stash.reserved_tokens, stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
+            reserved_tokens: Final = 0 if stash is None or stash.reservation_released else stash.reserved_tokens
+            itpm_reserved, otpm_reserved = (
+                (0, 0)
+                if stash is None or stash.io_reservation_released
+                else (stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
             )
             tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(failed_call)
 
@@ -5806,6 +5849,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else ()
             )
 
+            if stash is not None and (reserved_tokens > 0 or itpm_reserved > 0 or otpm_reserved > 0):
+                stash.mark_reservation_released()
             if pipeline_operations:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
                     pipeline_operations, parent_otel_span=litellm_parent_otel_span
@@ -5820,8 +5865,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         pipeline_operations=project_operations,
                         parent_otel_span=litellm_parent_otel_span,
                     )
-            if stash is not None and (reserved_tokens > 0 or itpm_reserved > 0 or otpm_reserved > 0):
-                stash.reservation_released = True
             if stash is None and tpm_actual > 0 and _is_socket_turn(failed_call):
                 await self._apply_usage_operations(
                     self._build_success_event_pipeline_operations(
@@ -5927,7 +5970,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         Idempotent: the slot release clears the stashed acquisition (and slot
         removal is a no-op ZREM on a second run), and the TPM/ITPM/OTPM
-        refund is guarded by the stash's ``reservation_released`` flag — if
+        refund is guarded by the stash's two released flags — if
         both this hook and async_log_failure_event end up running in the same
         flow, only the first release/refund applies. A mid-stream failure
         relayed here with recovered partial usage settles the reservation at
@@ -5953,11 +5996,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 stash.batch_tpd_refund_ops = ()
 
-            if stash.reservation_released:
-                return
-            reserved_tokens: Final = stash.reserved_tokens
-            itpm_reserved: Final = stash.itpm_reserved_tokens
-            otpm_reserved: Final = stash.otpm_reserved_tokens
+            reserved_tokens: Final = 0 if stash.reservation_released else stash.reserved_tokens
+            itpm_reserved: Final = 0 if stash.io_reservation_released else stash.itpm_reserved_tokens
+            otpm_reserved: Final = 0 if stash.io_reservation_released else stash.otpm_reserved_tokens
             if reserved_tokens <= 0 and itpm_reserved <= 0 and otpm_reserved <= 0:
                 return
             tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(request_data)
@@ -6024,6 +6065,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     itpm_reserved,
                     otpm_reserved,
                 )
+            stash.mark_reservation_released()
             if combined_ops:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                     increment_list=list(combined_ops),
@@ -6040,7 +6082,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         pipeline_operations=project_ops,
                         parent_otel_span=user_api_key_dict.parent_otel_span,
                     )
-            stash.reservation_released = True
         except Exception as e:
             verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)
         return

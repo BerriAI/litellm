@@ -28,8 +28,7 @@ from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.custom_llm import CustomLLM
-from litellm.utils import exception_type, filter_out_litellm_params, get_litellm_params
+from litellm.utils import exception_type, filter_out_litellm_params, get_litellm_params, header_auth_params
 
 #################### Initialize provider clients ####################
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
@@ -68,6 +67,10 @@ from litellm.utils import (
 )
 
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
+_OPTIONAL_OBJECT_DICT_ADAPTER: Final = TypeAdapter[dict[str, object] | None](dict[str, object] | None)
+_OPTIONAL_STRING_DICT_ADAPTER: Final = TypeAdapter[dict[str, str] | None](dict[str, str] | None)
+_OBJECT_DICT_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
+_STRING_DICT_ADAPTER: Final = TypeAdapter[dict[str, str]](dict[str, str])
 _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE: Final = (
     LlmProviders.DASHSCOPE,
     LlmProviders.QWENCLOUD,
@@ -94,8 +97,8 @@ def _chatgpt_image_params(kwargs: Mapping[str, object]) -> GenericLiteLLMParams:
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
     headers: Final = ResponsesAPIRequestUtils.merge_client_forwarded_headers(
-        TypeAdapter[dict[str, object] | None](dict[str, object] | None).validate_python(kwargs.get("extra_headers")),
-        TypeAdapter[dict[str, str] | None](dict[str, str] | None).validate_python(kwargs.get("headers")),
+        _OPTIONAL_OBJECT_DICT_ADAPTER.validate_python(kwargs.get("extra_headers")),
+        _OPTIONAL_STRING_DICT_ADAPTER.validate_python(kwargs.get("headers")),
     )
     return GenericLiteLLMParams.model_validate({**kwargs, "extra_headers": headers})
 
@@ -168,7 +171,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
             custom_llm_provider=provider_hints.get("custom_llm_provider"),
             api_base=provider_hints.get("api_base"),
             litellm_params=(
-                _chatgpt_image_params(TypeAdapter(dict[str, object]).validate_python(kwargs))
+                _chatgpt_image_params(_OBJECT_DICT_ADAPTER.validate_python(kwargs))
                 if provider_hints.get("custom_llm_provider") == "chatgpt"
                 or (isinstance(model, str) and model.startswith("chatgpt/"))
                 else None
@@ -300,7 +303,7 @@ def image_generation(
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
         chatgpt_params: Final = (
-            _chatgpt_image_params(TypeAdapter(dict[str, object]).validate_python({**kwargs, "api_key": api_key}))
+            _chatgpt_image_params(_OBJECT_DICT_ADAPTER.validate_python({**kwargs, "api_key": api_key}))
             if custom_llm_provider == "chatgpt" or (model is not None and model.startswith("chatgpt/"))
             else None
         )
@@ -583,7 +586,7 @@ def image_generation(
                         _chatgpt_image_headers(
                             model,
                             chatgpt_params.model_copy(update={"api_key": dynamic_api_key or api_key}),
-                            TypeAdapter(dict[str, str]).validate_python(headers),
+                            _STRING_DICT_ADAPTER.validate_python(headers),
                         )
                     )
                     if chatgpt_params is not None
@@ -608,10 +611,7 @@ def image_generation(
             )
         elif custom_llm_provider in litellm._custom_providers:  # Assume custom LLM provider
             # Get the Custom Handler
-            custom_handler: CustomLLM | None = None
-            for item in litellm.custom_provider_map:
-                if item["provider"] == custom_llm_provider:
-                    custom_handler = item["custom_handler"]
+            custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
 
             if custom_handler is None:
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -915,10 +915,7 @@ def image_edit(
 
         # Check for custom provider
         if custom_llm_provider in litellm._custom_providers:
-            custom_handler: CustomLLM | None = None
-            for item in litellm.custom_provider_map:
-                if item["provider"] == custom_llm_provider:
-                    custom_handler = item["custom_handler"]
+            custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
 
             if custom_handler is None:
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -995,10 +992,15 @@ def image_edit(
             or custom_llm_provider == "azure"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            dropped_form_params: Final = header_auth_params(custom_llm_provider)
             image_edit_request_params.update(
                 flatten_form_field_values(
-                    non_default_params,
-                    extra_body if isinstance(extra_body, dict) else None,
+                    {key: value for key, value in non_default_params.items() if key not in dropped_form_params},
+                    (
+                        {key: value for key, value in extra_body.items() if key not in dropped_form_params}
+                        if isinstance(extra_body, dict)
+                        else None
+                    ),
                 )
             )
 

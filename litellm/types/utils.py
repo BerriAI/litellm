@@ -383,6 +383,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
     input_cost_per_audio_token_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_priority: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_batches: ReadOnly[float | None]
     input_cost_per_audio_token_priority: ReadOnly[float | None]
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
@@ -408,10 +412,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
     input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    input_cost_per_token_above_200k_tokens_flex: ReadOnly[float | None]
     input_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
     input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
     output_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    output_cost_per_token_above_200k_tokens_flex: ReadOnly[float | None]
     output_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
@@ -444,6 +450,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
     output_cost_per_image_token_batches: ReadOnly[float | None]
+    output_cost_per_image_token_priority: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
@@ -554,6 +561,11 @@ class CallTypes(str, Enum):
     aextraction = "aextraction"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
+    acreate_realtime_client_secret = "acreate_realtime_client_secret"
+    arealtime_calls = "arealtime_calls"
+    acreate_realtime_transcription_session = "acreate_realtime_transcription_session"
+    acreate_realtime_translation_client_secret = "acreate_realtime_translation_client_secret"
+    arealtime_translation_calls = "arealtime_translation_calls"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
@@ -794,6 +806,8 @@ CallTypesLiteral = Literal[
     "acreate_realtime_client_secret",
     "arealtime_calls",
     "acreate_realtime_transcription_session",
+    "acreate_realtime_translation_client_secret",
+    "arealtime_translation_calls",
 ]
 
 MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
@@ -802,6 +816,10 @@ MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
 
 # Mapping of API routes to their corresponding call types
 API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
+    "/v1/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/v1/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
+    "/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
     # Chat Completions
     "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
     "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
@@ -1120,9 +1138,11 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     "/openai/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     # Realtime API
-    "/realtime": [CallTypes.arealtime],
-    "/v1/realtime": [CallTypes.arealtime],
-    "/openai/v1/realtime": [CallTypes.arealtime],
+    "/realtime": (CallTypes.arealtime,),
+    "/v1/realtime": (CallTypes.arealtime,),
+    "/openai/v1/realtime": (CallTypes.arealtime,),
+    "/realtime/translations": (CallTypes.arealtime,),
+    "/v1/realtime/translations": (CallTypes.arealtime,),
     "/live/sessions": (CallTypes.arealtime,),
     "/v1/live/sessions": (CallTypes.arealtime,),
     "/openai/v1/live/sessions": (CallTypes.arealtime,),
@@ -2951,9 +2971,19 @@ class TranscriptionUsageTokensObject(LiteLLMBaseModel):
     input_token_details: TranscriptionUsageInputTokenDetailsObject | None = None
 
 
+class TranscriptionDetectedLanguage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+
+
+_DETECTED_LANGUAGES: Final = TypeAdapter(tuple[TranscriptionDetectedLanguage, ...])
+
+
 class TranscriptionResponse(OpenAIObject):
     text: str | None = None
     usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
+    languages: Sequence[TranscriptionDetectedLanguage] | None = None
 
     _hidden_params: dict = {}
     _response_headers: dict | None = None
@@ -2966,8 +2996,28 @@ class TranscriptionResponse(OpenAIObject):
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, text=None) -> None:
-        super().__init__(text=text)
+    def __init__(
+        self,
+        text: str | None = None,
+        usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | Mapping[str, object] | None = None,
+        languages: Sequence[TranscriptionDetectedLanguage | Mapping[str, object]] | None = None,
+        **kwargs: object,  # kwargs-ok: OpenAI-compatible responses preserve provider extension fields
+    ) -> None:
+        super().__init__(
+            text=text, usage=usage, languages=TranscriptionResponse.detected_languages(languages), **kwargs
+        )
+        if self.languages is None:
+            del self.languages
+
+    @staticmethod
+    def detected_languages(value: object) -> tuple[TranscriptionDetectedLanguage, ...] | None:
+        try:
+            return _DETECTED_LANGUAGES.validate_python(value, from_attributes=True)
+        except ValidationError:
+            return None
+
+    def set_audio_transcription_duration(self, duration: float) -> None:
+        self._hidden_params["audio_transcription_duration"] = duration
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -4130,6 +4180,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_audio_token_flex: float | None = None
+    input_cost_per_audio_token_above_200k_tokens: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_flex: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_priority: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_batches: float | None = None
     input_cost_per_audio_token_priority: float | None = None
     input_cost_per_token_cache_hit: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
@@ -4140,6 +4194,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_above_272k_tokens_flex: float | None = None
     input_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     input_cost_per_token_above_200k_tokens_batches: float | None = None
+    input_cost_per_token_above_200k_tokens_flex: float | None = None
     input_cost_per_token_above_100k_tokens_batches: float | None = None
     input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
@@ -4169,12 +4224,14 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_272k_tokens_flex: float | None = None
     output_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     output_cost_per_token_above_200k_tokens_batches: float | None = None
+    output_cost_per_token_above_200k_tokens_flex: float | None = None
     output_cost_per_token_above_100k_tokens_batches: float | None = None
     output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
     output_cost_per_image_token: float | None = None
     output_cost_per_image_token_batches: float | None = None
+    output_cost_per_image_token_priority: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
@@ -4239,6 +4296,10 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "reasoning_modes",
         "reasoning_contexts",
     }
+)
+
+DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"max_input_tokens", "max_output_tokens", "max_tokens"}
 )
 
 DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
@@ -4356,6 +4417,7 @@ bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
 ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
+ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_COMPARISON_RESPONSE_ID_FIELD
 
 anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
 openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
@@ -4579,6 +4641,7 @@ class LlmProviders(str, Enum):
     CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
+    PARALLEL_AI = "parallel_ai"
     NACE = "nace"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
@@ -4711,6 +4774,7 @@ class LlmProviders(str, Enum):
     SAIL = "sail"
     REKA = "reka"
     STREAMLAKE = "streamlake"
+    WALLY = "wally"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"

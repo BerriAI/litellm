@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     schema_has_unresolvable_ref,
     schema_property_count,
     split_concatenated_json_objects,
+    split_embedding_media_for_tpm,
     split_media_for_tpm,
     strip_encrypted_reasoning_from_messages,
     strip_litellm_response_only_fields,
@@ -2709,3 +2710,22 @@ def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_unt
 
     assert flattened == [{"role": "user", "content": "Hello world"}, {"role": "assistant", "content": "Hi"}]
     assert messages == messages_before
+
+
+@pytest.mark.parametrize("mime", ["application/pdf", "video/mp4", "audio/wav", "image/png"])
+def test_embedding_media_split_holds_at_most_one_copy_of_a_large_payload(mime: str) -> None:
+    import gc
+    import tracemalloc
+
+    uri: Final = f"data:{mime};base64," + base64.b64encode(bytes(3 * 1024 * 1024)).decode("ascii")
+    split_embedding_media_for_tpm(f"data:{mime};base64,AAAA")
+    gc.collect()
+    tracemalloc.start()
+    try:
+        _, media = split_embedding_media_for_tpm(uri)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert media
+    assert peak < 1.5 * len(uri)

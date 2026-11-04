@@ -30,6 +30,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
+from starlette.datastructures import URL
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
@@ -1791,6 +1792,38 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database
     assert "sk-$(openssl rand -hex 32)" in announced[0]
     key_can_have_encrypted_the_database = general_settings.get("master_key") is not None
     assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_reads_fips_mode_from_the_config_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key", "fips_mode": True})
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_enforces_fips", lambda: False)
+
+    with pytest.raises(FipsModeError, match=r"general_settings\.fips_mode is on but OpenSSL does not enforce FIPS"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_refuses_a_fips_mode_reference_to_an_unset_variable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(
+        monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key", "fips_mode": "os.environ/FIPS_MODE_NOT_SET"}
+    )
+    monkeypatch.delenv("FIPS_MODE_NOT_SET", raising=False)
+
+    with pytest.raises(FipsModeError, match=r"general_settings\.fips_mode has no value"):
+        async with proxy_startup_event(FastAPI()):
+            pass
 
 
 class _DatabaseWithOneStoredCredential:
@@ -4116,7 +4149,11 @@ async def test_load_environment_variables_litellm_license_and_edge_cases():
     mock_license_check = MagicMock()
     mock_license_check.is_premium.return_value = True
 
-    with patch("litellm.proxy.proxy_server._license_check", mock_license_check):
+    with (
+        patch("litellm.proxy.proxy_server._license_check", mock_license_check),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.premium_user_data", None),
+    ):
         with patch.dict(os.environ, {}, clear=False):
             # Call the method under test
             proxy_config._load_environment_variables(test_config_with_license)
@@ -11117,7 +11154,7 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory():
 
 
 def test_realtime_websocket_route_aliases_registered():
-    """Realtime sessions reach the proxy via three path aliases stacked on
+    """Realtime sessions reach the proxy via five path aliases stacked on
     `realtime_websocket_endpoint`. Dropping any of them silently 405s
     WebSocket upgrades because the catch-all `/openai/{endpoint:path}`
     HTTP passthrough only declares HTTP methods. The aliases must also be
@@ -11133,7 +11170,13 @@ def test_realtime_websocket_route_aliases_registered():
     websocket_paths = {route.path for route in app.routes if isinstance(route, WebSocketRoute)}
     openai_routes = LiteLLMRoutes.openai_routes.value
 
-    for expected in ("/openai/v1/realtime", "/v1/realtime", "/realtime"):
+    for expected in (
+        "/openai/v1/realtime",
+        "/v1/realtime",
+        "/realtime",
+        "/v1/realtime/translations",
+        "/realtime/translations",
+    ):
         assert expected in websocket_paths, (
             f"{expected!r} missing from registered WebSocket routes; the "
             f"realtime endpoint will 405 for clients hitting this path."
@@ -11152,7 +11195,7 @@ def _lit6973_fake_realtime_ws() -> MagicMock:
     ws = MagicMock()
     ws.headers = {}
     ws.scope = {"headers": [], "type": "websocket"}
-    ws.url = "ws://testserver/v1/realtime"
+    ws.url = URL("ws://testserver/v1/realtime")
     ws.accept = AsyncMock()
     ws.send_text = AsyncMock()
     ws.close = AsyncMock()

@@ -37,6 +37,16 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
 
 
+def resolve_realtime_route_model(model: str | None, intent: str | None, is_translation: bool) -> str | None:
+    if model is not None:
+        return model
+    if is_translation:
+        return "gpt-realtime-translate"
+    if intent == "transcription":
+        return "gpt-realtime-whisper"
+    return None
+
+
 def resolve_inference_model(
     body_model: object,
     settings: Mapping[str, object],
@@ -197,10 +207,10 @@ def _parse_form_metadata(raw_metadata: str) -> object:
     """The JSON body path rejects a lone surrogate escape (``"\\ud800"``) with a
     400 because no provider or database can encode it. ``json.loads`` accepts
     the escape, so the multipart ``metadata`` field gets the same check."""
-    parsed: Final[object] = json.loads(raw_metadata)
     try:
+        parsed: Final[object] = json.loads(raw_metadata)
         json.dumps(parsed, ensure_ascii=False).encode("utf-8")
-    except UnicodeEncodeError as e:
+    except (json.JSONDecodeError, UnicodeEncodeError) as e:
         raise ProxyException(
             message=f"Invalid form payload: metadata {e}",
             type="invalid_request_error",
@@ -210,6 +220,11 @@ def _parse_form_metadata(raw_metadata: str) -> object:
     return parsed
 
 
+def _reraise_request_size_error(error: Exception) -> None:
+    if isinstance(error, HTTPException) and error.status_code == status.HTTP_413_CONTENT_TOO_LARGE:
+        raise error
+
+
 async def _read_form_data(request: Request) -> FormData:
     try:
         form_data: Final = await request.form()
@@ -217,6 +232,7 @@ async def _read_form_data(request: Request) -> FormData:
     except ClientDisconnect:
         raise
     except Exception as e:
+        _reraise_request_size_error(e)
         # ``request.form()`` raises on malformed multipart (missing
         # boundary, malformed chunk encoding, …). Surface as 400 so
         # the auth-time pre-read does not silently cache ``{}`` while
@@ -367,6 +383,7 @@ async def read_request_body(request: Request | None) -> dict:
         raise disconnected from e
     except Exception as e:
         # Catch unexpected errors to avoid crashes
+        _reraise_request_size_error(e)
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
         return {}
 
@@ -572,14 +589,16 @@ async def get_form_data(request: Request) -> dict[str, Any]:
     Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
     """
     form: Final = await request.form()
-    parsed_form_data: Final[dict[str, Any]] = {}
-    for key, value in form.multi_items():  # not dict(form), which keeps only the last repeat
-        if key.endswith("[]"):
-            clean_key = key[:-2]
-            parsed_form_data.setdefault(clean_key, []).append(value)
-        else:
-            parsed_form_data[key] = value
-    return parsed_form_data
+    form_items: Final = tuple(form.multi_items() if hasattr(form, "multi_items") else form.items())
+    array_keys: Final = frozenset(key[:-2] for key, _ in form_items if key.endswith("[]"))
+    normalized_items: Final = tuple((key.removesuffix("[]"), value) for key, value in form_items)
+    normalized_keys: Final = tuple(dict.fromkeys(key for key, _ in normalized_items))
+    return {
+        key: [value for item_key, value in normalized_items if item_key == key]
+        if key in array_keys
+        else next(value for item_key, value in reversed(normalized_items) if item_key == key)
+        for key in normalized_keys
+    }
 
 
 async def convert_upload_files_to_file_data(
@@ -802,10 +821,6 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
                     request_data["vector_store_ids"] = [value]
                 continue
             request_data.setdefault(key, value)
-        verbose_proxy_logger.debug(
-            "populate_request_with_path_params: Found path_params, vector_store_ids=%s",
-            request_data.get("vector_store_ids"),
-        )
         return request_data
 
     # Fallback: parse the URL path directly to extract vector_store_id
@@ -841,7 +856,3 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
                 existing_ids.append(vector_store_id)
         else:
             request_data["vector_store_ids"] = [vector_store_id]
-        verbose_proxy_logger.debug(
-            "populate_request_with_path_params: Updated request_data with vector_store_ids=%s",
-            request_data.get("vector_store_ids"),
-        )

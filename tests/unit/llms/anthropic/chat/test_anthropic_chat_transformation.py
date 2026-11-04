@@ -1,4 +1,5 @@
 import copy
+import itertools
 import json
 import logging
 from collections.abc import Iterator
@@ -40,6 +41,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
     VertexAIAnthropicConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
@@ -2629,6 +2631,46 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
         assert config_claude37["max_tokens"] == 64000
 
 
+def test_transform_request_uses_deployment_max_output_tokens_before_catalog() -> None:
+    model: Final = "claude-sonnet-4-6"
+    catalog_max_output_tokens: Final = litellm.get_model_info(model)["max_output_tokens"]
+    config: Final = AnthropicConfig()
+
+    configured: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={"model_info": {"max_output_tokens": 987}},
+        headers={},
+    )
+    catalog_default: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    non_mapping_model_info: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={"model_info": "invalid"},
+        headers={},
+    )
+    requested: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 654},
+        litellm_params={"model_info": {"max_output_tokens": 987}},
+        headers={},
+    )
+
+    assert configured["max_tokens"] == 987
+    assert catalog_default["max_tokens"] == catalog_max_output_tokens
+    assert non_mapping_model_info["max_tokens"] == catalog_max_output_tokens
+    assert requested["max_tokens"] == 654
+
+
 def test_get_config_without_model_uses_fallback():
     """
     Test that get_config without model parameter uses 128000 fallback.
@@ -4419,6 +4461,191 @@ def test_transform_request_includes_cache_control():
 
     assert "cache_control" in result
     assert result["cache_control"] == {"type": "ephemeral"}
+
+
+def _anthropic_body(messages: list, litellm_params: dict | None = None, tools: list | None = None) -> dict:
+    return AnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=messages,
+        optional_params={"max_tokens": 100, **({"tools": tools} if tools else {})},
+        litellm_params=litellm_params or {},
+        headers={},
+    )
+
+
+def test_transform_request_carries_prompt_cache_breakpoint_to_cache_control():
+    body: Final = _anthropic_body(
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse.", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                    {
+                        "type": "text",
+                        "text": "Bye",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    },
+                ],
+            },
+        ]
+    )
+
+    assert body["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "Bye", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "marker, expected_block",
+    [
+        ({"mode": "explicit", "ttl": "30m"}, {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}),
+        ({"mode": "implicit"}, {"type": "text", "text": "Hello"}),
+    ],
+)
+def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(marker, expected_block):
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": marker}]}
+    ]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        _anthropic_body(copy.deepcopy(messages))
+
+    body: Final = _anthropic_body(messages, litellm_params={"drop_params": True})
+    assert body["messages"] == [{"role": "user", "content": [expected_block]}]
+
+
+def test_transform_request_names_the_marker_ttl_rule_for_a_ttl_only_claude_takes():
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}
+            ],
+        }
+    ]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="optional ttl of '30m' or '12h'"):
+        _anthropic_body(messages)
+
+
+def test_transform_request_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_cap():
+    client_marked_part: Final = {"type": "text", "text": "part 0", "cache_control": {"type": "ephemeral"}}
+    marked_parts: Final = [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        for index in range(1, 5)
+    ]
+    messages: Final = [{"role": "user", "content": [client_marked_part, *marked_parts]}]
+    tools: Final = [{"name": "lookup", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}}]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="at most 4 cache breakpoints"):
+        _anthropic_body(copy.deepcopy(messages), tools=copy.deepcopy(tools))
+
+    body: Final = _anthropic_body(messages, litellm_params={"drop_params": True}, tools=tools)
+    assert [part.get("cache_control") for part in body["messages"][0]["content"]] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+        None,
+        None,
+        {"type": "ephemeral"},
+    ]
+    assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_transform_request_counts_a_cache_marked_tool_search_tool_toward_the_cap():
+    config: Final = AnthropicConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 100,
+            "tools": [
+                {
+                    "type": "tool_search_tool_regex_20251119",
+                    "name": "tool_search_tool_regex",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        optional_params={},
+        model="claude-sonnet-5-5",
+        drop_params=False,
+    )
+    marked_turns: Final = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": f"turn {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        }
+        for index in range(4)
+    ]
+
+    def body(litellm_params: dict) -> dict:
+        return config.transform_request(
+            model="claude-sonnet-5-5",
+            messages=copy.deepcopy(marked_turns),
+            optional_params=copy.deepcopy(optional_params),
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="this request has 5"):
+        body({})
+
+    capped: Final = body({"drop_params": True})
+    assert capped["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    sent_parts: Final = itertools.chain.from_iterable(message["content"] for message in capped["messages"])
+    assert [part.get("cache_control") for part in sent_parts] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+        None,
+        {"type": "ephemeral"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "unsent_marks",
+    [
+        pytest.param(
+            [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Noted.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+                }
+            ],
+            id="assistant_part",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Also this.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            id="message_level",
+        ),
+    ],
+)
+def test_transform_request_caps_only_the_marks_claude_receives(unsent_marks: list[dict]):
+    marked_parts: Final = [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}} for index in range(4)
+    ]
+
+    body: Final = _anthropic_body(
+        [{"role": "user", "content": marked_parts}, *unsent_marks, {"role": "user", "content": "Go on."}]
+    )
+
+    sent_marks: Final = [
+        part.get("cache_control")
+        for part in itertools.chain.from_iterable(message["content"] for message in body["messages"])
+        if isinstance(part, dict)
+    ]
+    assert sent_marks.count({"type": "ephemeral"}) == 4
 
 
 def test_compaction_block_empty_list_not_added():
@@ -10014,6 +10241,83 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert litellm_params["metadata"] == {}
 
 
+_INPUT_TRANSFORMATIONS: Final = [{"type": "thinking_block_binding", "count": 2}]
+
+
+def _input_transformations_response() -> AnthropicMessagesResponse:
+    return AnthropicMessagesResponse(
+        id="msg_input_transformations",
+        type="message",
+        role="assistant",
+        model="claude-sonnet-4-6",
+        content=[{"type": "text", "text": "ok"}],
+        stop_reason="end_turn",
+        stop_sequence=None,
+        usage={"input_tokens": 12, "output_tokens": 3},
+        input_transformations=_INPUT_TRANSFORMATIONS,
+    )
+
+
+def test_chat_response_surfaces_input_transformations_in_provider_specific_fields() -> None:
+    result: Final = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=_input_transformations_response()),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
+
+
+def test_chat_response_without_input_transformations_adds_no_key() -> None:
+    completion_response: Final = {
+        key: value for key, value in _input_transformations_response().items() if key != "input_transformations"
+    }
+    result: Final = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert "input_transformations" not in result.choices[0].message.provider_specific_fields
+
+
+def test_json_mode_chat_response_keeps_input_transformations() -> None:
+    completion_response: Final = {
+        **_input_transformations_response(),
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": 42}}
+        ],
+        "stop_reason": "tool_use",
+    }
+    result: Final = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        json_mode=True,
+    )
+
+    assert json.loads(result.choices[0].message.content) == {"answer": 42}
+    assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
+
+
 _HOSTED_MCP_TOOL: Final = {
     "type": "mcp",
     "server_label": "deepwiki",
@@ -10434,7 +10738,9 @@ def test_chat_transform_request_never_blames_a_numeric_assistant_tool_call_id_fo
                 {
                     "role": "assistant",
                     "content": None,
-                    "tool_calls": [{"id": 5, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+                    "tool_calls": [
+                        {"id": 5, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                    ],
                 },
                 {"role": "tool", "tool_call_id": "5", "content": "rain"},
             ],
@@ -10471,9 +10777,15 @@ def test_chat_transform_request_names_no_field_for_a_failure_outside_roles_and_t
 
 def _five_cache_hint_conversation() -> list[dict[str, object]]:
     return [
-        {"role": "system", "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}],
+        },
         {"role": "user", "content": [{"type": "text", "text": "turn 1", "cache_control": {"type": "ephemeral"}}]},
-        {"role": "assistant", "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}],
+        },
         {"role": "user", "content": [{"type": "text", "text": "turn 2", "cache_control": {"type": "ephemeral"}}]},
         {"role": "assistant", "content": "answer 2"},
         {"role": "user", "content": [{"type": "text", "text": "turn 3", "cache_control": {"type": "ephemeral"}}]},

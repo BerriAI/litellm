@@ -7454,6 +7454,31 @@
   "claude_code_marketplace": {
     "components": {
       "schemas": {
+        "Body_upload_plugin_claude_code_plugins_upload_post": {
+          "properties": {
+            "file": {
+              "contentMediaType": "application/octet-stream",
+              "description": "Skill ZIP containing SKILL.md and supporting files, up to 10 MiB",
+              "title": "File",
+              "type": "string"
+            },
+            "metadata": {
+              "contentMediaType": "application/json",
+              "contentSchema": {
+                "$ref": "#/components/schemas/UploadPluginRequest"
+              },
+              "description": "JSON skill metadata without a source URL",
+              "title": "Metadata",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "metadata"
+          ],
+          "title": "Body_upload_plugin_claude_code_plugins_upload_post",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -8057,6 +8082,137 @@
           "title": "UpdatePluginRequest",
           "type": "object"
         },
+        "UploadPluginRequest": {
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin author"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin category",
+              "title": "Category"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin description",
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill domain (e.g., 'Productivity')",
+              "title": "Domain"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin homepage URL",
+              "title": "Homepage"
+            },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
+              "title": "Installation Preference"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search keywords",
+              "title": "Keywords"
+            },
+            "name": {
+              "description": "Skill name (kebab-case)",
+              "pattern": "^[a-z0-9-]+$",
+              "title": "Name",
+              "type": "string"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill namespace within domain (e.g., 'workflows')",
+              "title": "Namespace"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "1.0.0",
+              "description": "Semantic version",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "UploadPluginRequest",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -8242,6 +8398,53 @@
           ]
         }
       },
+      "/claude-code/plugins/upload": {
+        "post": {
+          "description": "Create a skill and its uploaded ZIP atomically. Duplicate names return 409.",
+          "operationId": "upload_plugin_claude_code_plugins_upload_post",
+          "requestBody": {
+            "content": {
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_upload_plugin_claude_code_plugins_upload_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RegisterPluginResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Upload Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
       "/claude-code/plugins/{plugin_name}": {
         "delete": {
           "description": "Delete a plugin from the marketplace.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: The name of the plugin to delete",
@@ -8383,6 +8586,59 @@
             }
           ],
           "summary": "Update Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/plugins/{plugin_name}/archive/{digest}.zip": {
+        "get": {
+          "description": "Download an uploaded ZIP under the same visibility policy as its skill.",
+          "operationId": "download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "digest",
+              "required": true,
+              "schema": {
+                "title": "Digest",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/zip": {
+                  "schema": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Download Plugin Archive",
           "tags": [
             "claude_code_marketplace"
           ]
@@ -10237,8 +10493,15 @@
               "type": "string"
             },
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "probabilities": {
               "additionalProperties": {
@@ -10256,7 +10519,6 @@
           "required": [
             "type",
             "choice",
-            "confidence",
             "probabilities"
           ],
           "title": "ChoiceAnswer",
@@ -10687,8 +10949,15 @@
               "title": "Choice"
             },
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "name": {
               "anyOf": [
@@ -10718,8 +10987,7 @@
           "required": [
             "name",
             "choice",
-            "probabilities",
-            "confidence"
+            "probabilities"
           ],
           "title": "OpenAIChoiceAnswer",
           "type": "object"
@@ -10924,8 +11192,15 @@
         "OpenAIScoreAnswer": {
           "properties": {
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "name": {
               "anyOf": [
@@ -10959,8 +11234,7 @@
           "required": [
             "name",
             "score",
-            "probabilities",
-            "confidence"
+            "probabilities"
           ],
           "title": "OpenAIScoreAnswer",
           "type": "object"
@@ -10992,8 +11266,15 @@
           "additionalProperties": true,
           "properties": {
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "legend": {
               "additionalProperties": {
@@ -11034,7 +11315,6 @@
           "required": [
             "type",
             "score",
-            "confidence",
             "legend",
             "probabilities"
           ],
@@ -23542,8 +23822,15 @@
               "type": "string"
             },
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "probabilities": {
               "additionalProperties": {
@@ -23561,7 +23848,6 @@
           "required": [
             "type",
             "choice",
-            "confidence",
             "probabilities"
           ],
           "title": "ChoiceAnswer",
@@ -29400,8 +29686,15 @@
           "additionalProperties": true,
           "properties": {
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "legend": {
               "additionalProperties": {
@@ -29442,7 +29735,6 @@
           "required": [
             "type",
             "score",
-            "confidence",
             "legend",
             "probabilities"
           ],
@@ -34331,6 +34623,7 @@
       },
       "/openai/v1/realtime/calls": {
         "post": {
+          "description": "Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets",
           "operationId": "proxy_realtime_calls_openai_v1_realtime_calls_post",
           "responses": {
             "200": {
@@ -34350,6 +34643,7 @@
       },
       "/openai/v1/realtime/client_secrets": {
         "post": {
+          "description": "Create a short-lived client token for a Realtime conversation, transcription, or translation session",
           "operationId": "create_realtime_client_secret_openai_v1_realtime_client_secrets_post",
           "responses": {
             "200": {
@@ -54536,6 +54830,7 @@
     "paths": {
       "/openai/v1/realtime/calls": {
         "post": {
+          "description": "Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets",
           "operationId": "proxy_realtime_calls_openai_v1_realtime_calls_post_2",
           "responses": {
             "200": {
@@ -54555,6 +54850,7 @@
       },
       "/openai/v1/realtime/client_secrets": {
         "post": {
+          "description": "Create a short-lived client token for a Realtime conversation, transcription, or translation session",
           "operationId": "create_realtime_client_secret_openai_v1_realtime_client_secrets_post_2",
           "responses": {
             "200": {
@@ -54608,6 +54904,7 @@
       },
       "/realtime/calls": {
         "post": {
+          "description": "Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets",
           "operationId": "proxy_realtime_calls_realtime_calls_post",
           "responses": {
             "200": {
@@ -54627,6 +54924,7 @@
       },
       "/realtime/client_secrets": {
         "post": {
+          "description": "Create a short-lived client token for a Realtime conversation, transcription, or translation session",
           "operationId": "create_realtime_client_secret_realtime_client_secrets_post",
           "responses": {
             "200": {
@@ -54678,8 +54976,489 @@
           ]
         }
       },
+      "/realtime/translations/calls": {
+        "post": {
+          "description": "Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets",
+          "operationId": "proxy_realtime_calls_realtime_translations_calls_post",
+          "requestBody": {
+            "content": {
+              "application/sdp": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "201": {
+              "content": {
+                "text/plain": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "WebRTC SDP answer"
+            }
+          },
+          "summary": "Proxy Realtime Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/realtime/translations/client_secrets": {
+        "post": {
+          "description": "Create a short-lived client token for a Realtime conversation, transcription, or translation session",
+          "operationId": "create_realtime_client_secret_realtime_translations_client_secrets_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "gpt-realtime-translate",
+                  "session": {
+                    "model": "gpt-realtime-translate",
+                    "type": "translation"
+                  }
+                },
+                "schema": {
+                  "description": "Request body for POST /v1/realtime/client_secrets.\n\nLiteLLM also accepts a top-level `model` field for routing when\nsession.model is absent (LiteLLM extension, not forwarded to OpenAI).",
+                  "properties": {
+                    "expires_after": {
+                      "anyOf": [
+                        {
+                          "description": "Expiration config for a client secret.",
+                          "properties": {
+                            "anchor": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": "created_at",
+                              "title": "Anchor"
+                            },
+                            "seconds": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Seconds"
+                            }
+                          },
+                          "title": "RealtimeExpiresAfter",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "model": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Model"
+                    },
+                    "session": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "description": "Session configuration nested inside the client_secrets request body.\n\nMirrors OpenAI's RealtimeSessionCreateRequest (type=realtime) and\nRealtimeTranscriptionSessionCreateRequest (type=transcription).\nExtra/unknown fields are passed through unchanged.",
+                          "properties": {
+                            "audio": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": true,
+                                  "properties": {
+                                    "input": {
+                                      "anyOf": [
+                                        {
+                                          "additionalProperties": true,
+                                          "properties": {
+                                            "format": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Format"
+                                            },
+                                            "noise_reduction": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Noise Reduction"
+                                            },
+                                            "transcription": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "properties": {
+                                                    "delay": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Delay"
+                                                    },
+                                                    "keywords": {
+                                                      "anyOf": [
+                                                        {
+                                                          "items": {
+                                                            "type": "string"
+                                                          },
+                                                          "type": "array"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Keywords"
+                                                    },
+                                                    "language": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Language"
+                                                    },
+                                                    "languages": {
+                                                      "anyOf": [
+                                                        {
+                                                          "items": {
+                                                            "type": "string"
+                                                          },
+                                                          "type": "array"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Languages"
+                                                    },
+                                                    "model": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Model"
+                                                    },
+                                                    "prompt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Prompt"
+                                                    }
+                                                  },
+                                                  "title": "RealtimeAudioTranscriptionConfig",
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "turn_detection": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Turn Detection"
+                                            }
+                                          },
+                                          "title": "RealtimeAudioInputConfig",
+                                          "type": "object"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "output": {
+                                      "anyOf": [
+                                        {
+                                          "additionalProperties": true,
+                                          "properties": {
+                                            "format": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Format"
+                                            },
+                                            "language": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Language"
+                                            },
+                                            "voice": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Voice"
+                                            }
+                                          },
+                                          "title": "RealtimeAudioOutputConfig",
+                                          "type": "object"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "title": "RealtimeSessionAudioConfig",
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "include": {
+                              "anyOf": [
+                                {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Include"
+                            },
+                            "instructions": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Instructions"
+                            },
+                            "max_output_tokens": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Max Output Tokens"
+                            },
+                            "model": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Model"
+                            },
+                            "output_modalities": {
+                              "anyOf": [
+                                {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Output Modalities"
+                            },
+                            "prompt": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": true,
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Prompt"
+                            },
+                            "tool_choice": {
+                              "anyOf": [
+                                {},
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Tool Choice"
+                            },
+                            "tools": {
+                              "anyOf": [
+                                {
+                                  "items": {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Tools"
+                            },
+                            "tracing": {
+                              "anyOf": [
+                                {},
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Tracing"
+                            },
+                            "truncation": {
+                              "anyOf": [
+                                {},
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Truncation"
+                            },
+                            "type": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Type"
+                            }
+                          },
+                          "title": "RealtimeSessionConfig",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "title": "RealtimeClientSecretRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeClientSecretResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Client Secret",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
       "/v1/realtime/calls": {
         "post": {
+          "description": "Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets",
           "operationId": "proxy_realtime_calls_v1_realtime_calls_post",
           "responses": {
             "200": {
@@ -54699,6 +55478,7 @@
       },
       "/v1/realtime/client_secrets": {
         "post": {
+          "description": "Create a short-lived client token for a Realtime conversation, transcription, or translation session",
           "operationId": "create_realtime_client_secret_v1_realtime_client_secrets_post",
           "responses": {
             "200": {
@@ -54745,6 +55525,486 @@
             }
           ],
           "summary": "Create Realtime Transcription Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/realtime/translations/calls": {
+        "post": {
+          "description": "Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets",
+          "operationId": "proxy_realtime_calls_v1_realtime_translations_calls_post",
+          "requestBody": {
+            "content": {
+              "application/sdp": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "201": {
+              "content": {
+                "text/plain": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "WebRTC SDP answer"
+            }
+          },
+          "summary": "Proxy Realtime Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/realtime/translations/client_secrets": {
+        "post": {
+          "description": "Create a short-lived client token for a Realtime conversation, transcription, or translation session",
+          "operationId": "create_realtime_client_secret_v1_realtime_translations_client_secrets_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "gpt-realtime-translate",
+                  "session": {
+                    "model": "gpt-realtime-translate",
+                    "type": "translation"
+                  }
+                },
+                "schema": {
+                  "description": "Request body for POST /v1/realtime/client_secrets.\n\nLiteLLM also accepts a top-level `model` field for routing when\nsession.model is absent (LiteLLM extension, not forwarded to OpenAI).",
+                  "properties": {
+                    "expires_after": {
+                      "anyOf": [
+                        {
+                          "description": "Expiration config for a client secret.",
+                          "properties": {
+                            "anchor": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": "created_at",
+                              "title": "Anchor"
+                            },
+                            "seconds": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Seconds"
+                            }
+                          },
+                          "title": "RealtimeExpiresAfter",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "model": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Model"
+                    },
+                    "session": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "description": "Session configuration nested inside the client_secrets request body.\n\nMirrors OpenAI's RealtimeSessionCreateRequest (type=realtime) and\nRealtimeTranscriptionSessionCreateRequest (type=transcription).\nExtra/unknown fields are passed through unchanged.",
+                          "properties": {
+                            "audio": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": true,
+                                  "properties": {
+                                    "input": {
+                                      "anyOf": [
+                                        {
+                                          "additionalProperties": true,
+                                          "properties": {
+                                            "format": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Format"
+                                            },
+                                            "noise_reduction": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Noise Reduction"
+                                            },
+                                            "transcription": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "properties": {
+                                                    "delay": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Delay"
+                                                    },
+                                                    "keywords": {
+                                                      "anyOf": [
+                                                        {
+                                                          "items": {
+                                                            "type": "string"
+                                                          },
+                                                          "type": "array"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Keywords"
+                                                    },
+                                                    "language": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Language"
+                                                    },
+                                                    "languages": {
+                                                      "anyOf": [
+                                                        {
+                                                          "items": {
+                                                            "type": "string"
+                                                          },
+                                                          "type": "array"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Languages"
+                                                    },
+                                                    "model": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Model"
+                                                    },
+                                                    "prompt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Prompt"
+                                                    }
+                                                  },
+                                                  "title": "RealtimeAudioTranscriptionConfig",
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "turn_detection": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Turn Detection"
+                                            }
+                                          },
+                                          "title": "RealtimeAudioInputConfig",
+                                          "type": "object"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "output": {
+                                      "anyOf": [
+                                        {
+                                          "additionalProperties": true,
+                                          "properties": {
+                                            "format": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Format"
+                                            },
+                                            "language": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Language"
+                                            },
+                                            "voice": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Voice"
+                                            }
+                                          },
+                                          "title": "RealtimeAudioOutputConfig",
+                                          "type": "object"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "title": "RealtimeSessionAudioConfig",
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "include": {
+                              "anyOf": [
+                                {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Include"
+                            },
+                            "instructions": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Instructions"
+                            },
+                            "max_output_tokens": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Max Output Tokens"
+                            },
+                            "model": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Model"
+                            },
+                            "output_modalities": {
+                              "anyOf": [
+                                {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Output Modalities"
+                            },
+                            "prompt": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": true,
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Prompt"
+                            },
+                            "tool_choice": {
+                              "anyOf": [
+                                {},
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Tool Choice"
+                            },
+                            "tools": {
+                              "anyOf": [
+                                {
+                                  "items": {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Tools"
+                            },
+                            "tracing": {
+                              "anyOf": [
+                                {},
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Tracing"
+                            },
+                            "truncation": {
+                              "anyOf": [
+                                {},
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Truncation"
+                            },
+                            "type": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Type"
+                            }
+                          },
+                          "title": "RealtimeSessionConfig",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "title": "RealtimeClientSecretRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeClientSecretResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Client Secret",
           "tags": [
             "realtime"
           ]
