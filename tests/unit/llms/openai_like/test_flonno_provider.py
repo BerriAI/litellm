@@ -83,6 +83,7 @@ def test_prefixed_model_reaches_flonno_chat_completions_without_the_prefix():
         litellm.completion(
             model=FLONNO_PREFIXED,
             messages=[{"role": "user", "content": "hello"}],
+            api_key="flonno-test-key",
             client=client,
         )
 
@@ -163,3 +164,75 @@ def test_catalog_row_matches_its_backup_and_fits_its_context():
     assert row["input_cost_per_token"] == 3e-08
     assert row["output_cost_per_token"] == 2.5e-07
     assert litellm.get_model_info(FLONNO_PREFIXED)["litellm_provider"] == "flonno"
+
+
+def test_flonno_completion_never_borrows_openai_api_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("FLONNO_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-should-not-leak")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{FLONNO_API_BASE}/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-flonno",
+                "object": "chat.completion",
+                "created": 1,
+                "model": FLONNO_MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        with pytest.raises(litellm.AuthenticationError, match="FLONNO_API_KEY"):
+            litellm.completion(
+                model=FLONNO_PREFIXED,
+                messages=[{"role": "user", "content": "hello"}],
+            )
+
+    assert route.call_count == 0
+
+
+def test_flonno_completion_uses_flonno_api_key_from_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("FLONNO_API_KEY", "flonno-env-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-should-not-be-used")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{FLONNO_API_BASE}/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-flonno",
+                "object": "chat.completion",
+                "created": 1,
+                "model": FLONNO_MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        response: Final = litellm.completion(
+            model=FLONNO_PREFIXED,
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    request: Final = route.calls.last.request
+    assert route.call_count == 1
+    assert str(request.url) == f"{FLONNO_API_BASE}/chat/completions"
+    assert request.headers["authorization"] == "Bearer flonno-env-key"
+    assert "sk-openai-should-not-be-used" not in request.headers.get("authorization", "")
+    assert response.choices[0].message.content == "hi"
