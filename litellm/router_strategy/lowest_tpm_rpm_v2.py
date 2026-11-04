@@ -274,7 +274,10 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
-            if standard_logging_object["cache_hit"] is True:
+            cache_hit: Final[object] = (
+                standard_logging_object.get("cache_hit")  # pyright: ignore[reportUnknownMemberType]  # may be omitted
+            )
+            if cache_hit is True:
                 return
             model_group: Final = standard_logging_object.get("model_group")
             deployment_model: Final[object] = get_litellm_metadata_from_kwargs(kwargs).get("deployment")  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType, reportUnknownVariableType]  # helper has no typed metadata signature
@@ -327,7 +330,10 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
-            if standard_logging_object["cache_hit"] is True:
+            cache_hit: Final[object] = (
+                standard_logging_object.get("cache_hit")  # pyright: ignore[reportUnknownMemberType]  # may be omitted
+            )
+            if cache_hit is True:
                 return
             model_group: Final = standard_logging_object.get("model_group")
             deployment_model: Final[object] = get_litellm_metadata_from_kwargs(kwargs).get("deployment")  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType, reportUnknownVariableType]  # helper has no typed metadata signature
