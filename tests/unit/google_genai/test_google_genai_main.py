@@ -727,3 +727,63 @@ async def test_proxy_forwarded_headers_reach_generate_content_without_leaking_pr
     assert wire_headers["x-goog-api-key"] == _UPSTREAM_KEY
     assert wire_headers["x-cost-center"] == "core-platform"
     assert "authorization" not in wire_headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("incoming", "expected_upstream_key"),
+    [
+        ({"x-goog-api-key": "sk-litellm-virtual-key", "x-cost-center": "core-platform"}, _UPSTREAM_KEY),
+        (
+            {
+                "x-litellm-api-key": "sk-litellm-virtual-key",
+                "x-goog-api-key": "AIza-caller-key",
+                "x-cost-center": "core-platform",
+            },
+            "AIza-caller-key",
+        ),
+    ],
+    ids=["proxy-key-in-goog-header", "caller-key-beside-proxy-key"],
+)
+async def test_provider_auth_forwarding_never_sends_proxy_key_to_generate_content(
+    header_capture_wire: _WireCapture,
+    incoming: Mapping[str, str],
+    expected_upstream_key: str,
+) -> None:
+    from starlette.datastructures import Headers
+
+    from litellm.google_genai.main import agenerate_content
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import (
+        LiteLLMProxyRequestSetup,
+        clean_headers,
+        litellm_auth_header_name,
+    )
+
+    incoming_headers: Final = Headers(incoming)
+    cleaned: Final = clean_headers(
+        incoming_headers,
+        forward_llm_provider_auth_headers=True,
+        authenticated_with_header=litellm_auth_header_name(incoming_headers),
+    )
+    backend_data: Final = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers=cleaned,
+        request_data={"model": "gemini/gemini-2.0-flash"},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+        general_settings={"forward_client_headers_to_llm_api": True},
+    )
+
+    resp: Final = await agenerate_content(
+        model="gemini/gemini-2.0-flash",
+        contents=[{"role": "user", "parts": [{"text": "ping"}]}],
+        api_base=header_capture_wire.url,
+        api_key=_UPSTREAM_KEY,
+        headers=backend_data.get("headers"),
+    )
+
+    assert _extract_chunk_texts(resp) == ("pong",)
+    assert len(header_capture_wire.requests) == 1
+    wire_headers: Final = header_capture_wire.requests[0][1]
+    assert wire_headers["x-goog-api-key"] == expected_upstream_key
+    assert wire_headers["x-cost-center"] == "core-platform"
+    assert "x-litellm-api-key" not in wire_headers
