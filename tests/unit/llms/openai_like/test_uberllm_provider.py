@@ -78,7 +78,9 @@ def test_uberllm_supported_endpoints():
     }
 
 
-def test_uberllm_chat_completion_request():
+@pytest.mark.parametrize("reasoning_effort", [None, "none", "high"])
+def test_uberllm_chat_completion_request(reasoning_effort: str | None):
+    effort_kwargs: Final = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
     with respx.mock() as upstream:
         route: Final = upstream.post("https://api.uberllm.dev/v1/chat/completions").respond(
             200,
@@ -101,12 +103,14 @@ def test_uberllm_chat_completion_request():
             model="uberllm/deepseek/deepseek-v4.1-flash",
             messages=[{"role": "user", "content": "Say hello"}],
             api_key="uberllm-test-key",
+            **effort_kwargs,
         )
 
     request: Final = route.calls.last.request
     body: Final = json.loads(request.content)
     assert route.call_count == 1
     assert str(request.url) == "https://api.uberllm.dev/v1/chat/completions"
+    assert body.get("reasoning_effort") == reasoning_effort
     assert request.headers["authorization"] == "Bearer uberllm-test-key"
     assert body["model"] == "deepseek/deepseek-v4.1-flash"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
