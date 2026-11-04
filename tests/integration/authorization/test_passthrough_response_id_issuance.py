@@ -61,6 +61,7 @@ Route = Literal[
     "input_tokens",
     "openai_passthrough",
     "percent_encoded",
+    "comparison",
 ]
 
 
@@ -108,6 +109,16 @@ def _send(candidate: Gateway, key: str, method: str, path: str, body: bytes | No
 
 def _continue(previous_response_id: str) -> bytes:
     return json.dumps({"model": _MODEL, "input": "continue", "previous_response_id": previous_response_id}).encode()
+
+
+def _compare(comparison_response_id: str) -> bytes:
+    return json.dumps(
+        {
+            "model": _MODEL,
+            "input": "compare",
+            "prompt_cache_options": {"comparison_response_id": comparison_response_id},
+        }
+    ).encode()
 
 
 def _user_key(scenario: Scenario) -> str:
@@ -225,6 +236,8 @@ def _call(route: Route, vendor_id: str) -> tuple[str, str, bytes | None]:
             return ("GET", f"/openai_passthrough/v1/responses/{vendor_id}", None)
         case "percent_encoded":
             return ("GET", f"/openai/responses/%72{vendor_id[1:]}", None)
+        case "comparison":
+            return ("POST", "/openai/responses", _compare(vendor_id))
         case _:
             assert_never(route)
 
@@ -267,6 +280,7 @@ def test_the_owner_keeps_using_the_gateway_id_and_another_key_cannot(gateway: Ga
         "input_tokens",
         "openai_passthrough",
         "percent_encoded",
+        "comparison",
     ),
 )
 def test_a_vendor_id_the_gateway_never_issued_is_refused_before_it_reaches_openai(

@@ -47,6 +47,7 @@ from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_owner_filter,
     can_access_resource,
@@ -483,10 +484,14 @@ def _addressed_raw_response_ids(path: str, body: Mapping[str, object]) -> frozen
     path_ids: Final = frozenset(
         seg for parent, seg in pairwise(segments) if parent == "responses" and seg.startswith(_RESPONSE_ID_PREFIX)
     )
-    previous_response_id: Final = body.get("previous_response_id")
-    if isinstance(previous_response_id, str) and previous_response_id.startswith(_RESPONSE_ID_PREFIX):
-        return path_ids | {previous_response_id}
-    return path_ids
+    prompt_cache_options: Final = as_str_mapping(body.get("prompt_cache_options"))
+    body_ids: Final = (
+        body.get("previous_response_id"),
+        None if prompt_cache_options is None else prompt_cache_options.get("comparison_response_id"),
+    )
+    return path_ids | frozenset(
+        value for value in body_ids if isinstance(value, str) and value.startswith(_RESPONSE_ID_PREFIX)
+    )
 
 
 async def addressed_response_id_issuance(

@@ -1764,6 +1764,10 @@ class TestAddressedResponseIdIssuance:
             (f"/openai/responses/{UNISSUED_RESPONSE_ID}", {}),
             ("/v1/responses/compact", {"model": "gpt-5.6", "previous_response_id": UNISSUED_RESPONSE_ID}),
             ("/v1/responses", {"model": "gpt-5.6", "previous_response_id": UNISSUED_RESPONSE_ID}),
+            (
+                "/v1/responses",
+                {"model": "gpt-5.6", "prompt_cache_options": {"comparison_response_id": UNISSUED_RESPONSE_ID}},
+            ),
         ],
     )
     async def test_response_id_without_a_passthrough_row_is_unissued(self, path, body):
