@@ -37,9 +37,29 @@ class MorphChatConfig(OpenAILikeChatConfig):
     ) -> tuple[str | None, str | None]:
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        if model.removeprefix("morph/").startswith("morph-v3-"):
+            return ["messages", "model", "stream"]
         return [
             "messages",
             "model",
             "stream",
+            "stream_options",
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "stop",
+            "seed",
+            "max_tokens",
+            "max_completion_tokens",
+            "logit_bias",
+            "logprobs",
+            "top_logprobs",
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "response_format",
+            "reasoning_effort",
+            "prompt_cache_key",
         ]

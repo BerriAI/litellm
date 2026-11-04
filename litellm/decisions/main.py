@@ -1,5 +1,7 @@
+import asyncio
 import warnings
 from collections.abc import Mapping
+from functools import partial
 from typing import Final
 
 import httpx
@@ -15,6 +17,7 @@ from litellm.decisions.call import (
     SystemOneQuestions,
     SystemOneRequestFields,
     asend,
+    log_caller_request,
     prepare_call,
     reject_images_next_to_input,
     send,
@@ -76,6 +79,16 @@ def _prepare_decisions_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    log_caller_request(
+        kwargs,
+        {
+            "input": decision_input,
+            "questions": questions,
+            "audio": audio,
+            "videos": videos,
+            **{key: kwargs[key] for key in _SYSTEMONE_FIELDS if key in kwargs},
+        },
+    )
     return prepare_call(
         model=model,
         fields=_request_fields(model, decision_input, questions, audio, videos, kwargs),
@@ -104,19 +117,22 @@ async def adecisions(
     videos: DecisionsVideoClips | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
-    call: Final = _prepare_decisions_call(
-        model=model,
-        decision_input=input,
-        questions=questions,
-        safety_identifier=safety_identifier,
-        audio=audio,
-        videos=videos,
-        api_key=api_key,
-        api_base=api_base,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        kwargs=kwargs,
+    call: Final = await asyncio.to_thread(
+        partial(
+            _prepare_decisions_call,
+            model=model,
+            decision_input=input,
+            questions=questions,
+            safety_identifier=safety_identifier,
+            audio=audio,
+            videos=videos,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            kwargs=kwargs,
+        )
     )
     return await asend(call)
 

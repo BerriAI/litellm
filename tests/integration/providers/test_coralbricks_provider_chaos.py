@@ -36,6 +36,8 @@ from integration.providers._coralbricks import (
 )
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 Endpoint = Literal["chat", "messages", "responses"]
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 

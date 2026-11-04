@@ -6,6 +6,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -160,7 +161,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
         proxy_endpoint_url = proxy_endpoint_url.replace("bedrock-runtime", "bedrock-agent-runtime")
-        proxy_endpoint_url = f"{proxy_endpoint_url}/rerank"
+        proxy_endpoint_url = join_api_base(proxy_endpoint_url, "rerank")
 
         body: Final = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}

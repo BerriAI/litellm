@@ -258,9 +258,20 @@ def _observed(upstream: httpx.Client) -> list[JsonValue]:
     return requests
 
 
-def _denial_error(denied: httpx.Response) -> dict[str, JsonValue]:
+def _denial_error(denied: httpx.Response, route: str) -> dict[str, JsonValue]:
     assert denied.status_code == 422, denied.text
-    return object_value(object_value(denied.json())["error"])
+    if route == "/v1/messages":
+        body: Final = object_value(denied.json())
+        assert body["type"] == "error", denied.text
+        anthropic_error: Final = object_value(body["error"])
+        assert anthropic_error["type"] == "invalid_request_error", denied.text
+        assert "param" not in anthropic_error and "code" not in anthropic_error, denied.text
+        return anthropic_error
+    openai_error: Final = object_value(object_value(denied.json())["error"])
+    assert openai_error["type"] == "budget_exceeded", denied.text
+    assert openai_error["param"] is None
+    assert openai_error["code"] == "422"
+    return openai_error
 
 
 def _prove_end_user_budget_lockout(
@@ -275,7 +286,7 @@ def _prove_end_user_budget_lockout(
     info_path: str = "/customer/info",
 ) -> None:
     served_content: Final = f"served {end_user_id}"
-    _observed(upstream)
+    upstream.delete("/__observations").raise_for_status()
     served: Final = _send(gateway, spelling, deployment, key, end_user_id, served_content)
     _assert_served(spelling, served)
     assert _observed(upstream) == [
@@ -301,11 +312,10 @@ def _prove_end_user_budget_lockout(
     else:
         assert float(str(object_value(budget)["max_budget"])) == float(str(expected_max_budget)), customer_info.text
 
-    _observed(upstream)
+    upstream.delete("/__observations").raise_for_status()
     denied: Final = _send(gateway, spelling, deployment, key, end_user_id, f"denied {end_user_id}")
     assert _observed(upstream) == [], denied.text
-    error: Final = _denial_error(denied)
-    assert error["type"] == "budget_exceeded", denied.text
+    error: Final = _denial_error(denied, spelling.route)
     matched: Final = re.fullmatch(
         rf"ExceededBudget: End User={re.escape(end_user_id)} over budget\. "
         rf"Spend=([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?), Budget=0\.05",
@@ -533,7 +543,7 @@ def test_customer_budget_refuses_calls_and_writes_daily_spend(gateway: Gateway) 
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed_requests(upstream)
+        upstream.delete("/__observations").raise_for_status()
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
         _new_customer(gateway, end_user, max_budget=0.05)
         scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
@@ -552,6 +562,7 @@ def test_customer_budget_refuses_calls_and_writes_daily_spend(gateway: Gateway) 
         served: Final = _chat(gateway, model, key, end_user)
         assert served.status_code == 200, served.text
         assert _observed_requests(upstream) == [_expected_observation(_sent_body(served, end_user))]
+        upstream.delete("/__observations").raise_for_status()
 
         charged: Final = eventually(
             lambda: _end_user_row(end_user),
@@ -577,7 +588,7 @@ def test_customer_budget_update_takes_effect_without_restart(gateway: Gateway) -
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed_requests(upstream)
+        upstream.delete("/__observations").raise_for_status()
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
         _new_customer(gateway, end_user, path="/end_user/new", max_budget=1.0)
         scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
@@ -586,6 +597,7 @@ def test_customer_budget_update_takes_effect_without_restart(gateway: Gateway) -
         served: Final = _chat(gateway, model, key, end_user)
         assert served.status_code == 200, served.text
         assert _observed_requests(upstream) == [_expected_observation(_sent_body(served, end_user))]
+        upstream.delete("/__observations").raise_for_status()
 
         updated: Final = gateway.request("POST", "/customer/update", {"user_id": end_user, "max_budget": 0.01})
         assert updated.status_code == 200, updated.text
@@ -613,7 +625,7 @@ def test_streamed_call_is_refused_as_json_once_over_budget(gateway: Gateway) -> 
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        _observed_requests(upstream)
+        upstream.delete("/__observations").raise_for_status()
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
         _new_customer(gateway, end_user, max_budget=0.05)
         scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
@@ -624,6 +636,7 @@ def test_streamed_call_is_refused_as_json_once_over_budget(gateway: Gateway) -> 
         assert served.headers["content-type"].startswith("text/event-stream")
         assert 'data: {"id":"chatcmpl-' in served.text and "data: [DONE]" in served.text, served.text
         assert _observed_requests(upstream) == [_expected_observation(_sent_body(served, end_user))]
+        upstream.delete("/__observations").raise_for_status()
         eventually(
             lambda: _end_user_row(end_user),
             lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) >= 0.05,

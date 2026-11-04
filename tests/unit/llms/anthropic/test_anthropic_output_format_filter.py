@@ -12,6 +12,18 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 
 class TestOutputFormatArrayObjectConstraints:
+    def test_closes_an_object_whose_type_is_a_union_with_null(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "address": {"type": ["object", "null"], "properties": {"city": {"type": "string"}}},
+            },
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["properties"]["address"]["additionalProperties"] is False
+
     def test_removes_uniqueitems(self):
         schema = {
             "type": "object",
@@ -129,7 +141,7 @@ class TestOutputFormatArrayObjectConstraints:
         schema = {
             "type": "array",
             "items": {"type": "string"},
-            "minItems": 1,
+            "minItems": 2,
             "maxItems": 10,
             "uniqueItems": True,
             "minContains": 2,
@@ -139,7 +151,7 @@ class TestOutputFormatArrayObjectConstraints:
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
 
         assert result["description"] == (
-            "Note: minimum number of items: 1, maximum number of items: 10, "
+            "Note: minimum number of items: 2, maximum number of items: 10, "
             "all array items must be unique, minimum number of matching items: 2, "
             "maximum number of matching items: 3."
         )

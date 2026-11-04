@@ -2,6 +2,7 @@ use crate::execution::run_async;
 use std::sync::Arc;
 use std::{num::NonZero, thread::available_parallelism};
 
+use litellm_error::{Report, Source};
 use litellm_host_python::enter_native;
 use litellm_token_counter::{
     CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
@@ -50,10 +51,10 @@ impl TokenCounter {
                 let _slot = encode_slots
                     .acquire_owned()
                     .await
-                    .map_err(|error| Error::Task(error.to_string()))?;
+                    .map_err(|error| Error::Task(Source::new(error)))?;
                 tokio::task::spawn_blocking(move || count_body(&counter, &body))
                     .await
-                    .map_err(|error| Error::Task(error.to_string()))?
+                    .map_err(|error| Error::Task(Source::new(error)))?
             },
             token_count_error_to_pyerr,
         )
@@ -70,19 +71,12 @@ fn count_body(counter: &CoreTokenCounter, body: &[u8]) -> Result<InputTokenCount
 }
 
 pub(crate) fn token_count_error_to_pyerr(error: Error) -> PyErr {
-    let message = error.to_string();
-    match error {
-        Error::Load(_)
-        | Error::Ranks(_)
-        | Error::UnicodeClasses
-        | Error::UnsupportedTokenizer(_) => PyValueError::new_err(message),
-        Error::RequestParse(_)
-        | Error::MissingInput
-        | Error::FloatText
-        | Error::ContentBlock
-        | Error::ArrayItems
-        | Error::JsonSerialization(_)
-        | Error::JsonUtf8(_) => RustBridgeDeclined::new_err(message),
-        Error::Encode(_) | Error::Decode(_) | Error::Task(_) => PyRuntimeError::new_err(message),
+    let message = Report::new(&error).to_string();
+    if error.is_unsupported() {
+        RustBridgeDeclined::new_err(message)
+    } else if error.is_load() {
+        PyValueError::new_err(message)
+    } else {
+        PyRuntimeError::new_err(message)
     }
 }

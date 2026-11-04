@@ -9,6 +9,8 @@ with deployment credentials, bypassing the managed files access-control hooks.
 """
 
 import base64
+import json
+from typing import Final
 import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -326,7 +328,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
     # Mock router
     mock_router = MagicMock()
     mock_router.aretrieve_batch = AsyncMock(return_value=batch_response)
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value={
             "api_key": "test-key",
             "api_base": "https://test.azure.com/",
@@ -337,7 +339,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
     mock_deployment = MagicMock()
     mock_deployment.litellm_params.custom_llm_provider = "azure"
     mock_deployment.litellm_params.model = "azure/gpt-4"
-    mock_router.get_deployment = MagicMock(return_value=mock_deployment)
+    mock_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
     checker = CheckBatchCost(
         proxy_logging_obj=mock_proxy_logging,
@@ -367,13 +369,14 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
         # managed_files_obj.afile_content should NOT have been called
         mock_managed_files_hook.afile_content.assert_not_called()
 
-        # Verify the DB update writes batch_processed, status, and file_object
-        mock_prisma.db.litellm_managedobjecttable.update.assert_called_once()
-        update_call_kwargs = (
-            mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs
+        claim_data: Final = next(
+            call.kwargs["data"]
+            for call in mock_prisma.db.litellm_managedobjecttable.update_many.call_args_list
+            if call.kwargs["where"].get("id") == mock_job.id
         )
-        assert update_call_kwargs["data"]["batch_processed"] is True
-        assert update_call_kwargs["data"]["status"] == "complete"
-        assert (
-            "file_object" in update_call_kwargs["data"]
-        ), "file_object must be written to DB so list_batches reads updated status"
+        assert claim_data["batch_processed"] is True
+        assert claim_data["status"] == "complete"
+        persisted_batch: Final = json.loads(claim_data["file_object"])
+        assert persisted_batch["status"] == "completed"
+        assert persisted_batch["usage"]["prompt_tokens"] == 10
+        assert persisted_batch["usage"]["completion_tokens"] == 5

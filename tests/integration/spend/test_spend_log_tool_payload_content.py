@@ -15,12 +15,14 @@ import openai
 import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE
 from litellm.responses.utils import ResponsesAPIRequestUtils
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 REDACTED: Final = "REDACTED_BY_LITELM"
@@ -719,6 +721,33 @@ def test_chat_sdk_stream_include_usage_masks_request_fields(gateway: Gateway, tm
         observed: Final = _provider_calls(wire.drain())
         post_requests: Final = tuple(request for request in observed if request.method == "POST")
         assert len(post_requests) == 1
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_chat_stream_usage_the_proxy_adds_keeps_its_marker_out_of_the_stored_request(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    response_id: Final = f"chatcmpl-proxy-usage-{uuid4()}"
+    with (
+        wire_server(
+            _answering_model_listing(lambda request: _chat_stream(response_id, "sort_key", include_usage=True))
+        ) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
+        response: Final = isolated.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "stream marker"}], "stream": True},
+        )
+        assert response.status_code == 200, response.text
+        assert {string_value(event["id"]) for event in _sse_events(response.text)} == {response_id}, response.text
+        stored_request: Final = object_value(_stored_row(response_id)["proxy_server_request"])
+        assert stored_request["messages"] == [{"role": "user", "content": "stream marker"}], stored_request
+        assert "_litellm_stream_usage_injected" not in stored_request, stored_request
+        observed: Final = _provider_calls(wire.drain())
+        assert [_json_object(request.body)["stream_options"] for request in observed] == [{"include_usage": True}]
 
 
 def test_chat_history_keeps_string_tool_arguments_and_tool_content(gateway: Gateway, tmp_path: Path) -> None:

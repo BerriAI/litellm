@@ -2,7 +2,7 @@
 Types and field definitions for cache settings management endpoints
 """
 
-from typing import Any, Final
+from typing import Final
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -10,9 +10,9 @@ from litellm.types.llms.base import LiteLLMBaseModel
 class CacheSettingsField(LiteLLMBaseModel):
     field_name: str
     field_type: str
-    field_value: Any
+    field_value: object
     field_description: str
-    field_default: Any = None
+    field_default: object = None
     options: list[str] | None = None  # For fields with predefined options/enum values
     ui_field_name: str  # User-friendly display name
     link: str | None = None  # Documentation link for the field

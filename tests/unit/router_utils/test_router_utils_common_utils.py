@@ -10,11 +10,12 @@ from litellm import Router
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.router_utils.common_utils import (
+from litellm.litellm_core_utils.routing_common_utils import (
     _deployment_supports_web_search,
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    format_content_policy_no_fallback_note,
     format_fallback_outcome_message,
     provider_for_generic_call,
     resolve_model_group_alias,
@@ -286,6 +287,19 @@ class TestFilterWebSearchDeployments:
         assert "deployment-1" in result_ids
         assert "deployment-2" in result_ids
         assert "deployment-3" not in result_ids
+
+    def test_web_search_in_a_tuple_filters_unsupported(self, sample_deployments: list[dict[str, object]]) -> None:
+        result: Final = filter_web_search_deployments(sample_deployments, {"tools": ({"type": "web_search"},)})
+        assert [d["model_info"]["id"] for d in result] == ["deployment-1", "deployment-2"]
+
+    @pytest.mark.parametrize("tool_type", [{}, [], None, 5], ids=["object", "list", "null", "int"])
+    def test_a_non_string_tool_type_is_no_web_search_request(
+        self, sample_deployments: list[dict[str, object]], tool_type: object
+    ) -> None:
+        result: Final = filter_web_search_deployments(
+            sample_deployments, {"tools": [{"type": tool_type}, {"type": "function"}]}
+        )
+        assert result == sample_deployments
 
     def test_web_search_preview_filters_unsupported(self, sample_deployments):
         """web_search_preview type should also trigger filtering"""
@@ -664,6 +678,14 @@ def test_format_fallback_outcome_preserves_attempted_failure_wording_without_ski
         == "\n\nLiteLLM: model group 'primary' failed with the error above. "
         "Fallback to fallback also failed: detail"
     )
+
+
+def test_content_policy_note_explains_the_failure_when_fallbacks_are_a_plain_model_list() -> None:
+    note: Final = format_content_policy_no_fallback_note("gpt-bg", ("gpt-bg",), None, ["backup"], False)
+
+    assert "content_policy_fallback=None" in note
+    assert "LiteLLM: model group 'gpt-bg' failed with the error above. No fallback was attempted." in note
+    assert "Fallbacks are configured for" not in note
 
 
 class TestWarnOnProviderCredentialMismatch:

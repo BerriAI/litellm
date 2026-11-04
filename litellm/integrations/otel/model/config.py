@@ -121,6 +121,17 @@ class ExporterSpec(LiteLLMBaseModel):
     )
 
 
+def is_unconfigured_placeholder(spec: ExporterSpec) -> bool:
+    """Whether ``spec`` is the one ``_normalize`` folds in when nothing was configured.
+
+    No field set is what says the operator asked for nothing: an exporter they did
+    configure survives, even ``OTEL_EXPORTER=console`` whose value matches the default,
+    and so does the gated spec ``credential_gated_exporters`` appends, which would
+    otherwise eat itself when one preset layers onto another.
+    """
+    return not spec.model_fields_set
+
+
 class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
     def __init__(self, settings_cls: type[BaseSettings], env_settings: PydanticBaseSettingsSource) -> None:
         super().__init__(settings_cls)
@@ -130,7 +141,8 @@ class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
         return self._env_settings.get_field_value(field, field_name)
 
     def __call__(self) -> dict[str, object]:
-        return {key: value for key, value in self._env_settings().items() if key != "excluded_services"}
+        settings: Final = self._env_settings()
+        return {key: settings[key] for key in settings if key != "excluded_services"}
 
 
 class OpenTelemetryV2Config(BaseSettings):

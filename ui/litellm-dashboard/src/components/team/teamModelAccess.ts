@@ -1,3 +1,5 @@
+import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
+
 export const ALL_PROXY_MODELS = "all-proxy-models";
 export const NO_DEFAULT_MODELS = "no-default-models";
 
@@ -16,6 +18,24 @@ export interface TeamModelBadge {
   label: string;
   kind: TeamModelBadgeKind;
   tooltip: string;
+}
+
+const ALL_TEAM_MODELS = "all-team-models";
+const MODEL_SENTINELS: ReadonlySet<string> = new Set([ALL_PROXY_MODELS, ALL_TEAM_MODELS, NO_DEFAULT_MODELS]);
+
+// Per-model rate limits and budgets are enforced on the model name a request sends,
+// so only concrete names are offered: sentinels and wildcard patterns never match one.
+export function teamPerModelLimitOptions(
+  teamModels: string[],
+  accessGroupModels: string[],
+  userModels: string[],
+): string[] {
+  const coversAllModels =
+    teamModels.length === 0 || teamModels.includes(ALL_PROXY_MODELS) || teamModels.includes(ALL_TEAM_MODELS);
+  const granted = coversAllModels ? userModels : [...new Set([...teamModels, ...accessGroupModels])];
+  return unfurlWildcardModelsInList(granted, userModels).filter(
+    (model) => !MODEL_SENTINELS.has(model) && !model.endsWith("*"),
+  );
 }
 
 export function normalizeTeamModelSelection(models: string[] | undefined): string[] {

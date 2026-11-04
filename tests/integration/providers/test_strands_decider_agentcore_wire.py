@@ -166,7 +166,7 @@ _SCRUBBED_NAMES: Final = frozenset(
 _load_yaml: Final[Callable[[str], object]] = yaml.safe_load
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _OWNED_PROXY_CELL_SECONDS: Final = 2 * max(30.0, float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS") or 70)) + 120
-pytestmark: Final = pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+pytestmark: Final = [pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS), pytest.mark.shares_worker_state]
 _LINEAR_FACTOR: Final = 20
 _CLASSIFIER_SAMPLES: Final = 5
 
