@@ -280,6 +280,12 @@ def _latest_replayable_instructions(proxy_server_requests: Sequence[Mapping[str,
     return None if latest == REDACTED_BY_LITELLM else latest
 
 
+def _is_redacted_request(proxy_server_request: Mapping[str, object] | None) -> bool:
+    return proxy_server_request is not None and proxy_server_request.get("messages") == [
+        {"role": "user", "content": REDACTED_BY_LITELLM}
+    ]
+
+
 class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
@@ -350,6 +356,7 @@ class ResponsesSessionHandler:
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
             instructions=_latest_replayable_instructions(proxy_server_requests),
+            replays_redacted_turns=any(map(_is_redacted_request, proxy_server_requests[start.index : replayed_turns])),
         )
 
     @staticmethod
