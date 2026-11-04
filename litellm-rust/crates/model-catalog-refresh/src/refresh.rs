@@ -2,21 +2,6 @@ use crate::retry::{AfterRetryable, after_retryable};
 use crate::status::{Attempt, classify};
 use crate::{Fetch, FetchRequest};
 
-/// How a refresh ended
-#[derive(Clone, Debug, PartialEq)]
-pub enum Refreshed {
-    Adopted {
-        body: Vec<u8>,
-        /// `git_blob_id` of `body`
-        revision: String,
-        etag: Option<String>,
-    },
-    NotModified,
-    Failed {
-        reason: String,
-    },
-}
-
 /// A retryable failure about to be waited out
 #[derive(Clone, Debug, PartialEq)]
 pub struct Retrying<'a> {
@@ -37,15 +22,15 @@ pub trait Pause: Send {
     fn sleep(&mut self, seconds: f64) -> impl Future<Output = Result<(), Self::Stop>> + Send;
 }
 
-/// Up to `max_attempts` attempts, as main's `_fetch_remote_model_cost_map_with_retry`
+/// Up to `max_attempts` attempts, as main's `_fetch_remote_model_cost_map_with_retry`. Never `Attempt::Retryable`
 pub async fn refresh<P: Pause>(
     fetch: &impl Fetch,
     request: &FetchRequest,
     max_attempts: i64,
     pause: &mut P,
-) -> Result<Refreshed, P::Stop> {
+) -> Result<Attempt, P::Stop> {
     if max_attempts < 1 {
-        return Ok(Refreshed::Failed {
+        return Ok(Attempt::Failed {
             reason: "model cost map fetch failed".to_owned(),
         });
     }
@@ -58,7 +43,7 @@ pub async fn attempt(fetch: &impl Fetch, request: &FetchRequest) -> Attempt {
     classify(fetch.fetch(request).await, fetch.location(), request)
 }
 
-/// Carries on after `outcome`, the result of attempt number `attempt`
+/// Carries on after `outcome`, the result of attempt number `attempt`. Never `Attempt::Retryable`
 pub async fn resume<P: Pause>(
     fetch: &impl Fetch,
     request: &FetchRequest,
@@ -66,28 +51,20 @@ pub async fn resume<P: Pause>(
     max_attempts: i64,
     outcome: Attempt,
     pause: &mut P,
-) -> Result<Refreshed, P::Stop> {
+) -> Result<Attempt, P::Stop> {
     let (mut attempt_number, mut outcome) = (attempt, outcome);
     loop {
         let (reason, retry_after) = match outcome {
-            Attempt::Fetched { body, etag } => {
-                return Ok(Refreshed::Adopted {
-                    revision: litellm_model_catalog::revision(&body),
-                    body,
-                    etag,
-                });
-            }
-            Attempt::NotModified => return Ok(Refreshed::NotModified),
-            Attempt::Failed { reason } => return Ok(Refreshed::Failed { reason }),
             Attempt::Retryable {
                 reason,
                 retry_after,
             } => (reason, retry_after),
+            done => return Ok(done),
         };
         let seconds =
             match after_retryable(attempt_number, max_attempts, retry_after, || pause.jitter()) {
                 AfterRetryable::GiveUp => {
-                    return Ok(Refreshed::Failed {
+                    return Ok(Attempt::Failed {
                         reason: format!("{reason} (after {max_attempts} attempts)"),
                     });
                 }
@@ -216,15 +193,14 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn retries_then_adopts_with_the_revision_of_the_body() {
+    async fn retries_then_returns_the_fetched_body() {
         let fetch = Scripted::new([status(503, Some("1")), status(503, None), ok(b"hello\n")]);
         let mut pause = Recording::default();
         let refreshed = refresh(&fetch, &request(), 3, &mut pause).await.unwrap();
         assert_eq!(
             refreshed,
-            Refreshed::Adopted {
+            Attempt::Fetched {
                 body: b"hello\n".to_vec(),
-                revision: "ce013625030ba8dba906f756967f9e9ca394464a".to_owned(),
                 etag: Some("\"v2\"".to_owned()),
             }
         );
@@ -247,7 +223,7 @@ mod tests {
         let refreshed = refresh(&fetch, &request(), 3, &mut pause).await.unwrap();
         assert_eq!(
             refreshed,
-            Refreshed::Failed {
+            Attempt::Failed {
                 reason: format!("HTTP 429 from {URL} (after 3 attempts)"),
             }
         );
@@ -263,7 +239,7 @@ mod tests {
         let refreshed = refresh(&fetch, &request(), 3, &mut pause).await.unwrap();
         assert_eq!(
             refreshed,
-            Refreshed::Failed {
+            Attempt::Failed {
                 reason: format!("HTTP 404 from {URL}"),
             }
         );
@@ -281,7 +257,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             refreshed,
-            Refreshed::Failed {
+            Attempt::Failed {
                 reason: "model cost map fetch failed".to_owned(),
             }
         );
@@ -300,7 +276,7 @@ mod tests {
         let refreshed = resume(&fetch, &request(), 1, 3, first, &mut pause)
             .await
             .unwrap();
-        assert!(matches!(refreshed, Refreshed::Adopted { .. }));
+        assert!(matches!(refreshed, Attempt::Fetched { .. }));
         assert_eq!(
             pause.retried,
             vec![(1, 3, "HTTP 503 from x".to_owned(), 2.0)]
@@ -345,7 +321,7 @@ mod tests {
         let refreshed = refresh(&fetch, &request, 3, &mut Recording::default())
             .await
             .unwrap();
-        assert_eq!(refreshed, Refreshed::NotModified);
+        assert_eq!(refreshed, Attempt::NotModified);
         assert_eq!(
             fetch.requests.lock().unwrap()[0].if_none_match.as_deref(),
             Some("\"v1\"")

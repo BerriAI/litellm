@@ -81,13 +81,18 @@ impl CatalogRows {
     }
 }
 
-/// Model names match ignoring case, and keys are grouped by their raw `litellm_provider`
+/// The name two spellings of one `model_cost` key share, for every `model_cost` source. Names match ignoring case
+pub fn fold_model_name(name: &str) -> String {
+    name.to_lowercase()
+}
+
+/// Keys are grouped by their raw `litellm_provider`
 impl Rows for CatalogRows {
     type Row = Fields;
     type Stamp = ();
 
     fn fold(name: &str) -> String {
-        name.to_lowercase()
+        fold_model_name(name)
     }
 
     fn stamp(&self) -> Self::Stamp {}
@@ -105,7 +110,7 @@ impl Rows for CatalogRows {
         for key in keys {
             let provider = self
                 .fields(key)
-                .and_then(|fields| fields.get("litellm_provider")?.as_str());
+                .and_then(|fields| fields.get(crate::LITELLM_PROVIDER)?.as_str());
             visit(key, provider);
         }
     }

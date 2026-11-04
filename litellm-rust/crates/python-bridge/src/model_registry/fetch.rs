@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use litellm_http::ClientVariant;
 use litellm_model_catalog_refresh::{
-    Attempt, FetchRequest, Pause, Refreshed, Retrying, SourceClients, SourceFetch, attempt,
-    refresh, refused, resume,
+    Attempt, FetchRequest, Pause, Retrying, SourceClients, SourceFetch, attempt, refresh, refused,
+    resume,
 };
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -22,7 +22,7 @@ pub(crate) enum ModelCostMapFetch {
     Failed {
         reason: String,
     },
-    /// Only from `fetch_model_cost_map_once`, to resume with `refresh_model_cost_map`
+    /// Only from `attempt`, to resume with `run`
     Retryable {
         reason: String,
         retry_after: Option<f64>,
@@ -123,7 +123,7 @@ impl PyRefresh {
         let refreshed = litellm_host_python::run_sync_value(py, async move {
             run.refresh(first, &mut pause).await
         })?;
-        Python::attach(|py| Ok(from_refreshed(py, refreshed)))
+        Python::attach(|py| Ok(from_attempt(py, refreshed)))
     }
 
     /// `run` on a runtime that ends with the call, for the refresh `import litellm` starts. The process starts no
@@ -132,7 +132,7 @@ impl PyRefresh {
         let run = self.run.clone();
         let mut pause = self.pause(py, false);
         let refreshed = litellm_host_python::run_detached_value(py, run.refresh(None, &mut pause))?;
-        Python::attach(|py| Ok(from_refreshed(py, refreshed)))
+        Python::attach(|py| Ok(from_attempt(py, refreshed)))
     }
 
     /// `run` as an awaitable, where `sleep` returns an awaitable
@@ -141,7 +141,7 @@ impl PyRefresh {
         let mut pause = self.pause(py, true);
         litellm_host_python::run_async_value(py, async move {
             let refreshed = run.refresh(None, &mut pause).await?;
-            Ok(Python::attach(|py| from_refreshed(py, refreshed)))
+            Ok(Python::attach(|py| from_attempt(py, refreshed)))
         })
     }
 }
@@ -189,11 +189,10 @@ struct Run {
 }
 
 impl Run {
-    async fn refresh(self, first: Option<Attempt>, pause: &mut PythonPause) -> PyResult<Refreshed> {
+    async fn refresh(self, first: Option<Attempt>, pause: &mut PythonPause) -> PyResult<Attempt> {
         let fetch = match self.source {
             Ok(fetch) => fetch,
-            Err(Attempt::Failed { reason }) => return Ok(Refreshed::Failed { reason }),
-            Err(_) => unreachable!("a source that cannot be built is a final failure"),
+            Err(failed) => return Ok(failed),
         };
         match first {
             Some(first) => resume(&fetch, &self.request, 1, self.max_attempts, first, pause).await,
@@ -245,22 +244,6 @@ fn to_attempt(py: Python<'_>, fetch: &ModelCostMapFetch) -> Attempt {
             reason: reason.clone(),
             retry_after: *retry_after,
         },
-    }
-}
-
-fn from_refreshed(py: Python<'_>, refreshed: Refreshed) -> ModelCostMapFetch {
-    match refreshed {
-        Refreshed::Adopted {
-            body,
-            revision,
-            etag,
-        } => ModelCostMapFetch::Adopted {
-            body: PyBytes::new(py, &body).unbind(),
-            revision,
-            etag,
-        },
-        Refreshed::NotModified => ModelCostMapFetch::NotModified {},
-        Refreshed::Failed { reason } => ModelCostMapFetch::Failed { reason },
     }
 }
 

@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
-use litellm_model_catalog::{Rows, Store};
-use pyo3::intern;
+use litellm_model_catalog::{LITELLM_PROVIDER, Rows, Store, fold_model_name};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 
@@ -17,7 +16,7 @@ impl Rows for LiveModelCost {
     type Stamp = Option<(usize, usize)>;
 
     fn fold(name: &str) -> String {
-        name.to_lowercase()
+        fold_model_name(name)
     }
 
     fn stamp(&self) -> Self::Stamp {
@@ -63,7 +62,7 @@ impl Rows for LiveModelCost {
 
 fn provider(row: &Bound<'_, PyAny>) -> Option<String> {
     let row = row.cast::<PyDict>().ok()?;
-    let provider = row.get_item(intern!(row.py(), "litellm_provider")).ok()??;
+    let provider = row.get_item(LITELLM_PROVIDER).ok()??;
     provider.extract().ok()
 }
 

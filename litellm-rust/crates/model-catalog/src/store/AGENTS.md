@@ -1,6 +1,6 @@
 # Store
 
-`Store<R: Rows>` is an in-memory store, a small database built for exactly three queries. It knows nothing about the catalog. A source picks its own `Rows::Row` type, how names fold for matching, and the group each key is listed under. The catalog's sources fold to lowercase and group by raw `litellm_provider`
+`Store<R: Rows>` is an in-memory store, a small database built for exactly three queries. It knows nothing about the catalog. A source picks its own `Rows::Row` type, how names fold for matching, and the group each key is listed under. The catalog's sources, `CatalogRows` and python-bridge's `litellm.model_cost`, fold with `fold_model_name` and group by raw `LITELLM_PROVIDER`
 
 | Query | Method | Real caller |
 |---|---|---|

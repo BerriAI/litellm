@@ -32,7 +32,7 @@ impl SourceFetch {
                     region_name: Some(region.clone()),
                     ..AwsAuthConfig::default()
                 };
-                let config = litellm_cache_s3::s3_config(
+                let config = litellm_storage_s3::s3_config(
                     region,
                     s3_endpoint(clients.env),
                     clients.http,

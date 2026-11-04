@@ -1,7 +1,7 @@
 use std::sync::{LazyLock, PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use litellm_model_catalog_refresh::{Origin, Provenance};
+use litellm_model_catalog::{Origin, Provenance};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
