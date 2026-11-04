@@ -24,7 +24,6 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypedDict, get_args
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -32,6 +31,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.url_utils import is_https_url_with_host
 from litellm.proxy._types import CommonProxyErrors, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import (
     SkillVisibility,
@@ -254,14 +254,6 @@ _VALID_GIT_SUBDIR_PATH_RE: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-
 _VALID_SHA256_RE: Final = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
-def _is_https_url_with_host(url: str) -> bool:
-    try:
-        parts: Final = urlsplit(url)
-    except ValueError:
-        return False
-    return parts.scheme == "https" and bool(parts.hostname)
-
-
 def _validate_plugin_source(source: Mapping[str, str]) -> None:
     """Validate plugin source format, raising HTTPException on invalid input."""
     source_type: Final = source.get("source")
@@ -298,7 +290,7 @@ def _validate_plugin_source(source: Mapping[str, str]) -> None:
                 },
             )
     elif source_type == "archive":
-        if not _is_https_url_with_host(source.get("url", "")):
+        if not is_https_url_with_host(source.get("url", "")):
             raise HTTPException(
                 status_code=400,
                 detail={
