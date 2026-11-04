@@ -22,6 +22,12 @@ def _payload(spend: float, started: datetime = _NOW, window_start: datetime = _N
         "spend": spend,
         "metadata": json.dumps(
             {
+                "accounting_entities": {
+                    "api_key": "key",
+                    "user": "user/1",
+                    "team_id": "team",
+                    "organization_id": "org::1",
+                },
                 "accounting_windows": [
                     {
                         "entity_type": "key",
@@ -29,7 +35,7 @@ def _payload(spend: float, started: datetime = _NOW, window_start: datetime = _N
                         "window_duration": "1d",
                         "window_start": window_start.isoformat(),
                     }
-                ]
+                ],
             }
         ),
     }
