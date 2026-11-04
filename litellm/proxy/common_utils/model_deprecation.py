@@ -32,6 +32,7 @@ class _ResolvedDeprecation:
     litellm_model: str | None
     litellm_provider: str | None
     copied_from_another_row: bool = False
+    successor_model: str | None = None
 
 
 def _parse_deprecation_date(raw_value: object) -> date | None:
@@ -58,10 +59,11 @@ def _cost_map_lookup(model_key: str | None, catalog: Mapping[str, object]) -> _R
     entry: Final = litellm.model_cost.get(model_key)
     if not isinstance(entry, Mapping):
         return None
-    parsed: Final = _parse_deprecation_date(entry.get("deprecation_date"))
+    fields: Final[Mapping[str, object]] = entry
+    parsed: Final = _parse_deprecation_date(fields.get("deprecation_date"))
     if parsed is None:
         return None
-    provider: Final = entry.get("litellm_provider")
+    provider: Final = fields.get("litellm_provider")
     return _ResolvedDeprecation(
         deprecation_date=parsed,
         litellm_model=model_key,
@@ -69,6 +71,7 @@ def _cost_map_lookup(model_key: str | None, catalog: Mapping[str, object]) -> _R
         copied_from_another_row=isinstance(entry, AliasedCostEntry)
         and "deprecation_date" not in entry.registered_fields
         and model_key not in catalog,
+        successor_model=_successor_model(fields.get("successor_model")),
     )
 
 
@@ -127,15 +130,6 @@ def _resolve_deployment_deprecation(
     litellm_params: Final = _mapping_field(deployment, "litellm_params")
     model_key: Final = _as_model_key(litellm_params.get("model"))
 
-    override: Final = _parse_deprecation_date(model_info.get("deprecation_date"))
-    if override is not None:
-        override_provider: Final = model_info.get("litellm_provider")
-        return _ResolvedDeprecation(
-            deprecation_date=override,
-            litellm_model=model_key,
-            litellm_provider=override_provider if isinstance(override_provider, str) else None,
-        )
-
     provider: Final = _deployment_provider(litellm_params)
     base_model: Final = _as_model_key(model_info.get("base_model"))
     model_name: Final = model_key.split("/", 1)[1] if model_key is not None and "/" in model_key else model_key
@@ -150,7 +144,18 @@ def _resolve_deployment_deprecation(
         if pick is not None
     )
     own_rows: Final = tuple(pick for pick in picks if not pick.copied_from_another_row)
-    return min(own_rows or picks, key=lambda pick: pick.deprecation_date, default=None)
+    from_catalog: Final = min(own_rows or picks, key=lambda pick: pick.deprecation_date, default=None)
+
+    override: Final = _parse_deprecation_date(model_info.get("deprecation_date"))
+    if override is None:
+        return from_catalog
+    override_provider: Final = model_info.get("litellm_provider")
+    return _ResolvedDeprecation(
+        deprecation_date=override,
+        litellm_model=model_key,
+        litellm_provider=override_provider if isinstance(override_provider, str) else None,
+        successor_model=from_catalog.successor_model if from_catalog is not None else None,
+    )
 
 
 def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
@@ -182,7 +187,7 @@ def _build_info(
     today: date,
     warn_within_days: int,
     catalog: Mapping[str, object],
-) -> ModelDeprecationInfo | None:
+) -> _DeploymentInfo | None:
     model_name: Final = deployment.get("model_name")
     if not isinstance(model_name, str) or not model_name:
         return None
@@ -192,21 +197,40 @@ def _build_info(
         return None
 
     days_until: Final = (resolved.deprecation_date - today).days
-    return ModelDeprecationInfo(
-        model_name=model_name,
-        litellm_model=resolved.litellm_model,
-        deprecation_date=resolved.deprecation_date,
-        days_until_deprecation=days_until,
-        status=_classify(days_until, warn_within_days),
-        litellm_provider=resolved.litellm_provider,
-        successor_model=_checked_successor(model_name, _mapping_field(deployment, "model_info"), llm_router),
+    configured: Final = _checked_successor(model_name, _mapping_field(deployment, "model_info"), llm_router)
+    return _DeploymentInfo(
+        info=ModelDeprecationInfo(
+            model_name=model_name,
+            litellm_model=resolved.litellm_model,
+            deprecation_date=resolved.deprecation_date,
+            days_until_deprecation=days_until,
+            status=_classify(days_until, warn_within_days),
+            litellm_provider=resolved.litellm_provider,
+            successor_model=configured or resolved.successor_model,
+        ),
+        configured_successor=configured is not None,
     )
 
 
-def _merge_group(group: Sequence[ModelDeprecationInfo]) -> ModelDeprecationInfo:
-    """Keep the group's first deployment in config order, naming the first successor any of its deployments names"""
-    first: Final = group[0]
-    successors: Final = tuple(model.successor_model for model in group if model.successor_model is not None)
+@dataclass(frozen=True, slots=True)
+class _DeploymentInfo:
+    info: ModelDeprecationInfo
+    configured_successor: bool
+
+
+def _merge_group(group: Sequence[_DeploymentInfo]) -> ModelDeprecationInfo:
+    """Keep the group's first deployment in config order, naming the first successor any of its deployments names,
+    a successor configured in model_info ahead of one the cost map supplies"""
+    first: Final = group[0].info
+    tiers: Final = tuple(
+        tuple(
+            deployment.info.successor_model
+            for deployment in group
+            if deployment.configured_successor is configured and deployment.info.successor_model is not None
+        )
+        for configured in (True, False)
+    )
+    successors: Final = next((tier for tier in tiers if tier), ())
     if not successors:
         return first
     if len(frozenset(successors)) > 1:
@@ -220,13 +244,13 @@ def _merge_group(group: Sequence[ModelDeprecationInfo]) -> ModelDeprecationInfo:
 
 
 def _dedupe(
-    models: Sequence[ModelDeprecationInfo],
+    models: Sequence[_DeploymentInfo],
 ) -> tuple[ModelDeprecationInfo, ...]:
     """Report a model group carrying the same date on several deployments once"""
-    ordered: Final = sorted(models, key=lambda model: (model.model_name, model.deprecation_date))
+    ordered: Final = sorted(models, key=lambda model: (model.info.model_name, model.info.deprecation_date))
     return tuple(
         _merge_group(tuple(group))
-        for _, group in groupby(ordered, key=lambda model: (model.model_name, model.deprecation_date))
+        for _, group in groupby(ordered, key=lambda model: (model.info.model_name, model.info.deprecation_date))
     )
 
 

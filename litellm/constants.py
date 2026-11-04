@@ -135,6 +135,7 @@ ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
 GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS: Final = 10
+DEFAULT_MAX_REQUEST_HEADER_SIZE: Final = 16 * 1024
 budget_reservation_disabled_info_emitted = False
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = get_env_int("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1)
 DEFAULT_SQS_BATCH_SIZE: Final = get_env_int("DEFAULT_SQS_BATCH_SIZE", 512)
@@ -1093,6 +1094,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://inference.gitgot.ai/v1",
+    "https://inference.runanywhere.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
@@ -1181,6 +1183,7 @@ openai_compatible_providers: Final[list[str]] = [
     "reka",
     "gitgot",
     "streamlake",
+    "wally",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -2069,6 +2072,7 @@ SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
 SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30
 SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS: Final = 10000
 SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS: Final = 5000
+SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS: Final = 30
 SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE: Final = 100
 # Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
 # callers from forcing a DB query per request for unknown names, while bounding
