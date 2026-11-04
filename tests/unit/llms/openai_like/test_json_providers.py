@@ -4,7 +4,8 @@ Tests for JSON-based provider configuration system.
 
 import os
 import sys
-from unittest.mock import patch
+
+from litellm import register_model
 
 try:
     import pytest
@@ -105,9 +106,12 @@ class TestJSONProviderLoader:
         config_class = create_config_class(provider)
         config = config_class()
 
-        # Mock supports_function_calling to return False
-        with patch("litellm.utils.supports_function_calling", return_value=False):
-            supported = config.get_supported_openai_params("some-model-without-fc")
+        register_model(
+            {"publicai/some-model-without-fc": {"supports_function_calling": False}},
+            persist_across_reloads=False,
+            add_to_provider_model_sets=False,
+        )
+        supported = config.get_supported_openai_params("some-model-without-fc")
 
         tool_params = [
             "tools",
@@ -135,9 +139,12 @@ class TestJSONProviderLoader:
         config_class = create_config_class(provider)
         config = config_class()
 
-        # Mock supports_function_calling to return True
-        with patch("litellm.utils.supports_function_calling", return_value=True):
-            supported = config.get_supported_openai_params("some-model-with-fc")
+        register_model(
+            {"publicai/some-model-with-fc": {"supports_function_calling": True}},
+            persist_across_reloads=False,
+            add_to_provider_model_sets=False,
+        )
+        supported = config.get_supported_openai_params("some-model-with-fc")
 
         assert "tools" in supported
         assert "tool_choice" in supported

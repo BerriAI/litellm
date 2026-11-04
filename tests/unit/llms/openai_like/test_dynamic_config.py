@@ -1,8 +1,13 @@
-import pytest
+import json
+from typing import Final
 
+import pytest
+import respx
+
+import litellm
 from litellm.llms.openai_like import dynamic_config
 from litellm.llms.openai_like.dynamic_config import create_responses_config_class
-from litellm.llms.openai_like.json_loader import SimpleProviderConfig
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry, SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 
 _BASE = {"base_url": "https://api.example.com/v1", "api_key_env": "EXAMPLE_API_KEY"}
@@ -20,7 +25,6 @@ def _isolate_generated_class_cache():
 
 
 class TestClassCaching:
-
     def test_cache_is_keyed_on_slug_not_on_the_provider_instance(self):
         first = create_responses_config_class(_provider("cache_by_slug"))
         second = create_responses_config_class(_provider("cache_by_slug"))
@@ -139,3 +143,66 @@ class TestForceStoreFalse:
             headers={},
         )
         assert params["store"] is True
+
+
+@pytest.mark.parametrize(
+    "model_info,provider_capability,drop_params,expected_tools",
+    [
+        pytest.param(None, None, False, True, id="unknown-strict"),
+        pytest.param(None, None, True, True, id="unknown-drop"),
+        pytest.param({}, None, True, True, id="missing-capability"),
+        pytest.param({"supports_function_calling": None}, None, True, True, id="null-capability"),
+        pytest.param({"supports_function_calling": False}, None, True, False, id="model-disabled"),
+        pytest.param({"supports_function_calling": False}, True, True, False, id="model-overrides-provider"),
+        pytest.param(None, False, True, False, id="provider-disabled"),
+        pytest.param({"supports_function_calling": True}, False, True, True, id="model-enabled"),
+    ],
+)
+async def test_tools_reach_upstream_unless_explicitly_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    model_info: dict[str, bool | None] | None,
+    provider_capability: bool | None,
+    drop_params: bool,
+    expected_tools: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model: Final = "z-ai/issue-48145-model"
+    provider: Final = JSONProviderRegistry.get("nano-gpt")
+    assert provider is not None
+    monkeypatch.setattr(
+        provider,
+        "provider_info",
+        {} if provider_capability is None else {"supports_function_calling": provider_capability},
+    )
+    if model_info is not None:
+        litellm.register_model(
+            {f"nano-gpt/{model}": {"litellm_provider": "nano-gpt", "mode": "chat", **model_info}},
+            persist_across_reloads=False,
+            add_to_provider_model_sets=False,
+        )
+    tool: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://upstream.example/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-tools",
+                "object": "chat.completion",
+                "created": 1,
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            },
+        )
+        await litellm.acompletion(
+            model=f"nano-gpt/{model}",
+            messages=[{"role": "user", "content": "Weather in Paris?"}],
+            api_base="https://upstream.example/v1",
+            api_key="local-placeholder",
+            tools=[tool],
+            tool_choice="auto",
+            drop_params=drop_params,
+        )
+        body: Final = json.loads(route.calls.last.request.content)
+        assert ("tools" in body) is expected_tools
+        assert body.get("tool_choice") == ("auto" if expected_tools else None)
+        if expected_tools:
+            assert body["tools"] == [tool]
