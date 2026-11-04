@@ -1262,27 +1262,6 @@ class CostMap(RootModel[dict[str, CostMapEntry]]):
     pass
 
 
-class ConfigPatchResponse(BaseModel):
-    status: str
-    values: dict[str, float | dict[str, float]]
-
-
-class CostDiscountConfig(RootModel[dict[str, float]]):
-    pass
-
-
-class CostMarginConfig(RootModel[dict[str, float | dict[str, float]]]):
-    pass
-
-
-class CostDiscountConfigResponse(BaseModel):
-    values: dict[str, float]
-
-
-class CostMarginConfigResponse(BaseModel):
-    values: dict[str, float | dict[str, float]]
-
-
 class BedrockGuardrailParams(BaseModel):
     guardrail: Literal["bedrock"] = "bedrock"
     mode: Literal["pre_call"] = "pre_call"

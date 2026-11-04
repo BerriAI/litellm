@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_batch_cost_rates,
     get_billable_input_tokens,
     get_cost_per_unit,
+    get_fedramp_uplift_multiplier,
     get_modality_token_cost_key,
     get_regional_uplift_multiplier,
     get_service_tier_cost_key,
@@ -3330,7 +3331,9 @@ def batch_cost_calculator(
     text_tokens: Final = usage.completion_tokens - image_tokens
     total_completion_cost = text_tokens * text_rate + image_tokens * image_rate
 
-    uplift: Final = get_regional_uplift_multiplier(model_info, data_residency)
+    uplift: Final = get_regional_uplift_multiplier(model_info, data_residency) * get_fedramp_uplift_multiplier(
+        model_info, data_residency
+    )
     if uplift != 1.0:
         total_prompt_cost *= uplift
         total_completion_cost *= uplift

@@ -33,6 +33,7 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
+    DataResidency,
     ImageObject,
     ImageResponse,
     ImageUsage,
@@ -2579,6 +2580,51 @@ def test_data_residency_applies_uplift(data_residency, model, _local_model_cost_
     assert regional[1] == pytest.approx(base[1] * 1.10, rel=1e-9)
 
 
+def test_fedramp_data_residency_applies_configured_uplift() -> None:
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    model_info: Final[ModelInfo] = {
+        "key": "fedramp-fixture",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supported_openai_params": None,
+        "regional_processing_uplift_multiplier_us": 1.5,
+        "fedramp_uplift_multiplier": 1.1,
+    }
+
+    base: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+    fedramp: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=DataResidency.FEDRAMP.value,
+        model_info=model_info,
+    )
+
+    us: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=DataResidency.US.value,
+        model_info=model_info,
+    )
+
+    assert sum(base) > 0
+    assert fedramp[0] == pytest.approx(base[0] * 1.1)
+    assert fedramp[1] == pytest.approx(base[1] * 1.1)
+    assert us[0] == pytest.approx(base[0] * 1.5)
+    assert us[1] == pytest.approx(base[1] * 1.5)
+
+
 @pytest.mark.parametrize("model", ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-4o", "gpt-4.1"])
 def test_data_residency_no_uplift_for_pre_march_2026_models(model, _local_model_cost_map):
     """Models released before 2026-03-05 must not have the regional uplift."""
@@ -2717,6 +2763,22 @@ def test_vertex_uplift_invalid_multiplier_defaults_to_one():
     assert (
         get_vertex_regional_endpoint_uplift({"regional_endpoint_uplift_multiplier": "not-a-number"}, "us-east5") == 1.0
     )
+
+
+@pytest.mark.parametrize(
+    "model_info, data_residency",
+    [
+        ({"fedramp_uplift_multiplier": "not-a-number"}, "fedramp"),
+        ({}, "fedramp"),
+        ({"fedramp_uplift_multiplier": 1.1}, "us"),
+        ({"fedramp_uplift_multiplier": 1.1}, None),
+    ],
+)
+def test_fedramp_uplift_defaults_to_one(model_info: ModelInfo, data_residency: str | None):
+    """A malformed or missing FedRAMP multiplier, or a non-FedRAMP host, bills base pricing and never raises."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_fedramp_uplift_multiplier
+
+    assert get_fedramp_uplift_multiplier(model_info, data_residency) == 1.0
 
 
 def test_service_tier_suffixes_constant_in_sync_with_enum():
