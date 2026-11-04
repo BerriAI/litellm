@@ -2553,15 +2553,13 @@ def test_ProxyConfig__load_environment_variables_blocks_dangerous_keys(monkeypat
 @pytest.mark.parametrize(
     ("flag", "system"), (("use_google_kms", "google_kms"), ("use_azure_key_vault", "azure_key_vault"))
 )
-async def test_load_config_legacy_secret_manager_flags_capture_the_initialized_client(
+async def test_load_config_legacy_secret_manager_flags_initialize_the_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str, system: str
 ) -> None:
     if system == "azure_key_vault":
         client_type: Final = pytest.importorskip("azure.keyvault.secrets").SecretClient
     else:
         client_type: Final = pytest.importorskip("google.cloud.kms_v1").KeyManagementServiceClient
-
-    from litellm.rust_bridge.host.secret_manager import native_secret_manager_config
 
     credentials_file: Final = tmp_path / "credentials.json"
     credentials_file.write_text(
@@ -2594,10 +2592,6 @@ async def test_load_config_legacy_secret_manager_flags_capture_the_initialized_c
     client: Final = litellm.secret_manager_client
     assert isinstance(client, client_type)
     try:
-        captured: Final = native_secret_manager_config(client)
-        assert captured is not None
-        assert captured.system == system
-        assert dict(captured.environment)["GOOGLE_APPLICATION_CREDENTIALS"] == str(credentials_file)
         assert litellm._key_management_system is not None
         assert litellm._key_management_system.value == system
     finally:

@@ -13,10 +13,6 @@ pub(crate) enum PythonSettings {
     UrlPolicy,
     #[strum(serialize = "provider_defaults")]
     ProviderDefaults,
-    #[strum(serialize = "secret_manager")]
-    SecretManager,
-    #[strum(serialize = "secret_manager_binding")]
-    SecretManagerBinding,
 }
 
 pub(crate) struct Snapshot<'py> {

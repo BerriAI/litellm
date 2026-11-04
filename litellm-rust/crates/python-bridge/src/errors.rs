@@ -375,7 +375,7 @@ mod tests {
         Python::attach(|py| {
             let raised = pyo3::exceptions::PyKeyError::new_err("vault down");
             let identity = raised.value(py).clone().unbind();
-            let error = Error::from(crate::secrets::read_error(py, raised));
+            let error = Error::from(crate::secrets::external_error(py, raised));
             let surfaced = route_failure(py, error, RequestMarker::Unmarked, |_| {
                 panic!("the raised exception must not be remapped")
             })

@@ -23,12 +23,6 @@ pub(crate) enum ProjectionDetail {
         expected: &'static str,
         actual: String,
     },
-    #[error("{field}")]
-    InvalidField {
-        field: &'static str,
-        #[source]
-        source: serde_json::Error,
-    },
     #[error("{group}.{name}: missing snapshot field")]
     MissingSnapshotField {
         group: &'static str,
@@ -160,15 +154,6 @@ impl<'py> Field<'py> {
         self.value.is(PyBool::new(self.value.py(), true))
     }
 
-    pub(crate) fn schema_bool(&self) -> Result<bool, ProjectionError> {
-        if !self.value.is_instance_of::<PyBool>() {
-            return Err(ProjectionError::InternalSchemaFailure(
-                self.expected("a Boolean")?,
-            ));
-        }
-        Ok(self.exact_true())
-    }
-
     pub(crate) fn strict_string(&self) -> Result<String, ProjectionError> {
         let Ok(value) = self.value.cast::<PyString>() else {
             return Err(self.invalid("a string"));
@@ -234,19 +219,6 @@ impl<'py> Field<'py> {
                 }
             })
             .collect()
-    }
-
-    pub(crate) fn optional_string_collection(
-        &self,
-    ) -> Result<Option<Vec<String>>, ProjectionError> {
-        if self.value.is_none() {
-            return Ok(None);
-        }
-        self.string_collection().map(Some)
-    }
-
-    pub(crate) fn python_binding(&self) -> Option<Py<PyAny>> {
-        (!self.value.is_none()).then(|| self.value.clone().unbind())
     }
 }
 
