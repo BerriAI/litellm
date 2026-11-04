@@ -17,6 +17,7 @@ export type ConversationEntry =
   | ActionEntry
   | { kind: "error"; id: string; text: string };
 export interface LiteAdminSession {
+  userId: string;
   access: AriaAccess;
   token: string;
   accessToken: string;

@@ -1094,7 +1094,6 @@ async def _query_raw_rows(
     sql_query: str,
     *args: object,
 ) -> Sequence[Mapping[str, object]] | None:
-    """A raw ``LiteLLM_SpendLogs`` read that Postgres cancels at the statement timeout."""
     return await query_raw_within_statement_timeout(prisma_client, sql_query, *args)
 
 

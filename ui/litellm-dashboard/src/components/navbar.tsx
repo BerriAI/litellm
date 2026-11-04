@@ -27,6 +27,7 @@ interface NavbarProps {
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
   deploymentHealth?: React.ReactNode;
+  deploymentHealthLink?: React.ReactNode;
 }
 
 const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
@@ -37,6 +38,7 @@ const Navbar: React.FC<NavbarProps> = ({
   sidebarCollapsed = false,
   onToggleSidebar,
   deploymentHealth,
+  deploymentHealthLink,
 }) => {
   const baseUrl = getProxyBaseUrl();
   const { logoUrl, logoUrlDark } = useTheme();
@@ -157,7 +159,7 @@ const Navbar: React.FC<NavbarProps> = ({
                   <ThemeToggle />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   {deploymentHealth}
-                  <NotificationsBell accessToken={accessToken} />
+                  <NotificationsBell accessToken={accessToken} deploymentHealthLink={deploymentHealthLink} />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   <UserDropdown onLogout={handleLogout} />
                 </div>
