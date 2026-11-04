@@ -147,6 +147,49 @@ def test_invalid_key_surfaces_authentication_error() -> None:
             )
 
 
+@pytest.mark.parametrize("global_openai_key", (None, "unrelated-global-openai-key"))
+@pytest.mark.parametrize("stream", (False, True))
+def test_missing_provider_key_never_sends_openai_credentials(
+    monkeypatch: pytest.MonkeyPatch, global_openai_key: str | None, stream: bool
+) -> None:
+    monkeypatch.delenv("ITERACOMPUTE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-env-openai-key")
+    monkeypatch.setattr(litellm, "openai_key", global_openai_key)
+    monkeypatch.setattr(litellm, "api_key", None)
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://api.iteracompute.com/v1/chat/completions").respond(200, json=_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="ITERACOMPUTE_API_KEY"):
+            litellm.completion(
+                model="iteracompute/qwen/qwen3.8-27b",
+                messages=[{"role": "user", "content": "Hello"}],
+                stream=stream,
+            )
+        assert not route.called
+
+
+@pytest.mark.parametrize("organization", (None, "provider-organization"))
+def test_provider_key_wins_over_openai_credentials(
+    monkeypatch: pytest.MonkeyPatch, organization: str | None
+) -> None:
+    monkeypatch.setenv("ITERACOMPUTE_API_KEY", "provider-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setattr(litellm, "openai_key", "unrelated-global-openai-key")
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "unrelated-organization")
+    monkeypatch.setattr(litellm, "organization", "unrelated-global-organization")
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.iteracompute.com/v1/chat/completions").respond(200, json=_COMPLETION)
+        litellm.completion(
+            model="iteracompute/qwen/qwen3.8-27b",
+            messages=[{"role": "user", "content": "Hello"}],
+            organization=organization,
+        )
+    assert route.calls.last.request.headers["authorization"] == "Bearer provider-key"
+    if organization is None:
+        assert not route.calls.last.request.headers.get("openai-organization")
+    else:
+        assert route.calls.last.request.headers["openai-organization"] == organization
+
+
 def test_responses_bridge_keeps_model_namespace() -> None:
     with respx.mock() as upstream:
         route: Final = upstream.post("https://api.iteracompute.com/v1/chat/completions").respond(200, json=_COMPLETION)
