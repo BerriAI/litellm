@@ -155,6 +155,8 @@ class ModelArmorAPIError(Exception):
         self.detail = detail
 
 
+_RESPONSES_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
+
 _SCANNED_CONTENT_KEYS: Final = frozenset({"text", "sanitizedText", "findings", "maliciousUriMatchedItems"})
 
 
@@ -703,6 +705,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 )
 
     @staticmethod
+    def _scans_responses_input(data: dict, call_type: CallTypesLiteral) -> bool:
+        """Whether the scan reads the Responses API `input` rather than `messages`."""
+        if call_type in _RESPONSES_CALL_TYPES:
+            return True
+        return not data.get("messages") and data.get("input") is not None
+
+    @staticmethod
     def _responses_input_messages(responses_input: object) -> list[AllMessageValues]:
         """The role-carrying items of a Responses API `input`, in the chat message shape the scan reads."""
         if not isinstance(responses_input, (str, list)):
@@ -757,9 +766,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        # Responses API requests carry `input` instead of `messages`; scan it as chat messages
-        responses_input: Final = data.get("input") if not data.get("messages") else None
-        messages: Final = data.get("messages") or self._responses_input_messages(responses_input)
+        # Responses API requests carry `input` instead of `messages`; scan it as chat messages. For those
+        # call types `input` is what reaches the provider, so a `messages` field sent alongside it is ignored.
+        scans_responses_input: Final = self._scans_responses_input(data, call_type)
+        responses_input: Final = data.get("input") if scans_responses_input else None
+        messages: Final = (
+            self._responses_input_messages(responses_input) if scans_responses_input else data.get("messages")
+        )
         if not messages:
             verbose_proxy_logger.warning("Model Armor: not running guardrail. No messages in data")
             return data
@@ -824,7 +837,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                         set_last_user_message,
                     )
 
-                    if responses_input is not None:
+                    if scans_responses_input:
                         data["input"] = self._mask_responses_input(responses_input, sanitized_content)
                     else:
                         data["messages"] = set_last_user_message(messages, sanitized_content)
@@ -861,9 +874,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        # Responses API requests carry `input` instead of `messages`; scan it as chat messages
-        responses_input: Final = data.get("input") if not data.get("messages") else None
-        messages: Final = data.get("messages") or self._responses_input_messages(responses_input)
+        # Responses API requests carry `input` instead of `messages`; scan it as chat messages. For those
+        # call types `input` is what reaches the provider, so a `messages` field sent alongside it is ignored.
+        scans_responses_input: Final = self._scans_responses_input(data, call_type)
+        responses_input: Final = data.get("input") if scans_responses_input else None
+        messages: Final = (
+            self._responses_input_messages(responses_input) if scans_responses_input else data.get("messages")
+        )
         if not messages:
             verbose_proxy_logger.warning("Model Armor: not running guardrail. No messages in data")
             return data
@@ -920,7 +937,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                         set_last_user_message,
                     )
 
-                    if responses_input is not None:
+                    if scans_responses_input:
                         data["input"] = self._mask_responses_input(responses_input, sanitized_content)
                     else:
                         data["messages"] = set_last_user_message(messages, sanitized_content)

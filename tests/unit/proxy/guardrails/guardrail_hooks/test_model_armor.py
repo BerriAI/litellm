@@ -5348,12 +5348,12 @@ def _responses_guardrail(armor_response: dict, **kwargs) -> ModelArmorGuardrail:
     return guardrail
 
 
-async def _run_pre_call(guardrail: ModelArmorGuardrail, data: dict) -> dict:
+async def _run_pre_call(guardrail: ModelArmorGuardrail, data: dict, call_type: str = "responses") -> dict:
     return await guardrail.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         cache=MagicMock(spec=DualCache),
         data=data,
-        call_type="responses",
+        call_type=call_type,
     )
 
 
@@ -5428,7 +5428,7 @@ async def test_model_armor_responses_masks_trailing_user_items_and_keeps_other_i
 
 
 @pytest.mark.asyncio
-async def test_model_armor_messages_take_precedence_over_input():
+async def test_model_armor_chat_call_scans_messages_over_input():
     guardrail = _responses_guardrail(_NO_MATCH)
     data = {
         "model": "gpt-4",
@@ -5437,7 +5437,7 @@ async def test_model_armor_messages_take_precedence_over_input():
         "metadata": {},
     }
 
-    await _run_pre_call(guardrail, data)
+    await _run_pre_call(guardrail, data, call_type="completion")
 
     assert guardrail.make_model_armor_request.await_args.kwargs["content"] == "chat message"
 
@@ -5465,3 +5465,95 @@ async def test_model_armor_moderation_hook_scans_responses_input():
         )
 
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["responses", "aresponses"])
+async def test_model_armor_responses_call_scans_input_not_a_decoy_messages_field(call_type: str):
+    """`input` is what reaches the provider on a Responses call, so a benign `messages` sent next to it is ignored."""
+    guardrail = _responses_guardrail(_RAI_MATCH)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello"}],
+        "input": "synthetic harmful prompt",
+        "metadata": {},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run_pre_call(guardrail, data, call_type=call_type)
+
+    assert exc_info.value.status_code == 400
+    assert guardrail.make_model_armor_request.await_args.kwargs["content"] == "synthetic harmful prompt"
+
+
+@pytest.mark.asyncio
+async def test_model_armor_responses_masking_replaces_input_even_with_a_decoy_messages_field():
+    guardrail = _responses_guardrail(_MASKED, mask_request_content=True)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello"}],
+        "input": "call me at 555-0100",
+        "metadata": {},
+    }
+
+    result = await _run_pre_call(guardrail, data)
+
+    assert result["input"] == "call me at [REDACTED]"
+    assert result["messages"] == [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_model_armor_responses_inline_input_file_is_scanned():
+    import base64
+
+    guardrail = _responses_guardrail(_RAI_MATCH)
+    document = b"synthetic document text"
+    data = {
+        "model": "gpt-4",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "summarize this"},
+                    {
+                        "type": "input_file",
+                        "filename": "notes.txt",
+                        "file_data": "data:text/plain;base64," + base64.b64encode(document).decode(),
+                    },
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run_pre_call(guardrail, data)
+
+    assert exc_info.value.status_code == 400
+    first_call = guardrail.make_model_armor_request.await_args_list[0].kwargs
+    assert first_call["file_bytes"] == document
+    assert first_call["file_type"] == "TXT"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "file_item",
+    [
+        {"type": "input_file", "file_id": "file-abc123"},
+        {"type": "input_file", "file_url": "https://example.test/report.pdf"},
+    ],
+)
+async def test_model_armor_responses_input_file_reference_fails_closed(file_item: dict):
+    guardrail = _responses_guardrail(_NO_MATCH)
+    data = {
+        "model": "gpt-4",
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "summarize this"}, file_item]}],
+        "metadata": {},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run_pre_call(guardrail, data)
+
+    assert exc_info.value.status_code == 400
+    guardrail.make_model_armor_request.assert_not_awaited()
+
