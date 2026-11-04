@@ -20,7 +20,9 @@ Local UI login continues using axum-login and tower-sessions. Only after session
 
 Authentication evidence and principals contain no raw token, password, request body, or mutable accounting state. Session ownership is scoped by principal authority, subject, verifier, and credential ID, so separate credentials do not silently share an MCP session. Credential rotation may retain ownership when the verifier preserves a stable credential ID. Scope and expiry checks still run for each operation
 
-Failures distinguish invalid or expired credentials, forbidden operations, unavailable authentication services, and missing server configuration/context. HTTP adapters map those outcomes to status codes. Inference keeps its API-specific error envelopes and MCP translates policy failures to its own protocol
+Failures distinguish invalid or expired credentials, forbidden operations, unavailable authentication services, and missing server configuration/context. Bearer tokens, virtual keys and UI sessions all fail with the one `Error`, classified once by `status()`, and `is_denied()` tells a rejected caller from an auth failure. Inference keeps its API-specific error envelopes, the UI renders `Error` in its own envelope and MCP translates policy failures to its own protocol
+
+The plain-text rejection body is the top-level message only, never the `Report` chain, because the caller is unauthenticated and the sources carry secret-manager and backend detail. That stays reachable through `source()` for logs
 
 Virtual-key storage, JWT verification, OAuth2 introspection, trusted-proxy validation, SSO, and custom Python hook adapters are not implemented here yet. They should supply these contracts rather than bypassing the shared authorization boundary. Request-body-dependent custom hooks will need a bounded endpoint adapter after parsing
 

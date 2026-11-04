@@ -10,11 +10,11 @@
 import asyncio
 import copy
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
@@ -107,7 +107,13 @@ def redacted_response_obj_for_custom_logger(response_obj: object, custom_logger:
 
 def _is_redactable_response(response_obj: object) -> bool:
     return isinstance(
-        response_obj, (litellm.ModelResponse, litellm.ResponsesAPIResponse, litellm.EmbeddingResponse)
+        response_obj,
+        (
+            litellm.ModelResponse,
+            litellm.TextCompletionResponse,
+            litellm.ResponsesAPIResponse,
+            litellm.EmbeddingResponse,
+        ),
     ) or (isinstance(response_obj, dict) and ("choices" in response_obj or "output" in response_obj))
 
 
@@ -120,13 +126,59 @@ def _redacted_streaming_response_copy(streaming_response: object) -> object:
     return _redact_streaming_response(redacted_response)
 
 
+BEDROCK_GUARDRAIL_TRACE_FIELDS: Final = ("trace", "amazon-bedrock-trace")
+_MATCHED_TEXT_KEYS: Final = frozenset({"match", "regex"})
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _without_matched_text(trace: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    redacted: Final = dict(copy.deepcopy(trace))
+    stack: Final[list[JsonValue]] = [redacted]  # mutable-ok: iterative walk, recursive_detector bans recursion here
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key in _MATCHED_TEXT_KEYS & node.keys():
+                node[key] = "[REDACTED]"
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return redacted
+
+
+def _redacted_bedrock_trace(trace: object) -> object:
+    try:
+        return _without_matched_text(_JSON_OBJECT.validate_python(trace))
+    except ValidationError:
+        return trace
+
+
+def _redact_bedrock_guardrail_trace(response: object) -> None:
+    """A Bedrock guardrail trace echoes the matched text of its sensitive-information and word findings back."""
+    mapping: Final = _as_mapping(response)
+    if isinstance(response, dict):
+        traces: Final = {
+            field: _redacted_bedrock_trace(value)
+            for field, value in (mapping or {}).items()
+            if field in BEDROCK_GUARDRAIL_TRACE_FIELDS
+        }
+        response.update(traces)
+        return
+    for field, value in ((name, getattr(response, name, None)) for name in BEDROCK_GUARDRAIL_TRACE_FIELDS):
+        if value is not None:
+            setattr(response, field, _redacted_bedrock_trace(value))
+
+
 def _redact_streaming_response(streaming_response):
     if hasattr(streaming_response, "choices"):
         for choice in streaming_response.choices:
             _redact_choice_content(choice)
         redact_vertex_ai_metadata_from_logged_object(streaming_response)
+        if isinstance(streaming_response, litellm.ModelResponse):
+            _redact_bedrock_guardrail_trace(streaming_response)
     elif isinstance(streaming_response, litellm.ResponsesAPIResponse):
         return perform_redaction({}, streaming_response)
+    elif isinstance(streaming_response, litellm.TranscriptionResponse):
+        streaming_response.text = REDACTED_BY_LITELLM
     elif hasattr(streaming_response, "output"):
         _redact_responses_api_output(streaming_response.output)
         if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
@@ -152,6 +204,9 @@ def _redact_function_call(function_call) -> None:
 
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
+    if isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices, litellm.utils.TextChoices)):
+        drop_token_ids(choice)
+        _redact_provider_specific_fields(choice)
     if isinstance(choice, litellm.Choices):
         if choice.message.content is not None:
             choice.message.content = REDACTED_BY_LITELLM
@@ -159,6 +214,7 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        _drop_field_when_present(choice.message, "reasoning_items")
         _redact_provider_specific_fields(choice.message)
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
@@ -169,9 +225,14 @@ def _redact_choice_content(choice):
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        _drop_field_when_present(choice.delta, "reasoning_items")
         _redact_provider_specific_fields(choice.delta)
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))
+    elif isinstance(choice, litellm.utils.TextChoices):
+        _redact_field_when_present(choice, "text")
+        _redact_field_when_present(choice, "reasoning_content")
+        _drop_field_when_present(choice, "logprobs")
 
 
 def _as_mapping(value: object) -> Mapping[str, object] | None:
@@ -183,14 +244,27 @@ def _redact_provider_specific_fields(message: object) -> None:
         setattr(message, "provider_specific_fields", _redacted_provider_specific_fields(fields))  # noqa: B010  # typed as object
 
 
+def _drop_provider_specific_token_ids(holder: object) -> None:
+    fields: Final = _as_mapping(getattr(holder, "provider_specific_fields", None))
+    if fields is not None and fields.get("token_ids") is not None:
+        setattr(holder, "provider_specific_fields", {**fields, "token_ids": None})  # noqa: B010  # typed as object
+
+
+def drop_token_ids(choice: object) -> None:
+    if getattr(choice, "token_ids", None) is not None:
+        setattr(choice, "token_ids", None)  # noqa: B010  # pydantic extra, not a declared field
+    for holder in (choice, getattr(choice, "delta", None), getattr(choice, "message", None)):
+        _drop_provider_specific_token_ids(holder)
+
+
 def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:
-    for message in (choice.get("message"), choice.get("delta")):
+    for holder in (choice, choice.get("message"), choice.get("delta")):
         if (
-            (readable := _as_mapping(message)) is not None
+            (readable := _as_mapping(holder)) is not None
             and (fields := _as_mapping(readable.get("provider_specific_fields"))) is not None
-            and isinstance(message, dict)
+            and isinstance(holder, dict)
         ):
-            message["provider_specific_fields"] = _redacted_provider_specific_fields(fields)
+            holder["provider_specific_fields"] = _redacted_provider_specific_fields(fields)
 
 
 def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[str, object]:
@@ -205,7 +279,9 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
                 "reasoningContentBlocks",
                 "citations",
                 "compaction_blocks",
+                "compaction_start",
                 "compaction_delta",
+                "token_ids",
             )
             if key in fields
         },
@@ -215,6 +291,11 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
 def _redact_field_when_present(item: object, field: str) -> None:
     if getattr(item, field, None) is not None:
         setattr(item, field, REDACTED_BY_LITELLM)
+
+
+def _drop_field_when_present(item: object, field: str) -> None:
+    if getattr(item, field, None) is not None:
+        setattr(item, field, None)
 
 
 def _redact_responses_api_output(output_items):
@@ -351,6 +432,7 @@ def _redact_standard_logging_object(
             if isinstance(response.get("choices"), list):
                 _redact_model_response_dict_choices(response["choices"], redacted_str)
             redact_vertex_ai_metadata_from_logged_object(response)
+            _redact_bedrock_guardrail_trace(response)
         elif isinstance(response, str):
             standard_logging_object["response"] = redacted_str
         else:
@@ -372,30 +454,22 @@ def _redact_tool_calls_dict(message: Mapping[str, object]) -> None:
         function_call["arguments"] = REDACTED_BY_LITELLM
 
 
-def _redact_model_response_dict_choices(choices, redacted_str: str):
+def _redact_model_response_dict_choices(choices: Iterable[object], redacted_str: str) -> None:
     for choice in choices:
         if isinstance(choice, dict):
             _redact_provider_specific_fields_dict(choice)
-            if "message" in choice and isinstance(choice["message"], dict):
-                if choice["message"].get("content") is not None:
-                    choice["message"]["content"] = redacted_str
-                if choice["message"].get("reasoning_content") is not None:
-                    choice["message"]["reasoning_content"] = redacted_str
-                if "thinking_blocks" in choice["message"]:
-                    choice["message"]["thinking_blocks"] = None
-                if "audio" in choice["message"]:
-                    choice["message"]["audio"] = None
-                _redact_tool_calls_dict(choice["message"])
-            elif "delta" in choice and isinstance(choice["delta"], dict):
-                if choice["delta"].get("content") is not None:
-                    choice["delta"]["content"] = redacted_str
-                if choice["delta"].get("reasoning_content") is not None:
-                    choice["delta"]["reasoning_content"] = redacted_str
-                if "thinking_blocks" in choice["delta"]:
-                    choice["delta"]["thinking_blocks"] = None
-                if "audio" in choice["delta"]:
-                    choice["delta"]["audio"] = None
-                _redact_tool_calls_dict(choice["delta"])
+            if choice.get("token_ids") is not None:
+                choice["token_ids"] = None
+            if (
+                body := next((choice[key] for key in ("message", "delta") if isinstance(choice.get(key), dict)), None)
+            ) is not None:
+                for field in ("content", "reasoning_content"):
+                    if body.get(field) is not None:
+                        body[field] = redacted_str
+                for field in ("thinking_blocks", "reasoning_items", "audio"):
+                    if field in body:
+                        body[field] = None
+                _redact_tool_calls_dict(body)
             elif choice.get("text") is not None:
                 choice["text"] = redacted_str
         else:
@@ -518,16 +592,18 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             return {"text": REDACTED_BY_LITELLM}
 
         _result: Final = copy.deepcopy(result)
-        if isinstance(_result, litellm.ModelResponse):
+        if isinstance(_result, (litellm.ModelResponse, litellm.TextCompletionResponse)):
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:
                     _redact_choice_content(choice)
             redact_vertex_ai_metadata_from_logged_object(_result)
+            _redact_bedrock_guardrail_trace(_result)
         elif isinstance(_result, dict) and "choices" in _result:
             # Handle dict representation of ModelResponse (e.g., from model_dump())
             if _result.get("choices") is not None:
                 _redact_model_response_dict_choices(_result["choices"], REDACTED_BY_LITELLM)
             redact_vertex_ai_metadata_from_logged_object(_result)
+            _redact_bedrock_guardrail_trace(_result)
         elif isinstance(_result, dict) and "output" in _result:
             return _redacted_responses_api_response(_result, redact_instructions=redact_streaming_responses)
         elif isinstance(_result, litellm.ResponsesAPIResponse):

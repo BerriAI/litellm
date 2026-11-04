@@ -135,6 +135,13 @@ def _drop_or_500(request: Request, marker: str) -> Reply:
     return openai_error(500)
 
 
+def _overloaded_while(outage: threading.Event) -> Callable[[Request, str], Reply]:
+    def first_attempt(request: Request, marker: str) -> Reply:
+        return status_reply(529) if outage.is_set() else _served(request, marker, 1)
+
+    return first_attempt
+
+
 def _outage(statuses: Mapping[str, int]) -> Callable[[Request, str], Reply]:
     def first_attempt(request: Request, marker: str) -> Reply:
         if request.target == "/v1/messages":
@@ -165,7 +172,7 @@ class _Upstream:
         return self.first_attempt(request, marker)
 
 
-def _config(wire: Wire, directory: Path, models: _Models) -> Path:
+def _config(wire: Wire, directory: Path, models: _Models, *, retries: int = 1) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["model_list"] = [
         {
@@ -174,7 +181,7 @@ def _config(wire: Wire, directory: Path, models: _Models) -> Path:
                 "model": f"anthropic/{_ANTHROPIC_BACKEND}",
                 "api_base": wire.url,
                 "api_key": _ANTHROPIC_KEY,
-                "num_retries": 1,
+                "num_retries": retries,
             },
         },
         {
@@ -183,7 +190,7 @@ def _config(wire: Wire, directory: Path, models: _Models) -> Path:
                 "model": f"openai/{_OPENAI_BACKEND}",
                 "api_base": wire.url + "/v1",
                 "api_key": _OPENAI_KEY,
-                "num_retries": 1,
+                "num_retries": retries,
             },
         },
     ]
@@ -408,3 +415,68 @@ async def test_outage_on_every_first_attempt_is_absorbed_by_the_deployment_budge
                 _assert_completed_on_the_second_attempt(item)
             _assert_each_served_id_landed_exactly_once(models, served)
             assert all(upstream.attempts.count(call.marker) == 2 for call in calls)
+
+
+def _messages_rows(model: str, expected: int) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: read_rows(
+            "SELECT request_id, status, metadata->'error_information'->>'error_code' AS code "
+            'FROM "LiteLLM_SpendLogs" WHERE model_group=%s',
+            (model,),
+        ),
+        lambda found: len(found) >= expected,
+        seconds=90,
+    )
+
+
+@pytest.mark.timeout(300)
+async def test_overloaded_outage_during_a_burst_with_a_worker_sigkill_answers_529_and_lands_every_call_once(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    models: Final = _models()
+    calls: Final = _calls((("messages", True, 12), ("messages", False, 6)))
+    release: Final = threading.Event()
+    held: Final[SimpleQueue[str]] = SimpleQueue()
+    outage: Final = threading.Event()
+    outage.set()
+    upstream: Final = _Upstream(Attempts(), _overloaded_while(outage), held, release)
+    with wire_server(upstream) as wire:
+        config: Final = _config(wire, tmp_path, models, retries=0)
+        with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
+            candidate: Final = owned.gateway
+            base_url: Final = str(candidate.client.base_url)
+            workers: Final = eventually(
+                lambda: tuple(int(pid) for pid in _STARTED_WORKER.findall(owned.log.read_text())),
+                lambda pids: len(pids) == 2,
+                seconds=30,
+            )
+            burst: Final = asyncio.create_task(
+                _burst(base_url, candidate.key, models, calls, tolerate_transport_errors=True)
+            )
+            await asyncio.to_thread(eventually, held.qsize, lambda size: size == len(calls), 90)
+            held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
+            assert sum(held_by.values()) == len(calls), held_by
+            victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 5, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    assert item.status == 529, (item.call, item.text)
+                    assert "overloaded_error" in item.text, (item.call, item.text)
+                    assert "content_block_delta" not in item.text, (item.call, item.text)
+            outage.clear()
+            follow_up: Final = _Call(endpoint="messages", stream=True, marker=uuid.uuid4().hex)
+            (answered,) = await _burst(base_url, candidate.key, models, (follow_up,))
+            assert answered.status == 200, answered.text
+            assert message_id(parse_sse(answered.text)) == f"msg_{follow_up.marker}_a1", answered.text
+            rows: Final = _messages_rows(models.messages, len(served) + 1)
+            assert sorted(string_value(row["status"]) for row in rows) == ["failure"] * len(served) + ["success"], rows
+            assert {row["code"] for row in rows if row["status"] == "failure"} == {"529"}, rows
+            assert [row["request_id"] for row in rows if row["status"] == "success"] == [
+                f"msg_{follow_up.marker}_a1"
+            ], rows
+            assert all(upstream.attempts.count(item.call.marker) == 1 for item in (*served, answered))

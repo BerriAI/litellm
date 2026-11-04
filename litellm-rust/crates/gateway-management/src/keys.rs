@@ -1,8 +1,8 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use litellm_auth_types::SecretValue;
 use litellm_gateway_auth::keys::{KeyHash, KeyStatus};
+use litellm_secret_value::SecretValue;
 use rand::{RngCore, rngs::OsRng};
 
 use crate::Error;

@@ -1,6 +1,6 @@
 import datetime
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
@@ -70,8 +70,11 @@ def test_cohere_embedding_response_lists_every_embedding_type_in_provider_order(
     ("meta", "expected_counts", "expected_details"),
     [
         ({"billed_units": {"input_tokens": 5}}, (5, 0, 5), (5, None)),
+        ({"billed_units": {"input_tokens": 5, "image_tokens": 0}}, (5, 0, 5), (5, None)),
         ({"billed_units": {"images": 3}}, (3, 0, 3), (None, 3)),
         ({"billed_units": {"input_tokens": 5, "images": 3}}, (8, 0, 8), (5, 3)),
+        ({"billed_units": {"input_tokens": 0, "image_tokens": 6}}, (6, 0, 6), (0, 6)),
+        ({"billed_units": {"input_tokens": 3, "image_tokens": 6}}, (9, 0, 9), (3, 6)),
         ({"billed_units": {"input_tokens": 0}}, (0, 0, 0), (0, None)),
         (
             {"api_version": {"version": "2"}, "billed_units": {"input_tokens": 2, "output_tokens": 9}},
@@ -80,11 +83,15 @@ def test_cohere_embedding_response_lists_every_embedding_type_in_provider_order(
         ),
     ],
 )
-def test_cohere_embedding_usage_comes_from_billed_units(meta, expected_counts, expected_details):
-    response = _transform({"embeddings": {"float": FLOAT_VECTORS}, "meta": meta})
+def test_cohere_embedding_usage_comes_from_billed_units(
+    meta: Mapping[str, object],
+    expected_counts: tuple[int, int, int],
+    expected_details: tuple[int | None, int | None],
+) -> None:
+    response: Final = _transform({"embeddings": {"float": FLOAT_VECTORS}, "meta": meta})
 
     assert response.usage is not None
-    details = response.usage.prompt_tokens_details
+    details: Final = response.usage.prompt_tokens_details
     assert details is not None
     assert _token_counts(response) == expected_counts
     assert (details.text_tokens, details.image_tokens) == expected_details
@@ -123,8 +130,20 @@ def test_cohere_embedding_rows_pass_through_whatever_each_type_lists(embeddings,
     assert [row["embedding"] for row in response.data] == expected_vectors
 
 
-@pytest.mark.parametrize("embeddings", [FLOAT_VECTORS, [], None, "vectors", 3])
-def test_cohere_embeddings_that_are_not_keyed_by_type_are_rejected(embeddings):
+@pytest.mark.parametrize("vectors", [FLOAT_VECTORS, []])
+def test_cohere_v1_float_embeddings_list_one_row_per_vector(vectors: list[list[float]]) -> None:
+    response: Final = _transform(
+        {"embeddings": vectors, "meta": {"billed_units": {"input_tokens": 1}}, "response_type": "embeddings_floats"}
+    )
+
+    assert response.data == [
+        {"object": "embedding", "index": index, "embedding": vector} for index, vector in enumerate(vectors)
+    ]
+    assert _token_counts(response) == (1, 0, 1)
+
+
+@pytest.mark.parametrize("embeddings", [None, "vectors", 3])
+def test_cohere_embeddings_that_are_neither_keyed_by_type_nor_a_list_are_rejected(embeddings: object) -> None:
     with pytest.raises(ValidationError):
         _transform({"embeddings": embeddings, "meta": {"billed_units": {"input_tokens": 1}}})
 
@@ -147,12 +166,15 @@ def test_cohere_embedding_body_that_is_not_an_object_is_rejected(payload):
         _transform(payload)
 
 
-def test_cohere_embedding_body_without_embeddings_is_rejected():
-    with pytest.raises(KeyError):
+def test_cohere_embedding_body_without_embeddings_is_rejected() -> None:
+    with pytest.raises(ValidationError):
         _transform({"meta": {"billed_units": {"input_tokens": 1}}})
 
 
 COHERE_V2_EMBED_URL: Final = "https://api.cohere.ai/v2/embed"
+ONE_PIXEL_PNG: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
 
 
 @pytest.fixture
@@ -364,11 +386,41 @@ async def test_cohere_embed_v4_with_optional_params(respx_mock: respx.MockRouter
 
 @pytest.mark.usefixtures("_cohere_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(("input_tokens", "image_tokens"), [(0, 6), (3, 6)])
+async def test_cohere_embed_v4_image_tokens_are_billed_apart_from_input_tokens(
+    respx_mock: respx.MockRouter, input_tokens: int, image_tokens: int
+) -> None:
+    respx_mock.post(COHERE_V2_EMBED_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "5807ee2e-0cda-445a-9ec8-864c60a06606",
+                "embeddings": {"float": [[0.125, -0.375]]},
+                "texts": [],
+                "images": [{"width": 1, "height": 1, "format": "image/png", "bit_depth": 8}],
+                "meta": {
+                    "api_version": {"version": "2"},
+                    "billed_units": {"input_tokens": input_tokens, "image_tokens": image_tokens},
+                },
+                "response_type": "embeddings_by_type",
+            },
+        )
+    )
+    model_info: Final = litellm.get_model_info("cohere/embed-v4.0")
+
+    response: Final = await _embed(True, input=[ONE_PIXEL_PNG], input_type="image")
+
+    assert model_info["input_cost_per_image_token"] > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        input_tokens * model_info["input_cost_per_token"] + image_tokens * model_info["input_cost_per_image_token"]
+    )
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_cohere_embed_v4_image_embedding(respx_mock: respx.MockRouter, sync_mode: bool) -> None:
-    image: Final = (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
-    )
+    image: Final = ONE_PIXEL_PNG
     route: Final = respx_mock.post(COHERE_V2_EMBED_URL).mock(
         return_value=httpx.Response(
             200,

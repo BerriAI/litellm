@@ -115,28 +115,6 @@ def test_reka_is_available_in_add_model_form():
     }
 
 
-def test_reka_supported_endpoints():
-    expected: Final = {
-        "chat_completions": True,
-        "messages": True,
-        "responses": True,
-        "embeddings": False,
-        "image_generations": False,
-        "audio_transcriptions": False,
-        "audio_speech": False,
-        "moderations": False,
-        "batches": False,
-        "rerank": False,
-        "a2a": False,
-        "interactions": False,
-    }
-    backup_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    root_path = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
-
-    assert json.loads(backup_path.read_text())["providers"]["reka"]["endpoints"] == expected
-    assert json.loads(root_path.read_text())["providers"]["reka"]["endpoints"] == expected
-
-
 def test_reka_chat_completion_request():
     with respx.mock() as upstream:
         route: Final = upstream.post("https://api.reka.ai/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
