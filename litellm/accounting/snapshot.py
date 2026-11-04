@@ -81,7 +81,7 @@ def build_accounting_payload(
         billed_at=payload["endTime"],
     )
     accounting_metadata: Final = {
-        **{key: value for key, value in metadata.items() if key in _METADATA_FIELDS},
+        **{key: _accounting_metadata_field(key, value) for key, value in metadata.items() if key in _METADATA_FIELDS},
         "accounting_entities": entities,
         "accounting_savings": savings._asdict(),
         "accounting_model_access_groups": model_access_groups,
@@ -100,3 +100,23 @@ def build_accounting_payload(
             non_finite_as_null=True,
         )
     )
+
+
+_GUARDRAIL_METADATA_FIELDS: Final = frozenset({"guardrail_information", "standard_logging_guardrail_information"})
+_GUARDRAIL_ACCOUNTING_FIELDS: Final = frozenset(
+    {"guardrail_id", "guardrail_name", "guardrail_usage", "guardrail_cost_by_unit", "guardrail_cost_in_spend"}
+)
+
+
+def _accounting_guardrail_entries(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    return [_accounting_guardrail_entry(entry) for entry in value if isinstance(entry, Mapping)]
+
+
+def _accounting_guardrail_entry(entry: Mapping[object, object]) -> Mapping[str, object]:
+    return {key: item for key, item in entry.items() if isinstance(key, str) and key in _GUARDRAIL_ACCOUNTING_FIELDS}
+
+
+def _accounting_metadata_field(key: str, value: object) -> object:
+    return _accounting_guardrail_entries(value) if key in _GUARDRAIL_METADATA_FIELDS else value

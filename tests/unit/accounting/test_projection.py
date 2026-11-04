@@ -451,3 +451,43 @@ def test_tag_too_long_for_the_daily_index_still_charges_every_other_entity() -> 
     charged_tables: Final = {item.table for item in contributions}
     assert daily_tag_ids == {"normal"}
     assert {"LiteLLM_VerificationToken", "LiteLLM_TeamTable", "LiteLLM_DailyUserSpend"} <= charged_tables
+
+
+def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> None:
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "projection-test",
+            "custom_llm_provider": "openai",
+            "call_type": "acompletion",
+            "litellm_call_id": "guardrail-request",
+            "litellm_params": {"metadata": {"user_api_key": "key", "user_api_key_user_id": "user"}},
+        },
+        response_obj=ModelResponse(
+            id="guardrail-request", model="projection-test", usage=Usage(prompt_tokens=10, completion_tokens=5)
+        ),
+        start_time=_NOW,
+        end_time=_NOW,
+    )
+    guardrail: Final = {
+        "guardrail_name": "pii",
+        "guardrail_usage": {"requests": 1},
+        "guardrail_cost_by_unit": {"requests": 0.25},
+        "guardrail_response": "card 4111 1111 1111 1111",
+        "match_details": [{"matched": "4111 1111 1111 1111"}],
+    }
+    metadata: Final = {**_FIELDS.validate_json(payload["metadata"]), "guardrail_information": [guardrail]}
+    accounting_input: Final[SpendLogsPayload] = {
+        **payload,
+        "spend": 0.5,
+        "metadata": json.dumps(metadata),
+        "request_tags": '["nul\x00tag"]',
+    }
+    accounting: Final = build_accounting_payload(
+        accounting_input, entities={"api_key": "key"}, model_access_groups=(), windows=(), router=lambda: None
+    )
+    stored: Final = json.dumps(accounting, default=str)
+    restored: Final = _FIELDS.validate_json(stored)
+    usage_rows: Final = tuple(item for item in project(restored) if item.table == "LiteLLM_DailyGuardrailUsageUnits")
+    assert "4111" not in stored
+    assert "\\u0000" not in stored
+    assert [dict(item.increments) for item in usage_rows] == [{"units": 1, "cost": 0.25, "untracked_units": 0}]
