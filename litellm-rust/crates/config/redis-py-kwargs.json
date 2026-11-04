@@ -1,0 +1,2865 @@
+{
+  "meta": {
+    "description": "Every kwarg litellm/_redis.py can pass to redis-py, by tested redis-py version, next to how SETTINGS in src/redis/keys.rs handles it",
+    "generated": "2026-11-05",
+    "redis_py_versions": [
+      "5.3.1",
+      "6.4.0",
+      "7.4.1",
+      "8.0.1"
+    ],
+    "redis_py_locked": "5.3.1",
+    "python": "3.12",
+    "method": "uv run --no-project --python 3.12 --with redis==<version> python -I, reading inspect.getfullargspec(inspect.unwrap(cls.__init__)) args and kwonlyargs, minus self",
+    "signatures": {
+      "sync": "redis.Redis.__init__. _get_redis_kwargs uses it as the config allowlist and the REDIS_<KWARG> environment mapping",
+      "async": "redis.asyncio.Redis.__init__, which the proxy constructs. A kwarg in sync but not async raises TypeError when the client is built",
+      "connection": "redis.Connection or redis.asyncio.Connection MRO, the url allowlist from _get_redis_url_kwargs",
+      "cluster": "redis.asyncio.RedisCluster.__init__, the allowlist from _get_redis_cluster_kwargs"
+    },
+    "rust": {
+      "supported": "true when the Rust client honors the setting, which is only the Read rows",
+      "handling": {
+        "Read": "modeled by the resolver",
+        "Warn": "dropped and returned as an Ignored warning naming the consequence",
+        "Reject": "fails with RedisError::Unenforceable when set to true",
+        "unlisted": "no SETTINGS row, so it lands in passthrough for a redis-py host and the Rust client never uses it, without a warning",
+        "unlisted_host_object": "no SETTINGS row and listed in HOST_OBJECTS, so it lands in host_objects and the Rust client never uses it, without a warning"
+      },
+      "field": "the Options field in src/redis/options.rs that a Read row fills, null otherwise"
+    },
+    "versions": "each entry is a redis-py version whose signatures name the arg, with which ones. An empty array means no signature names it, so it only reaches Python as a litellm key"
+  },
+  "args": {
+    "address_remap": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted_host_object",
+        "field": null
+      },
+      "note": "Cluster-only and no SETTINGS row, so a Rust cluster store drops it without a warning"
+    },
+    "auto_close_connection_pool": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "async"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "async"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "async"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "async"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Async-only and outside the config allowlist, so Python never passes it from config"
+    },
+    "aws_iam_auth": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.aws.auth"
+      }
+    },
+    "aws_iam_cache_name": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.aws.cache_name"
+      }
+    },
+    "aws_iam_region": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.aws.region"
+      }
+    },
+    "aws_iam_serverless": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.aws.serverless"
+      }
+    },
+    "aws_iam_user_name": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.aws.user_name"
+      }
+    },
+    "azure_client_id": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.azure.client_id"
+      }
+    },
+    "azure_client_secret": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.azure.client_secret"
+      }
+    },
+    "azure_redis_ad_token": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.azure.ad_token"
+      }
+    },
+    "azure_tenant_id": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.azure.tenant_id"
+      }
+    },
+    "cache": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      },
+      "note": "Sync-only on every tested version, so the proxy's async path raises TypeError on it in Python too"
+    },
+    "cache_config": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      },
+      "note": "Sync-only on every tested version, so the proxy's async path raises TypeError on it in Python too"
+    },
+    "charset": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      },
+      "note": "Removed in redis-py 6.0, so the Warn row only matters for 5.3.1 configs"
+    },
+    "client_name": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "cluster_error_retry_attempts": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Cluster-only and no SETTINGS row, so a Rust cluster store drops it without a warning"
+    },
+    "command_packer": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "connection_error_retry_attempts": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Cluster-only and no SETTINGS row, so a Rust cluster store drops it without a warning. Only exists in 5.3.1"
+    },
+    "connection_pool": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "credential_provider": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.credential_provider"
+      }
+    },
+    "db": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.db"
+      }
+    },
+    "decode_responses": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "driver_info": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted_host_object",
+        "field": null
+      },
+      "note": "No SETTINGS row, so a Rust store drops it without a warning"
+    },
+    "dynamic_startup_nodes": {
+      "versions": [
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Cluster-only and no SETTINGS row, so a Rust cluster store drops it without a warning"
+    },
+    "encoder_class": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "encoding": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "encoding_errors": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "errors": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      },
+      "note": "Removed in redis-py 6.0, so the Warn row only matters for 5.3.1 configs"
+    },
+    "event_dispatcher": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "gcp_service_account": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.gcp.service_account"
+      }
+    },
+    "gcp_ssl_ca_certs": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.gcp.ssl_ca_certs"
+      }
+    },
+    "health_check_interval": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.health_check_interval"
+      }
+    },
+    "host": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.host"
+      }
+    },
+    "legacy_responses": {
+      "versions": [
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "No SETTINGS row, so a Rust store drops it without a warning"
+    },
+    "lib_name": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "lib_version": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "load_balancing_strategy": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Cluster-only and no SETTINGS row, so a Rust cluster store drops it without a warning. It changes which node serves a read"
+    },
+    "maint_notifications_config": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted_host_object",
+        "field": null
+      },
+      "note": "No SETTINGS row, so a Rust store drops it without a warning"
+    },
+    "maint_notifications_pool_handler": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "maintenance_notification_hash": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "maintenance_state": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "max_connections": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      },
+      "note": "Warned with the generic consequence, though Rust having no connection cap can push a low maxclients server over its limit"
+    },
+    "namespace": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.namespace"
+      }
+    },
+    "orig_host_address": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "orig_socket_connect_timeout": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "orig_socket_timeout": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "oss_cluster_maint_notifications_handler": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "No SETTINGS row, so a Rust store drops it without a warning. It takes an object but is missing from HOST_OBJECTS"
+    },
+    "parser": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "parser_class": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted_host_object",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "password": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.password"
+      }
+    },
+    "path": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Cluster-only and no SETTINGS row, so a Rust cluster store drops it without a warning"
+    },
+    "policy_resolver": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Cluster-only and no SETTINGS row, so a Rust cluster store drops it without a warning"
+    },
+    "port": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.port"
+      }
+    },
+    "protocol": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "read_from_replicas": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Cluster-only and no SETTINGS row, so a Rust cluster store drops it without a warning. It changes which node serves a read"
+    },
+    "redis_connect_func": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "reinitialize_steps": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Cluster-only and no SETTINGS row, so a Rust cluster store drops it without a warning"
+    },
+    "require_full_coverage": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Cluster-only and no SETTINGS row, so a Rust cluster store drops it without a warning"
+    },
+    "retry": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "retry_on_error": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "retry_on_timeout": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "sentinel_nodes": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.sentinel.nodes"
+      }
+    },
+    "sentinel_password": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.sentinel.password"
+      }
+    },
+    "service_name": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.sentinel.service_name"
+      }
+    },
+    "single_connection_client": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "socket_connect_timeout": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.socket_connect_timeout"
+      }
+    },
+    "socket_keepalive": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "socket_keepalive_options": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "socket_read_size": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "No SETTINGS row, so a Rust store drops it without a warning"
+    },
+    "socket_timeout": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.socket_timeout"
+      }
+    },
+    "socket_type": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "connection"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "connection"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "Connection internal that only the url allowlist admits, not a setting anyone configures"
+    },
+    "ssl": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.ssl"
+      }
+    },
+    "ssl_ca_certs": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.tls.ca_certs"
+      }
+    },
+    "ssl_ca_data": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.tls.ca_data"
+      }
+    },
+    "ssl_ca_path": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.tls.ca_path"
+      },
+      "note": "Python's async client raises TypeError on it before 7.4.1, so Rust reading it is a superset with the pinned 5.3.1"
+    },
+    "ssl_cert_reqs": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.tls.cert_reqs"
+      }
+    },
+    "ssl_certfile": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.tls.certfile"
+      }
+    },
+    "ssl_check_hostname": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.tls.check_hostname"
+      }
+    },
+    "ssl_ciphers": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "ssl_exclude_verify_flags": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "No SETTINGS row, so a Rust store drops it without a warning"
+    },
+    "ssl_include_verify_flags": {
+      "versions": [
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "unlisted",
+        "field": null
+      },
+      "note": "No SETTINGS row, so a Rust store drops it without a warning"
+    },
+    "ssl_keyfile": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.tls.keyfile"
+      }
+    },
+    "ssl_min_version": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      }
+    },
+    "ssl_ocsp_context": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      },
+      "note": "Sync-only on every tested version, so the proxy's async path raises TypeError on it in Python too"
+    },
+    "ssl_ocsp_expected_cert": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Warn",
+        "field": null
+      },
+      "note": "Sync-only on every tested version, so the proxy's async path raises TypeError on it in Python too"
+    },
+    "ssl_password": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.tls.key_password"
+      },
+      "note": "Python's async client raises TypeError on it before 7.4.1, so Rust reading it is a superset with the pinned 5.3.1"
+    },
+    "ssl_validate_ocsp": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Reject",
+        "field": null
+      },
+      "note": "Sync-only on every tested version, so the proxy's async path raises TypeError on it in Python too"
+    },
+    "ssl_validate_ocsp_stapled": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": false,
+        "handling": "Reject",
+        "field": null
+      },
+      "note": "Sync-only on every tested version, so the proxy's async path raises TypeError on it in Python too"
+    },
+    "startup_nodes": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.startup_nodes"
+      }
+    },
+    "unix_socket_path": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.unix_socket_path"
+      }
+    },
+    "url": {
+      "versions": [],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.url"
+      }
+    },
+    "username": {
+      "versions": [
+        {
+          "redis_py": "5.3.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "6.4.0",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "7.4.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        },
+        {
+          "redis_py": "8.0.1",
+          "signatures": [
+            "sync",
+            "async",
+            "connection",
+            "cluster"
+          ]
+        }
+      ],
+      "rust": {
+        "supported": true,
+        "handling": "Read",
+        "field": "Options.username"
+      }
+    }
+  }
+}
