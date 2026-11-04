@@ -22027,6 +22027,102 @@ class TestMCPEnableDisableManager:
         assert by_id[config_id].enabled is False
 
     @pytest.mark.asyncio
+    async def test_disabled_db_id_suppresses_same_id_config_fallback(self):
+        """BUG #2: disabling a DB server whose id is ALSO a config server id must suppress the
+        config fallback on caller surfaces. The disabled DB row is gated out of the registry, but
+        the same-id config entry would otherwise resurface through ``config_mcp_servers | registry``.
+        Tracking the id in ``_disabled_db_server_ids`` keeps it hidden from callers."""
+        from litellm.proxy.mcp_server import operations
+        from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        manager = global_mcp_server_manager
+        server_id = await self._load_config_server(manager)
+        assert server_id in manager.get_filtered_registry()
+
+        # Simulate a disabled DB row pinning the SAME id (its row is absent from the registry;
+        # only the config twin remains resident in config_mcp_servers / get_registry).
+        manager._disabled_db_server_ids.add(server_id)
+        try:
+            assert manager.is_server_caller_hidden(server_id) is True
+            # Caller-facing registry drops the config fallback; raw registry still has the twin.
+            assert server_id not in manager.get_filtered_registry()
+            assert server_id in manager.get_registry()
+
+            with patch.object(
+                manager, "get_allowed_mcp_servers", new=AsyncMock(return_value=[server_id])
+            ):
+                allowed = await operations._get_allowed_mcp_servers(
+                    user_api_key_auth=None, mcp_servers=None
+                )
+            assert all(s.server_id != server_id for s in allowed)
+        finally:
+            manager._disabled_db_server_ids.discard(server_id)
+
+    @pytest.mark.asyncio
+    async def test_plain_disabled_db_server_without_config_twin_just_disappears(self):
+        """BUG #2 counterpart: a disabled DB server with NO config twin needs no extra suppression
+        — the runtime query already keeps it out of the registry — but it is still caller-hidden."""
+        manager = MCPServerManager()
+        manager._disabled_db_server_ids.add("db-only")
+        assert manager.is_server_caller_hidden("db-only") is True
+        # No config twin resident, so it is simply absent from every registry view.
+        assert "db-only" not in manager.get_registry()
+        assert "db-only" not in manager.get_filtered_registry()
+
+    @pytest.mark.asyncio
+    async def test_admin_listing_shows_disabled_db_row_over_config_twin(self, monkeypatch):
+        """BUG #2: admin listing must still surface a disabled DB row (enabled=False); a same-id
+        config server must not resurrect it as enabled nor produce a duplicate entry."""
+        from litellm.proxy import proxy_server
+
+        manager = MCPServerManager()
+        config_id = await self._load_config_server(manager)
+        manager._disabled_db_server_ids.add(config_id)
+
+        disabled_twin = LiteLLM_MCPServerTable(
+            server_id=config_id,
+            server_name="db_twin",
+            url="https://db.example.com/mcp",
+            transport=MCPTransport.http,
+            enabled=False,
+        )
+        monkeypatch.setattr(proxy_server, "prisma_client", MagicMock(), raising=False)
+        with patch(
+            "litellm.proxy.mcp_server.db.get_all_mcp_servers",
+            new=AsyncMock(return_value=[disabled_twin]),
+        ):
+            listing = await manager.get_all_mcp_servers_unfiltered()
+
+        matches = [s for s in listing if s.server_id == config_id]
+        assert len(matches) == 1
+        assert matches[0].enabled is False
+
+    @pytest.mark.asyncio
+    async def test_refresh_populates_both_disabled_sets(self, monkeypatch):
+        """BUG #2: every refresh pass (boot/reload/toggle/cross-pod sync) loads the DB disable-set
+        alongside the config disable-set so ``is_server_caller_hidden`` stays accurate."""
+        from litellm.proxy import proxy_server
+
+        manager = MCPServerManager()
+        monkeypatch.setattr(proxy_server, "prisma_client", MagicMock(), raising=False)
+        with (
+            patch(
+                "litellm.proxy.mcp_server.db.get_disabled_config_server_ids",
+                new=AsyncMock(return_value={"cfg-x"}),
+            ),
+            patch(
+                "litellm.proxy.mcp_server.db.get_disabled_db_server_ids",
+                new=AsyncMock(return_value={"db-x"}),
+            ),
+        ):
+            await manager._refresh_disabled_config_server_ids()
+
+        assert manager._disabled_config_server_ids == {"cfg-x"}
+        assert manager._disabled_db_server_ids == {"db-x"}
+        assert manager.is_server_caller_hidden("db-x") is True
+        assert manager.is_server_caller_hidden("cfg-x") is True
+
+    @pytest.mark.asyncio
     async def test_reenable_config_server_restores_registry(self, monkeypatch):
         """Flipping a config server back on restores it to the caller-facing registry."""
         from litellm.proxy import proxy_server

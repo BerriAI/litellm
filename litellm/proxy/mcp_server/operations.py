@@ -878,7 +878,7 @@ async def _get_allowed_mcp_servers(
     allowed_mcp_servers: list[MCPServer] = []
     for allowed_mcp_server_id in allowed_mcp_server_ids:
         # Caller-facing: an admin-disabled config server is resident but hidden from callers.
-        if global_mcp_server_manager.is_config_server_caller_hidden(allowed_mcp_server_id):
+        if global_mcp_server_manager.is_server_caller_hidden(allowed_mcp_server_id):
             continue
         mcp_server = global_mcp_server_manager.get_mcp_server_by_id(allowed_mcp_server_id)
         if mcp_server is not None:
@@ -2189,7 +2189,7 @@ async def _execute_mcp_tool(
         all_registry_prefixes: Final[set[str]] = set()
         for registry_server in global_mcp_server_manager.get_registry().values():
             # Caller-facing: an admin-disabled config server's prefix must not steer routing.
-            if global_mcp_server_manager.is_config_server_caller_hidden(registry_server.server_id):
+            if global_mcp_server_manager.is_server_caller_hidden(registry_server.server_id):
                 continue
             for known_prefix in iter_known_server_prefixes(registry_server):
                 all_registry_prefixes.add(normalize_server_name(known_prefix))
@@ -2972,7 +2972,7 @@ async def call_mcp_tool(
         allowed_mcp_servers: list[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
             # Caller-facing: reject tool calls targeting an admin-disabled config server.
-            if global_mcp_server_manager.is_config_server_caller_hidden(allowed_mcp_server_id):
+            if global_mcp_server_manager.is_server_caller_hidden(allowed_mcp_server_id):
                 continue
             allowed_server = global_mcp_server_manager.get_mcp_server_by_id(allowed_mcp_server_id)
             if allowed_server is not None:

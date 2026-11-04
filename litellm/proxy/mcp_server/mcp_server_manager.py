@@ -2102,6 +2102,13 @@ class MCPServerManager:
         # ``LiteLLM_MCPServerStateOverride`` at boot and refreshed on every reload /
         # config-sync cycle so a toggle on one pod reaches the others.
         self._disabled_config_server_ids: set[str] = set()  # mutable-ok: live disabled-set
+        # DB-backed server ids an admin has toggled OFF (``enabled=false``). These rows are already
+        # gated out of ``registry`` by the runtime query, but a config server pinning the SAME id
+        # would otherwise reappear through the ``config_mcp_servers | registry`` merge. Tracking the
+        # ids lets every caller-facing reader subtract the disabled DB id too (via
+        # ``is_server_caller_hidden``) so the config fallback stays suppressed. Refreshed on every
+        # pass that refreshes ``_disabled_config_server_ids`` (boot, reload, toggle, cross-pod sync).
+        self._disabled_db_server_ids: set[str] = set()  # mutable-ok: live disabled-set
 
     def oauth_discovery_slot(self, server_id: str) -> _OAuthDiscoverySlot | None:
         return next((slot for slot in self._oauth_discovery_slots if slot.server_id == server_id), None)
@@ -2575,23 +2582,29 @@ class MCPServerManager:
             return is_db_row_enabled
         return server_id not in self._disabled_config_server_ids
 
-    def is_config_server_caller_hidden(self, server_id: str) -> bool:
-        """True when ``server_id`` is a config server an admin disabled, so caller-facing readers
-        (tool listing, tool calls, discovery) must exclude it even though it stays resident."""
-        return server_id in self._disabled_config_server_ids
+    def is_server_caller_hidden(self, server_id: str) -> bool:
+        """Unified caller-facing hidden-state predicate covering BOTH disable sources.
+
+        True when an admin disabled ``server_id`` whether it is a resident config server
+        (``_disabled_config_server_ids``) or a DB-backed server (``_disabled_db_server_ids``). The
+        DB arm matters because a disabled DB row is gated out of ``registry`` but a config entry
+        pinning the same id would otherwise surface through the ``config_mcp_servers | registry``
+        merge; subtracting the id on caller surfaces keeps that config fallback suppressed. Admin /
+        raw listings do not use this, so a disabled server still shows (enabled=false) for admins."""
+        return server_id in self._disabled_config_server_ids or server_id in self._disabled_db_server_ids
 
     def _subtract_disabled_config_servers(
         self, registry: Mapping[str, MCPServer]
     ) -> dict[str, MCPServer]:
-        """Return a caller-facing copy of ``registry`` with disabled config servers removed.
-        DB-disabled servers are already absent from the registry (gated at the DB query), so this
-        only needs to drop the resident-but-disabled config servers."""
-        if not self._disabled_config_server_ids:
+        """Return a caller-facing copy of ``registry`` with admin-disabled servers removed.
+        Drops resident-but-disabled config servers AND any config fallback whose id belongs to a
+        disabled DB server (the disabled DB row itself is already absent, gated at the DB query)."""
+        if not self._disabled_config_server_ids and not self._disabled_db_server_ids:
             return dict(registry)
         return {
             server_id: server
             for server_id, server in registry.items()
-            if server_id not in self._disabled_config_server_ids
+            if not self.is_server_caller_hidden(server_id)
         }
 
     def _close_upstream_sessions_for_server(self, server_id: str) -> None:
@@ -2607,8 +2620,11 @@ class MCPServerManager:
         ]
 
     async def _refresh_disabled_config_server_ids(self) -> None:
-        """Reload ``_disabled_config_server_ids`` from the override table. Best-effort: a DB
-        hiccup leaves the previous set in place rather than silently re-enabling servers."""
+        """Reload the admin disable-sets (config override rows AND DB ``enabled=false`` rows) from
+        the database. Refreshing both here means every caller (boot, reload, set_server_enabled,
+        cross-pod sync) keeps the DB-disabled set in step with the config-disabled set. Best-effort:
+        a DB hiccup on either query leaves that previous set in place rather than silently
+        re-enabling servers."""
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
@@ -2619,6 +2635,12 @@ class MCPServerManager:
             self._disabled_config_server_ids = await get_disabled_config_server_ids(prisma_client)
         except Exception as e:  # noqa: BLE001  # best-effort refresh; keep the last known set on failure
             verbose_logger.debug("Failed to refresh disabled MCP config server ids: %s", e)
+        try:
+            from litellm.proxy.mcp_server.db import get_disabled_db_server_ids
+
+            self._disabled_db_server_ids = await get_disabled_db_server_ids(prisma_client)
+        except Exception as e:  # noqa: BLE001  # best-effort refresh; keep the last known set on failure
+            verbose_logger.debug("Failed to refresh disabled MCP DB server ids: %s", e)
 
     async def set_server_enabled(
         self, server_id: str, enabled: bool, touched_by: str
@@ -7898,7 +7920,7 @@ class MCPServerManager:
             [
                 sid
                 for sid in target_server_ids
-                if sid not in checked_server_ids and not self.is_config_server_caller_hidden(sid)
+                if sid not in checked_server_ids and not self.is_server_caller_hidden(sid)
             ]
         )
 
@@ -7922,7 +7944,7 @@ class MCPServerManager:
 
         for server_id in allowed_server_ids:
             # Caller-facing accessible-servers listing: hide admin-disabled config servers.
-            if self.is_config_server_caller_hidden(server_id):
+            if self.is_server_caller_hidden(server_id):
                 continue
             server = self.get_mcp_server_by_id(server_id)
             if not server:
@@ -8065,9 +8087,9 @@ class MCPServerManager:
         # Admin-disabled config servers stay resident in the raw registry but must never be probed
         # (no upstream connection per poll). Report them with a non-probed "unknown" status; the
         # status Literal has no "disabled" value, so the UI's Disabled badge conveys the state.
-        probe_ids: Final = [sid for sid in target_server_ids if not self.is_config_server_caller_hidden(sid)]
+        probe_ids: Final = [sid for sid in target_server_ids if not self.is_server_caller_hidden(sid)]
         probed: Final = await self._run_health_checks(probe_ids)
-        skipped: Final = [sid for sid in dict.fromkeys(target_server_ids) if self.is_config_server_caller_hidden(sid)]
+        skipped: Final = [sid for sid in dict.fromkeys(target_server_ids) if self.is_server_caller_hidden(sid)]
         if not skipped:
             return probed
         unprobed: list[LiteLLM_MCPServerTable] = []

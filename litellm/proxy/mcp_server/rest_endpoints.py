@@ -694,7 +694,7 @@ if MCP_AVAILABLE:
         allowed_server_ids_set = {
             sid
             for sid in allowed_server_ids_set
-            if not global_mcp_server_manager.is_config_server_caller_hidden(sid)
+            if not global_mcp_server_manager.is_server_caller_hidden(sid)
         }
 
         canonical_server_id: Final = _resolve_mcp_server_id_for_rest(server_id, allowed_server_ids_set, _rest_client_ip)
@@ -1104,7 +1104,7 @@ if MCP_AVAILABLE:
                 [
                     sid
                     for sid in allowed_server_ids_set
-                    if not global_mcp_server_manager.is_config_server_caller_hidden(sid)
+                    if not global_mcp_server_manager.is_server_caller_hidden(sid)
                 ],
                 _rest_client_ip,
             )

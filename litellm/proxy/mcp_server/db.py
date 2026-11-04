@@ -2432,6 +2432,18 @@ async def get_disabled_config_server_ids(prisma_client: PrismaClient) -> set[str
     return {row.server_id for row in rows}
 
 
+async def get_disabled_db_server_ids(prisma_client: PrismaClient) -> set[str]:
+    """Server ids of DB-backed MCP servers an admin disabled (``enabled=false``).
+
+    ``get_runtime_mcp_server_rows`` already gates these rows out of ``manager.registry``. This set
+    lets caller-facing readers ALSO suppress a same-id *config* fallback, so disabling a DB server
+    cannot resurrect it through the ``config_mcp_servers | registry`` merge (right wins, and the
+    disabled DB row no longer shadows the config entry). Admin listings read the rows directly and
+    stay unaffected."""
+    rows: Final = await _mcp_server_table_actions(prisma_client).find_many(where={"enabled": False})
+    return {row.server_id for row in rows}
+
+
 async def reject_mcp_server(
     prisma_client: PrismaClient,
     server_id: str,
