@@ -1,20 +1,23 @@
 use std::{collections::HashMap, time::Duration};
 
-use litellm_config::{RedisSettings, ResolvedRedis, SecretSnapshot};
+use litellm_config::{RedisSettings, SecretSnapshot};
 use litellm_redis_connect::{Error, connect};
 use litellm_redis_testing::{RedisSentinel, RedisServer, RedisTlsServer, SERVICE_NAME, eventually};
+use litellm_redis_types::ResolvedRedis;
 use rstest::rstest;
 
 fn resolved(kwargs: serde_json::Value, environment: &[(&str, &str)]) -> ResolvedRedis {
     let settings: RedisSettings = serde_json::from_value(kwargs).unwrap();
     let environment: HashMap<&str, &str> = environment.iter().copied().collect();
     let lookup = |name: &str| environment.get(name).map(|value| (*value).to_owned());
-    settings
+    let configured = settings.coordination().unwrap();
+    configured
         .resolve(
-            &SecretSnapshot::read(settings.secret_names(), &lookup),
+            &SecretSnapshot::read(configured.secret_names(), &lookup),
             &lookup,
         )
         .unwrap()
+        .redis
 }
 
 fn port(url: &str) -> u16 {

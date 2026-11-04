@@ -1,6 +1,10 @@
 use litellm_redis_types::TlsOptions;
 
-use super::{Entry, Expected, Kwargs, RedisError, bool_value, parsed, text_value};
+use super::{
+    Expected, RedisError,
+    layers::Entry,
+    options::{TlsInput, flag, parsed, text},
+};
 use crate::Value;
 
 // redis-py's parse_url turns every query parameter into a client kwarg. Only the TLS ones have a redis-rs
@@ -13,31 +17,27 @@ const URL_TLS_SETTINGS: &[&str] = &[
     "ssl_check_hostname",
 ];
 
+/// `gcp_ca_certs` replaces `ssl_ca_certs` when GCP IAM is on, as `_get_redis_client_logic` does.
 pub(super) fn tls_options(
-    merged: &Kwargs,
-    gcp_ca_certs: Option<String>,
+    input: &TlsInput,
+    gcp_ca_certs: Option<&Entry>,
 ) -> Result<TlsOptions, RedisError> {
-    let verify_certificate =
-        parsed(
-            merged,
-            "ssl_cert_reqs",
-            Expected::CertRequirement,
-            |text| match text {
-                "required" | "optional" => Some(true),
-                "none" => Some(false),
-                _ => None,
-            },
-        )?
-        .unwrap_or(true);
     Ok(TlsOptions {
-        ca_certs: gcp_ca_certs
-            .or_else(|| text_value(merged, "ssl_ca_certs"))
-            .map(Into::into),
-        certfile: text_value(merged, "ssl_certfile").map(Into::into),
-        keyfile: text_value(merged, "ssl_keyfile").map(Into::into),
-        verify_certificate,
-        check_hostname: bool_value(merged, "ssl_check_hostname"),
+        ca_certs: text(gcp_ca_certs.or(input.ca_certs.as_ref())).map(Into::into),
+        certfile: text(input.certfile.as_ref()).map(Into::into),
+        keyfile: text(input.keyfile.as_ref()).map(Into::into),
+        verify_certificate: verify_certificate(input.cert_reqs.as_ref())?,
+        check_hostname: flag(input.check_hostname.as_ref())?,
     })
+}
+
+fn verify_certificate(cert_reqs: Option<&Entry>) -> Result<bool, RedisError> {
+    parsed(cert_reqs, Expected::CertRequirement, |text| match text {
+        "required" | "optional" => Some(true),
+        "none" => Some(false),
+        _ => None,
+    })
+    .map(|verify| verify.unwrap_or(true))
 }
 
 pub(super) fn url_tls(url: &str) -> Result<TlsOptions, RedisError> {
@@ -45,7 +45,7 @@ pub(super) fn url_tls(url: &str) -> Result<TlsOptions, RedisError> {
         return Ok(TlsOptions::verified());
     };
     let tls_scheme = parsed.scheme().eq_ignore_ascii_case("rediss");
-    let query: Kwargs = parsed
+    let query: Vec<(String, Entry)> = parsed
         .query_pairs()
         .map(|(name, value)| {
             (
@@ -65,10 +65,20 @@ pub(super) fn url_tls(url: &str) -> Result<TlsOptions, RedisError> {
             setting: entry.source.clone(),
         });
     }
+    let get = |key: &str| {
+        query
+            .iter()
+            .rev()
+            .find(|(name, _)| name == key)
+            .map(|(_, entry)| entry.clone())
+    };
     Ok(TlsOptions {
-        check_hostname: text_value(&query, "ssl_check_hostname")
+        ca_certs: text(get("ssl_ca_certs").as_ref()).map(Into::into),
+        certfile: text(get("ssl_certfile").as_ref()).map(Into::into),
+        keyfile: text(get("ssl_keyfile").as_ref()).map(Into::into),
+        verify_certificate: verify_certificate(get("ssl_cert_reqs").as_ref())?,
+        check_hostname: text(get("ssl_check_hostname").as_ref())
             .is_some_and(|text| url_bool(&text)),
-        ..tls_options(&query, None)?
     })
 }
 

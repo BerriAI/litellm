@@ -1,44 +1,57 @@
-use std::{
-    collections::HashMap,
-    fmt::Write,
-    sync::{Arc, Mutex},
-};
+use std::collections::{BTreeMap, HashMap};
 
 use litellm_config::{
-    AwsIamAuth, AzureAdAuth, CacheSettings, Config, Expected, RedisAuth, RedisError, RedisSettings,
-    ResolvedRedis, SecretSnapshot,
+    CacheSettings, Config, ConfiguredRedis, Expected, RedisError, Resolution, SecretSnapshot, Value,
 };
-use litellm_redis_types::{ClusterNode, Endpoint, TlsOptions};
+use litellm_redis_types::{
+    AwsIamAuth, AzureAdAuth, ClusterNode, Endpoint, RedisAuth, ResolvedRedis, TlsOptions,
+};
 use rstest::rstest;
 use serde_json::json;
-use tracing::{Event, Subscriber, field::Visit};
-use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
-fn resolve_settings(
-    settings: &RedisSettings,
+fn resolution(
+    configured: &ConfiguredRedis,
     environment: &HashMap<String, String>,
-) -> Result<ResolvedRedis, RedisError> {
+) -> Result<Resolution, RedisError> {
     let lookup = |name: &str| environment.get(name).cloned();
-    settings.resolve(
-        &SecretSnapshot::read(settings.secret_names(), &lookup),
+    configured.resolve(
+        &SecretSnapshot::read(configured.secret_names(), &lookup),
         &lookup,
     )
 }
 
-fn resolve(
+fn redis_cache_kwargs(kwargs: serde_json::Value) -> ConfiguredRedis {
+    ConfiguredRedis::redis_cache_kwargs(
+        serde_json::from_value::<BTreeMap<String, Value>>(kwargs).unwrap(),
+    )
+}
+
+fn resolve_kwargs(
+    kwargs: serde_json::Value,
+    environment: &HashMap<String, String>,
+) -> Result<ResolvedRedis, RedisError> {
+    resolution(&redis_cache_kwargs(kwargs), environment).map(|resolution| resolution.redis)
+}
+
+fn coordination_resolution(
     yaml: &str,
     environment: &[(&str, &str)],
-) -> Result<litellm_config::ResolvedRedis, RedisError> {
+) -> Result<Resolution, RedisError> {
     let environment: HashMap<String, String> = environment
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
         .collect();
     let config = Config::from_yaml(yaml).unwrap();
-    let settings = config
+    let configured = config
         .general_settings
         .coordination_redis
-        .unwrap_or_default();
-    resolve_settings(&settings, &environment)
+        .unwrap_or_default()
+        .coordination()?;
+    resolution(&configured, &environment)
+}
+
+fn resolve(yaml: &str, environment: &[(&str, &str)]) -> Result<ResolvedRedis, RedisError> {
+    coordination_resolution(yaml, environment).map(|resolution| resolution.redis)
 }
 
 fn resolve_cache(yaml: &str) -> Result<ResolvedRedis, RedisError> {
@@ -53,13 +66,16 @@ fn resolve_cache_in(yaml: &str, environment: &[(&str, &str)]) -> Result<Resolved
             .map(|(_, value)| (*value).to_owned())
     };
     let config = Config::from_yaml(yaml).unwrap();
-    match config.litellm_settings.cache_params.unwrap() {
-        CacheSettings::Redis(settings) => settings.resolve_cache(
-            &SecretSnapshot::read(settings.secret_names(), &lookup),
-            &lookup,
-        ),
+    let configured = match config.litellm_settings.cache_params.unwrap() {
+        CacheSettings::Redis(settings) => settings.cache_params(),
         CacheSettings::Other(_) => panic!("expected a Redis cache"),
-    }
+    };
+    configured
+        .resolve(
+            &SecretSnapshot::read(configured.secret_names(), &lookup),
+            &lookup,
+        )
+        .map(|resolution| resolution.redis)
 }
 
 fn cluster_ports(resolved: &ResolvedRedis) -> Vec<u16> {
@@ -400,7 +416,6 @@ fn a_host_or_port_cannot_reach_sentinel(
 }
 
 #[rstest]
-#[case::empty("general_settings:\n  coordination_redis:\n    sentinel_nodes: []\n    service_name: primary", &[], "sentinel_nodes")]
 #[case::not_pairs(
     "general_settings:\n  coordination_redis:\n    sentinel_nodes: [{host: s, port: 26379}]\n    service_name: primary",
     &[],
@@ -559,8 +574,9 @@ fn debug_redacts_redis_secrets_and_url() {
     )
     .unwrap();
     let settings = config.general_settings.coordination_redis.unwrap();
-    let resolved = resolve_settings(&settings, &HashMap::new()).unwrap();
-    let debug = format!("{settings:?} {resolved:?}");
+    let configured = settings.coordination().unwrap();
+    let resolved = resolution(&configured, &HashMap::new()).unwrap().redis;
+    let debug = format!("{settings:?} {configured:?} {resolved:?}");
 
     assert!(!debug.contains("redis://user:password"));
     assert!(!debug.contains("credential-user"));
@@ -605,44 +621,25 @@ fn legacy_unknown_settings_do_not_change_resolution() {
     assert!(matches!(resolved.endpoint, Endpoint::Host(_)));
 }
 
-struct WarningCapture(Arc<Mutex<Vec<String>>>);
-
-impl<S: Subscriber> Layer<S> for WarningCapture {
-    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
-        let mut fields = Fields::default();
-        event.record(&mut fields);
-        self.0.lock().unwrap().push(fields.0);
-    }
-}
-
-#[derive(Default)]
-struct Fields(String);
-
-impl Visit for Fields {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        write!(self.0, "{}={value:?} ", field.name()).unwrap();
-    }
-
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        write!(self.0, "{}={value} ", field.name()).unwrap();
-    }
-}
-
 #[rstest]
-fn ignored_setting_warning_names_the_setting_without_its_value() {
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(WarningCapture(events.clone()));
-    tracing::subscriber::with_default(subscriber, || {
-        resolve(
-            "general_settings:\n  coordination_redis:\n    host: redis\n    max_connections: 47",
-            &[],
-        )
-        .unwrap();
-    });
-    let warnings = events.lock().unwrap().join(" ");
+#[case::configured(
+    "general_settings:\n  coordination_redis:\n    host: redis\n    max_connections: 47",
+    &[],
+    "max_connections"
+)]
+#[case::from_the_environment(
+    "general_settings:\n  coordination_redis:\n    host: redis",
+    &[("REDIS_MAX_CONNECTIONS", "47")],
+    "REDIS_MAX_CONNECTIONS"
+)]
+fn ignored_settings_are_named_by_their_source(
+    #[case] yaml: &str,
+    #[case] environment: &[(&str, &str)],
+    #[case] source: &str,
+) {
+    let resolution = coordination_resolution(yaml, environment).unwrap();
 
-    assert!(warnings.contains("max_connections"));
-    assert!(!warnings.contains("47"));
+    assert_eq!(resolution.ignored, vec![source.to_owned()]);
 }
 
 fn tls_view(tls: Option<&TlsOptions>) -> serde_json::Value {
@@ -772,6 +769,16 @@ fn view(resolved: &ResolvedRedis) -> serde_json::Value {
     json!({"host": "redis", "ssl_cert_reqs": "strict"}),
     &[],
     Ok(expected_view(json!({"db": 0, "host": "redis", "mode": "host", "port": 6379}))),
+)]
+#[case::an_ambiguous_flag_is_refused(
+    json!({"host": "redis", "ssl": "on"}),
+    &[],
+    Err("invalid Redis setting ssl: expected a boolean"),
+)]
+#[case::empty_sentinel_nodes_without_the_environment_name_no_target(
+    json!({"sentinel_nodes": [], "service_name": "primary"}),
+    &[],
+    Err("either host or url must be specified for redis"),
 )]
 #[case::ssl_ca_path_is_unsupported(
     json!({"host": "redis", "ssl": true, "ssl_ca_path": "/ca"}),
@@ -1053,13 +1060,12 @@ fn resolves_like_python_redis(
     #[case] environment: &[(&str, &str)],
     #[case] expected: Result<serde_json::Value, &str>,
 ) {
-    let settings: RedisSettings = serde_json::from_value(kwargs).unwrap();
     let environment: HashMap<String, String> = environment
         .iter()
         .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
         .collect();
 
-    let outcome = resolve_settings(&settings, &environment)
+    let outcome = resolve_kwargs(kwargs, &environment)
         .map(|resolved| view(&resolved))
         .map_err(|error| error.to_string());
 
@@ -1068,22 +1074,22 @@ fn resolves_like_python_redis(
 
 fn snapshot(values: &[(&str, &str)]) -> SecretSnapshot {
     let values: HashMap<&str, &str> = values.iter().copied().collect();
-    SecretSnapshot::read(RedisSettings::default().secret_names(), &|name: &str| {
-        values.get(name).map(|value| (*value).to_owned())
-    })
+    SecretSnapshot::read(
+        ConfiguredRedis::environment_only().secret_names(),
+        &|name: &str| values.get(name).map(|value| (*value).to_owned()),
+    )
 }
 
 #[rstest]
 fn secret_manager_values_reach_the_resolver_through_the_snapshot() {
-    let settings: RedisSettings =
-        serde_json::from_str(r#"{"host": "os.environ/COORD_HOST"}"#).unwrap();
+    let settings = redis_cache_kwargs(json!({"host": "os.environ/COORD_HOST"}));
     let secrets = SecretSnapshot::read(settings.secret_names(), &|name: &str| match name {
         "COORD_HOST" => Some("from-the-manager".to_owned()),
         "REDIS_PASSWORD" => Some("manager-secret".to_owned()),
         _ => None,
     });
 
-    let resolved = settings.resolve(&secrets, &|_: &str| None).unwrap();
+    let resolved = settings.resolve(&secrets, &|_: &str| None).unwrap().redis;
 
     assert!(matches!(&resolved.endpoint, Endpoint::Host(host) if host.host == "from-the-manager"));
     assert_eq!(resolved.auth, static_auth(None, Some("manager-secret")));
@@ -1097,15 +1103,15 @@ fn the_azure_username_comes_from_the_process_environment_like_python(
     #[case] environment: &[(&str, &str)],
     #[case] expected: Option<&str>,
 ) {
-    let settings: RedisSettings =
-        serde_json::from_str(r#"{"host": "redis", "azure_redis_ad_token": "true"}"#).unwrap();
+    let settings = redis_cache_kwargs(json!({"host": "redis", "azure_redis_ad_token": "true"}));
     let environment: HashMap<&str, &str> = environment.iter().copied().collect();
 
     let resolved = settings
         .resolve(&snapshot(secrets), &|name: &str| {
             environment.get(name).map(|value| (*value).to_owned())
         })
-        .unwrap();
+        .unwrap()
+        .redis;
 
     assert!(
         matches!(&resolved.auth, RedisAuth::AzureAd(azure) if azure.username.as_deref() == expected),
