@@ -58635,7 +58635,22 @@
         "mode": "embedding",
         "source": "https://docs.libertai.io/apis/text/"
     },
+    "sarvam/sarvam-m": {
+        "cache_creation_input_token_cost": 0,
+        "cache_creation_input_token_cost_above_1hr": 0,
+        "cache_read_input_token_cost": 0,
+        "deprecation_date": "2026-06-05",
+        "input_cost_per_token": 0,
+        "litellm_provider": "sarvam",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "source": "https://docs.sarvam.ai/changelog/2026/6/5.md",
+        "supports_reasoning": true
+    },
     "sarvam/sarvam-105b": {
+        "cache_read_input_token_cost": 6e-08,
         "input_cost_per_token": 1.7e-07,
         "litellm_provider": "sarvam",
         "max_input_tokens": 128000,
@@ -58643,6 +58658,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 6.7e-07,
+        "source": "https://www.sarvam.ai/token-factory/pricing",
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -58655,6 +58671,7 @@
         "supports_vision": false
     },
     "sarvam/sarvam-105b-conversations": {
+        "cache_read_input_token_cost": 6e-08,
         "input_cost_per_token": 1.7e-07,
         "litellm_provider": "sarvam",
         "max_input_tokens": 32000,
@@ -58662,6 +58679,7 @@
         "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 6.7e-07,
+        "source": "https://www.sarvam.ai/token-factory/pricing",
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -58674,6 +58692,7 @@
         "supports_vision": false
     },
     "sarvam/glm5.3": {
+        "cache_read_input_token_cost": 2.2e-07,
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "sarvam",
         "max_input_tokens": 1048576,
@@ -58681,10 +58700,11 @@
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 4.33e-06,
+        "source": "https://www.sarvam.ai/token-factory/pricing",
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_prompt_caching": false,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
@@ -58693,6 +58713,7 @@
         "supports_vision": false
     },
     "sarvam/glm5.3-flash": {
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "sarvam",
         "max_input_tokens": 1048576,
@@ -58700,10 +58721,11 @@
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 5.0e-07,
+        "source": "https://www.sarvam.ai/token-factory/pricing",
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_prompt_caching": false,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
@@ -58712,6 +58734,7 @@
         "supports_vision": true
     },
     "sarvam/gemma4": {
+        "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 3.9e-07,
         "litellm_provider": "sarvam",
         "max_input_tokens": 262144,
@@ -58719,6 +58742,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 1.0e-06,
+        "source": "https://www.sarvam.ai/token-factory/pricing",
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -58731,6 +58755,7 @@
         "supports_vision": true
     },
     "sarvam/deepseekv4.1-flash-1017": {
+        "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 2.8e-07,
         "litellm_provider": "sarvam",
         "max_input_tokens": 1048576,
@@ -58738,6 +58763,7 @@
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 1.17e-06,
+        "source": "https://www.sarvam.ai/token-factory/pricing",
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
