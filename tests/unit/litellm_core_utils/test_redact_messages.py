@@ -163,6 +163,40 @@ def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted()
     assert response.choices[0].text == SECRET, "the caller's own response is not redacted"
 
 
+def _chat_logprobs() -> dict[str, object]:
+    top: Final = {"token": SECRET, "logprob": -0.2, "bytes": list(SECRET.encode())}
+    return {"content": [{"token": SECRET, "logprob": -0.1, "bytes": list(SECRET.encode()), "top_logprobs": [top]}]}
+
+
+def _chat_choice_with_logprobs() -> dict[str, object]:
+    return {"index": 0, "message": {"role": "assistant", "content": "answer"}, "logprobs": _chat_logprobs()}
+
+
+def _delta_choice_with_logprobs() -> dict[str, object]:
+    return {"index": 0, "delta": {"content": "answer"}, "logprobs": _chat_logprobs()}
+
+
+@pytest.mark.parametrize(
+    ("details", "result"),
+    [
+        pytest.param({}, ModelResponse(choices=[_chat_choice_with_logprobs()]), id="message_object"),
+        pytest.param({}, ModelResponse(choices=[_chat_choice_with_logprobs()]).model_dump(), id="message_dict"),
+        pytest.param({}, {"choices": [_delta_choice_with_logprobs()]}, id="delta_dict"),
+        pytest.param(
+            {"stream": True, "complete_streaming_response": ModelResponseStream(choices=[_delta_choice_with_logprobs()])},
+            None,
+            id="streamed",
+        ),
+    ],
+)
+def test_redaction_hides_the_answer_tokens_in_chat_logprobs(details: dict[str, object], result: object) -> None:
+    assert SECRET in str(details) + str(result)
+
+    redacted: Final = perform_redaction(details, result)
+
+    assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
+
+
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
     hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
     original_hidden_params: Final = copy.deepcopy(hidden_params)

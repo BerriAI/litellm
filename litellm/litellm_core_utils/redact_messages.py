@@ -206,6 +206,7 @@ def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
     if isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices, litellm.utils.TextChoices)):
         drop_token_ids(choice)
+        _drop_field_when_present(choice, "logprobs")
         _redact_provider_specific_fields(choice)
     if isinstance(choice, litellm.Choices):
         if choice.message.content is not None:
@@ -232,7 +233,6 @@ def _redact_choice_content(choice):
     elif isinstance(choice, litellm.utils.TextChoices):
         _redact_field_when_present(choice, "text")
         _redact_field_when_present(choice, "reasoning_content")
-        _drop_field_when_present(choice, "logprobs")
 
 
 def _as_mapping(value: object) -> Mapping[str, object] | None:
@@ -465,8 +465,9 @@ def _redact_model_response_dict_choices(choices: Iterable[object], redacted_str:
     for choice in choices:
         if isinstance(choice, dict):
             _redact_provider_specific_fields_dict(choice)
-            if choice.get("token_ids") is not None:
-                choice["token_ids"] = None
+            for field in ("token_ids", "logprobs"):
+                if choice.get(field) is not None:
+                    choice[field] = None
             if (
                 body := next((choice[key] for key in ("message", "delta") if isinstance(choice.get(key), dict)), None)
             ) is not None:
