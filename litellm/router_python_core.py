@@ -9224,6 +9224,7 @@ class PythonCore(DeprecatedRouterMembers):
             or original_model_group is None
             or is_guardrail_intervention(e)
             or unsupported_params_without_fallback
+            or isinstance(e, litellm_exceptions.PreviousResponseNotReplayableError)
         ):
             raise e
 

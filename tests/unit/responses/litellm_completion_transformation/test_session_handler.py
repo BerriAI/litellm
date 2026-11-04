@@ -1508,6 +1508,64 @@ async def test_previous_response_refuses_to_replay_turns_stored_redacted(
     assert response_ids[1] in refusal.value.message
 
 
+_OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
+
+
+async def test_previous_response_refusal_does_not_fall_back_to_another_model_group(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _gemini_response_id("chatcmpl-turn-1")
+    stored: Final = _StoredSpendLogs((_turn_stored_redacted(response_id, "My code word is PLUM-42."),))
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "bridged", "litellm_params": {"model": "gemini/gemini-3.5-flash", "api_key": "test-key"}},
+            {"model_name": "native", "litellm_params": {"model": "openai/gpt-5.6", "api_key": "test-key"}},
+        ],
+        fallbacks=[{"bridged": ["native"]}],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
+        bridged_route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        native_route: Final = respx.post(_OPENAI_RESPONSES_URL).mock(
+            return_value=httpx.Response(
+                400, json={"error": {"message": "Invalid previous_response_id", "type": "invalid_request_error"}}
+            )
+        )
+        with pytest.raises(litellm.BadRequestError) as refusal:
+            await router.aresponses(model="bridged", input="What is my code word?", previous_response_id=response_id)
+
+    assert not bridged_route.called
+    assert not native_route.called
+    assert (refusal.value.param, refusal.value.code) == ("previous_response_id", "previous_response_not_found")
+
+
+async def test_previous_response_replays_a_turn_whose_own_messages_field_holds_the_redaction_marker(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _gemini_response_id("chatcmpl-turn-1")
+    turn_with_marker_field: Final = {
+        **_turn_stored_in_full(response_id, _CODE_WORD_TURN, "OK"),
+        "proxy_server_request": {
+            "model": "gemini-bridge",
+            "input": _CODE_WORD_TURN,
+            "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
+        },
+    }
+    stored: Final = _StoredSpendLogs((turn_with_marker_field,))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        await litellm.aresponses(
+            model="gemini/gemini-3.5-flash",
+            input="What is my code word?",
+            previous_response_id=response_id,
+            api_key="test-gemini-key",
+        )
+        sent_body: Final = route.calls.last.request.content.decode()
+
+    assert "PLUM-42" in sent_body
+
+
 _SUMMARY_TEXT: Final = "Turn one planned Tokyo."
 
 

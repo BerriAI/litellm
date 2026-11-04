@@ -372,6 +372,10 @@ class UnsupportedEndpointError(BadRequestError):
     pass
 
 
+class PreviousResponseNotReplayableError(BadRequestError):
+    pass
+
+
 class EndpointNotSupportedByModelError(BadRequestError):
     def __init__(self, message: str, model: str, llm_provider: str = "") -> None:
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # inherited public exception constructor is untyped
