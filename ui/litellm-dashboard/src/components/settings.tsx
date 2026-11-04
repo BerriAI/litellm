@@ -324,6 +324,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [alertToWebhooks, setAlertToWebhooks] = useState<Record<string, string>>({});
   const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
   const [savedAlerts, setSavedAlerts] = useState<string[]>([]);
+  const [isSavingAlerts, setIsSavingAlerts] = useState(false);
 
   const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
   const [callbackConfigs, setCallbackConfigs] = useState<any[]>([]);
@@ -558,11 +559,14 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       },
     };
 
+    setIsSavingAlerts(true);
     try {
       await setCallbacksCall(accessToken, payload);
     } catch (error) {
       toast.fromError(error);
       return;
+    } finally {
+      setIsSavingAlerts(false);
     }
     setSavedAlerts(activeAlerts);
     toast.success(t("loggingAndAlerts.alertTypes.toasts.saved"));
@@ -708,7 +712,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   ))}
                 </TableBody>
               </Table>
-              <Button size="xs" className="mt-2" onClick={handleSaveAlerts}>
+              <Button size="xs" className="mt-2" onClick={handleSaveAlerts} disabled={isSavingAlerts}>
                 {t("loggingAndAlerts.alertTypes.saveChanges")}
               </Button>
 

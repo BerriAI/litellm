@@ -613,6 +613,43 @@ describe("Settings", () => {
     expect(savedSettings).not.toHaveProperty("alert_types");
   });
 
+  it("should save the reverted alert types when a switch is reverted while a save is in flight", async () => {
+    mockGetCallbacksCall.mockResolvedValue(teamsOnlyCallbacksResponse);
+    const finishSaves: Array<() => void> = [];
+    const pendingSave = () =>
+      new Promise<void>((resolve) => {
+        finishSaves.push(resolve);
+      });
+    vi.mocked(setCallbacksCall).mockImplementationOnce(pendingSave).mockImplementationOnce(pendingSave);
+
+    const user = userEvent.setup();
+    render(<Settings {...defaultProps} />);
+    await user.click(await screen.findByRole("tab", { name: "Alerting Types" }));
+
+    const deprecationWarningsRow = screen.getByRole("row", { name: "Model Deprecation Warnings" });
+    const deprecationWarningsSwitch = within(deprecationWarningsRow).getByRole("switch");
+    const saveButton = screen.getByRole("button", { name: "Save Changes" });
+    await user.click(deprecationWarningsSwitch);
+    await user.click(saveButton);
+    await user.click(deprecationWarningsSwitch);
+    await user.click(saveButton);
+    await act(async () => {
+      finishSaves.forEach((finish) => finish());
+    });
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenLastCalledWith(
+        "token",
+        expect.objectContaining({
+          general_settings: expect.objectContaining({
+            alert_types: ["llm_exceptions", "spend_reports"],
+          }),
+        }),
+      );
+    });
+  });
+
   it("should load alert types and webhook values from the Slack callback row", async () => {
     mockGetCallbacksCall.mockResolvedValue(slackCallbacksResponseWithoutTopLevelAlertTypes);
 
