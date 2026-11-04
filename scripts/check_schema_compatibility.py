@@ -52,14 +52,23 @@ def check_breaking_changes(old_schema: Schema, new_schema: Schema) -> tuple[str,
     return tuple(changes())
 
 
-def main() -> int:
-    parser: Final = argparse.ArgumentParser()
-    parser.add_argument("--base-ref", required=True)
-    options: Final = parser.parse_args()
-    base_ref: Final = TypeAdapter(str).validate_python(options.base_ref)
-    base: Final = subprocess.run(
+def _merge_base(base_ref: str) -> str:
+    return subprocess.run(
         ("git", "merge-base", "HEAD", base_ref), capture_output=True, text=True, check=True
     ).stdout.strip()
+
+
+def main() -> int:
+    parser: Final = argparse.ArgumentParser()
+    source: Final = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--base-ref", help="compare against the merge base of HEAD and this ref (needs history)")
+    source.add_argument("--base-commit", help="compare against this commit as is (works in a shallow clone)")
+    options: Final = parser.parse_args()
+    base: Final = (
+        TypeAdapter(str).validate_python(options.base_commit)
+        if options.base_commit
+        else _merge_base(TypeAdapter(str).validate_python(options.base_ref))
+    )
     previous: Final = subprocess.run(
         ("git", "show", f"{base}:schema.prisma"), capture_output=True, text=True, check=True
     ).stdout

@@ -977,10 +977,10 @@ jobs:
             dist: loadscope
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        timeout-minutes: ${{ matrix.shard == 'db-and-spend' && 10 || 3 }}
+        timeout-minutes: 3
         with:
           persist-credentials: false
-          fetch-depth: ${{ matrix.shard == 'db-and-spend' && '0' || '1' }}
+          fetch-depth: 1
 
       - name: Detect relevant changes
         id: changes
@@ -1019,7 +1019,10 @@ jobs:
         env:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
           UNIT_SHARD: ${{ matrix.shard }}
-          SCHEMA_BASE_REF: origin/${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
@@ -1031,9 +1034,17 @@ jobs:
             uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
           fi
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
-          if [ "$UNIT_SHARD" = "db-and-spend" ]; then
-            uv run --no-sync python scripts/check_schema_compatibility.py --base-ref "$SCHEMA_BASE_REF"
+          if [ "$UNIT_SHARD" != "db-and-spend" ]; then
+            exit 0
           fi
+          if [ -z "$PR_NUMBER" ]; then
+            echo "Push to $GITHUB_REF_NAME: no base to compare schema.prisma against"
+            exit 0
+          fi
+          merge_base=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${EVENT_BASE_REF}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          test -n "$merge_base"
+          git fetch --no-tags --depth=1 origin "$merge_base"
+          uv run --no-sync python scripts/check_schema_compatibility.py --base-commit "$merge_base"
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
