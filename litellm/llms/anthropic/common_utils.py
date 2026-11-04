@@ -1909,6 +1909,10 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     if not error_text:
         return False
     lower: Final = error_text.lower()
+    if "reasoningcontent.reasoningtext.signature" in lower or (
+        "reasoningtext.signature" in lower and ("doesn't support" in lower or "does not support" in lower)
+    ):
+        return True
     if "thinking" not in lower:
         return False
     if "signature" in lower and ("invalid" in lower or "valid string" in lower):

@@ -5306,7 +5306,7 @@ class BedrockConverseMessagesProcessor:
         match thinking_block:
             case {"type": "redacted_thinking", "data": str() as data} if to_claude and data.strip():
                 return BedrockConverseReasoningContentBlock(redactedContent=converse_redacted_content(data))
-            case {"signature": signature} if signature is not None:
+            case {"signature": signature} if to_claude and signature is not None:
                 return BedrockConverseReasoningContentBlock(
                     reasoningText=BedrockConverseReasoningTextBlock(
                         text=BedrockConverseMessagesProcessor._thinking_text(thinking_block), signature=signature
