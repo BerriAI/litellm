@@ -2645,7 +2645,9 @@ class LiteLLMCompletionResponsesConfig:
             raw_arguments = json.dumps({"content": raw_input}) if raw_input else ""
         raw_name: Final = function_call.get("name") or ""
         namespace: Final = function_call.get("namespace") or ""
-        qualify: Final = bool(namespace) and function_call.get("type") != "custom_tool_call"
+        # namespace == name is the deferred top-level shape (see namespace_tool_name_map): the chat
+        # tool is called by its bare name, so joining would send "<name>__<name>" upstream.
+        qualify: Final = bool(namespace) and namespace != raw_name and function_call.get("type") != "custom_tool_call"
         tool_call_id: Final = function_call.get("call_id") or function_call.get("id") or ""
         tool_call_function: Final = ChatCompletionToolCallFunctionChunk(
             name=f"{namespace}__{raw_name}" if qualify else raw_name,
@@ -3058,7 +3060,17 @@ class LiteLLMCompletionResponsesConfig:
         qualified_entries: Final = tuple(
             (f"{namespace}__{tool_name}", (namespace, tool_name)) for namespace, tool_name in namespace_entries
         )
-        return MappingProxyType(dict(qualified_entries + unambiguous_entries))
+        # A deferred top-level function comes back on the wire with namespace == name (the shape the
+        # OpenAI Agents SDK reserves for it, `agents/_tool_identity.py`). Without it the SDK cannot
+        # match the call to its tool and fails with "Tool <name> not found".
+        deferred_top_level_entries: Final = tuple(
+            (name, (name, name))
+            for tool in tools or ()
+            if tool.get("type") == "function" and validated_defer_loading(tool.get("defer_loading"))
+            for name in (str(tool.get("name") or ""),)
+            if name
+        )
+        return MappingProxyType(dict(qualified_entries + unambiguous_entries + deferred_top_level_entries))
 
     @staticmethod
     def _restore_namespace_tool_name(tool_name: str, names: NamespaceNameMap) -> tuple[str, str | None]:
