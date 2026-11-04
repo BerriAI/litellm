@@ -130,6 +130,7 @@ def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256(
     monkeypatch: pytest.MonkeyPatch, salt_key: str
 ) -> None:
     label = b"litellm-test:label:"
+    context = b"sk-test-master-key"
     monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
-    fixed_input = (1).to_bytes(4, "big") + label + b"\x00" + (256).to_bytes(4, "big")
-    assert derive_key_from_salt_key(label) == hmac.digest(bytes(range(32)), fixed_input, "sha256").hex()
+    fixed_input = (1).to_bytes(4, "big") + label + b"\x00" + context + (256).to_bytes(4, "big")
+    assert derive_key_from_salt_key(label, context) == hmac.digest(bytes(range(32)), fixed_input, "sha256").hex()

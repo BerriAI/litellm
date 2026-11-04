@@ -113,7 +113,7 @@ def _param(name: bytes, data_type: int, data: bytes) -> _OsslParam:
     return _OsslParam(name, data_type, data, len(data), _OSSL_PARAM_UNMODIFIED)
 
 
-def _kbkdf_hmac_sha256(key: bytes, label: bytes) -> bytes:
+def _kbkdf_hmac_sha256(key: bytes, label: bytes, context: bytes) -> bytes:
     import _hashlib
 
     libcrypto: Final = ctypes.CDLL(_hashlib.__file__)
@@ -126,11 +126,12 @@ def _kbkdf_hmac_sha256(key: bytes, label: bytes) -> bytes:
     )(("EVP_KDF_derive", libcrypto))
     ctx_free: Final = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(("EVP_KDF_CTX_free", libcrypto))
     kdf_free: Final = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(("EVP_KDF_free", libcrypto))
-    params: Final = (_OsslParam * 5)(
+    params: Final = (_OsslParam * 6)(
         _param(b"mac", _OSSL_PARAM_UTF8_STRING, b"HMAC"),
         _param(b"digest", _OSSL_PARAM_UTF8_STRING, b"SHA256"),
         _param(b"key", _OSSL_PARAM_OCTET_STRING, key),
         _param(b"salt", _OSSL_PARAM_OCTET_STRING, label),
+        _param(b"info", _OSSL_PARAM_OCTET_STRING, context),
     )
     derived: Final = ctypes.create_string_buffer(_DERIVED_KEY_BYTES)
     kdf: Final = kdf_fetch(None, b"KBKDF", None)
@@ -144,9 +145,9 @@ def _kbkdf_hmac_sha256(key: bytes, label: bytes) -> bytes:
         kdf_free(kdf)
 
 
-def derive_key_from_salt_key(label: bytes) -> str:
-    """Hex of 32 bytes derived from LITELLM_SALT_KEY under label by SP 800-108r1 KBKDF in counter mode with
-    HMAC-SHA256, run by EVP_KDF in the OpenSSL that hashlib uses. Raises ValueError when LITELLM_SALT_KEY is not
+def derive_key_from_salt_key(label: bytes, context: bytes) -> str:
+    """Hex of 32 bytes derived from LITELLM_SALT_KEY under label and context by SP 800-108r1 KBKDF in counter mode
+    with HMAC-SHA256, run by EVP_KDF in the OpenSSL that hashlib uses. Raises ValueError when LITELLM_SALT_KEY is not
     at least 32 bytes of hex, optionally prefixed with sk-."""
     salt_key: Final = _SALT_KEY_HEX.fullmatch(os.getenv(SALT_KEY_ENV_VAR, ""))
     if salt_key is None:
@@ -154,4 +155,4 @@ def derive_key_from_salt_key(label: bytes) -> str:
             f"With OpenSSL enforcing FIPS, {SALT_KEY_ENV_VAR} must be at least 32 bytes of hex, such as "
             "sk-$(openssl rand -hex 32)"
         )
-    return _kbkdf_hmac_sha256(bytes.fromhex(salt_key.group(1)), label).hex()
+    return _kbkdf_hmac_sha256(bytes.fromhex(salt_key.group(1)), label, context).hex()

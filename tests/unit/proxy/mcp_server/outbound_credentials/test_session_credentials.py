@@ -238,34 +238,46 @@ def test_session_key_without_fips_stays_the_scrypt_key_of_the_master_key() -> No
     assert keys.signing_key.get_secret_value() == "990dce331d97862e3af47815b707c42923fc760e6740d4a77a81583a206f339d"
 
 
-@pytest.mark.skipif(
+def _fips_keys(master_key: str) -> tuple[str, str, str]:
+    envelope_keys_from_master_key.cache_clear()
+    session_keys_from_master_key.cache_clear()
+    envelope = envelope_keys_from_master_key(master_key)
+    session = session_keys_from_master_key(master_key)
+    return (
+        envelope.signing_key.get_secret_value(),
+        envelope.encryption_key.get_secret_value(),
+        session.signing_key.get_secret_value(),
+    )
+
+
+_needs_shared_openssl = pytest.mark.skipif(
     not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
 )
+
+
+@_needs_shared_openssl
 @pytest.mark.usefixtures("openssl_enforcing_fips")
 def test_keys_under_fips_come_from_the_salt_key_are_distinct_and_the_same_on_every_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + "5a" * 32)
-
-    def derived_keys() -> tuple[str, str, str]:
-        envelope_keys_from_master_key.cache_clear()
-        session_keys_from_master_key.cache_clear()
-        envelope = envelope_keys_from_master_key(MASTER_KEY)
-        session = session_keys_from_master_key(MASTER_KEY)
-        return (
-            envelope.signing_key.get_secret_value(),
-            envelope.encryption_key.get_secret_value(),
-            session.signing_key.get_secret_value(),
-        )
-
-    first = derived_keys()
-    assert first == derived_keys()
+    first = _fips_keys(MASTER_KEY)
+    assert first == _fips_keys(MASTER_KEY)
     assert len(set(first)) == 3, first
     assert first == (
-        "c982eac990e5bd412ab1c417a2c011483178981f0bf70b94650b3ab64e38f124",
-        "8de6fa9aae4ae1d7eb76ef4f88ed50445bb283c8b56454a530a8eca4b7a8a756",
-        "30ab21d7dac030b7cd6521705333be7ae3299670ad173aa1387b501ea06641c5",
+        "ef694d415772aef09731c47709d4d9da47f7bbfcd6484836dea09c2bb387063b",
+        "d8a7cd70690fbf98c5581301b2e0460f2ad714f7c74b2af1b3dac3e0aa99db85",
+        "5e11e470bf9c838165b70d0b2b82a7ee5e2f00d9449eeb54f7c5bf9491b64354",
     )
+
+
+@_needs_shared_openssl
+@pytest.mark.usefixtures("openssl_enforcing_fips")
+def test_keys_under_fips_all_change_when_the_master_key_rotates(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + "5a" * 32)
+    before = _fips_keys(MASTER_KEY)
+    after = _fips_keys("sk-a-different-master-key")
+    assert set(before).isdisjoint(after), (before, after)
 
 
 @pytest.mark.usefixtures("openssl_enforcing_fips")

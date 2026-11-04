@@ -63,12 +63,13 @@ def envelope_keys_from_master_key(master_key: str) -> EnvelopeKeys:
     admission path. The derivation is deterministic; rotating ``master_key`` invalidates
     every outstanding envelope, which is the intended behavior for a signing-key change.
 
-    When OpenSSL enforces FIPS, both keys come from :func:`derive_key_from_salt_key` instead.
+    When OpenSSL enforces FIPS, both keys come from :func:`derive_key_from_salt_key` with the master key as context
+    instead.
     """
     if openssl_enforces_fips():
         return EnvelopeKeys(
-            signing_key=SecretStr(derive_key_from_salt_key(_SIGNING_KEY_DOMAIN)),
-            encryption_key=SecretStr(derive_key_from_salt_key(_ENCRYPTION_KEY_DOMAIN)),
+            signing_key=SecretStr(derive_key_from_salt_key(_SIGNING_KEY_DOMAIN, master_key.encode())),
+            encryption_key=SecretStr(derive_key_from_salt_key(_ENCRYPTION_KEY_DOMAIN, master_key.encode())),
         )
     signing: Final = hashlib.scrypt(
         master_key.encode(),

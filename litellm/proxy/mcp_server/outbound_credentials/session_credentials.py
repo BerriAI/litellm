@@ -61,10 +61,13 @@ def session_keys_from_master_key(master_key: str) -> SessionKeys:
     ``master_key`` invalidates every outstanding session, which is the intended behavior
     for a signing-key change.
 
-    When OpenSSL enforces FIPS, the key comes from :func:`derive_key_from_salt_key` instead.
+    When OpenSSL enforces FIPS, the key comes from :func:`derive_key_from_salt_key` with the master key as context
+    instead.
     """
     if openssl_enforces_fips():
-        return SessionKeys(signing_key=SecretStr(derive_key_from_salt_key(_SESSION_SIGNING_KEY_DOMAIN)))
+        return SessionKeys(
+            signing_key=SecretStr(derive_key_from_salt_key(_SESSION_SIGNING_KEY_DOMAIN, master_key.encode()))
+        )
     signing: Final = hashlib.scrypt(
         master_key.encode(),
         salt=_SESSION_SIGNING_KEY_DOMAIN,
