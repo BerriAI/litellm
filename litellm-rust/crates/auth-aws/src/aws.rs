@@ -268,16 +268,35 @@ impl AwsAuthService {
     ) -> Result<Credentials, Error> {
         let resolved = config.clone().with_environment(env_lookup);
         let flow = classify_auth(config, env_lookup);
-        let cached = self.cached_credentials(&resolved, &flow).await?;
+        self.fresh_credentials(&resolved, &flow).await
+    }
+
+    /// The credentials botocore's default chain finds in `region`, without LiteLLM's Bedrock settings
+    /// (`AWS_ROLE_NAME`, `AWS_PROFILE_NAME`, `AWS_SESSION_NAME`) that `resolve_credentials` also reads.
+    pub async fn default_chain_credentials(&self, region: &str) -> Result<Credentials, Error> {
+        let config = AwsAuthConfig {
+            region_name: Some(region.to_owned()),
+            ..Default::default()
+        };
+        self.fresh_credentials(&config, &AwsAuthFlow::DefaultChain)
+            .await
+    }
+
+    async fn fresh_credentials(
+        &self,
+        resolved: &AwsAuthConfig,
+        flow: &AwsAuthFlow,
+    ) -> Result<Credentials, Error> {
+        let cached = self.cached_credentials(resolved, flow).await?;
         if fresh(&cached) {
             return Ok(cached);
         }
-        self.credentials.invalidate(&resolved).await;
-        let refetched = self.cached_credentials(&resolved, &flow).await?;
+        self.credentials.invalidate(resolved).await;
+        let refetched = self.cached_credentials(resolved, flow).await?;
         if fresh(&refetched) {
             return Ok(refetched);
         }
-        self.credentials.invalidate(&resolved).await;
+        self.credentials.invalidate(resolved).await;
         Err(Error::ExpiredCredentials)
     }
 
@@ -1189,6 +1208,57 @@ mod tests {
                 ))
             })
         }
+    }
+
+    #[derive(Default)]
+    struct RecordingLoader {
+        loads: std::sync::Mutex<Vec<(AwsAuthConfig, AwsAuthFlow)>>,
+    }
+
+    impl ProviderLoader for RecordingLoader {
+        fn load(&self, config: AwsAuthConfig, flow: AwsAuthFlow) -> ProviderFuture<'_> {
+            self.loads.lock().unwrap().push((config, flow));
+            Box::pin(async {
+                Ok(SharedCredentialsProvider::new(Credentials::new(
+                    "ak",
+                    "sk",
+                    None,
+                    None,
+                    "recording",
+                )))
+            })
+        }
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn default_chain_credentials_do_not_share_a_configured_role_in_the_same_region() {
+        let loader = Arc::new(RecordingLoader::default());
+        let auth = AwsAuthService::new(loader.clone());
+        let bedrock_env = |name: &str| match name {
+            AWS_ROLE_NAME => Some("arn:aws:iam::123456789012:role/bedrock".to_string()),
+            AWS_REGION_NAME => Some("us-east-1".to_string()),
+            _ => None,
+        };
+        auth.resolve_credentials(AwsAuthConfig::default(), &bedrock_env)
+            .await
+            .unwrap();
+
+        auth.default_chain_credentials("us-east-1").await.unwrap();
+        auth.default_chain_credentials("us-east-1").await.unwrap();
+
+        let loads = loader.loads.lock().unwrap();
+        assert_eq!(loads.len(), 2);
+        assert_eq!(
+            loads[1],
+            (
+                AwsAuthConfig {
+                    region_name: Some("us-east-1".to_string()),
+                    ..Default::default()
+                },
+                AwsAuthFlow::DefaultChain
+            )
+        );
     }
 
     #[rstest::rstest]
