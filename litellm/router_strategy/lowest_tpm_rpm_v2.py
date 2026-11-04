@@ -16,7 +16,10 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    get_litellm_metadata_from_kwargs,  # pyright: ignore[reportUnknownVariableType]  # helper has no typed return
+    get_parent_otel_span_from_kwargs,
+)
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
 from litellm.types.router import RouterErrors
@@ -255,7 +258,13 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     @with_service_target("router_usage")
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time,
+        end_time,  # pyright: ignore[reportUnknownParameterType]  # CustomLogger callback signature is untyped
+    ) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -266,7 +275,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group: Final = standard_logging_object.get("model_group")
-            model: Final = standard_logging_object["hidden_params"].get("litellm_model_name")
+            deployment_model: Final[object] = get_litellm_metadata_from_kwargs(kwargs).get("deployment")  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType, reportUnknownVariableType]  # helper has no typed metadata signature
+            hidden_model: Final[str | None] = standard_logging_object["hidden_params"].get("litellm_model_name")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # standard logging payload hidden parameters are untyped
+            model: Final[str | None] = (deployment_model if isinstance(deployment_model, str) else None) or hidden_model  # pyright: ignore[reportUnknownVariableType]  # hidden parameter value has an incomplete type
             id = standard_logging_object.get("model_id")
             if model_group is None or id is None or model is None:
                 return
@@ -298,7 +309,13 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             )
 
     @with_service_target("router_usage")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time,
+        end_time,  # pyright: ignore[reportUnknownParameterType]  # CustomLogger callback signature is untyped
+    ) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -309,9 +326,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group: Final = standard_logging_object.get("model_group")
-            model: Final = standard_logging_object["hidden_params"]["litellm_model_name"]
+            deployment_model: Final[object] = get_litellm_metadata_from_kwargs(kwargs).get("deployment")  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType, reportUnknownVariableType]  # helper has no typed metadata signature
+            hidden_model: Final[str | None] = standard_logging_object["hidden_params"].get("litellm_model_name")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # standard logging payload hidden parameters are untyped
+            model: Final[str | None] = (deployment_model if isinstance(deployment_model, str) else None) or hidden_model  # pyright: ignore[reportUnknownVariableType]  # hidden parameter value has an incomplete type
             id = standard_logging_object.get("model_id")
-            if model_group is None or id is None:
+            if model_group is None or id is None or model is None:
                 return
             elif isinstance(id, int):
                 id = str(id)
