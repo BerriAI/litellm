@@ -3,7 +3,9 @@ Handles Authentication Errors
 """
 
 import logging
+import math
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException, Request, status
@@ -48,6 +50,19 @@ else:
     Span = Any
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def budget_retry_after_seconds(budget_reset_at: datetime, now: datetime) -> int:
+    """Whole seconds until the budget resets, never below 1 so a client does not retry at once."""
+    reset_at: Final = (
+        budget_reset_at if budget_reset_at.tzinfo is not None else budget_reset_at.replace(tzinfo=timezone.utc)
+    )
+    current: Final = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+    return max(1, math.ceil((reset_at - current).total_seconds()))
+
+
 def _as_proxy_exception(e: Exception) -> ProxyException:
     """Convert an authentication failure into the ProxyException the client receives."""
     if isinstance(e, litellm.BudgetExceededError):
@@ -56,6 +71,11 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             type=ProxyErrorTypes.budget_exceeded,
             param=None,
             code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+            headers=(
+                {"retry-after": str(budget_retry_after_seconds(e.budget_reset_at, _utc_now()))}
+                if e.budget_reset_at is not None
+                else None
+            ),
         )
     if isinstance(e, ModelAccessDeniedHTTPException):
         return ModelAccessDeniedProxyException(

@@ -67,6 +67,7 @@ class _BudgetCounter:
     spend_log_entity_id: str | None = None
     window_duration: str | None = None
     window_start: datetime | None = None
+    budget_reset_at: datetime | None = None
 
 
 _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
@@ -234,6 +235,7 @@ def _raise_counter_budget_exceeded(
         ),
         entity_type=_COUNTER_ENTITY_TYPES.get(counter.entity_type),
         entity_id=counter.spend_log_entity_id or counter.entity_id,
+        budget_reset_at=counter.budget_reset_at,
     )
 
 
@@ -495,6 +497,7 @@ async def _get_budget_counters(
                     fallback_spend=float(valid_token.spend or 0.0),
                     entity_type="Key",
                     entity_id=valid_token.token,
+                    budget_reset_at=valid_token.budget_reset_at,
                 )
             )
         counters.extend(
@@ -518,6 +521,7 @@ async def _get_budget_counters(
                     fallback_spend=float(team_object.spend or 0.0),
                     entity_type="Team",
                     entity_id=team_id,
+                    budget_reset_at=team_object.budget_reset_at,
                 )
             )
         counters.extend(
@@ -546,6 +550,7 @@ async def _get_budget_counters(
                 fallback_spend=float(user_object.spend or 0.0),
                 entity_type="User",
                 entity_id=user_object.user_id,
+                budget_reset_at=user_object.budget_reset_at,
             )
         )
 
@@ -629,6 +634,7 @@ async def _get_end_user_budget_counter(
         fallback_spend=fallback_spend,
         entity_type="EndUser",
         entity_id=end_user_id,
+        budget_reset_at=_reset_at_of(_get_value(end_user_object, "litellm_budget_table")),
     )
 
 
@@ -669,6 +675,7 @@ async def _get_tag_budget_counters(
                 fallback_spend=_to_float(_get_value(tag_object, "spend")) or 0.0,
                 entity_type="Tag",
                 entity_id=tag_name,
+                budget_reset_at=_reset_at_of(budget_table),
             )
         )
     return counters
@@ -725,6 +732,17 @@ def _dedupe_tags(tags: list[str]) -> list[str]:
     return deduped_tags
 
 
+async def _cached_team_member_default_budget(
+    team_object: LiteLLM_TeamTable, user_api_key_cache: UserApiKeyCache
+) -> object:
+    default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
+    if not isinstance(default_budget_id, str):
+        return None
+    return _CACHED_VALUE.validate_python(
+        await user_api_key_cache.async_get_cache(key=f"team_member_default_budget:{default_budget_id}")
+    )
+
+
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _get_team_member_budget_counter(
     valid_token: UserAPIKeyAuth,
@@ -749,20 +767,20 @@ async def _get_team_member_budget_counter(
 
     member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
     now: Final = datetime.now(timezone.utc)
+    member_row_sets_cap: Final = member_budget_row is not None and member_budget_row.max_budget is not None
+    default_budget: Final = (
+        None if member_row_sets_cap else await _cached_team_member_default_budget(team_object, user_api_key_cache)
+    )
+    team_member_reset_at: Final = _reset_at_of(member_budget_row if member_row_sets_cap else default_budget)
     team_member_budget: float | None = None
     if member_budget_row is not None and member_budget_row.max_budget is not None:
         team_member_budget = member_budget_row.effective_max_budget(now=now)
     else:
-        default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
-        if isinstance(default_budget_id, str):
-            default_budget: Final = _CACHED_VALUE.validate_python(
-                await user_api_key_cache.async_get_cache(key=f"team_member_default_budget:{default_budget_id}")
+        default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
+        if default_cap is not None and default_cap > 0:
+            team_member_budget = default_cap + (
+                member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
             )
-            default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
-            if default_cap is not None and default_cap > 0:
-                team_member_budget = default_cap + (
-                    member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
-                )
 
     if team_member_budget is None or team_member_budget <= 0:
         return None
@@ -775,6 +793,7 @@ async def _get_team_member_budget_counter(
         fallback_spend=float(team_member_spend or 0.0),
         entity_type="TeamMember",
         entity_id=f"{valid_token.user_id}:{team_object.team_id}",
+        budget_reset_at=team_member_reset_at,
     )
 
 
@@ -814,6 +833,7 @@ async def _get_org_budget_counter(
         fallback_spend=org_spend,
         entity_type="Organization",
         entity_id=org_id,
+        budget_reset_at=_reset_at_of(org_budget_table),
     )
 
 
@@ -847,6 +867,7 @@ async def _get_project_budget_counter(
         fallback_spend=_to_float(_get_value(project_object, "spend")) or 0.0,
         entity_type="Project",
         entity_id=valid_token.project_id,
+        budget_reset_at=_reset_at_of(project_budget_table),
     )
 
 
@@ -886,6 +907,7 @@ def _get_budget_limit_counters(
                 spend_log_entity_id=entity_id,
                 window_duration=str(budget_duration),
                 window_start=window_start,
+                budget_reset_at=get_budget_window_reset_at(window_dict),
             )
         )
     return counters
@@ -1280,6 +1302,17 @@ def get_budget_window_start(window: object) -> datetime | None:
     if reset_at.tzinfo is None:
         reset_at = reset_at.replace(tzinfo=timezone.utc)
     return reset_at - timedelta(seconds=duration_seconds)
+
+
+def get_budget_window_reset_at(window: object) -> datetime | None:
+    reset_at: Final = _coerce_datetime(_coerce_window(window).get("reset_at"))
+    if reset_at is None:
+        return None
+    return reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)
+
+
+def _reset_at_of(budget_table: object) -> datetime | None:
+    return _coerce_datetime(_get_value(budget_table, "budget_reset_at"))
 
 
 def _coerce_datetime(value: object) -> datetime | None:

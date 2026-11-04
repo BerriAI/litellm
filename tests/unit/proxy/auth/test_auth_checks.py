@@ -3,6 +3,7 @@
 
 import sys, os, asyncio, time, random, uuid
 import hashlib
+from datetime import datetime, timezone
 import json
 import traceback
 from dotenv import load_dotenv
@@ -989,6 +990,25 @@ async def test_virtual_key_max_budget_check(
 
     # Verify budget alert was triggered
     assert alert_called, "Budget alert should be triggered"
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_check_carries_the_budget_reset_at():
+    from litellm.proxy.auth.auth_checks import virtual_key_max_budget_check
+
+    reset_at: Final = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    valid_token = UserAPIKeyAuth(token="test-token", spend=10.0, max_budget=10.0, budget_reset_at=reset_at)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+
+    async def mock_budget_alert(*args, **kwargs):
+        return None
+
+    proxy_logging_obj.budget_alerts = mock_budget_alert
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await virtual_key_max_budget_check(valid_token=valid_token, proxy_logging_obj=proxy_logging_obj, user_obj=None)
+
+    assert exc_info.value.budget_reset_at == reset_at
 
 
 @pytest.mark.parametrize(
