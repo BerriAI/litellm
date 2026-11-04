@@ -764,6 +764,57 @@ async def test_recomputed_cost_of_a_served_bridge_response_prices_the_reasoning_
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
 
 
+_DEEPWIKI_SERVER: Final = {"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}
+
+
+def test_mcp_servers_the_responses_bridge_cannot_run_answer_400(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _build_responses_kwargs(
+            model="gpt-5.6",
+            extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER]},
+            max_tokens=1024,
+            messages=MESSAGES,
+        )
+
+    assert rejected.value.status_code == 400
+    assert "to gpt-5.6 on openai, so the MCP server `deepwiki` would not run" in rejected.value.message
+
+
+@pytest.mark.parametrize(
+    "drop_form",
+    [{"drop_params": True}, {"additional_drop_params": ["mcp_servers"]}],
+    ids=["drop_params", "additional_drop_params"],
+)
+def test_drop_params_keeps_mcp_servers_off_the_responses_request(
+    monkeypatch: pytest.MonkeyPatch, drop_form: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="gpt-5.6",
+        extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], **drop_form},
+        max_tokens=1024,
+        messages=MESSAGES,
+    )
+
+    assert "mcp_servers" not in responses_kwargs
+    assert responses_kwargs["input"]
+
+
+def test_drop_params_drops_the_mcp_toolset_tools_of_dropped_mcp_servers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    weather_tool: Final = {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="gpt-5.6",
+        extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], "drop_params": True},
+        max_tokens=1024,
+        messages=MESSAGES,
+        tools=[{"type": "mcp_toolset", "mcp_server_name": "deepwiki"}, weather_tool],
+    )
+
+    assert [tool["name"] for tool in responses_kwargs["tools"]] == ["get_weather"]
+
+
 TEXT_RESPONSE: Final = {
     "id": "resp_cleared",
     "object": "response",

@@ -1061,6 +1061,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
     supports_url_context: bool = Field(default=False)
+    supports_continuation: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supports_fast_mode: bool = Field(default=False)
