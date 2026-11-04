@@ -108,6 +108,7 @@ class _Filter(TypedDict):
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SanitizationResult(TypedDict):
+    invocationResult: NotRequired[ReadOnly[str]]
     filterResults: NotRequired[ReadOnly[Mapping[str, _Filter] | Sequence[_Filter] | str | int | float | bool | None]]
 
 
@@ -153,6 +154,9 @@ class ModelArmorAPIError(Exception):
         super().__init__(detail)
         self.detail = detail
 
+
+# invocationResult values that mean Model Armor did not finish scanning, although it answered HTTP 200
+_INCOMPLETE_INVOCATION_RESULTS: Final = frozenset({"PARTIAL", "FAILURE"})
 
 _SCANNED_CONTENT_KEYS: Final = frozenset({"text", "sanitizedText", "findings", "maliciousUriMatchedItems"})
 
@@ -419,8 +423,26 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         json_response: Final = _RESPONSE_JSON.validate_python(response.json())
         if isinstance(json_response, _AwaitableJSON):
-            return _ModelArmorResponseRoot.model_validate(await json_response).root
-        return _ModelArmorResponseRoot.model_validate(json_response).root
+            armor_response: Final = _ModelArmorResponseRoot.model_validate(await json_response).root
+        else:
+            armor_response = _ModelArmorResponseRoot.model_validate(json_response).root
+        self._raise_if_scan_incomplete(armor_response)
+        return armor_response
+
+    def _raise_if_scan_incomplete(self, armor_response: _ModelArmorResponse) -> None:
+        """A 200 whose invocationResult is PARTIAL or FAILURE means some filters did not run.
+
+        Accepting it would treat an unfinished scan as a clean one. It is raised like any other API
+        failure, so every hook applies fail_on_error. A scan that already matched a filter is still
+        returned, so the caller blocks instead of failing open on content that was flagged.
+        """
+        result: Final = armor_response.get("sanitizationResult", {}).get("invocationResult")
+        if result not in _INCOMPLETE_INVOCATION_RESULTS:
+            return
+        if self._should_block_content(armor_response):
+            return
+        verbose_proxy_logger.error("Model Armor scan did not complete - invocationResult: %s", result)
+        raise ModelArmorAPIError(f"Model Armor scan incomplete (invocationResult={result})")
 
     def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict:
         """
