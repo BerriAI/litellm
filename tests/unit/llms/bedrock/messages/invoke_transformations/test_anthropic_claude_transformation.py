@@ -1547,6 +1547,7 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
     assert result["max_tokens"] == 4096
 
 
+@pytest.mark.usefixtures("local_beta_headers_config")
 def test_bedrock_messages_keeps_compaction_param_and_adds_beta():
     """
     The ``compact-2026-09-04`` beta uses a top-level ``compaction`` parameter, not a
@@ -1580,6 +1581,7 @@ def test_bedrock_messages_keeps_compaction_param_and_adds_beta():
     assert set(result).issubset(cfg.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS)
 
 
+@pytest.mark.usefixtures("local_beta_headers_config")
 def test_bedrock_messages_keeps_compact_2026_09_04_beta_for_adopting_request():
     """
     A request that adopts the signed block sends it first in ``messages`` and must
@@ -1601,6 +1603,54 @@ def test_bedrock_messages_keeps_compact_2026_09_04_beta_for_adopting_request():
 
     assert "compact-2026-09-04" in result["anthropic_beta"]
     assert result["messages"][0]["content"][0] == block
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_bedrock_messages_adds_compact_2026_09_04_beta_for_signed_block_without_client_header():
+    """
+    A client that adopts the signed block but sends no anthropic-beta header still
+    needs ``compact-2026-09-04``; the Anthropic route adds it for the block, and so
+    does Bedrock Invoke.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    block = {"type": "compaction", "content": "<summary>TR-TITCK: Type IB.</summary>", "signature": "sig"}
+    messages = [{"role": "user", "content": [block, {"type": "text", "text": "Now KR-MFDS."}]}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["anthropic_beta"] == ["compact-2026-09-04"]
+    assert result["messages"][0]["content"][0] == block
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize("compaction", [None, "summarize", []])
+def test_bedrock_messages_drops_compaction_that_is_not_an_object(compaction):
+    """
+    Only an object ``compaction`` gets the beta. Any other value is dropped, as it
+    was before the field was allowed, instead of reaching Bedrock without its beta.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 512, "compaction": compaction},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "compaction" not in result
+    assert "compact-2026-09-04" not in result.get("anthropic_beta", [])
 
 
 def test_bedrock_messages_filters_unsupported_context_management_edits():

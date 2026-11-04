@@ -23,6 +23,7 @@ from litellm.llms.anthropic.common_utils import (
     OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
     carried_thinking_keys,
+    carries_signed_compaction_block,
     validated_object_mapping,
 )
 from litellm.llms.anthropic.messages.native.transformation import (
@@ -555,12 +556,15 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         A top-level ``compaction`` request needs the ``compact-2026-09-04``
         anthropic-beta; without it Bedrock answers 400 "compaction: Extra inputs
-        are not permitted". Later requests that adopt the returned block need the
-        same beta, which the caller sends as a header.
+        are not permitted". A later request that adopts the returned signed
+        block needs the same beta, so it is added for that block too, as the
+        Anthropic route does.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
         """
-        if isinstance(anthropic_messages_request.get("compaction"), dict):
+        if isinstance(anthropic_messages_request.get("compaction"), dict) or carries_signed_compaction_block(
+            anthropic_messages_request.get("messages") or ()
+        ):
             beta_set.add("compact-2026-09-04")
 
     def strips_beta_gated_fields_from_final_headers(self) -> bool:
@@ -842,6 +846,16 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
+
+        # ``compaction`` travels only with its beta. A beta map without compact-2026-09-04
+        # (bedrock_mantle) or a non-object value keeps the earlier strip instead of a 400.
+        if "compaction" in anthropic_messages_request and not (
+            isinstance(anthropic_messages_request["compaction"], dict) and "compact-2026-09-04" in filtered_betas
+        ):
+            verbose_logger.debug(
+                "Bedrock Invoke: dropping `compaction`; compact-2026-09-04 is not served on this route"
+            )
+            anthropic_messages_request.pop("compaction")
 
         final_request: Final = OBJECT_MAPPING_ADAPTER.validate_python(anthropic_messages_request)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
         gated: Final = strip_beta_gated_native_request(
