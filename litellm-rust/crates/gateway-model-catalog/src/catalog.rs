@@ -327,9 +327,11 @@ mod tests {
         }
         let catalog = catalog(Some(url.clone()), CancellationToken::new());
         let boot = catalog.installed();
+        tokio::time::sleep(Duration::from_millis(5)).await;
         catalog.revalidate().await;
         let installed = catalog.installed();
         assert!(Arc::ptr_eq(&installed.catalog, &boot.catalog));
+        assert!(installed.provenance.loaded_at > boot.provenance.loaded_at);
         assert_eq!(
             installed.provenance.origin,
             Origin::Bundled {
@@ -436,9 +438,10 @@ mod tests {
     async fn reloading_a_forced_bundled_map_restamps_it_without_fetching() {
         let catalog = catalog(None, CancellationToken::new());
         let boot = catalog.installed();
+        tokio::time::sleep(Duration::from_millis(5)).await;
         let reloaded = catalog.reload().await.unwrap();
         assert!(Arc::ptr_eq(&reloaded.catalog, &boot.catalog));
-        assert!(reloaded.provenance.loaded_at >= boot.provenance.loaded_at);
+        assert!(reloaded.provenance.loaded_at > boot.provenance.loaded_at);
         assert_eq!(
             Provenance {
                 loaded_at: boot.provenance.loaded_at,
@@ -447,6 +450,14 @@ mod tests {
             boot.provenance
         );
         assert!(Arc::ptr_eq(&catalog.installed(), &reloaded));
+    }
+
+    #[rstest]
+    fn retry_jitter_is_a_fresh_draw_below_one_second() {
+        let (first, second) = (TokioPause.jitter(), TokioPause.jitter());
+        assert!((0.0..1.0).contains(&first), "{first}");
+        assert!((0.0..1.0).contains(&second), "{second}");
+        assert_ne!(first, second);
     }
 
     fn limits(min_model_count: usize) -> IntegrityLimits {
