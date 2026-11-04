@@ -21,6 +21,25 @@ if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 
 
+def _model_map_function_calling(model: str, custom_llm_provider: str) -> bool | None:
+    from litellm.utils import get_model_info_helper
+
+    try:
+        value: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider).get(
+            "supports_function_calling"
+        )
+    except Exception:  # noqa: BLE001  # get_model_info_helper raises bare Exception for unmapped models
+        return None
+    return value if isinstance(value, bool) else None
+
+
+def _function_calling_disabled(model: str, provider: SimpleProviderConfig) -> bool:
+    from_model_map: Final = _model_map_function_calling(model=model, custom_llm_provider=provider.slug)
+    if from_model_map is not None:
+        return not from_model_map
+    return provider.provider_info.get("supports_function_calling") is False
+
+
 def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
@@ -107,14 +126,12 @@ def create_config_class(provider: SimpleProviderConfig):
 
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
-            that don't support function calling."""
-            from litellm.utils import supports_function_calling, supports_reasoning
+            the model map, or failing that the provider, marks as not supporting function calling."""
+            from litellm.utils import supports_reasoning
 
             supported_params: Final = super().get_supported_openai_params(model=model)
 
-            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
-
-            if not _supports_fc:
+            if _function_calling_disabled(model=model, provider=provider):
                 tool_params: Final = [
                     "tools",
                     "tool_choice",
