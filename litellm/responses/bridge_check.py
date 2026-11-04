@@ -74,6 +74,31 @@ def bridge_check_request_params(request_params: Mapping[str, object]) -> Mapping
     return {**kept, **reduce(delete_nested_value, nested_paths, {"extra_body": kept_extra_body})}
 
 
+def bridge_allowed_params(
+    *,
+    bridges_to_responses_api: bool,
+    chat_reasoning_effort: DeploymentReasoningEffort,
+    model: str,
+    custom_llm_provider: str,
+    base_model: str | None,
+) -> tuple[str, ...]:
+    if bridges_to_responses_api and custom_llm_provider in RESPONSES_WEB_SEARCH_PROVIDERS:
+        return ("reasoning_effort", "web_search_options")
+    if bridges_to_responses_api or reasoning_effort_needs_allowing(
+        chat_reasoning_effort, model=model, custom_llm_provider=custom_llm_provider, base_model=base_model
+    ):
+        return ("reasoning_effort",)
+    return ()
+
+
+def bridge_allowed_params(*, bridges_to_responses_api: bool, custom_llm_provider: str) -> tuple[str, ...]:
+    if not bridges_to_responses_api:
+        return ()
+    if custom_llm_provider in RESPONSES_WEB_SEARCH_PROVIDERS:
+        return ("reasoning_effort", "web_search_options")
+    return ("reasoning_effort",)
+
+
 def bridge_reasoning_effort(
     reasoning_effort: str | Mapping[str, object] | None, extra_body: object
 ) -> str | Mapping[str, object] | None:

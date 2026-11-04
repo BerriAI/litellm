@@ -210,6 +210,8 @@ def _redact_responses_api_output(output_items):
                     content_part.text = REDACTED_BY_LITELLM
                 if getattr(content_part, "refusal", None) is not None:
                     content_part.refusal = REDACTED_BY_LITELLM
+                if getattr(content_part, "logprobs", None) is not None:
+                    content_part.logprobs = None
 
         # Redact reasoning items in output array
         if hasattr(output_item, "type") and output_item.type == "reasoning":
@@ -239,6 +241,8 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
                     content_item["text"] = redacted_str
                 if isinstance(content_item, dict) and content_item.get("refusal") is not None:
                     content_item["refusal"] = redacted_str
+                if isinstance(content_item, dict):
+                    content_item.pop("logprobs", None)
 
         if output_item.get("type") == "reasoning" and isinstance(output_item.get("summary"), list):
             for summary_item in output_item["summary"]:
@@ -484,6 +488,7 @@ def perform_redaction(model_call_details: dict[str, object], result, redact_stre
         elif isinstance(_result, litellm.ResponsesAPIResponse):
             if hasattr(_result, "output"):
                 _redact_responses_api_output(_result.output)
+                _redact_responses_api_output_dict(_result.output, REDACTED_BY_LITELLM)
             # Redact reasoning field in ResponsesAPIResponse
             if hasattr(_result, "reasoning") and _result.reasoning is not None:
                 _result.reasoning = None
