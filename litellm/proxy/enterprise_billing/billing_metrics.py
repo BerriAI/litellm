@@ -225,10 +225,7 @@ def load_billing_metrics_config(
     *, license_data: "EnterpriseLicenseData | None", litellm_version: str
 ) -> BillingMetricsConfig | None:
     env: Final = MappingProxyType(
-        {
-            name: os.getenv(name) or ""
-            for name in (ENDPOINT_ENV, CLIENT_ID_ENV, CLIENT_SECRET_ENV, TOKEN_URL_ENV)
-        }
+        {name: os.getenv(name) or "" for name in (ENDPOINT_ENV, CLIENT_ID_ENV, CLIENT_SECRET_ENV, TOKEN_URL_ENV)}
     )
     missing: Final = tuple(name for name, value in env.items() if not value)
     if missing:
