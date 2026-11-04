@@ -2624,11 +2624,18 @@ class MCPServerManager:
         the database. Refreshing both here means every caller (boot, reload, set_server_enabled,
         cross-pod sync) keeps the DB-disabled set in step with the config-disabled set. Best-effort:
         a DB hiccup on either query leaves that previous set in place rather than silently
-        re-enabling servers."""
+        re-enabling servers.
+
+        Centralized teardown (BUG B): snapshot the union of disabled ids BEFORE reassigning either
+        set, then close upstream sessions for every id that is hidden AFTER but was not before. This
+        covers disables learned here on any path — DB-toggle (via ``reload_servers_from_database``)
+        and cross-pod sync — not just the config toggle's own manual close. A failed query leaves its
+        set unchanged, so it can never fabricate a "newly disabled" id and trigger a bogus close."""
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             return
+        previously_disabled: Final = self._disabled_config_server_ids | self._disabled_db_server_ids
         try:
             from litellm.proxy.mcp_server.db import get_disabled_config_server_ids
 
@@ -2641,6 +2648,13 @@ class MCPServerManager:
             self._disabled_db_server_ids = await get_disabled_db_server_ids(prisma_client)
         except Exception as e:  # noqa: BLE001  # best-effort refresh; keep the last known set on failure
             verbose_logger.debug("Failed to refresh disabled MCP DB server ids: %s", e)
+        # Tear down sessions for ids newly hidden by this refresh (idempotent; already-disabled ids
+        # are excluded, so no double-close).
+        newly_disabled: Final = (
+            self._disabled_config_server_ids | self._disabled_db_server_ids
+        ) - previously_disabled
+        for server_id in newly_disabled:
+            self._close_upstream_sessions_for_server(server_id)
 
     async def set_server_enabled(
         self, server_id: str, enabled: bool, touched_by: str
@@ -2664,18 +2678,18 @@ class MCPServerManager:
             set_mcp_server_enabled,
         )
 
-        # Idempotent no-op: already in the requested state -> no write, reload, or sync event.
+        # Idempotent no-op for DB rows only: ``get_mcp_server`` is an authoritative DB read, so an
+        # already-in-state row needs no write/reload/sync event. We do NOT short-circuit the config
+        # branch here (BUG A): its state would come from the pod-local ``_disabled_config_server_ids``
+        # cache, which another pod may have made stale — skipping the write on a stale cache would
+        # leave the DB override unset and let the next sync restore access. The config branch below
+        # therefore always upserts the override (idempotent) so the DB reflects the request.
         existing: Final = await get_mcp_server(prisma_client, server_id)
-        if existing is not None:
-            if self.effective_enabled(server_id, is_db_row_enabled=existing.enabled is not False) == enabled:
-                existing.enabled = enabled
-                return existing
-        elif self.is_config_declared_server(server_id) and (
-            self.effective_enabled(server_id, is_db_row_enabled=None) == enabled
+        if existing is not None and (
+            self.effective_enabled(server_id, is_db_row_enabled=existing.enabled is not False) == enabled
         ):
-            noop_table: Final = self.build_mcp_server_table(self.config_mcp_servers[server_id])
-            noop_table.enabled = enabled
-            return noop_table
+            existing.enabled = enabled
+            return existing
 
         updated: Final = await set_mcp_server_enabled(prisma_client, server_id, enabled, touched_by)
         if updated is not None:
@@ -7776,6 +7790,17 @@ class MCPServerManager:
                 health_check_error="Server not found",
                 last_health_check=datetime.now(),
             )
+
+        # Admin-disabled servers must never be probed, even on the direct per-server path (BUG C):
+        # GET /v1/mcp/server/{id} calls this directly, bypassing the bulk filter. Mirror the bulk
+        # unfiltered path's shape for a hidden server — a non-probed "unknown" record with
+        # enabled=False and no upstream client opened — so admins can still see it but no connection
+        # (with global auth headers) is ever made to a disabled upstream.
+        if self.is_server_caller_hidden(server.server_id):
+            unprobed: Final = self.build_mcp_server_table(server)
+            unprobed.status = "unknown"
+            unprobed.enabled = False
+            return unprobed
 
         if server.spec_path:
             spec_status, spec_error, spec_checked_at = await self._openapi_health_probes(server.spec_path).check()
