@@ -2485,6 +2485,10 @@
     }
   },
   "keyTeamHelpers": {
+    "fetchAvailableModelsTeamKey": {
+      "allProxyModels": "All Proxy Models",
+      "allProviderModels": "All {{provider}} models"
+    },
     "modelMaxBudgetEditor": {
       "blurb": "Cap spend per model over its own window. A budget set on the bare model name also covers the provider-prefixed spelling of that model. Pick an access group, or type a pattern like claude-opus*, to share one budget across every model it covers.",
       "addModelBudget": "Add Model Budget",
@@ -3752,6 +3756,10 @@
     }
   },
   "workflows": {
+    "page": {
+      "title": "Workflow Runs",
+      "featureName": "Workflows"
+    },
     "header": {
       "title": "Workflow Runs",
       "subtitle": "Durable state tracking for agents and automated workflows"
@@ -6407,6 +6415,1562 @@
         "removeOverride": "Failed to remove override: {{message}}"
       }
     }
+  },
+  "aiHub": {
+    "publicModelHub": {
+      "copiedToClipboard": "Copied to clipboard!",
+      "serviceUnavailable": "Service unavailable",
+      "serviceAlive": "I'm alive! ✓",
+      "embeddedExplainer": "These are models, agents, and MCP servers your proxy admin has indicated are available in your company.",
+      "about": {
+        "title": "About",
+        "defaultDescription": "Proxy Server to call 100+ LLMs in the OpenAI format.",
+        "builtWith": "Built with litellm: v{{version}}"
+      },
+      "usefulLinks": {
+        "title": "Useful Links"
+      },
+      "health": {
+        "title": "Health and Endpoint Status",
+        "serviceStatus": "Service status: {{status}}"
+      },
+      "tabs": {
+        "models": "Model Hub",
+        "agents": "Agent Hub",
+        "mcp": "MCP Hub",
+        "skills": "Skill Hub"
+      },
+      "models": {
+        "title": "Available Models",
+        "chatTitle": "Models",
+        "chatCount": "{{rowCount}} models",
+        "searchLabel": "Search Models:",
+        "searchTooltip": "Finds every published model whose name contains what you type, across all pages. Try 'grok', 'claude', 'gpt-4', or 'sonnet'",
+        "chatSearchPlaceholder": "Search models",
+        "chatSearchAriaLabel": "Search models",
+        "searchPlaceholder": "Search model names...",
+        "searchAriaLabel": "Search model names",
+        "providerLabel": "Provider:",
+        "providersPlaceholder": "Select providers",
+        "providersAriaLabel": "Select providers",
+        "noProvidersFound": "No providers found",
+        "modeLabel": "Mode:",
+        "modePlaceholder": "Select modes",
+        "chatModePlaceholder": "Model type",
+        "featuresLabel": "Features:",
+        "featuresPlaceholder": "Select features",
+        "chatFeaturesPlaceholder": "Model capability",
+        "loading": "Loading models…",
+        "noMatchTitle": "No matching models",
+        "noMatchBody": "Adjust the search or filters to see more models.",
+        "emptyTitle": "No models available",
+        "emptyBody": "Models made public by the proxy admin will appear here."
+      },
+      "agents": {
+        "title": "Available Agents",
+        "searchLabel": "Search Agents:",
+        "searchTooltip": "Search agents by name or description",
+        "searchPlaceholder": "Search agent names or descriptions...",
+        "skillsLabel": "Skills:",
+        "skillsPlaceholder": "Select skills",
+        "loading": "Loading agents…",
+        "noMatchTitle": "No matching agents",
+        "noMatchBody": "Adjust the search or skill filter to see more agents.",
+        "showing": "Showing {{shown}} of {{total}} agents"
+      },
+      "mcp": {
+        "title": "Available MCP Servers",
+        "searchLabel": "Search MCP Servers:",
+        "searchTooltip": "Search MCP servers by name or description",
+        "searchPlaceholder": "Search MCP server names or descriptions...",
+        "transportLabel": "Transport:",
+        "transportPlaceholder": "Select transport types",
+        "loading": "Loading MCP servers…",
+        "noMatchTitle": "No matching MCP servers",
+        "noMatchBody": "Adjust the search or transport filter to see more servers.",
+        "showing": "Showing {{shown}} of {{total}} MCP servers"
+      },
+      "modelDialog": {
+        "fallbackTitle": "Model Details",
+        "copyName": "Copy model name",
+        "overview": "Model Overview",
+        "modelName": "Model Name:",
+        "mode": "Mode:",
+        "notSpecified": "Not specified",
+        "providers": "Providers:",
+        "description": "Description:",
+        "wildcardTitle": "Wildcard Routing",
+        "wildcardIntro": "This model uses wildcard routing. You can pass any value where you see the <code>*</code> symbol.",
+        "wildcardExample": "For example, with <model/>, you can use any string (<example/>) that matches this pattern.",
+        "tokenCost": "Token & Cost Information",
+        "maxInputTokens": "Max Input Tokens:",
+        "maxOutputTokens": "Max Output Tokens:",
+        "inputCost": "Input Cost per 1M Tokens:",
+        "outputCost": "Output Cost per 1M Tokens:",
+        "capabilities": "Capabilities",
+        "noCapabilities": "No special capabilities listed",
+        "rateLimits": "Rate Limits",
+        "tpm": "Tokens per Minute:",
+        "rpm": "Requests per Minute:",
+        "openaiParams": "Supported OpenAI Parameters",
+        "usageExample": "Usage Example",
+        "copyToClipboard": "Copy to clipboard"
+      },
+      "agentDialog": {
+        "fallbackTitle": "Agent Details",
+        "copyName": "Copy agent name",
+        "overview": "Agent Overview",
+        "name": "Name:",
+        "version": "Version:",
+        "description": "Description:",
+        "url": "URL:",
+        "capabilities": "Capabilities",
+        "skills": "Skills",
+        "ioModes": "Input/Output Modes",
+        "inputModes": "Input Modes:",
+        "outputModes": "Output Modes:",
+        "documentation": "Documentation",
+        "viewDocumentation": "View Documentation",
+        "usageExample": "Usage Example (A2A Protocol)",
+        "stepRetrieveCard": "Step 1: Retrieve Agent Card",
+        "stepCallAgent": "Step 2: Call the Agent",
+        "copyToClipboard": "Copy to clipboard"
+      },
+      "mcpDialog": {
+        "fallbackTitle": "MCP Server Details",
+        "copyName": "Copy server name",
+        "overview": "Server Overview",
+        "serverName": "Server Name:",
+        "transport": "Transport:",
+        "alias": "Alias:",
+        "authType": "Auth Type:",
+        "description": "Description:",
+        "additionalInfo": "Additional Information",
+        "usageExample": "Usage Example",
+        "copyToClipboard": "Copy to clipboard"
+      }
+    },
+    "publicModelHubColumns": {
+      "notAvailable": "N/A",
+      "rpmLimit": "RPM: {{value}}",
+      "tpmLimit": "TPM: {{value}}",
+      "free": "Free",
+      "inputCost": "Input {{cost}}",
+      "outputCost": "Output {{cost}}",
+      "chatMode": "Chat",
+      "responseTime": "Response Time: {{ms}}ms",
+      "lastChecked": "Last Checked: {{date}}",
+      "healthUnknown": "Unknown",
+      "models": {
+        "modelChat": "Model",
+        "modelName": "Model Name",
+        "providers": "Providers",
+        "mode": "Mode",
+        "maxInput": "Max Input",
+        "maxOutput": "Max Output",
+        "costChat": "Cost / 1M tokens",
+        "inputCost": "Input $/1M",
+        "outputCost": "Output $/1M",
+        "features": "Features",
+        "tags": "Tags",
+        "healthStatus": "Health Status",
+        "limits": "Limits"
+      },
+      "agents": {
+        "name": "Agent Name",
+        "description": "Description",
+        "version": "Version",
+        "provider": "Provider",
+        "skills": "Skills",
+        "capabilities": "Capabilities"
+      },
+      "mcp": {
+        "serverName": "Server Name",
+        "description": "Description",
+        "transport": "Transport",
+        "authType": "Auth Type"
+      }
+    },
+    "modelHubTable": {
+      "title": "AI Hub",
+      "adminDescription": "Make models, agents, and MCP servers public for developers to know what's available.",
+      "userDescription": "A list of all public model names personally available to you.",
+      "hubUrlLabel": "Model Hub URL:",
+      "copyUrl": "Copy URL",
+      "tabs": {
+        "models": "Model Hub",
+        "agents": "Agent Hub",
+        "mcp": "MCP Hub",
+        "skills": "Skill Hub"
+      },
+      "models": {
+        "chatTitle": "Models",
+        "chatCount": "{{shown}} models",
+        "makePublic": "Select Models to Make Public",
+        "loading": "Loading models…",
+        "showing": "Showing {{shown}} of {{total}} models",
+        "empty": {
+          "decisionsTitle": "No model on this proxy uses the decisions mode",
+          "decisionsBody": "The decision models LiteLLM supports are listed below.",
+          "noMatchTitle": "No matching models",
+          "noMatchBody": "Adjust the filters to see more models.",
+          "noneTitle": "No models yet",
+          "noneBody": "Models added to this proxy will appear here."
+        }
+      },
+      "agents": {
+        "makePublic": "Select Agents to Make Public",
+        "searchLabel": "Search Agents:",
+        "searchPlaceholder": "Search agent names or descriptions...",
+        "clearSearch": "Clear search",
+        "loading": "Loading agents…",
+        "noMatchTitle": "No matching agents",
+        "noMatchBody": "Adjust the search to see more agents.",
+        "noneTitle": "No agents yet",
+        "noneBody": "Agents added to this proxy will appear here.",
+        "showing": "Showing {{shown}} of {{total}} agents"
+      },
+      "mcp": {
+        "manageVisibility": "Manage MCP Hub Visibility",
+        "loading": "Loading MCP servers…",
+        "noneTitle": "No MCP servers yet",
+        "noneBody": "MCP servers added to this proxy will appear here.",
+        "showing_one": "Showing {{count}} MCP server",
+        "showing_other": "Showing {{count}} MCP servers"
+      },
+      "skills": {
+        "makePublic": "Select Skills to Make Public"
+      },
+      "publicNotEnabled": {
+        "title": "Public Model Hub not enabled.",
+        "body": "Ask your proxy admin to enable this on their Admin UI."
+      },
+      "modelDialog": {
+        "fallbackTitle": "Model Details",
+        "overview": "Model Overview",
+        "modelGroup": "Model Group:",
+        "mode": "Mode:",
+        "notSpecified": "Not specified",
+        "providers": "Providers:",
+        "description": "Description:",
+        "tokenCost": "Token & Cost Information",
+        "maxInputTokens": "Max Input Tokens:",
+        "maxOutputTokens": "Max Output Tokens:",
+        "inputCost": "Input Cost per 1M Tokens:",
+        "outputCost": "Output Cost per 1M Tokens:",
+        "capabilities": "Capabilities",
+        "noCapabilities": "No special capabilities listed",
+        "rateLimits": "Rate Limits",
+        "tpm": "Tokens per Minute:",
+        "rpm": "Requests per Minute:",
+        "openaiParams": "Supported OpenAI Parameters",
+        "usageExample": "Usage Example",
+        "decisionNote": "Decision models answer on <code>/v1/decisions</code> and <code>/v1/systemone</code>, not <code>/chat/completions</code>.",
+        "howToCall": "How to call decision models",
+        "tryPlayground": "Try it in the Playground"
+      },
+      "agentDialog": {
+        "fallbackTitle": "Agent Details",
+        "overview": "Agent Overview",
+        "name": "Name:",
+        "version": "Version:",
+        "protocolVersion": "Protocol Version:",
+        "url": "URL:",
+        "description": "Description:",
+        "capabilities": "Capabilities",
+        "ioModes": "Input/Output Modes",
+        "inputModes": "Input Modes:",
+        "outputModes": "Output Modes:",
+        "notSpecified": "Not specified",
+        "skills": "Skills",
+        "skillId": "ID: {{id}}",
+        "examples": "Examples:",
+        "additionalFeatures": "Additional Features",
+        "extendedCard": "Supports Authenticated Extended Card"
+      },
+      "mcpDialog": {
+        "fallbackTitle": "MCP Server Details",
+        "overview": "Server Overview",
+        "serverName": "Server Name:",
+        "serverId": "Server ID:",
+        "alias": "Alias:",
+        "transport": "Transport:",
+        "authType": "Auth Type:",
+        "status": "Status:",
+        "statusUnknown": "unknown",
+        "description": "Description:",
+        "connectionDetails": "Connection Details",
+        "command": "Command:",
+        "allowedTools": "Allowed Tools",
+        "teams": "Teams",
+        "accessGroups": "Access Groups",
+        "metadata": "Metadata",
+        "createdBy": "Created By:",
+        "updatedBy": "Updated By:",
+        "createdAt": "Created At:",
+        "updatedAt": "Updated At:",
+        "lastHealthCheck": "Last Health Check:",
+        "healthCheckError": "Health Check Error:",
+        "usageExample": "Usage Example"
+      }
+    },
+    "agentHubColumns": {
+      "rowActions": {
+        "openActions": "Open agent actions",
+        "viewDetails": "View details",
+        "copyName": "Copy agent name",
+        "nameCopied": "Agent name copied"
+      },
+      "name": "Agent Name",
+      "description": "Description",
+      "version": "Version",
+      "protocol": "Protocol",
+      "skills": "Skills",
+      "capabilities": "Capabilities",
+      "ioModes": "I/O Modes",
+      "public": "Public",
+      "actions": "Actions",
+      "skillCount_one": "{{count}} skill",
+      "skillCount_other": "{{count}} skills",
+      "inputLabel": "In:",
+      "outputLabel": "Out:",
+      "yes": "Yes",
+      "no": "No"
+    },
+    "mcpHubColumns": {
+      "rowActions": {
+        "openActions": "Open MCP server actions",
+        "viewDetails": "View details",
+        "copyName": "Copy server name",
+        "nameCopied": "Server name copied"
+      },
+      "serverName": "Server Name",
+      "description": "Description",
+      "transport": "Transport",
+      "authType": "Auth Type",
+      "status": "Status",
+      "tools": "Tools",
+      "createdBy": "Created By",
+      "hubListing": "Hub listing",
+      "actions": "Actions",
+      "statusUnknown": "unknown",
+      "toolCount_one": "{{count}} tool",
+      "toolCount_other": "{{count}} tools",
+      "allTools": "All tools",
+      "listed": "Listed",
+      "unlisted": "Unlisted"
+    },
+    "modelHubColumns": {
+      "rowActions": {
+        "openActions": "Open model actions",
+        "viewDetails": "View details",
+        "copyName": "Copy model name",
+        "nameCopied": "Model name copied"
+      },
+      "modelChat": "Model",
+      "publicModelName": "Public Model Name",
+      "provider": "Provider",
+      "mode": "Mode",
+      "tokens": "Tokens",
+      "cost": "Cost/1M",
+      "features": "Features",
+      "tags": "Tags",
+      "public": "Public",
+      "actions": "Actions",
+      "yes": "Yes",
+      "no": "No"
+    },
+    "skillHubColumns": {
+      "rowActions": {
+        "openActions": "Open skill actions",
+        "viewDetails": "View details",
+        "copyName": "Copy skill name",
+        "nameCopied": "Skill name copied"
+      },
+      "name": "Skill Name",
+      "description": "Description",
+      "category": "Category",
+      "domain": "Domain",
+      "source": "Source",
+      "status": "Status",
+      "actions": "Actions",
+      "public": "Public",
+      "draft": "Draft"
+    },
+    "skillHubDashboard": {
+      "emptyState": {
+        "noMatchTitle": "No matching skills",
+        "noneTitle": "No skills yet",
+        "noMatchBody": "Adjust the search or domain filter to see more skills.",
+        "noneBody": "Skills added here will appear for developers."
+      },
+      "allDomains": "All Domains",
+      "totalSkills": "Total Skills",
+      "namespaces": "Namespaces",
+      "domains": "Domains",
+      "allSkills": "All Skills",
+      "allPublicSkills": "All Public Skills",
+      "searchPlaceholder": "Search by name, namespace, or tag…",
+      "clearSearch": "Clear search",
+      "loading": "Loading skills…",
+      "showing_one": "Showing {{shown}} of {{count}} skill",
+      "showing_other": "Showing {{shown}} of {{count}} skills"
+    },
+    "decisionModelGarden": {
+      "routes": {
+        "decisions": "/v1/decisions docs",
+        "selfHosted": "Self-hosted, own route",
+        "needsUpgrade": "Needs a newer LiteLLM",
+        "ownDeployment": "Deploy under your own name"
+      },
+      "addModel": "Add model",
+      "title": "Decision models LiteLLM supports",
+      "summary_one": "{{count}} decision model across $t(aiHub.decisionModelGarden.providerCount, {\"count\": {{providers}} }) answers on <code>/v1/decisions</code>.",
+      "summary_other": "{{count}} decision models across $t(aiHub.decisionModelGarden.providerCount, {\"count\": {{providers}} }) answer on <code>/v1/decisions</code>.",
+      "providerCount_one": "{{count}} provider",
+      "providerCount_other": "{{count}} providers",
+      "selfHosted_one": "{{count}} more is self-hosted and answers on its own route.",
+      "selfHosted_other": "{{count}} more are self-hosted and answer on their own routes.",
+      "needsUpgrade_one": "{{count}} more needs a newer LiteLLM version.",
+      "needsUpgrade_other": "{{count}} more need a newer LiteLLM version.",
+      "docs": "Decisions docs",
+      "showFewer": "Show fewer",
+      "showAll": "Show all {{total}}"
+    },
+    "modelHubProviders": {
+      "loading": "Loading providers",
+      "allProviders": "All providers",
+      "ariaLabel": "Provider"
+    },
+    "modelCustomMetadata": {
+      "tags": "Tags:",
+      "customMetadata": "Custom Metadata:"
+    },
+    "usefulLinks": {
+      "saveFailed": "Failed to save links - {{error}}",
+      "invalidUrl": "Please enter a valid URL",
+      "duplicateName": "A link with this display name already exists",
+      "added": "Link added successfully",
+      "updated": "Link updated successfully",
+      "deleted": "Link deleted successfully",
+      "orderSaved": "Link order saved successfully",
+      "title": "Link Management",
+      "description": "Manage the links that are displayed under 'Useful Links' on the public model hub.",
+      "addForm": {
+        "title": "Add New Link",
+        "displayName": "Display Name",
+        "displayNamePlaceholder": "Friendly name",
+        "url": "URL",
+        "submit": "Add Link"
+      },
+      "manageExisting": "Manage Existing Links",
+      "openPublicHubTitle": "Open Public Model Hub",
+      "publicHub": "Public Model Hub",
+      "rearrange": "Rearrange Order",
+      "saveOrder": "Save Order",
+      "cancel": "Cancel",
+      "table": {
+        "displayName": "Display Name",
+        "url": "URL",
+        "actions": "Actions"
+      },
+      "save": "Save",
+      "moveUp": "Move up",
+      "alreadyTop": "Already at the top",
+      "moveDown": "Move down",
+      "alreadyBottom": "Already at the bottom",
+      "openLink": "Open link",
+      "editLink": "Edit link",
+      "deleteLink": "Delete link",
+      "empty": "No links added yet. Add a new link above."
+    },
+    "makeMcpPublic": {
+      "title": "Manage MCP Hub Visibility",
+      "steps": {
+        "selectServers": "Select Servers",
+        "confirm": "Confirm"
+      },
+      "updated": "MCP Hub publication list updated",
+      "step1Title": "Select MCP Servers for the Hub",
+      "selectAll": "Select All",
+      "description": "Select the complete list of MCP servers to publish on the public hub. Uncheck a server to remove it from this list, or uncheck all to clear it. Authentication and access permissions still apply",
+      "legacyNote": "Legacy mode also lists servers with public IP access enabled. Set public_mcp_hub_strict_whitelist to true in your configuration to use only the publication list",
+      "noServers": "No MCP servers available.",
+      "publishServer": "Publish {{name}}",
+      "listedLegacy": "Listed by legacy mode",
+      "listed": "Listed",
+      "statusUnknown": "unknown",
+      "moreTools": "+{{extra}} more",
+      "configureYaml": "Configure in YAML",
+      "yamlHelp": "Merge these settings into your proxy configuration and reload it. Entries use the server IDs shown above, not names or aliases. For servers defined in YAML, pin server_id in each existing mcp_servers entry so the publication list stays stable",
+      "selectedCount_one": "<strong>{{count}}</strong> MCP server selected",
+      "selectedCount_other": "<strong>{{count}}</strong> MCP servers selected",
+      "step2Title": "Confirm MCP Hub Publication",
+      "publicWarning": "Anyone who can open <code>/ui/model_hub_table</code> can discover published servers. Explicitly published server IDs also allow requests from public IPs. Authentication and access permissions still apply",
+      "publicationList": "MCP servers in the publication list:",
+      "noPublished": "No explicitly published servers",
+      "savingSummary_one": "Saving replaces the publication list with <strong>{{count}}</strong> MCP server. Legacy mode may still list servers with public IP access enabled",
+      "savingSummary_other": "Saving replaces the publication list with <strong>{{count}}</strong> MCP servers. Legacy mode may still list servers with public IP access enabled",
+      "noMetadata": "This proxy does not provide explicit publication status for every MCP server. Update the proxy to manage visibility here, or edit litellm_settings.public_mcp_servers in its existing configuration",
+      "loadingSettings": "Loading publication settings",
+      "cancel": "Cancel",
+      "previous": "Previous",
+      "next": "Next",
+      "save": "Save Publication List"
+    },
+    "makeAgentPublic": {
+      "title": "Make Agents Public",
+      "steps": {
+        "selectAgents": "Select Agents",
+        "confirm": "Confirm"
+      },
+      "selectAtLeastOne": "Please select at least one agent to make public",
+      "success": "Successfully made {{total}} agent(s) public!",
+      "failed": "Failed to make agents public. Please try again.",
+      "step1Title": "Select Agents to Make Public",
+      "selectAll": "Select All",
+      "description": "Select the agents you want to be visible on the public model hub. Users will still require a valid Virtual Key to use these agents.",
+      "noAgents": "No agents available.",
+      "moreSkills": "+{{extra}} more",
+      "selectedCount_one": "<strong>{{count}}</strong> agent selected",
+      "selectedCount_other": "<strong>{{count}}</strong> agents selected",
+      "step2Title": "Confirm Making Agents Public",
+      "warning": "<strong>Warning:</strong> Once you make these agents public, anyone who can go to the <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.",
+      "toBeMadePublic": "Agents to be made public:",
+      "total_one": "Total: <strong>{{count}}</strong> agent will be made public",
+      "total_other": "Total: <strong>{{count}}</strong> agents will be made public",
+      "cancel": "Cancel",
+      "previous": "Previous",
+      "next": "Next",
+      "makePublic": "Make Public"
+    },
+    "makeModelPublic": {
+      "title": "Make Models Public",
+      "steps": {
+        "selectModels": "Select Models",
+        "confirm": "Confirm"
+      },
+      "selectAtLeastOne": "Please select at least one model to make public",
+      "success": "Successfully made {{total}} model group(s) public!",
+      "failed": "Failed to make model groups public. Please try again.",
+      "step1Title": "Select Models to Make Public",
+      "selectAll": "Select All",
+      "description": "Select the models you want to be visible on the public model hub. Users will still require a valid Virtual Key to use these models.",
+      "noMatch": "No models match the current filters.",
+      "selectedCount_one": "<strong>{{count}}</strong> model selected",
+      "selectedCount_other": "<strong>{{count}}</strong> models selected",
+      "step2Title": "Confirm Making Models Public",
+      "warning": "<strong>Warning:</strong> Once you make these models public, anyone who can go to the <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.",
+      "toBeMadePublic": "Models to be made public:",
+      "total_one": "Total: <strong>{{count}}</strong> model will be made public",
+      "total_other": "Total: <strong>{{count}}</strong> models will be made public",
+      "cancel": "Cancel",
+      "previous": "Previous",
+      "next": "Next",
+      "makePublic": "Make Public"
+    }
+  },
+  "publicModelHub": {
+    "modelHubPage": {
+      "loading": "Loading..."
+    },
+    "modelHubTablePage": {
+      "loading": "Loading..."
+    },
+    "tabs": {
+      "models": "Models",
+      "agents": "Agents",
+      "mcpShort": "MCP",
+      "mcpServers": "MCP servers",
+      "skills": "Skills"
+    },
+    "header": {
+      "title": "AI Hub",
+      "operational": "Operational",
+      "description": "Models, agents, MCP servers and skills you can call through this gateway"
+    },
+    "linksMenu": {
+      "trigger": "Links",
+      "version": "LiteLLM v{{version}}"
+    },
+    "baseUrlField": {
+      "label": "Base URL",
+      "copy": "Copy base URL",
+      "hint": "Use your LiteLLM key as the API key in any OpenAI-compatible SDK"
+    },
+    "healthBadge": {
+      "responseTime": "Response time",
+      "milliseconds": "{{value}} ms",
+      "lastChecked": "Last checked"
+    },
+    "format": {
+      "modes": {
+        "chat": "Chat",
+        "completion": "Completion",
+        "embedding": "Embedding",
+        "rerank": "Rerank",
+        "imageGeneration": "Image generation",
+        "imageEdit": "Image edit",
+        "audioSpeech": "Text to speech",
+        "audioTranscription": "Transcription",
+        "videoGeneration": "Video generation",
+        "realtime": "Realtime",
+        "responses": "Responses",
+        "batch": "Batch",
+        "ocr": "OCR",
+        "decisions": "Decisions"
+      },
+      "free": "Free",
+      "capabilities": {
+        "vision": "Vision",
+        "functionCalling": "Function calling",
+        "reasoning": "Reasoning",
+        "webSearch": "Web search",
+        "parallelFunctionCalling": "Parallel function calling",
+        "urlContext": "URL context",
+        "fastMode": "Fast mode"
+      },
+      "notChecked": "Not checked",
+      "relativeTime": {
+        "justNow": "just now",
+        "minutes": "{{minutes}} min ago",
+        "hours": "{{hours}} h ago",
+        "days_one": "{{count}} day ago",
+        "days_other": "{{count}} days ago"
+      },
+      "mcpAuth": {
+        "none": "None",
+        "oauth2": "OAuth",
+        "bearerToken": "Bearer token",
+        "apiKey": "API key"
+      }
+    },
+    "snippets": {
+      "retrieveAgentCard": "Retrieve the agent card",
+      "callAgent": "Call the agent"
+    },
+    "noResults": {
+      "noneYet": "No {{noun}} published yet",
+      "noMatchQuery": "No {{noun}} match \"{{query}}\"",
+      "noMatchFilters": "No {{noun}} match these filters",
+      "filteredHint": "Try a shorter search or fewer filters",
+      "emptyHint": "Your admin publishes them from the AI Hub page",
+      "clearFilters": "Clear filters"
+    },
+    "notEnabled": {
+      "title": "This AI Hub isn't available",
+      "description": "Ask your proxy admin to make it public from their Admin UI"
+    },
+    "loadFailed": {
+      "title": "Couldn't load {{noun}}",
+      "description": "The gateway returned an error. Try again in a moment",
+      "retry": "Try again"
+    },
+    "notListed": {
+      "title": "“{{name}}” isn't listed here",
+      "description": "It may have been renamed or unpublished"
+    },
+    "filterChip": {
+      "search": "Search {{noun}}",
+      "empty": "No {{noun}} found",
+      "clear": "Clear {{label}} filter"
+    },
+    "copyIconButton": {
+      "copied": "Copied"
+    },
+    "codeBlock": {
+      "copyCode": "Copy code"
+    },
+    "endpointField": {
+      "label": "Endpoint",
+      "copy": "Copy endpoint"
+    },
+    "searchInput": {
+      "clear": "Clear search"
+    },
+    "inspectorHeader": {
+      "close": "Close"
+    },
+    "masterDetail": {
+      "details": "Details"
+    },
+    "modelsPager": {
+      "range": "{{start}}–{{end}} of {{total}}",
+      "previous": "Previous page",
+      "next": "Next page"
+    },
+    "sortControl": {
+      "sortBy": "Sort by",
+      "sort": "Sort",
+      "descending": "Sort descending"
+    },
+    "modelsToolbar": {
+      "search": "Search models",
+      "provider": "Provider",
+      "providerNoun": "providers",
+      "mode": "Mode",
+      "modeNoun": "modes",
+      "features": "Features",
+      "featureNoun": "features"
+    },
+    "modelPrices": {
+      "free": "Free",
+      "freeDirection": "Free {{direction}}",
+      "perMillion": "{{price}} / 1M {{direction}}",
+      "in": "in",
+      "out": "out"
+    },
+    "modelRow": {
+      "context": "{{tokens}} context"
+    },
+    "modelsPane": {
+      "noun": "models"
+    },
+    "modelInspector": {
+      "summary": "{{mode}} model from {{providers}}",
+      "tokens": "{{tokens}} tokens",
+      "facts": {
+        "mode": "Mode",
+        "context": "Context",
+        "maxOutput": "Max output",
+        "inputPrice": "Input / 1M tokens",
+        "outputPrice": "Output / 1M tokens",
+        "rpm": "Requests per minute",
+        "tpm": "Tokens per minute",
+        "providers": "Providers",
+        "provider": "Provider",
+        "tags": "Tags"
+      },
+      "callThisModel": {
+        "title": "Call this model"
+      },
+      "customMetadata": {
+        "title": "Custom metadata"
+      },
+      "supportedParams": {
+        "title": "Supported OpenAI parameters",
+        "show": "Show {{total}}"
+      },
+      "copyName": "Copy model name",
+      "wildcard": {
+        "title": "Wildcard model",
+        "description": "Call it as <example/>, with any model name this provider offers"
+      },
+      "capabilities": "Capabilities"
+    },
+    "agentInspector": {
+      "copyName": "Copy agent name",
+      "facts": {
+        "version": "Version",
+        "owner": "Owner",
+        "protocol": "Protocol",
+        "inputOutput": "Input / output",
+        "capabilities": "Capabilities"
+      },
+      "documentation": "Read the documentation",
+      "skills": "Skills",
+      "callAgent": "Call this agent",
+      "step": "Step {{step}}: {{title}}"
+    },
+    "skillInspector": {
+      "copyName": "Copy skill name",
+      "facts": {
+        "domain": "Domain",
+        "namespace": "Namespace",
+        "version": "Version",
+        "category": "Category",
+        "source": "Source",
+        "author": "Author",
+        "added": "Added",
+        "keywords": "Keywords"
+      },
+      "install": {
+        "title": "Install in Claude Code",
+        "marketplace": "First time only: add this marketplace",
+        "skill": "Then install the skill"
+      }
+    },
+    "mcpInspector": {
+      "copyName": "Copy server name",
+      "facts": {
+        "transport": "Transport",
+        "signIn": "Sign-in",
+        "alias": "Alias"
+      },
+      "connect": "Connect a client"
+    },
+    "resourcePane": {
+      "search": "Search {{noun}}"
+    },
+    "agentsPane": {
+      "noun": "agents",
+      "filterLabel": "Skill tag",
+      "filterNoun": "skill tags"
+    },
+    "mcpPane": {
+      "noun": "MCP servers",
+      "filterLabel": "Transport",
+      "filterNoun": "transports"
+    },
+    "skillsPane": {
+      "noun": "skills",
+      "filterLabel": "Domain",
+      "filterNoun": "domains"
+    }
+  },
+  "shell": {
+    "navbar": {
+      "expandSidebar": "Expand sidebar",
+      "collapseSidebar": "Collapse sidebar",
+      "logoAlt": "LiteLLM Brand",
+      "thanks": "Thanks for using LiteLLM!",
+      "productDocs": "Product documentation"
+    },
+    "viewSwitcher": {
+      "chat": "Chat",
+      "aiGateway": "AI Gateway",
+      "chatDescription": "Chat UI for using LLMs, MCPs, Agents",
+      "chatDisabled": "Admins can enable in Settings",
+      "moyaiDescription": "Cloud Coding Agent",
+      "trigger": "Switch workspace, current: {{workspace}}"
+    },
+    "navDisplayName": {
+      "account": "Account"
+    },
+    "docsLink": {
+      "label": "Docs"
+    },
+    "userMenu": {
+      "premium": "Premium",
+      "standard": "Standard",
+      "upgradeHint": "Upgrade to Premium for advanced features",
+      "userId": "User ID",
+      "copyUserId": "Copy User ID",
+      "role": "Role",
+      "hideNewBadges": "Hide New Feature Indicators",
+      "toggleHideNewBadges": "Toggle hide new feature indicators",
+      "hidePrompts": "Hide All Prompts",
+      "toggleHidePrompts": "Toggle hide all prompts",
+      "hideBlogPosts": "Hide Blog Posts",
+      "toggleHideBlogPosts": "Toggle hide blog posts",
+      "hideBouncingIcon": "Hide Bouncing Icon",
+      "toggleHideBouncingIcon": "Toggle hide bouncing icon",
+      "hideAgent": "Hide {{agent}}",
+      "toggleHideAgent": "Toggle hide {{agent}}",
+      "triggerAria": "Account menu — {{role}} — signed in as {{identity}}",
+      "unknownRole": "Unknown role",
+      "unknownIdentity": "unknown",
+      "changePassword": "Change Password",
+      "logout": "Logout"
+    },
+    "notifications": {
+      "release": {
+        "newFeatures_one": "{{count}} new feature",
+        "newFeatures_other": "{{count}} new features",
+        "fixes_one": "{{count}} fix",
+        "fixes_other": "{{count}} fixes",
+        "otherUpdates_one": "and {{count}} other update",
+        "otherUpdates_other": "and {{count}} other updates"
+      },
+      "upgrade": {
+        "title": "LiteLLM v{{version}} is available",
+        "description": "{{summary}}. Your current version is v{{current}}",
+        "link": "View release notes"
+      },
+      "announcement": {
+        "markAsRead": "Mark as read"
+      },
+      "bell": {
+        "trigger": "Notifications",
+        "triggerUnread": "Notifications, {{unread}} unread",
+        "title": "What's new"
+      }
+    },
+    "dashboardCommunityLinks": {
+      "label": "Community links",
+      "joinSlack": "Join Slack",
+      "joinDiscord": "Join Discord",
+      "github": "LiteLLM on GitHub"
+    },
+    "dashboardResources": {
+      "latestPosts": "Latest posts",
+      "loadingPosts": "Loading posts…",
+      "retryPosts": "Retry loading posts",
+      "helpAndResources": "Help and resources"
+    },
+    "blogDropdown": {
+      "loading": "loading",
+      "failed": "Failed to load posts",
+      "retry": "Retry",
+      "empty": "No posts available",
+      "viewAll": "View all posts",
+      "trigger": "Blog"
+    },
+    "communityButtons": {
+      "label": "Community links",
+      "slackLabel": "Join Slack",
+      "slackTooltip": "LiteLLM Slack community",
+      "githubLabel": "LiteLLM on GitHub",
+      "githubTooltip": "LiteLLM on GitHub"
+    },
+    "workerDropdown": {
+      "trigger": "Switch worker, current: {{worker}}",
+      "label": "Worker",
+      "searchLabel": "Search workers",
+      "searchPlaceholder": "Search workers…",
+      "empty": "No matching workers"
+    },
+    "commandPalette": {
+      "title": "Command palette",
+      "description": "Search for a page, an action or a virtual key",
+      "types": {
+        "key": "Key",
+        "page": "Page",
+        "action": "Action"
+      },
+      "empty": {
+        "keyError": "Unable to search keys",
+        "noRecentKeys": "No recent keys",
+        "noResults": "No results for “{{query}}”"
+      },
+      "groups": {
+        "pages": "Pages",
+        "actions": "Actions",
+        "keys": "Keys",
+        "recentKeys": "Recent keys"
+      },
+      "searchKeys": {
+        "title": "Search virtual keys",
+        "subtitle": "Find a key by alias or ID"
+      },
+      "unnamedKey": "Unnamed key",
+      "filterKeys": {
+        "title": "Filter the keys table for “{{query}}”",
+        "subtitle": "Open Virtual Keys with this search applied"
+      },
+      "label": "Search",
+      "virtualKeys": "Virtual Keys",
+      "placeholder": {
+        "keys": "Search keys by alias or ID…",
+        "global": "Search pages and actions…"
+      },
+      "searching": "Searching…"
+    },
+    "commandPaletteUtils": {
+      "ctrlShortcut": "Ctrl K"
+    },
+    "shortcutLabel": {
+      "ctrlShortcut": "Ctrl K"
+    },
+    "commandPaletteHint": {
+      "keys": "<press>Press</press><shortcut/><action>to search keys</action>",
+      "global": "<press>Press</press><shortcut/><action>to search or jump to a page</action>",
+      "dismiss": "Dismiss search hint"
+    },
+    "commandPaletteTrigger": {
+      "keys": "Search keys…",
+      "global": "Search or jump to…",
+      "search": "Search"
+    },
+    "deploymentHealth": {
+      "activeWarnings_one": "{{count}} active warning",
+      "activeWarnings_other": "{{count}} active warnings",
+      "icon": {
+        "withCount": "Deployment health, {{warnings}}",
+        "label": "Deployment health"
+      },
+      "link": {
+        "label": "Deployment health"
+      },
+      "banner": {
+        "label": "Deployment alert",
+        "review": "Review"
+      }
+    },
+    "deploymentWarnings": {
+      "envCredentialLogin": {
+        "fix": "Anyone with <username/>/<password/> (or the master key, when <password/> is unset) can sign in as a proxy admin with a shared static secret. Create a regular admin account with its own password, then set <setting/>"
+      },
+      "noRedis": {
+        "fix": "This proxy runs more than one worker (or the worker count could not be verified). Without Redis, rate limits, budgets, router state and cache invalidation are per worker, so limits are enforced once per worker and spend can overshoot"
+      },
+      "detailedDebug": {
+        "fix": "<loglevel/> logs extensive diagnostic information and significantly slows the proxy. Use it only while troubleshooting and turn it off in production"
+      },
+      "license": {
+        "expiresToday": "expires today",
+        "expiresIn_one": "expires in {{count}} day",
+        "expiresIn_other": "expires in {{count}} days",
+        "expiredTitle": "Your LiteLLM Enterprise license expired on {{date}}",
+        "expiredFix": "Enterprise features are now disabled. Reach out to <sales/> to restore access",
+        "expiringTitle": "Your LiteLLM Enterprise license {{countdown}} ({{date}})",
+        "expiringFix": "Renew before it lapses to keep enterprise features. Reach out to <sales/>"
+      }
+    },
+    "deploymentHealthPanel": {
+      "snooze": {
+        "oneDay": "Snooze for 1 day",
+        "sevenDays": "Snooze for 7 days",
+        "thirtyDays": "Snooze for 30 days",
+        "trigger": "Snooze",
+        "triggerAria": "Snooze {{title}}",
+        "forever": "Ignore forever"
+      },
+      "severity": {
+        "critical": "Critical",
+        "warning": "Warnings"
+      },
+      "restore": {
+        "label": "Restore",
+        "aria": "Restore {{title}}"
+      },
+      "ignoreMeta": {
+        "envVar": "By env var <envvar/>",
+        "until": "Until {{time}}",
+        "byUser": "· by {{user}}",
+        "since": "Since {{date}} · by {{user}}"
+      },
+      "ignoreStatus": {
+        "snoozed": "Snoozed",
+        "ignored": "Ignored"
+      },
+      "item": {
+        "docs": "Read the docs"
+      },
+      "empty": {
+        "title": "No active warnings",
+        "ignoredBelow": "Snoozed and ignored warnings are listed below",
+        "description": "Deployment warnings show up here when this proxy’s setup needs attention"
+      },
+      "body": {
+        "loadError": "Could not load deployment warnings",
+        "loading": "Loading deployment warnings",
+        "ignoredGroup": "Ignored and snoozed"
+      },
+      "sheet": {
+        "title": "Deployment health",
+        "description": "Warnings about how this proxy is deployed"
+      }
+    },
+    "agentControlPlane": {
+      "plugin": "Plugin",
+      "configure": "Configure the plugin URL in settings"
+    },
+    "dashboardShell": {
+      "navigation": "Navigation",
+      "openNavigation": "Open navigation"
+    },
+    "telemetryEnvNotice": {
+      "vetoed": "Telemetry is turned off by an environment variable",
+      "set": "Telemetry environment variables are set",
+      "setOnProxy": "Set on this proxy: {{variables}}.",
+      "readOnly": "These override the settings on this page, which are read-only until they are removed.",
+      "editable": "The groups below can still be changed here."
+    },
+    "deprecationBanner": {
+      "title": "{{featureName}} is deprecated",
+      "description": "<feature/> will be removed in the near future. See the <discussion>deprecation discussion</discussion> for details."
+    },
+    "loadingScreen": {
+      "loading": "Loading..."
+    },
+    "logo": {
+      "alt": "{{name}} logo"
+    },
+    "adminOnlyNotice": {
+      "description": "{{pageTitle}} is only available to admin users."
+    },
+    "pageHeader": {
+      "controls": "Page controls"
+    }
+  },
+  "login": {
+    "schema": {
+      "usernameRequired": "Please enter your username",
+      "passwordRequired": "Please enter your password"
+    },
+    "ssoNotice": {
+      "title": "Single Sign-On (SSO) is enabled. LiteLLM no longer automatically redirects to the SSO login flow upon loading this page. To re-enable auto-redirect-to-SSO, set <setting/> in your environment configuration.",
+      "close": "Close"
+    },
+    "adminDisabled": {
+      "title": "Admin UI Disabled",
+      "description": "The Admin UI has been disabled by the administrator. To re-enable it, please update the following environment variable:"
+    },
+    "form": {
+      "title": "Login",
+      "subtitle": "Access your LiteLLM Admin UI.",
+      "defaultCredentials": {
+        "title": "Default Credentials",
+        "body": "By default, Username is <username/> and Password is your set LiteLLM Proxy<masterkey/>.",
+        "help": "Need to set UI credentials or SSO? <docs>Check the documentation</docs>."
+      },
+      "worker": {
+        "label": "Worker",
+        "placeholder": "Choose a worker to connect to"
+      },
+      "username": {
+        "label": "Username",
+        "placeholder": "Enter your username"
+      },
+      "password": {
+        "label": "Password",
+        "placeholder": "Enter your password"
+      },
+      "loading": "loading",
+      "submitting": "Logging in...",
+      "submit": "Login",
+      "sso": "Login with SSO",
+      "ssoUnavailable": "Please configure SSO to log in with SSO."
+    }
+  },
+  "onboarding": {
+    "page": {
+      "loading": "Loading..."
+    },
+    "form": {
+      "errors": {
+        "sessionFailed": "Failed to start session. Please try again.",
+        "submitFailed": "Failed to submit. Please try again."
+      }
+    },
+    "formBody": {
+      "schema": {
+        "passwordRequired": "password required to sign up"
+      },
+      "resetPassword": "Reset Password",
+      "signUp": "Sign Up",
+      "resetDescription": "Reset your password to access Admin UI.",
+      "signUpDescription": "Claim your user account to login to Admin UI.",
+      "sso": {
+        "title": "SSO",
+        "description": "SSO is under the Enterprise Tier.",
+        "trial": "Get Free Trial"
+      },
+      "email": "Email Address",
+      "password": {
+        "label": "Password",
+        "resetHint": "Enter your new password",
+        "signUpHint": "Create a password for your account"
+      },
+      "loading": "loading"
+    },
+    "errorView": {
+      "title": "Failed to load invitation",
+      "description": "The invitation link may be invalid or expired.",
+      "back": "Back to Login"
+    },
+    "loadingView": {
+      "label": "Loading invitation"
+    }
+  },
+  "changePassword": {
+    "schema": {
+      "currentRequired": "Current password is required",
+      "newRequired": "New password is required",
+      "confirmRequired": "Confirm your new password",
+      "mismatch": "New passwords do not match"
+    },
+    "form": {
+      "toasts": {
+        "updatedSignIn": "Password updated. Please log in with your new password.",
+        "updated": "Password updated"
+      },
+      "title": "Change Password",
+      "description": "Enter your current password and choose a new one. The new password must meet this proxy's password policy.",
+      "resetRequired": "Your password must be changed before you can use the dashboard: it was either found in a known data breach or set by an administrator as a temporary password. After updating it, you will be signed out to log in again.",
+      "currentPassword": "Current Password",
+      "newPassword": "New Password",
+      "confirmNewPassword": "Confirm New Password",
+      "loading": "loading",
+      "submit": "Change Password"
+    }
+  },
+  "home": {
+    "page": {
+      "title": "Home",
+      "createKey": "Create New Virtual Key",
+      "usageAria": "Usage, last {{days}} days",
+      "usageFailed": "Failed to load usage",
+      "retry": "Retry",
+      "whatsNew": "What's new in LiteLLM?",
+      "leaderboard": {
+        "title": "Leaderboard",
+        "subtitle": "Share of tokens over the last {{days}} days, with the change between the first and second half of the period"
+      }
+    },
+    "updatesFeed": {
+      "title": "Updates",
+      "viewAll": "View all",
+      "failed": "Failed to load posts",
+      "retry": "Retry",
+      "empty": "No posts yet"
+    }
+  },
+  "apiReference": {
+    "page": {
+      "featureName": "The API Reference tab"
+    },
+    "view": {
+      "title": "OpenAI Compatible Proxy: API Reference",
+      "description": "LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url to point to your litellm proxy. Example Below"
+    },
+    "docLink": {
+      "title": "Open documentation in a new tab",
+      "label": "API Reference Docs",
+      "newTab": "(opens in a new tab)"
+    }
+  },
+  "uiTheme": {
+    "settings": {
+      "toasts": {
+        "updated": "Theme settings updated successfully!",
+        "updateFailed": "Failed to update theme settings",
+        "reset": "Theme settings reset to default!",
+        "resetFailed": "Failed to reset theme settings"
+      },
+      "title": "UI Theme Customization",
+      "description": "Customize your LiteLLM admin dashboard with a custom logo and favicon.",
+      "logoUrl": {
+        "label": "Custom Logo URL",
+        "hint": "Enter a URL for your custom logo or leave empty for default"
+      },
+      "logoUrlDark": {
+        "label": "Custom Logo URL (dark mode)",
+        "hint": "Enter a URL for a logo suited to dark backgrounds, or leave empty to reuse the logo above"
+      },
+      "faviconUrl": {
+        "label": "Custom Favicon URL",
+        "hint": "Enter a URL for your custom favicon (.ico, .png, or .svg) or leave empty for default"
+      },
+      "saveButton": "Save Changes",
+      "resetButton": "Reset to Default"
+    }
+  },
+  "ui": {
+    "breadcrumb": {
+      "label": "breadcrumb"
+    },
+    "combobox": {
+      "clear": "Clear"
+    },
+    "command": {
+      "title": "Command Palette",
+      "description": "Search for a command to run..."
+    },
+    "dialog": {
+      "contentClose": "Close",
+      "footerClose": "Close"
+    },
+    "messageScroller": {
+      "scrollToEnd": "Scroll to end",
+      "scrollToStart": "Scroll to start"
+    },
+    "resizableSheetContent": {
+      "resize": "Resize drawer",
+      "collapse": "Collapse drawer",
+      "expand": "Expand drawer"
+    },
+    "sheet": {
+      "close": "Close"
+    },
+    "spinner": {
+      "loading": "Loading"
+    }
+  },
+  "shared": {
+    "advancedDatePicker": {
+      "selectTimeRange": "Select Time Range",
+      "invalidDateFormat": "Invalid date format",
+      "endBeforeStart": "End date cannot be before start date",
+      "selectDateRange": "Select date range",
+      "relativeTime": "Relative time",
+      "startAndEndDates": "Start and end dates",
+      "startDate": "Start date",
+      "endDate": "End date",
+      "from": "From:",
+      "to": "To:",
+      "cancel": "Cancel",
+      "apply": "Apply"
+    },
+    "budgetPeriodTooltip": {
+      "budgetPeriod": "Budget period: {{start}} to {{end}} ({{timeZone}})",
+      "nextReset": "Next reset: {{date}} ({{timeZone}})",
+      "spendLine": "{{label}}: ${{amount}}",
+      "spendThisPeriod": "Spend this period",
+      "spendSoFar": "Spend so far",
+      "noBudgetSet": "No budget set",
+      "maxBudget": "Max budget: ${{amount}}",
+      "lifetimeBudget": "Lifetime budget, never resets",
+      "resetInterval": "Reset interval: {{interval}}"
+    },
+    "charts": {
+      "areaChart": {
+        "noData": "No data"
+      },
+      "barChart": {
+        "noData": "No data"
+      },
+      "stackedUsageChart": {
+        "total": "Total"
+      }
+    },
+    "copyButton": {
+      "copied": "Copied"
+    },
+    "createdKeyDisplay": {
+      "saveWarning": "Please save this secret key somewhere safe and accessible. For security reasons, <bold>you will not be able to view it again</bold> through your LiteLLM account. If you lose this secret key, you will need to generate a new one.",
+      "virtualKey": "Virtual Key:",
+      "copied": "Copied!",
+      "copyVirtualKey": "Copy Virtual Key",
+      "gatewayUrl": "Gateway URL:",
+      "copyUrl": "Copy URL",
+      "agentInstructions": "Agent instructions",
+      "copyInstructions": "Copy instructions",
+      "hide": "Hide",
+      "show": "Show",
+      "toasts": {
+        "keyCopied": "Key copied to clipboard",
+        "instructionsCopied": "Instructions copied",
+        "gatewayUrlCopied": "Gateway URL copied to clipboard"
+      }
+    },
+    "dataTable": {
+      "loadingMessage": "Loading…",
+      "defaultEmptyState": {
+        "title": "No results",
+        "description": "No rows match your search or filters."
+      },
+      "filterDrawer": {
+        "title": "Filters",
+        "apply": "Apply Filters",
+        "reset": "Reset"
+      },
+      "pagination": {
+        "rowsPerPage": "Rows per page",
+        "noResults": "No results",
+        "showing": "Showing {{start}}-{{end}} of {{total}}",
+        "pageOf": "Page {{page}} of {{total}}",
+        "firstPage": "Go to first page",
+        "previousPage": "Go to previous page",
+        "nextPage": "Go to next page",
+        "lastPage": "Go to last page"
+      },
+      "selectionColumn": {
+        "selectAllRows": "Select all rows",
+        "selectRow": "Select row"
+      },
+      "sortHeader": {
+        "sortOptionsFor": "Sort options for {{column}}",
+        "ascending": "Ascending",
+        "descending": "Descending",
+        "reset": "Reset"
+      },
+      "multiSortHeader": {
+        "fieldAscending": "{{field}} ascending",
+        "fieldDescending": "{{field}} descending",
+        "sortOptionsFor": "Sort options for {{fields}}",
+        "fieldSeparator": " or ",
+        "reset": "Reset"
+      },
+      "toolbar": {
+        "search": "Search",
+        "removeFilter": "Remove {{label}} filter",
+        "clearAll": "Clear all",
+        "refresh": "Refresh",
+        "columns": "Columns",
+        "filters": "Filters"
+      },
+      "viewOptions": {
+        "view": "View"
+      }
+    },
+    "errorState": {
+      "title": "Failed to load",
+      "retry": "Retry"
+    },
+    "errorUtils": {
+      "unknownError": "An unknown error occurred"
+    },
+    "inheritedBudgetHint": {
+      "memberAlias": "{{member}} in {{team}}",
+      "intro": "This key has no budget of its own, but its spend still counts toward:"
+    },
+    "multiSelect": {
+      "placeholder": "Select options",
+      "empty": "No options found",
+      "createOption": "Create \"{{value}}\"",
+      "loading": "Loading...",
+      "clearAll": "Clear all"
+    },
+    "numericalInput": {
+      "placeholder": "Enter a numerical value"
+    },
+    "paginatedMultiSelect": {
+      "placeholder": "Search…",
+      "empty": "No results",
+      "loading": "Loading…"
+    },
+    "paginatedSearchSelect": {
+      "placeholder": "Search…",
+      "empty": "No results",
+      "loading": "Loading…"
+    },
+    "passwordInput": {
+      "hide": "Hide password",
+      "show": "Show password"
+    },
+    "savingsTiles": {
+      "total": {
+        "label": "Total recorded savings",
+        "loading": "Loading...",
+        "hint": "Compression + prompt caching + auto-router",
+        "info": "The sum of recorded savings in the three tiles beside it. Auto-router requests without an estimate are excluded. Its caching term is the LiteLLM-injected share; caching supplied by clients or providers appears only in the caching tile's Total figure."
+      },
+      "compression": {
+        "label": "Compression savings",
+        "hint": "{{tokens}} tokens compressed",
+        "info": "Tokens Headroom removed before the call, priced at the model's input rate."
+      },
+      "caching": {
+        "label": "Prompt caching savings",
+        "hint": "LiteLLM injected",
+        "total": "Total",
+        "info": "What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. The headline figure is the share LiteLLM earned by inserting the breakpoints itself, through configured injection points or auto prompt caching. The total beside it also counts requests that arrived with their own cache_control and providers that cache implicitly. Either can be negative on traffic that writes more cache than it reuses, which is why the headline is not always the smaller of the two."
+      },
+      "autorouter": {
+        "label": "Auto-router savings",
+        "hint": "Recorded estimates subtotal",
+        "info": "Sum of available per-request savings estimates against each router's highest-tier baseline, net of classifier cost. Requests without an estimate contribute nothing to this subtotal; this does not mean they saved zero. Historical records retain the estimator used when they were written. The Auto-router usage tab shows coverage for current estimates."
+      }
+    },
+    "scopedSavingsTab": {
+      "perDay": "Per day",
+      "runningTotal": "Running total saved",
+      "savedInterval": "Saved {{interval}}",
+      "rangeUtc": "{{range}} (UTC)",
+      "bucketedByUtc": "Spend is bucketed by UTC day",
+      "unavailable": "Savings are unavailable for this range. Try another date range or reopen this tab.",
+      "title": "Savings",
+      "cumulative": "Cumulative",
+      "loading": "Loading savings...",
+      "noUsage": "No usage recorded for this {{entityType}} in this range."
+    },
+    "searchSelect": {
+      "placeholder": "Select…",
+      "empty": "No results"
+    },
+    "summaryCard": {
+      "infoLabel": "How {{label}} is calculated"
+    },
+    "tableCells": {
+      "autoRouterTag": {
+        "title": "Routed by auto-router \"{{modelGroup}}\""
+      },
+      "idCell": {
+        "copyId": "Copy ID"
+      },
+      "modelsCell": {
+        "allProxyModels": "All Proxy Models",
+        "scopedTooltip": "Scoped to {{scope}} routes; this key cannot call any models",
+        "noModelAccess": "No model access",
+        "more": "+{{number}} more"
+      },
+      "spendBudgetCell": {
+        "unlimited": "· Unlimited",
+        "memberBudget": "· {{spend}} of ${{budget}} (team member)",
+        "ofBudget": "of ${{budget}}",
+        "meterValue": "{{spend}} of ${{budget}}",
+        "memberSpend": "team member spend {{spend}}"
+      },
+      "userPopoverCell": {
+        "userAlias": "User Alias",
+        "userEmail": "User Email",
+        "userId": "User ID",
+        "copyLabel": "Copy {{label}}"
+      }
+    }
+  },
+  "commonComponents": {
+    "checkOpenapiSchema": {
+      "typeHelp": {
+        "string": "Text input",
+        "number": "Numeric input",
+        "integer": "Whole number input",
+        "boolean": "True/False value",
+        "fallback": "Text input"
+      },
+      "fieldHelp": {
+        "maxBudget": "Enter maximum budget in USD (e.g., 100.50)",
+        "budgetDuration": "Select a time period for budget reset",
+        "tpmLimit": "Enter maximum tokens per minute (whole number)",
+        "rpmLimit": "Enter maximum requests per minute (whole number)",
+        "duration": "Enter duration (e.g., 30s, 24h, 7d)",
+        "metadata": "Enter JSON object with key-value pairs\nExample: {\"team\": \"research\", \"project\": \"nlp\"}",
+        "config": "Enter configuration as JSON object\nExample: {\"setting\": \"value\"}",
+        "permissions": "Enter comma-separated permission strings",
+        "enforcedParams": "Enter parameters as JSON object\nExample: {\"param\": \"value\"}",
+        "blocked": "Enter true/false or specific block conditions",
+        "aliases": "Enter aliases as JSON object\nExample: {\"alias1\": \"value1\", \"alias2\": \"value2\"}",
+        "models": "Select one or more model names",
+        "keyAlias": "Enter a unique identifier for this key",
+        "tags": "Enter comma-separated tag strings"
+      },
+      "jsonHelp": "{{helpText}}\nMust be valid JSON format",
+      "enumHelp": "Select from available options\nAllowed values: {{values}}",
+      "fetchFailed": "Failed to fetch schema",
+      "required": "{{label}} is required",
+      "invalidJson": "Please enter valid JSON",
+      "jsonPlaceholder": "Enter as JSON",
+      "durationPlaceholder": "eg: 30s, 30h, 30d",
+      "error": "Error: {{error}}"
+    },
+    "defaultProxyAdminTag": {
+      "label": "Default Proxy Admin"
+    },
+    "deleteResourceModal": {
+      "typeToConfirm": "Type <confirmation/> to confirm deletion:",
+      "cancel": "Cancel",
+      "deleting": "Deleting...",
+      "delete": "Delete"
+    }
+  },
+  "networking": {
+    "sessionExpired": "UI Session Expired. Logging out.",
+    "modelCreated": "Model {{modelName}} created successfully",
+    "noModelsExist": "No Models Exist. Click Add Model to get started.",
+    "keyInfoFetchFailed": "Failed to fetch key info - {{error}}",
+    "teamUpdateFailed": "Failed to update team settings: {{error}}",
+    "configValueUpdated": "Successfully updated value!",
+    "configFieldReset": "Field reset on proxy",
+    "passThroughEndpointUpdated": "Pass through endpoint updated successfully"
+  },
+  "toast": {
+    "titles": {
+      "budgetExceeded": "Budget Exceeded",
+      "serviceUnavailable": "Service Unavailable",
+      "authenticationError": "Authentication Error",
+      "accessDenied": "Access Denied",
+      "notFound": "Not Found",
+      "validationError": "Validation Error",
+      "requestError": "Request Error",
+      "alreadyExists": "Already Exists",
+      "rateLimitExceeded": "Rate Limit Exceeded",
+      "serverError": "Server Error",
+      "error": "Error"
+    }
+  },
+  "utils": {
+    "dataUtils": {
+      "copiedToClipboard": "Copied to clipboard",
+      "copyFailed": "Failed to copy to clipboard"
+    },
+    "textUtils": {
+      "invalidJson": "Please enter valid JSON"
+    }
+  },
+  "codeBlock": {
+    "copyCode": "Copy code"
   },
   "chat": {
     "page": {

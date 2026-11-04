@@ -2,6 +2,7 @@
 
 import { Copy, Search, X } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -11,11 +12,13 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { ItemTitle } from "@/components/ui/item";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
+import i18n from "@/i18n/i18n";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 import { providerLogo, providerName, SECTION_TITLE } from "./hubFormat";
 
 export function CopyIconButton({ value, label, className }: { value: string; label: string; className?: string }) {
+  const { t } = useTranslation();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -25,7 +28,7 @@ export function CopyIconButton({ value, label, className }: { value: string; lab
             size="icon-sm"
             aria-label={label}
             className={cn("text-muted-foreground", className)}
-            onClick={() => void copyToClipboard(value, "Copied")}
+            onClick={() => void copyToClipboard(value, t("publicModelHub.copyIconButton.copied"))}
           />
         }
       >
@@ -36,7 +39,13 @@ export function CopyIconButton({ value, label, className }: { value: string; lab
   );
 }
 
-export function CodeBlock({ code, label = "Copy code" }: { code: string; label?: string }) {
+export function CodeBlock({
+  code,
+  label = i18n.t("publicModelHub.codeBlock.copyCode"),
+}: {
+  code: string;
+  label?: string;
+}) {
   return (
     <div className="relative min-w-0 rounded-lg border border-border bg-muted">
       <CopyIconButton value={code} label={label} className="absolute top-1.5 right-1.5 bg-background" />
@@ -125,13 +134,14 @@ export function Facts({ groups }: { groups: Fact[][] }) {
 }
 
 export function EndpointField({ id, value }: { id: string; value: string }) {
+  const { t } = useTranslation();
   return (
     <Field>
-      <FieldLabel htmlFor={id}>Endpoint</FieldLabel>
+      <FieldLabel htmlFor={id}>{t("publicModelHub.endpointField.label")}</FieldLabel>
       <InputGroup>
         <InputGroupInput id={id} readOnly value={value} className="font-mono text-xs md:text-xs" />
         <InputGroupAddon align="inline-end">
-          <CopyIconButton value={value} label="Copy endpoint" className="size-6" />
+          <CopyIconButton value={value} label={t("publicModelHub.endpointField.copy")} className="size-6" />
         </InputGroupAddon>
       </InputGroup>
     </Field>
@@ -147,6 +157,7 @@ export function SearchInput({
   onChange: (value: string) => void;
   placeholder: string;
 }) {
+  const { t } = useTranslation();
   return (
     <InputGroup className="h-8 min-w-0 flex-1">
       <InputGroupAddon>
@@ -160,7 +171,11 @@ export function SearchInput({
       />
       {value && (
         <InputGroupAddon align="inline-end">
-          <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => onChange("")}>
+          <InputGroupButton
+            size="icon-xs"
+            aria-label={t("publicModelHub.searchInput.clear")}
+            onClick={() => onChange("")}
+          >
             <X />
           </InputGroupButton>
         </InputGroupAddon>
