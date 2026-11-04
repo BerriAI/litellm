@@ -1191,7 +1191,8 @@
         "supports_native_streaming": true,
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "token_count_model": {"model":"anthropic.claude-haiku-4-5-20251001-v1:0","litellm_provider":"bedrock"}
     },
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -16119,7 +16120,8 @@
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 1024,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "token_count_model": {"model":"anthropic.claude-sonnet-4-5-20250929-v1:0","litellm_provider":"bedrock"}
     },
     "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
@@ -16294,7 +16296,8 @@
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 1024,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "token_count_model": {"model":"anthropic.claude-sonnet-4-5-20250929-v1:0","litellm_provider":"bedrock"}
     },
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
         "deprecation_date": "2027-03-30",
@@ -17072,7 +17075,8 @@
         "prompt_cache_min_tokens": 1024,
         "input_cost_per_token_batches": 1.5e-06,
         "output_cost_per_token_batches": 7.5e-06,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "token_count_model": {"model":"anthropic.claude-sonnet-4-5-20250929-v1:0","litellm_provider":"bedrock"}
     },
     "claude-opus-4-5-20251101": {
         "supports_web_search": true,
