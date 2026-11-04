@@ -49,6 +49,7 @@ BatchStatus: TypeAlias = Literal[
 TERMINAL_BATCH_STATUSES: Final[frozenset[str]] = frozenset({"completed", "failed", "cancelled", "expired"})
 _STOP_STATUSES: Final[frozenset[str]] = TERMINAL_BATCH_STATUSES | frozenset({"cancelling"})
 _BATCH_ENDPOINT_ADAPTER: Final[TypeAdapter[BatchEndpoint]] = TypeAdapter(BatchEndpoint)
+_CLIENT_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _CANCEL_POLL_SECONDS: Final = 1.0
 _HEARTBEAT_SECONDS: Final = 30.0
 _STALE_AFTER_SECONDS: Final = 180.0
@@ -350,6 +351,19 @@ def _error_body(error: Exception) -> _ErrorBody:
     return body
 
 
+def _without_client_key_metadata(body: Mapping[str, object]) -> Mapping[str, object]:
+    litellm_metadata: Final = body.get("litellm_metadata")
+    if not isinstance(litellm_metadata, Mapping):
+        return body
+    client_metadata: Final = _CLIENT_METADATA_ADAPTER.validate_python(litellm_metadata)
+    return {
+        **body,
+        "litellm_metadata": {
+            key: value for key, value in client_metadata.items() if not key.startswith("user_api_key_")
+        },
+    }
+
+
 def _line_response(outcome: RowOutcome | ExpiredRow) -> _ResultResponse | None:
     if isinstance(outcome, ExpiredRow):
         return None
@@ -645,7 +659,12 @@ class LiteLLMExecutedBatchRunner:
 
     async def _dispatch(self, run: _BatchRun, line: BatchInputLine) -> Mapping[str, object]:
         params: Final = MappingProxyType(
-            {**line.body, "model": run.model, "metadata": self._row_metadata(run), "disable_fallbacks": True}
+            {
+                **_without_client_key_metadata(line.body),
+                "model": run.model,
+                "metadata": self._row_metadata(run),
+                "disable_fallbacks": True,
+            }
         )
         return _dump(await self._router_call(run.endpoint)(**params))
 

@@ -33,6 +33,7 @@ from litellm.constants import (
     DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY,
 )
 from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
 from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
@@ -381,6 +382,22 @@ def _parse_spend_log_metadata(payload: Mapping[str, object]) -> SpendLogsMetadat
         )
         return _EMPTY_SPEND_LOG_METADATA
     return parsed
+
+
+def _metadata_bucket(value: object) -> Mapping[str, object]:
+    return _SPEND_METADATA_ADAPTER.validate_python(value) if isinstance(value, Mapping) else {}
+
+
+def _virtual_key_team_id(kwargs: Mapping[str, object]) -> str:
+    """The team of the virtual key that authenticated the request, or "" for JWT, custom auth, OAuth2,
+    UI sessions, the master key and team-less keys, whose api_key does not pin a tag row to one team."""
+    params: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs.get("litellm_params") or {})
+    buckets: Final = tuple(_metadata_bucket(params.get(bucket)) for bucket in ("litellm_metadata", "metadata"))
+    marked: Final = next(
+        (bucket for bucket in buckets if bucket.get(USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY) is True), None
+    )
+    team_id: Final = marked.get("user_api_key_team_id") if marked is not None else None
+    return team_id if isinstance(team_id, str) else ""
 
 
 def _is_billed_retry_attempt(metadata: SpendLogsMetadata) -> bool:
@@ -753,6 +770,7 @@ class DBSpendUpdateWriter:
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
                     request_model_access_groups=get_request_model_access_groups(kwargs),
+                    virtual_key_team_id=_virtual_key_team_id(_SPEND_METADATA_ADAPTER.validate_python(kwargs or {})),
                 ),
                 task_name="spend rollups",
             )
@@ -1182,6 +1200,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         request_model_access_groups: Sequence[str] = (),
         project_id: str | None = None,
+        virtual_key_team_id: str = "",
     ):
         """
         Runs every spend-update helper for one request. Each helper goes through
@@ -1281,7 +1300,9 @@ class DBSpendUpdateWriter:
         )
         await self._run_spend_update_step(
             "add_spend_log_transaction_to_daily_tag_transaction",
-            self.add_spend_log_transaction_to_daily_tag_transaction(payload=payload_copy, prisma_client=prisma_client),
+            self.add_spend_log_transaction_to_daily_tag_transaction(
+                payload=payload_copy, prisma_client=prisma_client, virtual_key_team_id=virtual_key_team_id
+            ),
             payload=payload_copy,
         )
         await self._enqueue_model_usage_transaction(payload=payload_copy, prisma_client=prisma_client)
@@ -3116,6 +3137,7 @@ class DBSpendUpdateWriter:
         self,
         payload: SpendLogsPayload,
         prisma_client: PrismaClient | None = None,
+        virtual_key_team_id: str = "",
     ) -> None:
         if prisma_client is None:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
@@ -3137,7 +3159,7 @@ class DBSpendUpdateWriter:
             endpoint_str = base_daily_transaction.get("endpoint") or ""
             daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
             daily_transaction = DailyTagSpendTransaction(
-                tag=tag, **base_daily_transaction, request_id=payload["request_id"]
+                tag=tag, team_id=virtual_key_team_id, **base_daily_transaction, request_id=payload["request_id"]
             )
 
             await self.daily_tag_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})

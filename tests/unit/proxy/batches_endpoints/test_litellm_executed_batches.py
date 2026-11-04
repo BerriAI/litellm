@@ -660,7 +660,9 @@ async def test_resolve_litellm_executed_provider_asks_the_router_for_the_team_sc
     assert (
         await resolve_litellm_executed_provider(router, BATCH_MODEL, "team-1", FakeFilesApiProbe(True, [])) == expected
     )
-    router.registry.return_value.credentials.assert_called_once_with(BATCH_MODEL, form="with_provider", team_id="team-1")
+    router.registry.return_value.credentials.assert_called_once_with(
+        BATCH_MODEL, form="with_provider", team_id="team-1"
+    )
 
 
 async def test_create_stores_a_validating_batch_and_completes_it_in_the_background() -> None:
@@ -709,6 +711,37 @@ async def test_create_dispatches_each_row_with_the_batch_model_and_the_key_metad
         assert metadata["user_api_key_team_id"] == "team-1"
         assert metadata["user_api_key_alias"] == "alias-1"
         assert metadata["user_api_key_user_email"] == "user@example.com"
+
+
+@pytest.mark.parametrize(("via_virtual_key", "expected"), [(True, "team-1"), (False, "")])
+async def test_each_row_keeps_the_virtual_key_team_for_tag_spend(via_virtual_key: bool, expected: str) -> None:
+    from litellm.proxy.db.db_spend_update_writer import _virtual_key_team_id
+
+    user = UserAPIKeyAuth(api_key="sk-batch-key", team_id="team-1").model_copy(
+        update={"via_virtual_key": via_virtual_key}
+    )
+    harness = make_runner(user=user)
+    await harness.create_and_finish()
+
+    teams = [
+        _virtual_key_team_id({"litellm_params": {"metadata": call.kwargs["metadata"]}})
+        for call in harness.router.acompletion.await_args_list
+    ]
+    assert teams == [expected] * 2
+
+
+async def test_a_row_cannot_claim_another_team_through_its_own_litellm_metadata() -> None:
+    from litellm.proxy.db.db_spend_update_writer import _virtual_key_team_id
+
+    forged = {"user_api_key_is_virtual_key": True, "user_api_key_team_id": "team-other", "custom_field": "kept"}
+    user = UserAPIKeyAuth(api_key="sk-batch-key", team_id="team-1").model_copy(update={"via_virtual_key": False})
+    harness = make_runner(content=jsonl(chat_row("row-1", "hi 1", litellm_metadata=forged)), user=user)
+    await harness.create_and_finish()
+
+    (call,) = harness.router.acompletion.await_args_list
+    params = {"metadata": call.kwargs["metadata"], "litellm_metadata": call.kwargs["litellm_metadata"]}
+    assert _virtual_key_team_id({"litellm_params": params}) == ""
+    assert call.kwargs["litellm_metadata"] == {"custom_field": "kept"}
 
 
 async def test_create_dispatches_each_row_with_the_key_team_and_project_tags_as_inherited_tags() -> None:

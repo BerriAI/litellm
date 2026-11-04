@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Final, Protocol, TypeGuard, cast
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import CLI_SESSION_KEY_PREFIX
+from litellm.constants import CLI_SESSION_KEY_PREFIX, USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
@@ -310,6 +310,7 @@ def _shared_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, 
         "user_api_key": api_key,
         "user_api_key_hash": api_key,
         "user_api_key_team_id": team_id,
+        USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY: rows.key is not None,
         **(
             {
                 "user_api_key_user_email": getattr(rows.user, "user_email", None),

@@ -32,6 +32,7 @@ class DailySpendTable:
     name: str
     entity_id_column: str
     carries_request_id: bool = False
+    carries_team_id: bool = False
 
 
 DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingProxyType(
@@ -41,7 +42,9 @@ DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingP
         "org": DailySpendTable(name="LiteLLM_DailyOrganizationSpend", entity_id_column="organization_id"),
         "end_user": DailySpendTable(name="LiteLLM_DailyEndUserSpend", entity_id_column="end_user_id"),
         "agent": DailySpendTable(name="LiteLLM_DailyAgentSpend", entity_id_column="agent_id"),
-        "tag": DailySpendTable(name="LiteLLM_DailyTagSpend", entity_id_column="tag", carries_request_id=True),
+        "tag": DailySpendTable(
+            name="LiteLLM_DailyTagSpend", entity_id_column="tag", carries_request_id=True, carries_team_id=True
+        ),
     }
 )
 
@@ -168,6 +171,7 @@ def _row_params(
         *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
         *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
+        *((_as_text(transaction.get("team_id")),) if table.carries_team_id else ()),
     )
 
 
@@ -180,6 +184,7 @@ def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
         *_COUNTER_COLUMNS,
         *_SPEND_COLUMNS,
         *(("request_id",) if table.carries_request_id else ()),
+        *(("team_id",) if table.carries_team_id else ()),
     )
 
 
@@ -210,11 +215,16 @@ def build_bulk_upsert(
         if table.carries_request_id
         else ""
     )
+    team_id_update: Final = (
+        f', "team_id" = COALESCE(NULLIF(EXCLUDED."team_id", \'\'), {quoted_table}."team_id")'
+        if table.carries_team_id
+        else ""
+    )
     sql: Final = (
         f'INSERT INTO {quoted_table} ({_quoted(columns)}, "updated_at")\n'
         f"VALUES {rows}\n"
         f"ON CONFLICT ({_quoted((table.entity_id_column, *_KEY_COLUMNS))}) DO UPDATE SET\n"
-        f"  {increments}{request_id_update},\n"
+        f"  {increments}{request_id_update}{team_id_update},\n"
         f"  \"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )
     return sql, tuple(value for key, transaction in batch for value in _row_params(table, key, transaction))

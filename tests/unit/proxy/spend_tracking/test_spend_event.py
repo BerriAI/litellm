@@ -6,7 +6,9 @@ import pytest
 
 import litellm
 from litellm.caching.caching import Cache
+from litellm.constants import USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.db.db_spend_update_writer import _virtual_key_team_id
 from litellm.proxy.spend_tracking.spend_event import (
     CACHE_OFF_KEY,
     SpendEventBuildError,
@@ -149,6 +151,21 @@ def test_round_trip_preserves_identity_usage_reservation_and_tools():
     tool_calls: Final = args.response_obj["choices"][0]["message"]["tool_calls"]
     assert [call["function"]["name"] for call in tool_calls] == ["get_weather"]
     assert "complete_streaming_response" not in args.kwargs
+
+
+def test_round_trip_keeps_the_virtual_key_team_for_tag_spend():
+    base: Final = _success_kwargs()
+    kwargs: Final = {
+        **base,
+        "litellm_params": {
+            **base["litellm_params"],
+            "metadata": {**base["litellm_params"]["metadata"], USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY: True},
+        },
+    }
+    event: Final = decode_spend_event(_build(kwargs, _response()))
+    assert not isinstance(event, SpendEventDecodeError)
+
+    assert _virtual_key_team_id(spend_event_callback_args(event).kwargs) == "team-1"
 
 
 def test_streaming_event_reconstructs_complete_streaming_response():

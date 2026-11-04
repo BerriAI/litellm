@@ -1086,6 +1086,7 @@ model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
   request_id          String?
   tag                 String?   
+  team_id             String   @default("")
   date                String
   api_key             String   
   model               String?
@@ -1114,6 +1115,7 @@ model LiteLLM_DailyTagSpend {
   @@unique([tag, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
   @@index([tag, date])
+  @@index([team_id, date, tag])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
