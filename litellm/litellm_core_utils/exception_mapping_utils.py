@@ -327,14 +327,12 @@ def _permission_denied_error(
     exception_provider: str,
     response: httpx.Response | None,
     extra_information: str,
-    original_exception: _ProviderHTTPException | None = None,
 ) -> PermissionDeniedError:
-    """OpenAI-compatible 403 replies, matching openai.PermissionDeniedError (#49936)"""
-    try:
-        req = getattr(original_exception, "request", None)
-    except RuntimeError:  # httpx raises when the request was never set
-        req = None
-    request: Final = req if isinstance(req, httpx.Request) else httpx.Request("POST", "https://litellm.ai")
+    """OpenAI-compatible 403 replies, matching openai.PermissionDeniedError (#49936)
+
+    The fallback response uses a neutral request so upstream credentials, query and body never leak into it
+    """
+    request: Final = httpx.Request("POST", "https://litellm.ai")
     return PermissionDeniedError(
         message=f"PermissionDeniedError: {exception_provider} - {message}",
         llm_provider=custom_llm_provider,
@@ -471,7 +469,6 @@ def _map_openai_exception(
                 exception_provider=exception_provider,
                 response=response,
                 extra_information=extra_information,
-                original_exception=original_exception,
             )
         if invalid_request_status == 404:
             raise NotFoundError(
@@ -558,7 +555,6 @@ def _map_openai_exception(
                 exception_provider=exception_provider,
                 response=response,
                 extra_information=extra_information,
-                original_exception=original_exception,
             )
         elif original_exception.status_code == 404:
             raise NotFoundError(
@@ -1702,7 +1698,6 @@ def _map_huggingface_exception(
                 exception_provider="HuggingfaceException",
                 response=getattr(original_exception, "response", None),
                 extra_information=extra_information,
-                original_exception=original_exception,
             )
         elif original_exception.status_code == 400:
             raise BadRequestError(
@@ -2257,7 +2252,6 @@ def _map_azure_exception(
                 exception_provider=exception_provider,
                 response=response,
                 extra_information=extra_information,
-                original_exception=original_exception,
             )
         elif original_exception.status_code == 404:
             raise NotFoundError(
@@ -2375,7 +2369,6 @@ def _map_openrouter_exception(
                 exception_provider=exception_provider,
                 response=getattr(original_exception, "response", None),
                 extra_information=extra_information,
-                original_exception=original_exception,
             )
         elif original_exception.status_code == 404:
             raise NotFoundError(

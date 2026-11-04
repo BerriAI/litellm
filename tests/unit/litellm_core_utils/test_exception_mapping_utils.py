@@ -3197,3 +3197,27 @@ def test_openai_403_maps_to_permission_denied(provider: str, error_type: str) ->
     assert isinstance(excinfo.value, openai.PermissionDeniedError)
     assert excinfo.value.status_code == 403
     assert message in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "huggingface"])
+def test_fallback_403_response_does_not_carry_the_upstream_request(provider: str) -> None:
+    """The stub response on a 403 must not reuse the upstream request and its credentials"""
+
+    class _Upstream403(Exception):
+        status_code = 403
+        message = "forbidden"
+        response = None
+        request = httpx.Request(
+            "POST",
+            "https://upstream.example/v1/chat?key=query-secret",
+            headers={"Authorization": "Bearer sk-upstream-secret"},
+            content=b'{"api_key": "body-secret"}',
+        )
+
+    with pytest.raises(litellm.PermissionDeniedError) as excinfo:
+        exception_type(model="some-model", original_exception=_Upstream403("forbidden"), custom_llm_provider=provider)
+
+    stub_request: Final = excinfo.value.response.request
+    assert str(stub_request.url) == "https://litellm.ai"
+    assert "authorization" not in stub_request.headers
+    assert b"body-secret" not in stub_request.content
