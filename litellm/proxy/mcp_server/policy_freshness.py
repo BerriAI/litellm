@@ -4,18 +4,16 @@ One query on the writer hashes every row the caller's MCP access depends on. Whi
 recorded after the last completed listing, the cache is trusted. Anything else reads policy from the database.
 """
 
-import json
 import time
 from collections import OrderedDict
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
-
 from litellm._logging import verbose_logger
+from litellm.models.mcp_policy import PolicySubject, ReachableObjects
 from litellm.proxy.common_utils.strict_cache_refill import release_strict_cache_refill, require_strict_cache_refill
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
@@ -25,6 +23,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_reservation_cache_key,
     user_object_permission_id_cache_key,
 )
+from litellm.repositories.mcp_policy_repository import MCPPolicyRepository
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -33,99 +32,6 @@ if TYPE_CHECKING:
 _MARK_CAPACITY: Final = 4096
 _MARK_TTL_FRACTION: Final = 0.5
 _SETTLE_SECONDS: Final = 5.0
-
-# Spend, activity and credential columns change on every request or are secrets, and never describe access.
-_FINGERPRINT_SQL: Final = """
-WITH k AS (SELECT * FROM "LiteLLM_VerificationToken" WHERE token = $1::text),
-u AS (SELECT * FROM "LiteLLM_UserTable" WHERE user_id IN (SELECT user_id FROM k) OR user_id = $2::text),
-t AS (SELECT * FROM "LiteLLM_TeamTable" WHERE team_id IN (SELECT team_id FROM k WHERE team_id IS NOT NULL)
-         OR team_id IN (SELECT unnest(teams) FROM u) OR team_id = $3::text),
-o AS (SELECT * FROM "LiteLLM_OrganizationTable"
-      WHERE organization_id IN (SELECT organization_id FROM k UNION SELECT organization_id FROM u
-                                UNION SELECT organization_id FROM t)
-         OR organization_id = $4::text),
-tm AS (SELECT * FROM "LiteLLM_TeamMembership" WHERE user_id IN (SELECT user_id FROM u) OR user_id IN (SELECT user_id FROM k)),
-om AS (SELECT * FROM "LiteLLM_OrganizationMembership" WHERE user_id IN (SELECT user_id FROM u) OR user_id IN (SELECT user_id FROM k)),
-p AS (SELECT * FROM "LiteLLM_ObjectPermissionTable" WHERE object_permission_id IN (SELECT object_permission_id FROM k UNION SELECT object_permission_id FROM u
-                                     UNION SELECT object_permission_id FROM t UNION SELECT object_permission_id FROM o)),
-ag AS (SELECT * FROM "LiteLLM_AccessGroupTable" WHERE access_group_id IN (SELECT unnest(access_group_ids) FROM k UNION SELECT unnest(access_group_ids) FROM t)),
-b AS (SELECT * FROM "LiteLLM_BudgetTable" WHERE budget_id IN (SELECT budget_id FROM k UNION SELECT budget_id FROM o
-                          UNION SELECT budget_id FROM tm UNION SELECT budget_id FROM om))
-SELECT
-  md5(concat_ws('#',
-    (SELECT COALESCE(string_agg((to_jsonb(k) - 'spend' - 'total_spend' - 'model_spend' - 'budget_reset_at'
-        - 'updated_at' - 'last_active' - 'last_rotation_at')::text, ',' ORDER BY token), '') FROM k),
-    (SELECT COALESCE(string_agg((to_jsonb(u) - 'spend' - 'model_spend' - 'budget_reset_at' - 'updated_at'
-        - 'last_breach_check_at' - 'password' - 'password_reset_required')::text, ',' ORDER BY user_id), '') FROM u),
-    (SELECT COALESCE(string_agg((to_jsonb(t) - 'spend' - 'model_spend' - 'budget_reset_at' - 'updated_at')::text, ',' ORDER BY team_id), '') FROM t),
-    (SELECT COALESCE(string_agg((to_jsonb(o) - 'spend' - 'model_spend' - 'budget_reset_at' - 'updated_at')::text, ',' ORDER BY organization_id), '') FROM o),
-    (SELECT COALESCE(string_agg((to_jsonb(tm) - 'spend' - 'total_spend' - 'updated_at')::text, ',' ORDER BY user_id, team_id), '') FROM tm),
-    (SELECT COALESCE(string_agg((to_jsonb(om) - 'spend' - 'updated_at')::text, ',' ORDER BY user_id, organization_id), '') FROM om),
-    (SELECT COALESCE(string_agg(to_jsonb(p)::text, ',' ORDER BY object_permission_id), '') FROM p),
-    (SELECT COALESCE(string_agg(to_jsonb(ag)::text, ',' ORDER BY access_group_id), '') FROM ag),
-    (SELECT COALESCE(string_agg((to_jsonb(b) - 'budget_reset_at' - 'updated_at')::text, ',' ORDER BY budget_id), '') FROM b)
-  )) AS digest,
-  EXISTS (SELECT 1 FROM p WHERE cardinality(mcp_toolsets) > 0) AS uses_toolsets,
-  jsonb_build_object(
-    'user_id', COALESCE((SELECT user_id FROM k), $2::text),
-    'project_id', (SELECT project_id FROM k),
-    'team_ids', (SELECT COALESCE(jsonb_agg(x), '[]'::jsonb) FROM (
-        SELECT team_id AS x FROM k WHERE team_id IS NOT NULL UNION SELECT unnest(teams) FROM u
-        UNION SELECT $3::text) q WHERE x IS NOT NULL),
-    'organization_ids', (SELECT COALESCE(jsonb_agg(x), '[]'::jsonb) FROM (
-        SELECT organization_id AS x FROM k UNION SELECT organization_id FROM u UNION SELECT organization_id FROM t
-        UNION SELECT $4::text) q WHERE x IS NOT NULL),
-    'permission_ids', (SELECT COALESCE(jsonb_agg(x), '[]'::jsonb) FROM (
-        SELECT object_permission_id AS x FROM k UNION SELECT object_permission_id FROM u
-        UNION SELECT object_permission_id FROM t UNION SELECT object_permission_id FROM o) q WHERE x IS NOT NULL),
-    'access_group_ids', (SELECT COALESCE(jsonb_agg(x), '[]'::jsonb) FROM (
-        SELECT unnest(access_group_ids) AS x FROM k UNION SELECT unnest(access_group_ids) FROM t) q WHERE x IS NOT NULL)
-  ) AS reachable
-"""
-
-
-@dataclass(frozen=True, slots=True)
-class PolicySubject:
-    """Whose policy is being validated: a virtual key (its hash), or a keyless user (and the team and organization its token pins)."""
-
-    key_hash: str | None = None
-    user_id: str | None = None
-    pinned_team_id: str | None = None
-    pinned_org_id: str | None = None
-
-    @property
-    def mark(self) -> str:
-        return (
-            f"key:{self.key_hash}"
-            if self.key_hash is not None
-            else f"user:{self.user_id}:{self.pinned_team_id}:{self.pinned_org_id}"
-        )
-
-
-class ReachableObjects(BaseModel):
-    """Every cached auth object the subject can read, including ids whose rows no longer exist."""
-
-    model_config = ConfigDict(frozen=True)
-
-    user_id: str | None = None
-    project_id: str | None = None
-    team_ids: tuple[str, ...] = ()
-    organization_ids: tuple[str, ...] = ()
-    permission_ids: tuple[str, ...] = ()
-    access_group_ids: tuple[str, ...] = ()
-
-
-class PolicyFingerprint(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    digest: str
-    uses_toolsets: bool
-    reachable: ReachableObjects
-
-    @field_validator("reachable", mode="before")
-    @classmethod
-    def _decode_reachable(cls, value: object) -> object:
-        return json.loads(value) if isinstance(value, str) else value
 
 
 def policy_subject_for(
@@ -141,13 +47,6 @@ def policy_subject_for(
     if auth.jwt_claims is not None and auth.user_id and not jwt_teams_from_claim_list:
         return PolicySubject(user_id=auth.user_id, pinned_team_id=auth.team_id, pinned_org_id=auth.org_id)
     return None
-
-
-async def fetch_policy_fingerprint(prisma_client: "PrismaClient", subject: PolicySubject) -> PolicyFingerprint:
-    rows: Final[Sequence[Mapping[str, object]]] = await prisma_client.writer_db.query_raw(  # pyright: ignore[reportAny]  # Prisma's raw client is untyped
-        _FINGERPRINT_SQL, subject.key_hash, subject.user_id, subject.pinned_team_id, subject.pinned_org_id
-    )
-    return PolicyFingerprint.model_validate(rows[0])
 
 
 def cached_policy_keys(subject: PolicySubject, reachable: ReachableObjects) -> tuple[str, ...]:
@@ -231,7 +130,7 @@ class RequestFreshness:
         marks, subject, digest, prisma_client, settled_mark = self.staged
         self.staged = None
         try:
-            confirmed: Final = await fetch_policy_fingerprint(prisma_client, subject)
+            confirmed: Final = await MCPPolicyRepository(prisma_client).get_fingerprint(subject)
         except Exception as e:  # noqa: BLE001  # an unconfirmed digest is simply not recorded
             verbose_logger.warning("MCP policy fingerprint could not be confirmed after the listing: %s", e)
             return
@@ -282,7 +181,7 @@ async def cached_policy_is_current(
     if subject is None or listing is None or prisma_client is None:
         return False
     try:
-        fingerprint: Final = await fetch_policy_fingerprint(prisma_client, subject)
+        fingerprint: Final = await MCPPolicyRepository(prisma_client).get_fingerprint(subject)
     except Exception as e:  # noqa: BLE001  # an unreadable fingerprint must read policy from the database, not fail the request
         verbose_logger.warning("MCP policy fingerprint unavailable, reading policy from the database: %s", e)
         return False

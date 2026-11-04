@@ -30,20 +30,19 @@ from litellm.proxy.common_utils.strict_cache_refill import strict_cache_refill
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server import catalog, operations
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler, UnloadableEntitlementError
+from litellm.models.mcp_policy import PolicySubject, ReachableObjects
 from litellm.proxy.mcp_server.policy_freshness import (
-    PolicySubject,
-    ReachableObjects,
     RequestFreshness,
     ValidatedPolicyMarks,
     cached_policy_is_current,
     cached_policy_keys,
     current_listing,
-    fetch_policy_fingerprint,
     policy_subject_for,
     validated_listing,
     validated_policy_marks,
 )
 from litellm.proxy.mcp_server import policy_freshness as policy_freshness_module
+from litellm.repositories.mcp_policy_repository import MCPPolicyRepository
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -203,7 +202,7 @@ async def test_entries_written_by_the_real_readers_are_gone_after_a_changed_dige
 async def test_the_fingerprint_is_read_from_the_writer_with_the_subject_bound() -> None:
     client: Final = database(fingerprint_row("abc", team_ids=("t",), access_group_ids=("g",)))
     subject: Final = PolicySubject(key_hash="h", user_id="u", pinned_team_id="t", pinned_org_id="o")
-    result: Final = await fetch_policy_fingerprint(client, subject)
+    result: Final = await MCPPolicyRepository(client).get_fingerprint(subject)
     assert (result.digest, result.uses_toolsets) == ("abc", False)
     assert result.reachable.team_ids == ("t",)
     assert result.reachable.access_group_ids == ("g",)
@@ -217,7 +216,7 @@ async def test_the_fingerprint_accepts_a_json_text_reachable_column() -> None:
         '"permission_ids": ["p"], "access_group_ids": []}'
     )
     client: Final = database({"digest": "abc", "uses_toolsets": False, "reachable": reachable_text})
-    assert (await fetch_policy_fingerprint(client, KEY)).reachable.permission_ids == ("p",)
+    assert (await MCPPolicyRepository(client).get_fingerprint(KEY)).reachable.permission_ids == ("p",)
 
 
 @pytest.mark.asyncio
