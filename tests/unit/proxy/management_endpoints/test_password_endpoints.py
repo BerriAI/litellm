@@ -493,7 +493,7 @@ async def test_change_password_requires_db():
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 async def test_fips_password_change_runs_both_pbkdf2_off_the_event_loop(pbkdf2_on_event_loop: list[bool]) -> None:
     from litellm.proxy._types import ChangePasswordRequest
 

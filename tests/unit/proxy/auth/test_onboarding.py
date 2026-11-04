@@ -478,7 +478,7 @@ async def test_claim_token_sets_accepted_at_after_password_written():
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 async def test_fips_claim_hashes_off_the_event_loop(pbkdf2_on_event_loop: list[bool]) -> None:
     await test_claim_token_sets_accepted_at_after_password_written()
     assert pbkdf2_on_event_loop == [False]

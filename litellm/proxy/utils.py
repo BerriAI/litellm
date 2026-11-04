@@ -89,7 +89,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.password_policy import MIN_ALLOWED_LENGTH
 from litellm.proxy.bug_report_config import build_proxy_bug_report
-from litellm.proxy.common_utils.fips import openssl_enforces_fips
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -8413,7 +8413,7 @@ def hash_password(password: str) -> str:
     import hashlib
     import os
 
-    if openssl_enforces_fips():
+    if fips_mode_active():
         fips_salt: Final = ssl.RAND_bytes(16)
         fips_dk: Final = hashlib.pbkdf2_hmac("sha256", password.encode(), fips_salt, iterations=600_000, dklen=32)
         return "pbkdf2:" + base64.b64encode(fips_salt + fips_dk).decode()
@@ -8428,7 +8428,7 @@ def verify_password(password: str, stored: str) -> bool:
     import hashlib
     import secrets
 
-    if openssl_enforces_fips():
+    if fips_mode_active():
         if not _is_pbkdf2_row(stored):
             verbose_proxy_logger.error("FIPS mode refuses a non-PBKDF2 password row. Reset it with /user/update.")
             return False
@@ -8458,7 +8458,7 @@ _FIPS_KDF_POOL: Final = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fi
 
 async def run_off_loop_if_fips(kdf: Callable[..., _T], *args: str) -> _T:
     """Run a password KDF inline, or on the single KDF thread in FIPS mode."""
-    if not openssl_enforces_fips():
+    if not fips_mode_active():
         return kdf(*args)
     return await asyncio.get_running_loop().run_in_executor(_FIPS_KDF_POOL, kdf, *args)
 
@@ -8469,7 +8469,7 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
     are left alone (they migrate on next login via the SHA256 fallback).
     Skips quickly if no plaintext passwords exist.
     """
-    if openssl_enforces_fips():
+    if fips_mode_active():
         return "Skipped, FIPS mode has no password migration"
     all_with_pw: Final = await UserRepository(prisma_client).table.find_many(
         where={"password": {"not": None}},

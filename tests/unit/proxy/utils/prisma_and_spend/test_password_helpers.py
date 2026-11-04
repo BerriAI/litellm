@@ -232,19 +232,24 @@ async def test_migrate_passwords_raises_on_db_failure() -> None:
 
 
 @pytest.mark.usefixtures("fips_openssl")
+def test_a_fips_openssl_without_fips_mode_stays_on_scrypt() -> None:
+    assert hash_password(PASSWORD).startswith("scrypt:")
+
+
+@pytest.mark.usefixtures("fips_mode")
 def test_fips_hash_is_pbkdf2_sha256_at_600k_salted_by_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ssl, "RAND_bytes", lambda size: bytes(range(size)))
     assert hash_password(PASSWORD) == PBKDF2_ROW
 
 
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 def test_fips_hash_salts_every_row_and_verifies() -> None:
     first: Final = hash_password(PASSWORD)
     assert first != hash_password(PASSWORD)
     assert verify_password(PASSWORD, first)
 
 
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 def test_fips_verify_needs_the_right_password_of_at_least_eight_characters() -> None:
     outcome: Final = {
         "right": verify_password(PASSWORD, PBKDF2_ROW),
@@ -262,7 +267,7 @@ def test_fips_verify_needs_the_right_password_of_at_least_eight_characters() -> 
     }
 
 
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 @pytest.mark.parametrize(
     "row",
     [
@@ -305,7 +310,7 @@ def test_standard_mode_verifies_the_rows_it_always_did(row: str, verifies: bool)
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 async def test_fips_boot_migration_writes_no_row() -> None:
     pc: Final = MagicMock()
     pc.db.litellm_usertable.find_many = AsyncMock(
@@ -342,7 +347,7 @@ async def test_password_kdf_runs_on_the_event_loop_in_standard_mode() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 async def test_password_kdfs_leave_the_event_loop_on_a_single_thread_in_fips_mode() -> None:
     release_first: Final = threading.Event()
     first_kdf: Final = asyncio.ensure_future(run_off_loop_if_fips(lambda: release_first.wait(timeout=5)))

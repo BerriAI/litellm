@@ -5486,7 +5486,7 @@ async def test_user_update_reports_a_bad_budget_duration_as_a_request_error_not_
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: list[bool]) -> None:
     from litellm.proxy.management_endpoints.internal_user_endpoints import _hash_password_in_dict
 

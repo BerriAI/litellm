@@ -32,7 +32,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
 from litellm.proxy.auth.login_throttle import LoginAttempt, LoginThrottle
 from litellm.proxy.auth.password_policy import is_breach_check_enabled, is_password_breached
-from litellm.proxy.common_utils.fips import openssl_enforces_fips
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -113,7 +113,7 @@ _ONE_FIPS_LOGIN_AT_A_TIME: Final = asyncio.Lock()
 
 async def _password_matches(password: str, stored: str, attempt: LoginAttempt) -> bool:
     """Checks inline, or in FIPS mode one login at a time, refusing a login whose user got blocked while it waited."""
-    if not openssl_enforces_fips():
+    if not fips_mode_active():
         return verify_password(password, stored)
     async with _ONE_FIPS_LOGIN_AT_A_TIME:
         await attempt.refuse_if_blocked_while_waiting()

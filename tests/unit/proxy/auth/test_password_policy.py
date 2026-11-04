@@ -360,7 +360,7 @@ async def test_validate_passwords_bulk_empty_batch_makes_no_lookups():
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 async def test_fips_mode_keeps_the_breach_check() -> None:
     client_says_breached: Final = _client_returning(f"{_sha1_upper(STRONG_PASSWORD)[5:]}:1387")
     assert await is_password_breached(STRONG_PASSWORD, {}, client_says_breached) is True

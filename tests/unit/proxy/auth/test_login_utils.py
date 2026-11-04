@@ -2398,7 +2398,7 @@ async def test_login_rehash_rewrites_only_a_legacy_row(stored: str, schemes_writ
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 async def test_fips_login_runs_one_pbkdf2_off_the_event_loop_and_writes_no_row(
     monkeypatch: pytest.MonkeyPatch, pbkdf2_on_event_loop: list[bool]
 ) -> None:
@@ -2470,7 +2470,7 @@ async def _login_whose_user_gets_blocked_during_the_row_lookup(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 async def test_fips_login_hides_the_right_password_when_its_user_got_blocked_while_it_waited(
     monkeypatch: pytest.MonkeyPatch, pbkdf2_on_event_loop: list[bool]
 ) -> None:
@@ -2484,7 +2484,7 @@ async def test_fips_login_hides_the_right_password_when_its_user_got_blocked_whi
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.usefixtures("fips_mode")
 async def test_fips_burst_of_wrong_passwords_stops_deriving_once_its_user_is_blocked(
     monkeypatch: pytest.MonkeyPatch, pbkdf2_on_event_loop: list[bool]
 ) -> None:

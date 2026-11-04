@@ -23,6 +23,7 @@ from prisma.errors import ClientNotConnectedError
 import litellm
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     InitPassThroughEndpointHelpers,
     _registered_pass_through_routes,
@@ -529,6 +530,14 @@ def fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
     monkeypatch.setattr(_hashlib, "new", new)
+
+
+@pytest.fixture
+def fips_mode(fips_openssl: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.cryptography_enforces_fips", lambda: True)
+    enforce_fips_mode({"fips_mode": True})
+    yield
+    enforce_fips_mode({})
 
 
 @pytest.fixture
