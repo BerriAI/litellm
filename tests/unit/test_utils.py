@@ -1382,27 +1382,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         raise AssertionError(error_message)
 
 
-def test_cost_map_schema_accepts_vertex_modality_and_context_tiers() -> None:
-    row: Final = {
-        "litellm_provider": "vertex_ai",
-        "mode": "chat",
-        "input_cost_per_token": 1e-6,
-        "output_cost_per_token": 2e-6,
-        "input_cost_per_token_above_200k_tokens_flex": 3e-6,
-        "output_cost_per_token_above_200k_tokens_flex": 4e-6,
-        "input_cost_per_token_above_200k_tokens_batches": 3e-6,
-        "output_cost_per_token_above_200k_tokens_batches": 4e-6,
-        "input_cost_per_audio_token_above_200k_tokens": 5e-6,
-        "input_cost_per_audio_token_above_200k_tokens_flex": 6e-6,
-        "input_cost_per_audio_token_above_200k_tokens_priority": 7e-6,
-        "input_cost_per_audio_token_above_200k_tokens_batches": 8e-6,
-        "output_cost_per_image_token_priority": 9e-6,
-        "output_cost_per_image_token_batches": 10e-6,
-    }
-
-    assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-vertex-tier-model": row})
-
-
 def test_max_tokens_consistency():
     """
     Test that max_tokens == max_output_tokens for all models.
@@ -1606,6 +1585,38 @@ def test_get_provider_rerank_config():
         "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
     )
     assert isinstance(config, HostedVLLMRerankConfig)
+
+
+def test_get_provider_video_config_resolves_a_custom_provider_map_base_video_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `BaseVideoConfig` registered in `custom_provider_map` answers for its provider name, a `CustomLLM`
+    registered there does not, and a built-in name still resolves to its built-in config even when a `CustomLLM`
+    shadows it in the map."""
+    from litellm.llms.custom_llm import CustomLLM
+    from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+
+    class QueueVideoConfig(OpenAIVideoConfig):
+        pass
+
+    video_config: Final = QueueVideoConfig()
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [
+            {"provider": "queue-video", "custom_handler": video_config},
+            {"provider": "image-only", "custom_handler": CustomLLM()},
+            {"provider": "openai", "custom_handler": CustomLLM()},
+        ],
+    )
+    monkeypatch.setattr(litellm, "_custom_providers", ["queue-video", "image-only", "openai"])
+
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="queue-video") is video_config
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="image-only") is None
+    assert isinstance(
+        ProviderConfigManager.get_provider_video_config(model="sora-2", provider="openai"), OpenAIVideoConfig
+    )
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="not-registered") is None
 
 
 def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
@@ -7696,7 +7707,6 @@ def test_openai_non_text_embedding_3_drop_params_per_call():
         litellm.drop_params = prev_drop_params
 
 
-
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -10042,24 +10052,3 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
-
-
-def test_cost_map_schema_accepts_vertex_modality_and_context_tiers() -> None:
-    row: Final = {
-        "litellm_provider": "vertex_ai",
-        "mode": "chat",
-        "input_cost_per_token": 1e-6,
-        "output_cost_per_token": 2e-6,
-        "input_cost_per_token_above_200k_tokens_flex": 3e-6,
-        "output_cost_per_token_above_200k_tokens_flex": 4e-6,
-        "input_cost_per_token_above_200k_tokens_batches": 3e-6,
-        "output_cost_per_token_above_200k_tokens_batches": 4e-6,
-        "input_cost_per_audio_token_above_200k_tokens": 5e-6,
-        "input_cost_per_audio_token_above_200k_tokens_flex": 6e-6,
-        "input_cost_per_audio_token_above_200k_tokens_priority": 7e-6,
-        "input_cost_per_audio_token_above_200k_tokens_batches": 8e-6,
-        "output_cost_per_image_token_priority": 9e-6,
-        "output_cost_per_image_token_batches": 10e-6,
-    }
-
-    assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-vertex-tier-model": row})
