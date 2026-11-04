@@ -1568,6 +1568,42 @@ def test_vertex_ai_transform_empty_function_call_arguments():
     }
 
 
+
+@pytest.mark.parametrize(
+    "arguments, expected_args",
+    [
+        (None, {}),
+        ('{"location": "Boston"', {"location": "Boston"}),
+    ],
+    ids=["null_arguments", "truncated_arguments"],
+)
+def test_convert_to_gemini_tool_call_invoke_tolerates_null_and_truncated_arguments(arguments, expected_args):
+    """
+    Gemini conversion must accept the same tool call arguments as the Anthropic
+    path: null is treated as no arguments and truncated JSON is repaired,
+    instead of raising "Unable to convert openai tool calls".
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    parts = convert_to_gemini_tool_call_invoke(message)
+    assert len(parts) == 1
+    assert parts[0]["function_call"]["name"] == "get_weather"
+    assert parts[0]["function_call"]["args"] == expected_args
+
+
 @pytest.mark.asyncio
 async def test_bedrock_process_image_async_factory():
     """

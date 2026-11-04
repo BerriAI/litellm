@@ -1212,7 +1212,7 @@ def _gemini_tool_call_invoke_helper(
             "type": "object",
         }
     else:
-        arguments_dict = json.loads(arguments)
+        arguments_dict = parse_tool_call_arguments(arguments, tool_name=name, context="Gemini tool invoke")
     function_call: Final = VertexFunctionCall(
         name=name,
         args=arguments_dict,
