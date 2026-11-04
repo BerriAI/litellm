@@ -43,6 +43,10 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::request::NativeRequestRedis;
     #[pymodule_export]
+    use crate::redis::store::router_cooldowns::{NativeDeclaredCooldowns, NativeRouterCooldowns};
+    #[pymodule_export]
+    use crate::redis::store::router_usage::NativeRouterUsage;
+    #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
     use crate::routes::chat_completions::{acompletion, completion};
@@ -117,6 +121,9 @@ mod tests {
                 "NativeDiagnosticProcessor",
                 "NativeRedisClient",
                 "NativeRequestRedis",
+                "NativeDeclaredCooldowns",
+                "NativeRouterCooldowns",
+                "NativeRouterUsage",
                 "native_redis_breaker_states",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",

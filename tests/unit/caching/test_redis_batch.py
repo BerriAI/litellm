@@ -27,6 +27,7 @@ from litellm.caching.redis_cache import (
     _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # the chain the service hook reports
 )
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.redis.native_settings import NativeRedisSettings
 
 SCRIPT = "return redis.call('GET', KEYS[1])"
 _Answer = TypeVar("_Answer")
@@ -96,6 +97,7 @@ class FakeRedisCache(RedisCache):
         self.client = client
         self.namespace = namespace
         self.redis_kwargs = {"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2, "db": id(self) % 1_000_000}
+        self.native_settings = NativeRedisSettings(redis_kwargs=self.redis_kwargs, namespace=namespace, default_ttl=60)
         self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
         self.service_logger_obj = ServiceLogging()
         self.default_ttl = None

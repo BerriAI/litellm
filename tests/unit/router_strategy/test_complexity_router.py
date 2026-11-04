@@ -16038,9 +16038,7 @@ class TestHealthFallbackDispatch:
                     {"primary-id": {"is_healthy": True, "timestamp": time.time()}}
                 )
             else:
-                router.cooldown_cache.cooldown_store.delete_cache(
-                    router.cooldown_cache.get_cooldown_cache_key("primary-id")
-                )
+                router.cooldown_cache.cooldown_store.evict_local("primary-id")
             recovered: Final[dict[str, object]] = {"session_id": "outage"}
             assert await self._request(router, surface, stream, recovered) == "primary"
             assert recovered["routing_decision"]["routed_model"] == "primary"
@@ -16216,9 +16214,7 @@ class TestHealthFallbackDispatch:
                     {"primary-id": {"is_healthy": True, "timestamp": time.time()}}
                 )
             else:
-                router.cooldown_cache.cooldown_store.delete_cache(
-                    router.cooldown_cache.get_cooldown_cache_key("primary-id")
-                )
+                router.cooldown_cache.cooldown_store.evict_local("primary-id")
             recovered: Final[dict[str, object]] = {"session_id": "pinned"}
             assert await self._request(router, "chat", False, recovered) == "primary"
             assert recovered["routing_decision"]["cause"] == "session_affinity_pin"

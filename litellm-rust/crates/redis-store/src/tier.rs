@@ -1,0 +1,312 @@
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex, MutexGuard},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use litellm_redis_client::{Declared, Error as RedisError, RedisBatch, RedisClient};
+
+use litellm_cache::{BaseCache, DeleteCache, Error, ExactCacheContext, FlushCache};
+
+pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
+
+/// How a read-through family uses its memory tier, declared once by the family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TierPolicy {
+    /// Python's `redis_batch_cache_expiry`: a key memory misses is read from Redis at most this often.
+    pub refresh_after: Duration,
+    /// How long a value read from Redis stays in memory.
+    pub backfill_ttl: Duration,
+    pub on_breaker_open: OnBreakerOpen,
+    /// Python's `default_max_redis_batch_cache_size`: how many keys the refresh throttle tracks.
+    pub tracked_reads: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnBreakerOpen {
+    /// Serve what memory holds and let the next read try Redis again.
+    ServeMemory,
+}
+
+/// The memory tier in front of Redis that a read-through family builds for itself, as Python's
+/// `DualCache` with a `RedisCache` does.
+pub struct MemoryTier<L1, L2> {
+    memory: L1,
+    remote: Option<L2>,
+    policy: TierPolicy,
+    reads: Mutex<RecentReads>,
+    updates: Mutex<()>,
+    now: Clock,
+}
+
+pub fn system_clock() -> Clock {
+    Arc::new(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+    })
+}
+
+impl<V, L1> MemoryTier<L1, RedisClient>
+where
+    V: Clone + Send + Sync + 'static,
+    L1: BaseCache<Value = V, Context = ExactCacheContext> + DeleteCache + FlushCache,
+{
+    pub fn read_through(
+        memory: L1,
+        remote: Option<RedisClient>,
+        policy: TierPolicy,
+        now: Clock,
+    ) -> Self {
+        Self {
+            memory,
+            remote,
+            reads: Mutex::new(RecentReads::new(policy.tracked_reads)),
+            policy,
+            updates: Mutex::new(()),
+            now,
+        }
+    }
+
+    pub fn memory(&self) -> &L1 {
+        &self.memory
+    }
+
+    pub fn remote(&self) -> Option<&RedisClient> {
+        self.remote.as_ref()
+    }
+
+    pub fn now(&self) -> Duration {
+        (self.now)()
+    }
+
+    pub fn set_memory(&self, key: &str, value: V, ttl: Duration) -> Result<(), Error> {
+        self.memory
+            .set_cache(key, value, &ExactCacheContext { ttl: Some(ttl) })
+    }
+
+    /// Read-modify-write of one memory entry, atomic against every other update of this tier.
+    pub fn update_memory(
+        &self,
+        key: &str,
+        ttl: Duration,
+        update: impl FnOnce(Option<V>) -> V,
+    ) -> Result<V, Error> {
+        let _guard = lock(&self.updates)?;
+        let value = update(self.memory.get_cache(key, &ExactCacheContext::default())?);
+        self.set_memory(key, value.clone(), ttl)?;
+        Ok(value)
+    }
+
+    /// Python's `DualCache.async_batch_get_cache`: memory first, then one round trip for the misses
+    /// whose refresh is due, written back to memory. A failed Redis read serves memory, as
+    /// `RedisCache` swallows it, and only a breaker refusal releases the refresh it reserved.
+    pub async fn get_many<E: std::fmt::Display>(
+        &self,
+        keys: &[String],
+        decode: impl Fn(&[u8]) -> Result<V, E>,
+    ) -> Result<Vec<Option<V>>, Error> {
+        let declared = self.declare_many(RedisClient::batch, keys)?;
+        self.resolve_many(declared, decode).await
+    }
+
+    /// The first half of `get_many`: reserves the due refreshes and declares their GETs on the
+    /// batch `batch_for` picks for this tier's client, without sending anything.
+    pub fn declare_many(
+        &self,
+        batch_for: impl FnOnce(&RedisClient) -> RedisBatch,
+        keys: &[String],
+    ) -> Result<DeclaredRead, Error> {
+        let fetch = match &self.remote {
+            None => None,
+            Some(remote) => {
+                let reservation = self.reserve(keys, &self.read_memory(keys)?)?;
+                (!reservation.keys.is_empty()).then(|| {
+                    let batch = batch_for(remote);
+                    let keys: Vec<&str> = reservation.keys.iter().map(String::as_str).collect();
+                    let replies = batch.mget::<Vec<u8>>(&keys);
+                    Fetch {
+                        reservation,
+                        replies,
+                    }
+                })
+            }
+        };
+        Ok(DeclaredRead {
+            keys: keys.to_vec(),
+            fetch,
+        })
+    }
+
+    /// The second half of `get_many`. Memory is read again here, so a value written to memory
+    /// since the declaration wins over what Redis answered.
+    pub async fn resolve_many<E: std::fmt::Display>(
+        &self,
+        declared: DeclaredRead,
+        decode: impl Fn(&[u8]) -> Result<V, E>,
+    ) -> Result<Vec<Option<V>>, Error> {
+        let DeclaredRead { keys, fetch } = declared;
+        let Some(Fetch {
+            reservation,
+            replies,
+        }) = fetch
+        else {
+            return self.read_memory(&keys);
+        };
+        let fetched = settle(replies).await;
+        let local = self.read_memory(&keys)?;
+        let fetched = match fetched {
+            Ok(fetched) => fetched,
+            Err(RedisError::BreakerOpen) => {
+                self.release(reservation)?;
+                return Ok(local);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Redis read failed, serving the memory tier");
+                return Ok(local);
+            }
+        };
+        let decoded = match fetched
+            .iter()
+            .map(|raw| raw.as_deref().map(&decode).transpose())
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                tracing::warn!(%error, "a Redis value did not decode, serving the memory tier");
+                return Ok(local);
+            }
+        };
+        let read = reservation
+            .keys
+            .into_iter()
+            .zip(decoded)
+            .collect::<HashMap<_, _>>();
+        keys.iter()
+            .zip(local)
+            .map(|(key, local)| match local {
+                Some(value) => Ok(Some(value)),
+                None => self.backfill(key, read.get(key).cloned().flatten()),
+            })
+            .collect()
+    }
+
+    pub fn delete_memory(&self, key: &str) -> Result<(), Error> {
+        self.memory.delete_cache(key)
+    }
+
+    pub fn flush_memory(&self) -> Result<(), Error> {
+        self.memory.flush_cache()
+    }
+
+    fn read_memory(&self, keys: &[String]) -> Result<Vec<Option<V>>, Error> {
+        let context = ExactCacheContext::default();
+        keys.iter()
+            .map(|key| self.memory.get_cache(key, &context))
+            .collect()
+    }
+
+    fn backfill(&self, key: &str, value: Option<V>) -> Result<Option<V>, Error> {
+        if let Some(value) = &value {
+            self.set_memory(key, value.clone(), self.policy.backfill_ttl)?;
+        }
+        Ok(value)
+    }
+
+    fn reserve(&self, keys: &[String], local: &[Option<V>]) -> Result<Reservation, Error> {
+        let now = self.now();
+        let mut reads = lock(&self.reads)?;
+        let due = keys
+            .iter()
+            .zip(local)
+            .filter(|(_, value)| value.is_none())
+            .filter_map(|(key, _)| {
+                let previous = reads.get(key);
+                let due = previous
+                    .is_none_or(|read| now.saturating_sub(read) >= self.policy.refresh_after);
+                due.then(|| {
+                    reads.insert(key.clone(), now);
+                    (key.clone(), previous)
+                })
+            })
+            .collect::<Vec<_>>();
+        let (keys, previous) = due.into_iter().unzip();
+        Ok(Reservation { keys, previous })
+    }
+
+    fn release(&self, reservation: Reservation) -> Result<(), Error> {
+        let mut reads = lock(&self.reads)?;
+        for (key, previous) in reservation.keys.into_iter().zip(reservation.previous) {
+            match previous {
+                Some(read) => reads.insert(key, read),
+                None => reads.remove(&key),
+            }
+        }
+        Ok(())
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, Error> {
+    Ok(mutex.lock()?)
+}
+
+async fn settle(
+    replies: Declared<Vec<Option<Vec<u8>>>>,
+) -> Result<Vec<Option<Vec<u8>>>, RedisError> {
+    replies.resolve().await
+}
+
+/// The GETs `declare_many` put on a batch, with the refreshes they reserved.
+pub struct DeclaredRead {
+    keys: Vec<String>,
+    fetch: Option<Fetch>,
+}
+
+struct Fetch {
+    reservation: Reservation,
+    replies: Declared<Vec<Option<Vec<u8>>>>,
+}
+
+struct Reservation {
+    keys: Vec<String>,
+    previous: Vec<Option<Duration>>,
+}
+
+/// Python's `LimitedSizeOrderedDict`: insertion-ordered, and any write at capacity drops the
+/// oldest entry first, even when the written key is already present.
+struct RecentReads {
+    capacity: usize,
+    order: VecDeque<String>,
+    times: HashMap<String, Duration>,
+}
+
+impl RecentReads {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::new(),
+            times: HashMap::new(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<Duration> {
+        self.times.get(key).copied()
+    }
+
+    fn insert(&mut self, key: String, time: Duration) {
+        if self.times.len() >= self.capacity
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.times.remove(&oldest);
+        }
+        if self.times.insert(key.clone(), time).is_none() {
+            self.order.push_back(key);
+        }
+    }
+
+    fn remove(&mut self, key: &str) {
+        if self.times.remove(key).is_some() {
+            self.order.retain(|tracked| tracked != key);
+        }
+    }
+}

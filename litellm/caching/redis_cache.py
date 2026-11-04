@@ -42,6 +42,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
+from litellm.redis.native_settings import NativeRedisSettings
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
     RedisPipelineLpopOperation,
@@ -645,6 +646,8 @@ def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
 
+    native_settings: NativeRedisSettings | None = None
+
     def __init__(
         self,
         host=None,
@@ -711,6 +714,11 @@ class RedisCache(BaseCache):
             super().__init__(default_ttl=int(litellm.default_redis_ttl))
         else:
             super().__init__()  # defaults to 60s
+        self.native_settings = NativeRedisSettings(
+            redis_kwargs=MappingProxyType(dict(redis_kwargs)),
+            namespace=namespace,
+            default_ttl=self.default_ttl,
+        )
 
     def _admit_async_call(self, call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:
         return call()

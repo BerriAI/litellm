@@ -1,11 +1,10 @@
 """
-One Redis round trip per request for the router's pre-call reads.
-
-Before `RoutingReadBatch`, `async_get_available_deployment` issued one MGET for the cooldown keys
-(`CooldownCache`) and a second one for the tpm/rpm counters (`LowestTPMLoggingHandler_v2`).
+The router's pre-call reads. Cooldowns go through the native store, and the tpm/rpm selector
+counters (`LowestTPMLoggingHandler_v2`) ride one MGET on the Python Redis.
 """
 
 import time
+from collections.abc import Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -13,8 +12,17 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
+from litellm.redis.stores._connection import native_client
+from litellm.redis.stores.router_cooldowns import CooldownCacheValue, RouterCooldownStore
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_utils import routing_prefetch
+from litellm.rust_bridge._native import NativeRedisClient
+from tests.unit.caching.test_redis_batch import FakeNativePending, FakeNativeRequest, FakeNatives
+from tests.unit.conftest import redis_cache_double
+from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
+from tests.unit.redis.stores.test_router_cooldowns import Handles as CooldownHandles
 
 _MODEL_GROUP = "claude"
 _MESSAGES = [{"role": "user", "content": "ping"}]
@@ -34,7 +42,7 @@ def _redis_answering(values_by_key_prefix: dict[str, object]) -> MagicMock:
     def _mget(key_list, parent_otel_span=None):
         return {key: values_by_key_prefix.get(key.rsplit(":", 1)[0], values_by_key_prefix.get(key)) for key in key_list}
 
-    redis = MagicMock(spec=RedisCache)
+    redis = redis_cache_double()
     redis.async_batch_get_cache = AsyncMock(side_effect=_mget)
     return redis
 
@@ -55,18 +63,18 @@ def _redis_key_families(redis: MagicMock) -> list[list[str]]:
     ]
 
 
-def _cooldown(seconds: float) -> dict:
-    return {"exception_received": "429", "status_code": "429", "timestamp": time.time(), "cooldown_time": seconds}
+def _cool_down(router: Router, model_id: str, started: float) -> None:
+    router.cooldown_cache.cooldown_store.put(
+        model_id, {"exception_received": "429", "status_code": "429", "timestamp": started, "cooldown_time": 60}, 60
+    )
 
 
 @pytest.mark.asyncio
-async def test_usage_based_routing_reads_cooldowns_and_counters_in_one_redis_round_trip():
+async def test_usage_based_routing_reads_the_counters_in_one_python_redis_round_trip():
     redis = _redis_answering({})
     router = _router(redis, "usage-based-routing-v2")
 
-    deployment = await router.async_get_available_deployment(
-        model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES
-    )
+    deployment = await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
     assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
     assert _redis_key_families(redis) == [
@@ -75,10 +83,8 @@ async def test_usage_based_routing_reads_cooldowns_and_counters_in_one_redis_rou
             "dep-a:anthropic/claude-x:tpm",
             "dep-b:anthropic/claude-x:rpm",
             "dep-b:anthropic/claude-x:tpm",
-            "deployment:dep-a:cooldown",
-            "deployment:dep-b:cooldown",
         ]
-    ], "cooldown state and usage counters must arrive in one MGET"
+    ], "the usage counters must arrive in one MGET, without cooldown keys"
 
 
 @pytest.mark.asyncio
@@ -114,21 +120,19 @@ async def test_usage_based_routing_still_batches_when_the_strategy_is_a_fixed_si
             "dep-a:anthropic/claude-x:tpm",
             "dep-b:anthropic/claude-x:rpm",
             "dep-b:anthropic/claude-x:tpm",
-            "deployment:dep-a:cooldown",
-            "deployment:dep-b:cooldown",
         ]
     ], "the subclassed strategy must still get the batched read, not a second MGET"
     router.cache.async_batch_get_cache.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_simple_shuffle_still_reads_only_cooldowns():
+async def test_simple_shuffle_reads_nothing_from_the_python_redis():
     redis = _redis_answering({})
     router = _router(redis, "simple-shuffle")
 
     await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
-    assert _redis_key_families(redis) == [["deployment:dep-a:cooldown", "deployment:dep-b:cooldown"]]
+    assert _redis_key_families(redis) == []
 
 
 @pytest.mark.asyncio
@@ -153,18 +157,11 @@ async def test_batched_counters_pick_the_deployment_the_strategy_picks_reading_a
 
 @pytest.mark.asyncio
 async def test_batched_read_still_excludes_a_cooled_down_deployment():
-    redis = _redis_answering(
-        {
-            "dep-a:anthropic/claude-x:tpm": 100,
-            "dep-b:anthropic/claude-x:tpm": 10,
-            "deployment:dep-b:cooldown": _cooldown(seconds=60),
-        }
-    )
+    redis = _redis_answering({"dep-a:anthropic/claude-x:tpm": 100, "dep-b:anthropic/claude-x:tpm": 10})
     router = _router(redis, "usage-based-routing-v2")
+    _cool_down(router, "dep-b", started=time.time())
 
-    deployment = await router.async_get_available_deployment(
-        model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES
-    )
+    deployment = await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
     assert deployment["model_info"]["id"] == "dep-a", "dep-b has the lowest tpm but is cooling down"
     assert redis.async_batch_get_cache.await_count == 1
@@ -172,25 +169,18 @@ async def test_batched_read_still_excludes_a_cooled_down_deployment():
 
 @pytest.mark.asyncio
 async def test_batched_read_ignores_an_expired_cooldown():
-    redis = _redis_answering(
-        {
-            "dep-a:anthropic/claude-x:tpm": 100,
-            "dep-b:anthropic/claude-x:tpm": 10,
-            "deployment:dep-b:cooldown": _cooldown(seconds=-1),
-        }
-    )
+    redis = _redis_answering({"dep-a:anthropic/claude-x:tpm": 100, "dep-b:anthropic/claude-x:tpm": 10})
     router = _router(redis, "usage-based-routing-v2")
+    _cool_down(router, "dep-b", started=time.time() - 61)
 
-    deployment = await router.async_get_available_deployment(
-        model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES
-    )
+    deployment = await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
     assert deployment["model_info"]["id"] == "dep-b"
 
 
 @pytest.mark.asyncio
 async def test_a_failed_batched_read_degrades_like_the_two_failed_reads_did():
-    redis = MagicMock(spec=RedisCache)
+    redis = redis_cache_double()
     redis.async_batch_get_cache = AsyncMock(side_effect=ConnectionError("redis unavailable"))
     routed = _router(redis, "usage-based-routing-v2")
     alone = _router(redis, "usage-based-routing-v2")
@@ -204,17 +194,100 @@ async def test_a_failed_batched_read_degrades_like_the_two_failed_reads_did():
 
     assert str(routed_error.value) == str(alone_error.value)
     assert len(routed.cache.last_redis_batch_access_time) == 0, "a failed read must not throttle the next one"
-    assert len(routed.cooldown_cache.cooldown_store.last_redis_batch_access_time) == 0
 
 
 @pytest.mark.asyncio
 async def test_a_failed_batched_read_leaves_simple_shuffle_routing():
-    redis = MagicMock(spec=RedisCache)
+    redis = redis_cache_double()
     redis.async_batch_get_cache = AsyncMock(side_effect=ConnectionError("redis unavailable"))
     router = _router(redis, "simple-shuffle")
 
-    deployment = await router.async_get_available_deployment(
-        model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES
-    )
+    deployment = await router.async_get_available_deployment(model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES)
 
     assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+
+
+def _armed_store() -> tuple[RouterCooldownStore, CooldownHandles]:
+    handles: Final = CooldownHandles()
+    store: Final = RouterCooldownStore(native_client(RedisCache(host="redis.internal")), handle=handles)
+    store.put("dep-a", {"exception_received": "429", "status_code": "429", "timestamp": 1.0, "cooldown_time": 60}, 60)
+    return store, handles
+
+
+@pytest.mark.asyncio
+async def test_routing_takes_the_armed_cooldown_read_from_the_native_batch_once_then_reads_on_its_own():
+    store, handles = _armed_store()
+    natives: Final = FakeNatives()
+
+    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+        routing_prefetch.arm_cooldowns(store, ["dep-a", "dep-b", "dep-c"])
+        armed: Final = routing_prefetch.armed()
+        first: Final = await routing_prefetch.read_cooldowns(store, ["dep-a", "dep-b"], None)
+        reads_after_first: Final = len(handles.built[0].targets)
+        second: Final = await routing_prefetch.read_cooldowns(store, ["dep-a", "dep-b"], None)
+
+    assert armed
+    assert handles.built[0].declared == [("dep-a", "dep-b", "dep-c")]
+    assert first == second == (("dep-a", store.snapshot()["dep-a"]),)
+    assert natives.built[0].events == ["flush_pre", "resolve"]
+    assert len(handles.built[0].targets) == reads_after_first + 1, "a second read goes to the store"
+
+
+@pytest.mark.asyncio
+async def test_an_armed_cooldown_read_that_does_not_cover_the_routing_ids_is_read_again():
+    store, _ = _armed_store()
+    natives: Final = FakeNatives()
+
+    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+        routing_prefetch.arm_cooldowns(store, ["dep-b"])
+        active: Final = await routing_prefetch.read_cooldowns(store, ["dep-a", "dep-b"], None)
+
+    assert active == (("dep-a", store.snapshot()["dep-a"]),)
+    assert natives.built[0].events == ["flush_pre", "resolve"]
+
+
+def _redis_down() -> list[tuple[str, CooldownCacheValue]]:
+    raise ConnectionError("redis down")
+
+
+class _UnreachableCooldowns(FakeCooldowns):
+    def declare_active(
+        self, request: FakeNativeRequest, model_ids: Sequence[str]
+    ) -> FakeNativePending[list[tuple[str, CooldownCacheValue]]]:
+        super().declare_active(request, model_ids)
+        return FakeNativePending(request, _redis_down)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_armed_cooldown_read_falls_back_to_the_stores_own_read():
+    built: Final[list[FakeCooldowns]] = []
+
+    def unreachable(client: NativeRedisClient | None) -> FakeCooldowns:
+        built.append(_UnreachableCooldowns(client))
+        return built[-1]
+
+    store: Final = RouterCooldownStore(native_client(RedisCache(host="redis.internal")), handle=unreachable)
+    store.put("dep-a", {"exception_received": "429", "status_code": "429", "timestamp": 1.0, "cooldown_time": 60}, 60)
+
+    with request_redis_batch_scope(native_factory=FakeNatives()):  # pyright: ignore[reportArgumentType]  # test double
+        routing_prefetch.arm_cooldowns(store, ["dep-a"])
+        active: Final = await routing_prefetch.read_cooldowns(store, ["dep-a"], None)
+
+    assert built[0].declared == [("dep-a",)]
+    assert active == (("dep-a", store.snapshot()["dep-a"]),)
+
+
+def test_arming_the_cooldown_read_outside_a_request_or_without_redis_declares_nothing():
+    store, handles = _armed_store()
+    offline: Final = CooldownHandles()
+    natives: Final = FakeNatives()
+
+    routing_prefetch.arm_cooldowns(store, ["dep-a"])
+    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+        routing_prefetch.arm_cooldowns(RouterCooldownStore(None, handle=offline), ["dep-a"])
+        armed: Final = routing_prefetch.armed()
+
+    assert handles.built[0].declared == []
+    assert offline.built[0].declared == []
+    assert not armed
+    assert natives.built == []

@@ -38,7 +38,7 @@ from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import ModelResponse
 
-from .test_redis_batch import FakeClient, FakeRedisCache
+from .test_redis_batch import FakeClient, FakeNatives, FakeRedisCache
 
 
 async def _script_outside_the_pipeline(keys: Sequence[str], args: Sequence[object]) -> object:
@@ -514,3 +514,31 @@ async def test_a_cancelled_post_call_flush_keeps_the_shared_spend_counter_and_co
     assert redis_cache.alone == [], "a cancel says nothing about the shared counter, so Redis keeps it"
     assert spend_cache.in_memory_cache.get_cache("spend:key:k1") == 3.5, "the local copy counts the cancelled spend"
     assert spend_cache.in_memory_cache.get_cache("spend:team:t1") is None, "an absent local copy is not seeded"
+
+
+@pytest.mark.asyncio
+async def test_native_post_call_ops_go_out_with_the_post_call_flush_not_the_request_boundary():
+    natives = FakeNatives()
+
+    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+        request.native_post_call()
+        await request.flush_all()
+        at_the_boundary = list(natives.built[0].events)
+        await flush_post_call_redis_batches()
+    await drain_post_call_redis_batches()
+
+    assert at_the_boundary == ["flush_pre"]
+    assert natives.built[0].events == ["flush_pre", "flush_post"]
+
+
+@pytest.mark.asyncio
+async def test_native_post_call_ops_still_waiting_on_their_callbacks_are_drained_at_shutdown():
+    natives = FakeNatives()
+
+    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+        request.native_post_call()
+        await request.flush_all()
+    await drain_post_call_redis_batches()
+    await drain_post_call_redis_batches()
+
+    assert natives.built[0].events == ["flush_pre", "flush_post"]

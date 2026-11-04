@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 
+from litellm.caching.redis_cache import RedisCache
+from litellm.redis.stores._connection import native_client
 from litellm.rust_bridge._native import NativeRedisClient, native_redis_breaker_states
 
 
@@ -45,3 +47,21 @@ def test_a_discarded_client_leaves_the_process_registry(monkeypatch: pytest.Monk
 
     assert while_connected == before + 1
     assert len(native_redis_breaker_states()) == before
+
+
+def test_a_redis_cache_captures_what_native_stores_need_at_construction() -> None:
+    cache: Final = RedisCache(host="127.0.0.1", port=1, namespace="ns", socket_timeout=0.2)
+
+    assert cache.native_settings is not None
+    assert dict(cache.native_settings.redis_kwargs) == {"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2}
+    assert cache.native_settings.namespace == "ns"
+    assert cache.native_settings.default_ttl == cache.default_ttl
+
+
+class _UnbuiltRedisCache(RedisCache):
+    def __init__(self) -> None:
+        pass
+
+
+def test_a_redis_cache_stand_in_that_skips_the_constructor_leaves_native_stores_on_memory() -> None:
+    assert native_client(_UnbuiltRedisCache().native_settings) is None

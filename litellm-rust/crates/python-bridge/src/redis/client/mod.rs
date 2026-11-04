@@ -195,13 +195,7 @@ fn shared_client(
 /// The Rust client for one `RedisCache`, built once and handed to every native store, so a store
 /// never sees the redis-py kwargs or the namespace.
 #[pyclass(frozen, name = "NativeRedisClient")]
-pub(crate) struct NativeRedisClient(
-    #[expect(
-        dead_code,
-        reason = "the native stores built on this client read it, starting in #49525"
-    )]
-    pub(crate) RedisClient,
-);
+pub(crate) struct NativeRedisClient(pub(crate) RedisClient);
 
 #[pymethods]
 impl NativeRedisClient {
