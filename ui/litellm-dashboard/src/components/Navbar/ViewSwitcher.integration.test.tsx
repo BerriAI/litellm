@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { I18nextProvider } from "react-i18next";
+import { createDashboardI18n } from "@/i18n";
 import userEvent from "@testing-library/user-event";
 
 import { renderWithProviders, screen, testQueryClient, within } from "@/../tests/test-utils";
@@ -21,13 +23,15 @@ vi.mock("@/components/networking", () => ({
   getUiConfig: getUiConfigMock,
 }));
 
-function renderSwitcher() {
+function renderSwitcher(language: "en" | "zh-CN" = "en") {
   return renderWithProviders(
-    <TerminologyProvider>
-      <PluginModeProvider accessToken="test-session">
-        <ViewSwitcher />
-      </PluginModeProvider>
-    </TerminologyProvider>,
+    <I18nextProvider i18n={createDashboardI18n(language)}>
+      <TerminologyProvider>
+        <PluginModeProvider accessToken="test-session">
+          <ViewSwitcher />
+        </PluginModeProvider>
+      </TerminologyProvider>
+    </I18nextProvider>,
   );
 }
 
@@ -65,6 +69,29 @@ describe("ViewSwitcher", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each([
+    ["/ui/chat", "聊天"],
+    ["/ui/moyai", "Moyai"],
+    ["/ui/", "AI 网关"],
+  ])("localizes the active workspace at %s while preserving product names", (pathname, label) => {
+    state.pathname = pathname;
+    renderSwitcher("zh-CN");
+    expect(screen.getByRole("button", { name: `切换工作区，当前：${label}` })).toHaveTextContent(label);
+  });
+
+  it("localizes workspace descriptions and disabled Chat without changing navigation", async () => {
+    const user = userEvent.setup();
+    renderSwitcher("zh-CN");
+    await user.click(screen.getByRole("button", { name: "切换工作区，当前：AI 网关" }));
+    const chat = await screen.findByRole("menuitem", {
+      name: "聊天 使用 LLM、MCP 和智能体的聊天界面 管理员可在设置中启用",
+    });
+    expect(chat).toHaveAttribute("aria-disabled", "true");
+    expect(assignSpy).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("menuitem", { name: "Moyai 云端编程智能体" }));
+    expect(assignSpy).toHaveBeenCalledWith("/ui/moyai");
+  });
+
   it("should render the workspace selector and keep disabled Chat unavailable", async () => {
     const user = userEvent.setup();
     renderSwitcher();
@@ -86,6 +113,16 @@ describe("ViewSwitcher", () => {
     await user.click(await screen.findByRole("button", { name: "Switch workspace, current: SI Gateway" }));
     expect(await screen.findByRole("menuitem", { name: "SI Gateway" })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "AI Gateway" })).not.toBeInTheDocument();
+  });
+
+  it("preserves SI terminology when the workspace selector is in Chinese", async () => {
+    getUiConfigMock.mockResolvedValue({ use_si_terminology: true });
+    const user = userEvent.setup();
+    renderSwitcher("zh-CN");
+
+    await user.click(await screen.findByRole("button", { name: "切换工作区，当前：SI 网关" }));
+    expect(await screen.findByRole("menuitem", { name: "SI 网关" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "AI 网关" })).not.toBeInTheDocument();
   });
 
   it("should show the active plugin and switch plugin modes within the gateway", async () => {

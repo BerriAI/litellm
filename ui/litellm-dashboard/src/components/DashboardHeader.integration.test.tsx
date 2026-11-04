@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginModeProvider } from "@/contexts/PluginModeContext";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
+import LanguageProvider from "@/i18n/LanguageProvider";
+import { LANGUAGE_STORAGE_KEY } from "@/i18n";
 import { DashboardHeader } from "./DashboardHeader";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/ui/logs" }));
@@ -56,13 +58,15 @@ async function openTools() {
   const user = userEvent.setup();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <QueryClientProvider client={client}>
-      <PluginModeProvider accessToken="test-session">
-        <CommandPaletteProvider>
-          <DashboardHeader accessToken={null} />
-        </CommandPaletteProvider>
-      </PluginModeProvider>
-    </QueryClientProvider>,
+    <LanguageProvider>
+      <QueryClientProvider client={client}>
+        <PluginModeProvider accessToken="test-session">
+          <CommandPaletteProvider>
+            <DashboardHeader accessToken={null} />
+          </CommandPaletteProvider>
+        </PluginModeProvider>
+      </QueryClientProvider>
+    </LanguageProvider>,
   );
   await user.click(screen.getByRole("button", { name: "More options" }));
   const tools = await screen.findByRole("dialog", { name: "Gateway tools" });
@@ -70,6 +74,25 @@ async function openTools() {
 }
 
 describe("mobile header nested controls", () => {
+  it("switches language inside mobile tools without losing the open menu or preference", async () => {
+    const { user, tools } = await openTools();
+    await user.click(within(tools).getByRole("button", { name: "Language", exact: true }));
+    await user.click(await screen.findByRole("menuitemradio", { name: "简体中文" }));
+
+    const translatedTools = await screen.findByRole("dialog", { name: "网关工具" });
+    expect(within(translatedTools).getByRole("button", { name: "语言", exact: true })).toBeVisible();
+    expect(within(translatedTools).getByRole("button", { name: "切换为深色模式" })).toBeVisible();
+    expect(screen.getByText("请求日志")).toBeVisible();
+    expect(localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("zh-CN");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(screen.getByRole("dialog", { name: "网关工具" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "网关工具" })).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "更多选项" }));
+    expect(await screen.findByRole("dialog", { name: "网关工具" })).toBeVisible();
+  });
+
   it.each(["mouse", "touch"] as const)(
     "selects a portalled gateway item with %s without dismissing More",
     async (pointer) => {

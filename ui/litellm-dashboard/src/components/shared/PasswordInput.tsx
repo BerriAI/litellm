@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@/i18n/useTranslation";
 import { Eye, EyeOff } from "lucide-react";
 import * as React from "react";
 
@@ -12,6 +13,7 @@ export type PasswordInputProps = Omit<React.ComponentPropsWithoutRef<"input">, "
 export const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputProps>(
   ({ className, groupClassName, disabled, ...props }, ref) => {
     const [revealed, setRevealed] = React.useState(false);
+    const { t } = useTranslation();
 
     return (
       <InputGroup className={groupClassName}>
@@ -26,7 +28,7 @@ export const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputPro
           <InputGroupButton
             size="icon-xs"
             disabled={disabled}
-            aria-label={revealed ? "Hide password" : "Show password"}
+            aria-label={revealed ? t("Hide password") : t("Show password")}
             onClick={() => setRevealed((current) => !current)}
           >
             {revealed ? <EyeOff /> : <Eye />}
