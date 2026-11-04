@@ -5222,19 +5222,35 @@
               }
             },
             {
+              "description": "Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention.",
               "in": "query",
               "name": "timezone",
               "required": false,
               "schema": {
                 "anyOf": [
                   {
+                    "maximum": 840,
+                    "minimum": -840,
                     "type": "integer"
                   },
                   {
                     "type": "null"
                   }
                 ],
+                "description": "Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention.",
                 "title": "Timezone"
+              }
+            },
+            {
+              "description": "When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended.",
+              "in": "query",
+              "name": "include_current_utc_day",
+              "required": false,
+              "schema": {
+                "default": true,
+                "description": "When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended.",
+                "title": "Include Current Utc Day",
+                "type": "boolean"
               }
             }
           ],
@@ -5395,19 +5411,35 @@
               }
             },
             {
+              "description": "Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention.",
               "in": "query",
               "name": "timezone",
               "required": false,
               "schema": {
                 "anyOf": [
                   {
+                    "maximum": 840,
+                    "minimum": -840,
                     "type": "integer"
                   },
                   {
                     "type": "null"
                   }
                 ],
+                "description": "Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention.",
                 "title": "Timezone"
+              }
+            },
+            {
+              "description": "When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended.",
+              "in": "query",
+              "name": "include_current_utc_day",
+              "required": false,
+              "schema": {
+                "default": true,
+                "description": "When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended.",
+                "title": "Include Current Utc Day",
+                "type": "boolean"
               }
             }
           ],
@@ -5577,19 +5609,35 @@
               }
             },
             {
+              "description": "Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention.",
               "in": "query",
               "name": "timezone",
               "required": false,
               "schema": {
                 "anyOf": [
                   {
+                    "maximum": 840,
+                    "minimum": -840,
                     "type": "integer"
                   },
                   {
                     "type": "null"
                   }
                 ],
+                "description": "Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention.",
                 "title": "Timezone"
+              }
+            },
+            {
+              "description": "When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended.",
+              "in": "query",
+              "name": "include_current_utc_day",
+              "required": false,
+              "schema": {
+                "default": true,
+                "description": "When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended.",
+                "title": "Include Current Utc Day",
+                "type": "boolean"
               }
             }
           ],
@@ -5749,19 +5797,35 @@
               }
             },
             {
+              "description": "Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention.",
               "in": "query",
               "name": "timezone",
               "required": false,
               "schema": {
                 "anyOf": [
                   {
+                    "maximum": 840,
+                    "minimum": -840,
                     "type": "integer"
                   },
                   {
                     "type": "null"
                   }
                 ],
+                "description": "Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention.",
                 "title": "Timezone"
+              }
+            },
+            {
+              "description": "When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended.",
+              "in": "query",
+              "name": "include_current_utc_day",
+              "required": false,
+              "schema": {
+                "default": true,
+                "description": "When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended.",
+                "title": "Include Current Utc Day",
+                "type": "boolean"
               }
             }
           ],
@@ -5922,19 +5986,35 @@
               }
             },
             {
+              "description": "Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention.",
               "in": "query",
               "name": "timezone",
               "required": false,
               "schema": {
                 "anyOf": [
                   {
+                    "maximum": 840,
+                    "minimum": -840,
                     "type": "integer"
                   },
                   {
                     "type": "null"
                   }
                 ],
+                "description": "Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention.",
                 "title": "Timezone"
+              }
+            },
+            {
+              "description": "When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended.",
+              "in": "query",
+              "name": "include_current_utc_day",
+              "required": false,
+              "schema": {
+                "default": true,
+                "description": "When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended.",
+                "title": "Include Current Utc Day",
+                "type": "boolean"
               }
             }
           ],

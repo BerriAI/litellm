@@ -48,7 +48,7 @@ PRISMA_TO_PG_TABLE: Final[Mapping[DailyActivityTable, str]] = MappingProxyType(
 
 
 _MIN_TIMEZONE_OFFSET_MINUTES: Final = -840  # UTC+14 (e.g. Line Islands)
-_MAX_TIMEZONE_OFFSET_MINUTES: Final = 840   # UTC-14
+_MAX_TIMEZONE_OFFSET_MINUTES: Final = 840  # UTC-14
 
 
 def adjust_dates_for_timezone(

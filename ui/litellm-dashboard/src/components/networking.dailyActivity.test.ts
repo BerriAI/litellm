@@ -6,6 +6,7 @@ import {
   dailyActivityExportCall,
   dailyActivityKeySearchCall,
   dailyActivityModelTopKeysCall,
+  gatewayDailyActivityCall,
 } from "./networking";
 import type { DailyActivityEntity, DailyActivityRequest } from "./UsagePage/dailyActivityApi";
 
@@ -26,8 +27,8 @@ const captureFetch = () => {
 const requestedUrl = (mockFetch: ReturnType<typeof captureFetch>, callIndex = 0): URL =>
   new URL(String(mockFetch.mock.calls[callIndex][0]), "http://example.com");
 
-const start = new Date("2025-01-05T00:00:00Z");
-const end = new Date("2025-01-31T00:00:00Z");
+const start = new Date(2025, 0, 5);
+const end = new Date(2025, 0, 31);
 
 const req = (overrides: Partial<DailyActivityRequest> = {}): DailyActivityRequest => ({
   accessToken: "sk-key",
@@ -38,6 +39,8 @@ const req = (overrides: Partial<DailyActivityRequest> = {}): DailyActivityReques
 
 afterEach(() => {
   global.fetch = originalFetch;
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 describe("dailyActivityAggregatedCall", () => {
@@ -115,13 +118,20 @@ describe("dailyActivityAggregatedCall", () => {
     expect(requestedUrl(mockFetch).searchParams.has("api_key")).toBe(false);
   });
 
-  it("sends include_current_utc_day only when set", async () => {
-    const mockFetch = captureFetch();
+  it.each<[DailyActivityEntity]>([["user"], ["team"], ["tag"], ["organization"], ["customer"], ["agent"]])(
+    "preserves true, false, and omitted live-day settings for %s",
+    async (entity) => {
+      const mockFetch = captureFetch();
 
-    await dailyActivityAggregatedCall("user", req({ includeCurrentUtcDay: true }));
+      for (const setting of [true, false, undefined]) {
+        await dailyActivityAggregatedCall(entity, req({ includeCurrentUtcDay: setting }));
 
-    expect(requestedUrl(mockFetch).searchParams.get("include_current_utc_day")).toBe("true");
-  });
+        expect(
+          requestedUrl(mockFetch, mockFetch.mock.calls.length - 1).searchParams.get("include_current_utc_day"),
+        ).toBe(setting === undefined ? null : String(setting));
+      }
+    },
+  );
 
   it("sends api_key_limit only when provided", async () => {
     const mockFetch = captureFetch();
@@ -132,6 +142,29 @@ describe("dailyActivityAggregatedCall", () => {
     expect(requestedUrl(mockFetch, 0).searchParams.has("api_key_limit")).toBe(false);
     expect(requestedUrl(mockFetch, 1).searchParams.get("api_key_limit")).toBe("250");
   });
+});
+
+describe("gatewayDailyActivityCall", () => {
+  it.each(["America/Los_Angeles", "Asia/Kolkata"])(
+    "sends local date boundaries and the caller's live-day timezone in %s",
+    async (timezone) => {
+      vi.stubEnv("TZ", timezone);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-08-06T02:00:00Z"));
+      const mockFetch = captureFetch();
+      const rangeStart = new Date(2026, 11, 31);
+      const rangeEnd = new Date(2027, 0, 1);
+
+      await gatewayDailyActivityCall("sk-key", rangeStart, rangeEnd);
+
+      const url = requestedUrl(mockFetch);
+      expect(url.pathname).toBe("/gateway/daily/activity");
+      expect(url.searchParams.get("start_date")).toBe("2026-12-31");
+      expect(url.searchParams.get("end_date")).toBe("2027-01-01");
+      expect(url.searchParams.get("timezone")).toBe(String(new Date().getTimezoneOffset()));
+      expect(url.searchParams.get("include_current_utc_day")).toBe("true");
+    },
+  );
 });
 
 describe("dailyActivityKeySearchCall", () => {
