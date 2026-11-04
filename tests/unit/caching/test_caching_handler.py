@@ -2765,6 +2765,22 @@ def _anthropic_stream_without_content_blocks() -> dict[str, object]:
     }
 
 
+def _anthropic_sse_event(payload: dict[str, object]) -> str:
+    return f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+
+
+def _anthropic_stream_with_only_empty_blocks(*blocks_and_deltas: dict[str, object]) -> dict[str, object]:
+    return {
+        CACHED_STREAM_EVENTS_KEY: [
+            'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_1", "content": []}}\n\n',
+            *(_anthropic_sse_event(event) for event in blocks_and_deltas),
+            'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n',
+            'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}\n\n',
+            'event: message_stop\ndata: {"type": "message_stop"}\n\n',
+        ]
+    }
+
+
 EmptyResult = ModelResponse | TextCompletionResponse | ResponsesAPIResponse | dict[str, object]
 EmptyResponseCase = tuple[EmptyResult, Callable[..., Awaitable[object]], str, dict[str, object]]
 
@@ -2810,6 +2826,39 @@ def _empty_response_cases() -> list[EmptyResponseCase]:
         ),
         (
             _anthropic_stream_without_content_blocks(),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
+        ),
+        (
+            _anthropic_stream_with_only_empty_blocks(
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            ),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
+        ),
+        (
+            _anthropic_stream_with_only_empty_blocks(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": "", "citations": None},
+                },
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": ""}},
+            ),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
+        ),
+        (
+            _anthropic_stream_with_only_empty_blocks(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": "", "citations": []},
+                },
+            ),
             aanthropic_messages,
             CallTypes.aanthropic_messages.value,
             {"messages": _unique_messages(), "max_tokens": 16, "stream": True},

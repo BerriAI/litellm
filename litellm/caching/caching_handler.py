@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     assemble_complete_response_from_streaming_chunks,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.caching import CACHED_STREAM_EVENTS_KEY, EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -67,6 +68,7 @@ _StreamResultT = TypeVar("_StreamResultT")
 
 
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_parent_otel_span_from_kwargs,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -128,9 +130,37 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
-def _starts_content_block(event: object) -> bool:
-    text: Final = event.decode("utf-8", errors="replace") if isinstance(event, bytes) else event
-    return isinstance(text, str) and "event: content_block_start" in text.splitlines()
+_SSE_EVENT_DATA: Final = TypeAdapter(Mapping[str, object])
+
+
+def _sse_event_data(line: str) -> Mapping[str, object] | None:
+    if not line.startswith("data:"):
+        return None
+    try:
+        return _SSE_EVENT_DATA.validate_json(line.removeprefix("data:"))
+    except ValidationError:
+        return None
+
+
+def _content_block_payload(event: Mapping[str, object]) -> object:
+    match event.get("type"):
+        case "content_block_start":
+            return event.get("content_block")
+        case "content_block_delta":
+            return event.get("delta")
+        case _:
+            return None
+
+
+def _sse_line_carries_output(line: str) -> bool:
+    event: Final = _sse_event_data(line)
+    payload: Final = as_str_mapping(_content_block_payload(event)) if event is not None else None
+    return payload is not None and any(key != "type" and value not in ("", [], None) for key, value in payload.items())
+
+
+def _sse_frame_carries_output(frame: object) -> bool:
+    text: Final = frame.decode("utf-8", errors="replace") if isinstance(frame, bytes) else frame
+    return isinstance(text, str) and any(_sse_line_carries_output(line) for line in split_sse_lines(text))
 
 
 def is_response_without_output(result: object) -> bool:
@@ -142,7 +172,7 @@ def is_response_without_output(result: object) -> bool:
         return False
     cached_stream_events: Final = result.get(CACHED_STREAM_EVENTS_KEY)
     if isinstance(cached_stream_events, (list, tuple)):
-        return not any(_starts_content_block(event) for event in cached_stream_events)
+        return not any(_sse_frame_carries_output(event) for event in cached_stream_events)
     if "choices" in result:
         return not result["choices"]
     if result.get("object") == "response":
