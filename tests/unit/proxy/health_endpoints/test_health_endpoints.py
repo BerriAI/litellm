@@ -35,6 +35,9 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.proxy.health_endpoints.model_checks import CHAT_COMPLETIONS_SCRIPT, TestModelRouteType
+from litellm.proxy.health_endpoints.test_model_requests import CHAT_COMPLETIONS
+from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash, claim_request_stash_for_data
 from litellm.router import Router
 from litellm.types.router import RouterModelGroupAliasItem
 from litellm.types.utils import oauth_token_exchange_litellm_params
@@ -6199,6 +6202,7 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admin: bool
 ) -> None:
     from starlette.requests import Request
+
     from litellm.proxy import proxy_server
 
     monkeypatch.setenv("CHATGPT_AUTH_FILE", str(tmp_path / "missing-default-auth.json"))
@@ -6252,3 +6256,108 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
                 await call
             assert error.value.code == "403"
             assert len(upstream.calls) == 0
+
+
+class _RewritingHooks:
+    """Stands in for ProxyLogging: a guardrail that rewrites the prompt, then a rate limiter that rejects it."""
+
+    def __init__(self) -> None:
+        self.stashes: tuple[RequestRateLimiterStash, ...] = ()
+        self.failed_routes: tuple[str, ...] = ()
+
+    async def pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: TestModelRouteType
+    ) -> dict[str, object]:
+        self.stashes = (*self.stashes, claim_request_stash_for_data(data))
+        messages: Final = data["messages"]
+        assert isinstance(messages, list)
+        first: Final = messages[0]
+        assert isinstance(first, dict)
+        first["content"] = "<redacted by a guardrail>"
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    async def post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        *,
+        route: str,
+    ) -> HTTPException | None:
+        self.failed_routes = (*self.failed_routes, route)
+        return None
+
+
+@pytest.mark.asyncio
+async def test_test_model_turns_run_the_proxy_hooks_on_a_copy_of_the_fixture_each_in_its_own_request_context() -> None:
+    hooks: Final = _RewritingHooks()
+    call: Final = _health_endpoints_module._turn_caller(  # pyright: ignore[reportPrivateUsage]  # the seam under test
+        None,
+        pinned_model_id=None,
+        call_params={"model": "openai/synthetic"},
+        proxy_metadata={},
+        user_api_key_dict=UserAPIKeyAuth(token="synthetic-token"),
+        hooks=hooks,
+        guardrail_model_name=None,
+    )
+    fixture_before: Final = copy.deepcopy(CHAT_COMPLETIONS.turn_1)
+
+    for call_id in ("turn-a", "turn-b"):
+        with pytest.raises(HTTPException, match="Rate limit exceeded"):
+            await call(CHAT_COMPLETIONS_SCRIPT, CHAT_COMPLETIONS.turn_1, call_id)
+
+    assert CHAT_COMPLETIONS.turn_1 == fixture_before
+    assert hooks.stashes[0] is not hooks.stashes[1]
+    assert [stash.owner_litellm_call_id for stash in hooks.stashes] == ["turn-a", "turn-b"]
+    assert hooks.failed_routes == ("/health/test_model", "/health/test_model")
+
+
+class _RecordingHooks:
+    def __init__(self) -> None:
+        self.guardrails: tuple[object, ...] = ()
+
+    async def pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: TestModelRouteType
+    ) -> dict[str, object]:
+        metadata: Final = data.get("metadata")
+        assert isinstance(metadata, dict)
+        self.guardrails = (*self.guardrails, metadata.get("guardrails"))
+        raise HTTPException(status_code=400, detail="stopped before the provider")
+
+    async def post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        *,
+        route: str,
+    ) -> HTTPException | None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_test_model_turns_pick_up_the_guardrails_attached_to_the_saved_deployment() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "guarded-model",
+                "litellm_params": {"model": "openai/synthetic", "api_key": "synthetic", "guardrails": ["pii-mask"]},
+                "model_info": {"id": "guarded-deployment"},
+            }
+        ]
+    )
+    hooks: Final = _RecordingHooks()
+    call: Final = _health_endpoints_module._turn_caller(  # pyright: ignore[reportPrivateUsage]  # the seam under test
+        router,
+        pinned_model_id="guarded-deployment",
+        call_params={},
+        proxy_metadata={},
+        user_api_key_dict=UserAPIKeyAuth(token="synthetic-token"),
+        hooks=hooks,
+        guardrail_model_name="guarded-model",
+    )
+
+    with pytest.raises(HTTPException, match="stopped before the provider"):
+        await call(CHAT_COMPLETIONS_SCRIPT, CHAT_COMPLETIONS.turn_1, "turn-a")
+
+    assert hooks.guardrails == (["pii-mask"],)

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, TypeAlias, TypedDict
+from typing import Annotated, Final, Literal, Protocol, TypeAlias, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -105,6 +105,7 @@ from litellm.proxy.health_endpoints.model_checks import (
     EndpointScript,
     TestModelEndpoint,
     TestModelResponse,
+    TestModelRouteType,
     endpoint_result_payload,
     overall_status,
     response_cost,
@@ -117,7 +118,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_api import deployment_usable_by_team
 from litellm.secret_managers.main import get_secret_bool
@@ -2733,6 +2734,26 @@ async def _logged_cost(logging_obj: LiteLLMLoggingObj, fallback: float | None) -
     return float(logged) if isinstance(logged, int | float) else fallback
 
 
+class TurnHooks(Protocol):
+    """The part of ProxyLogging a health-check turn goes through, the same two hooks a proxied request hits."""
+
+    async def pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict[str, object],  # mutable-ok: ProxyLogging.pre_call_hook rewrites the request dict in place
+        call_type: TestModelRouteType,
+    ) -> dict[str, object]: ...  # mutable-ok: ProxyLogging.pre_call_hook returns that same request dict
+
+    async def post_call_failure_hook(
+        self,
+        request_data: dict[str, object],  # mutable-ok: ProxyLogging.post_call_failure_hook takes the request dict
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        *,
+        route: str,
+    ) -> HTTPException | None: ...
+
+
 def _turn_caller(
     llm_router: Router | None,
     *,
@@ -2740,29 +2761,31 @@ def _turn_caller(
     call_params: Mapping[str, object],
     proxy_metadata: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
-    proxy_logging_obj: ProxyLogging,
+    hooks: TurnHooks,
+    guardrail_model_name: str | None,
 ) -> Callable[[EndpointScript, Mapping[str, object], str], Awaitable[CalledTurn]]:
     """The two ways a turn reaches the provider: pinned to a saved deployment through the router, so the
     deployment's own credentials and pricing apply, or straight through litellm with the submitted params.
-    Either way the turn goes through the proxy's pre-call hooks first, so the caller's rate limits, parallel
-    request cap and guardrails apply to it the way they apply to every proxied request, and it carries the
-    proxy's own logging object, so the cost read back is the one the spend log row gets. Every turn skips
-    LiteLLM's response cache, so the reply, and the cache-miss retry of the same prompt, come from the provider
-    and not from a stored answer."""
+    Either way the turn picks up the guardrails attached to the deployments under ``guardrail_model_name`` and
+    goes through the proxy's pre-call hooks, so the caller's rate limits, parallel request cap and those
+    guardrails apply to it the way they apply to every proxied request, and it carries the
+    proxy's own logging object, so the cost read back is the one the spend log row gets. Each turn runs in its
+    own task, so hooks that keep per-request state in context variables (the rate limiter's slot stash) see one
+    request per turn, as they do for separate proxied requests, and the hooks get a deep copy of the shared
+    conversation fixture so a content-rewriting guardrail cannot change the next check's prompt. Every turn
+    skips LiteLLM's response cache, so the reply, and the cache-miss retry of the same prompt, come from the
+    provider and not from a stored answer."""
 
-    async def call(script: EndpointScript, body: Mapping[str, object], call_id: str) -> CalledTurn:
-        target_params: Final = {"model": pinned_model_id} if pinned_model_id is not None else call_params
-        request: Final = {
-            **target_params,
-            **body,
-            script.metadata_key: {**proxy_metadata, "tags": [_test_model_tag(call_id)]},
-            "litellm_call_id": call_id,
-            "drop_params": True,
-            "cache": {"no-cache": True},
-        }
+    async def admitted_turn(
+        script: EndpointScript,
+        request: dict[str, object],  # mutable-ok: the pre-call hooks rewrite the request dict in place
+    ) -> tuple[LiteLLMLoggingObj, object]:
         try:
-            admitted: Final = await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=user_api_key_dict, data=request, call_type=script.route_type
+            guarded: Final = check_and_merge_model_level_guardrails(
+                data=request, llm_router=llm_router, trust_client_model_info=False, model_alias=guardrail_model_name
+            )
+            admitted: Final = await hooks.pre_call_hook(
+                user_api_key_dict=user_api_key_dict, data=guarded, call_type=script.route_type
             )
             logging_obj, prepared = litellm.utils.function_setup(
                 original_function=script.route_type,
@@ -2776,13 +2799,26 @@ def _turn_caller(
                 getattr(target, script.route_type)(**prepared), HEALTH_CHECK_TIMEOUT_SECONDS
             )
         except Exception as error:
-            await proxy_logging_obj.post_call_failure_hook(
+            await hooks.post_call_failure_hook(
                 request_data=request,
                 original_exception=error,
                 user_api_key_dict=user_api_key_dict,
                 route="/health/test_model",
             )
             raise
+        return logging_obj, response
+
+    async def call(script: EndpointScript, body: Mapping[str, object], call_id: str) -> CalledTurn:
+        target_params: Final = {"model": pinned_model_id} if pinned_model_id is not None else call_params
+        request: Final = {
+            **target_params,
+            **copy.deepcopy(dict(body)),
+            script.metadata_key: {**proxy_metadata, "tags": [_test_model_tag(call_id)]},
+            "litellm_call_id": call_id,
+            "drop_params": True,
+            "cache": {"no-cache": True},
+        }
+        logging_obj, response = await asyncio.create_task(admitted_turn(script, request))
         return CalledTurn(response=response, cost=await _logged_cost(logging_obj, response_cost(response)))
 
     return call
@@ -2914,11 +2950,12 @@ async def test_model(
         overrides_saved_deployment: Final = any(
             key != "model" or value != resolved.stored_model for key, value in resolved.request_litellm_params.items()
         )
-        pinned_model_id: Final = (
-            resolved.deployment_by_id.model_info.id
+        pinned: Final = (
+            resolved.deployment_by_id
             if resolved.deployment_by_id is not None and not overrides_saved_deployment
             else None
         )
+        pinned_model_id: Final = pinned.model_info.id if pinned is not None else None
         proxy_metadata: Final = {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict),
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
@@ -2935,7 +2972,8 @@ async def test_model(
             },
             proxy_metadata=proxy_metadata,
             user_api_key_dict=user_api_key_dict,
-            proxy_logging_obj=proxy_logging_obj,
+            hooks=proxy_logging_obj,
+            guardrail_model_name=pinned.model_name if pinned is not None else None,
         )
         run_query: Final[_RawQuery | None] = prisma_client.db.query_raw if prisma_client is not None else None
         started_at: Final = datetime.now(timezone.utc) - timedelta(minutes=1)
