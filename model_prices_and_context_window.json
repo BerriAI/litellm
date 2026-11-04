@@ -67581,11 +67581,12 @@
     },
     "xai/grok-imagine-image-quality": {
         "deprecation_date": "2026-11-02",
-        "deprecation_source": "https://docs.x.ai/docs/models",
+        "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "input_cost_per_image": 0.05,
         "litellm_provider": "xai",
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
+        "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
         ],
@@ -67599,11 +67600,12 @@
     },
     "xai/grok-imagine-image-quality-20260403": {
         "deprecation_date": "2026-11-02",
-        "deprecation_source": "https://docs.x.ai/docs/models",
+        "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "input_cost_per_image": 0.05,
         "litellm_provider": "xai",
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
+        "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
         ],
@@ -67617,11 +67619,12 @@
     },
     "xai/grok-imagine-image-quality-latest": {
         "deprecation_date": "2026-11-02",
-        "deprecation_source": "https://docs.x.ai/docs/models",
+        "deprecation_source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "input_cost_per_image": 0.05,
         "litellm_provider": "xai",
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
+        "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
         ],
@@ -67635,11 +67638,12 @@
     },
     "xai/grok-imagine-image-pro": {
         "deprecation_date": "2026-05-15",
-        "deprecation_source": "https://docs.x.ai/docs/models",
+        "deprecation_source": "https://docs.x.ai/developers/migration/may-15-retirement",
         "input_cost_per_image": 0.05,
         "litellm_provider": "xai",
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
+        "successor_model": "xai/grok-imagine-image-2.0",
         "supported_endpoints": [
             "/v1/images/generations"
         ],
@@ -67757,6 +67761,7 @@
     },
     "xai/grok-voice-transcribe-1.0": {
         "deprecation_date": "2026-10-02",
+        "deprecation_source": "https://docs.x.ai/docs/release-notes",
         "successor_model": "xai/grok-voice-transcribe-2.0",
         "input_cost_per_second": 2.778e-05,
         "litellm_provider": "xai",
@@ -74548,6 +74553,7 @@
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "deprecation_date": "2026-05-15",
+        "deprecation_source": "https://docs.x.ai/developers/migration/may-15-retirement",
         "input_cost_per_image_token": 1e-06,
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_above_200k_tokens": 2e-06,
@@ -74558,6 +74564,7 @@
         "output_cost_per_token": 2e-06,
         "output_cost_per_token_above_200k_tokens": 4e-06,
         "source": "https://api.x.ai/v1/language-models",
+        "successor_model": "xai/grok-build-0.1",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -77919,6 +77926,7 @@
         "litellm_provider": "xai",
         "mode": "realtime",
         "source": "https://docs.x.ai/developers/pricing",
+        "successor_model": "xai/grok-voice-3.0",
         "supported_endpoints": [
             "/v1/realtime"
         ],
