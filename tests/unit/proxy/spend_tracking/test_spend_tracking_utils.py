@@ -4418,6 +4418,81 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["total_tokens"] == 31
 
 
+def _fallback_after_a_failed_follow_up(
+    cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})
+):
+    from litellm.litellm_core_utils.hidden_params import set_hidden_param
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import ModelResponse, Usage
+
+    now: Final = datetime.datetime.now(timezone.utc)
+    logger: Final = Logging(
+        model="fallback-model",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=now,
+        litellm_call_id="caller",
+        function_id="function",
+    )
+    logger.update_environment_variables(
+        model="fallback-model",
+        custom_llm_provider="openai",
+        litellm_params={"metadata": {"user_api_key": "sk-test"}},
+        optional_params=dict(request_params),
+    )
+    fallback: Final = ModelResponse(id="fallback", usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4))
+    set_hidden_param(fallback, "response_cost", 0.1)
+    logger.record_served_rounds_for_failure(((Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.4),))
+    logger.carry_failed_attempt_usage()
+    logger.model_call_details["cache_hit"] = cache_hit
+    prepared: Final = logger.prepare_response_cost(fallback, now)
+    assert prepared is not None
+    return logger, fallback, prepared, now
+
+
+@pytest.mark.parametrize(("cache_hit", "own_cost"), [(False, 0.1), (True, 0.0)], ids=["fresh", "cached"])
+def test_success_row_bills_a_failed_follow_ups_cost_and_tokens(cache_hit: bool, own_cost: float):
+    logger, fallback, _, now = _fallback_after_a_failed_follow_up(cache_hit)
+
+    payload: Final = get_logging_payload(
+        kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
+    )
+
+    assert payload["spend"] == pytest.approx(own_cost + 0.4)
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (3 + 5, 1 + 2, 4 + 7)
+
+
+@pytest.mark.parametrize(("cache_hit", "own_cost"), [(False, 0.1), (True, 0.0)], ids=["fresh", "cached"])
+def test_request_params_cannot_change_what_a_failed_follow_up_bills(cache_hit: bool, own_cost: float):
+    forged_attempt: Final = [{"prompt_tokens": 1000, "completion_tokens": 1000, "total_tokens": 2000}, -100.0]
+    logger, fallback, _, now = _fallback_after_a_failed_follow_up(
+        cache_hit,
+        {
+            "stash_billed_by_continuation": True,
+            "failed_attempts_owed_on_success": [forged_attempt],
+            "failed_attempts_billed_on_success": [forged_attempt],
+        },
+    )
+
+    payload: Final = get_logging_payload(
+        kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
+    )
+
+    assert payload["spend"] == pytest.approx(own_cost + 0.4)
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (8, 3, 11)
+
+
+def test_cached_fallback_cost_breakdown_adds_up_to_the_billed_failed_follow_up():
+    _, _, prepared, _ = _fallback_after_a_failed_follow_up(cache_hit=True)
+
+    breakdown: Final = prepared.payload["cost_breakdown"]
+
+    assert breakdown is not None
+    assert breakdown["total_cost"] == pytest.approx(prepared.payload["response_cost"]) == pytest.approx(0.4)
+    assert breakdown["additional_costs"]["failed_attempts_cost"] == pytest.approx(0.4)
+
+
 def test_get_logging_payload_failure_without_recovered_usage_is_zero():
     """A failure with no recovered usage keeps zero token counts, so the
     combined-usage override never invents tokens for ordinary failures.
