@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { dailyActivityExportCall } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import type { DailyActivityRequest } from "@/components/UsagePage/dailyActivityApi";
 import type { AgentRow } from "../components/overview/agentCatalog";
 import { clientAgentModelsFromExport, type ClientAgentModelsResult } from "./clientAgentModelsData";
@@ -18,15 +19,18 @@ const loadModels = async (request: DailyActivityRequest, agent: AgentRow): Promi
   try {
     const blob = await dailyActivityExportCall("tag", request, "daily_with_models", "json");
     if (blob.size > MAX_CLIENT_MODEL_EXPORT_BYTES) {
-      return { results: [], error: "Choose a shorter date range to load the model breakdown" };
+      return { results: [], error: i18n.t("usage.clientModels.errors.tooLarge") };
     }
     const payload: unknown = JSON.parse(await blob.text());
     return clientAgentModelsFromExport(payload, agent);
   } catch (error: unknown) {
     if (error instanceof SyntaxError) {
-      return { results: [], error: "Could not load complete model usage. Try again." };
+      return { results: [], error: i18n.t("usage.clientModels.errors.invalidJson") };
     }
-    return { results: [], error: error instanceof Error ? error.message : "Could not load the model breakdown" };
+    return {
+      results: [],
+      error: error instanceof Error ? error.message : i18n.t("usage.clientModels.errors.loadFailed"),
+    };
   }
 };
 
@@ -61,7 +65,7 @@ export function useClientAgentModels({ accessToken, startTime, endTime, agent, e
   return {
     results: current?.results ?? [],
     loading: active && validRange && current === null,
-    error: active && !validRange ? "Select a valid date range" : current?.error ?? null,
+    error: active && !validRange ? i18n.t("usage.clientUsage.errors.invalidRange") : current?.error ?? null,
     reload,
   };
 }

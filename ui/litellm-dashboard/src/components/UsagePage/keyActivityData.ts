@@ -1,4 +1,5 @@
 import type { Team } from "@/components/key_team_helpers/key_list";
+import i18n from "@/i18n/i18n";
 import { processActivityData } from "@/components/activity_metrics";
 import type { DailyActivityAggregatedResponse, DailyActivityMetadata, KeySpendActivityRow } from "./dailyActivityApi";
 import { toDailyData } from "./dailyActivityApi";
@@ -18,7 +19,7 @@ export const overallUsageMetrics = (
   results: ReturnType<typeof toDailyData>,
   metadata: DailyActivityMetadata,
 ): ModelActivityData => ({
-  label: "Overall Usage",
+  label: i18n.t("usage.keyActivity.overallUsage"),
   total_requests: metadata.total_api_requests,
   total_successful_requests: metadata.total_successful_requests,
   total_failed_requests: metadata.total_failed_requests,

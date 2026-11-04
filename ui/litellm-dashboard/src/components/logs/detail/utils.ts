@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+
 /**
  * Utility functions for LogDetailsDrawer component.
  * These functions handle data formatting, validation, and guardrail calculations.
@@ -87,10 +89,10 @@ export function calculateTotalMaskedEntities(entries: any[]): number {
  * @param entries - Array of guardrail entries
  * @returns Display string for guardrail label
  */
-export function getGuardrailLabel(entries: any[]): string {
+export function getGuardrailLabel(entries: any[], t: TFunction): string {
   if (entries.length === 0) return "-";
   if (entries.length === 1) return entries[0]?.guardrail_name ?? "-";
-  return `${entries.length} guardrails`;
+  return t("logs.detail.guardrailLabel.count", { count: entries.length });
 }
 
 /**

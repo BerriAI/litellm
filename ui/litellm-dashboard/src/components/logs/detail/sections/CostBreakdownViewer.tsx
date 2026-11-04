@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
@@ -50,6 +51,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   cacheReadTokens,
   cacheCreationTokens,
 }) => {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const isCached = cacheHit?.toLowerCase() === "true";
   const hasTokenCounts = promptTokens !== undefined || completionTokens !== undefined;
@@ -100,12 +102,12 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
             <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
           )}
           <div className="flex items-center justify-between w-full">
-            <h3 className="text-lg font-medium text-foreground">Cost Breakdown</h3>
+            <h3 className="text-lg font-medium text-foreground">{t("logs.detail.costBreakdown.title")}</h3>
             <div className="flex items-center space-x-2 mr-4">
-              <span className="text-sm text-muted-foreground">Total:</span>
+              <span className="text-sm text-muted-foreground">{t("logs.detail.costBreakdown.total")}</span>
               <span className="text-sm font-semibold text-foreground">
                 {formatCost(totalSpend)}
-                {isCached && " (Cached)"}
+                {isCached && t("logs.detail.costBreakdown.cached")}
               </span>
             </div>
           </div>
@@ -127,24 +129,34 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                   return (
                     <>
                       <div className="flex text-sm">
-                        <span className="text-muted-foreground font-medium w-1/3">Input Cost:</span>
+                        <span className="text-muted-foreground font-medium w-1/3">
+                          {t("logs.detail.costBreakdown.inputCost")}
+                        </span>
                         <span className="text-foreground">
                           {formatCost(rawCost)}
                           {rawInputTokens !== undefined && rawInputTokens !== null && (
                             <span className="text-muted-foreground font-normal ml-1">
-                              ({rawInputTokens.toLocaleString()} tokens)
+                              {t("logs.detail.costBreakdown.tokens", {
+                                count: rawInputTokens,
+                                value: rawInputTokens.toLocaleString(),
+                              })}
                             </span>
                           )}
                         </span>
                       </div>
                       {(costBreakdown?.cache_read_cost ?? 0) > 0 && (
                         <div className="flex text-sm">
-                          <span className="text-muted-foreground font-medium w-1/3">Prompt Cache Read Cost:</span>
+                          <span className="text-muted-foreground font-medium w-1/3">
+                            {t("logs.detail.costBreakdown.cacheReadCost")}
+                          </span>
                           <span className="text-foreground">
                             {formatCost(isCached ? 0 : costBreakdown?.cache_read_cost)}
                             {(cacheReadTokens ?? 0) > 0 && (
                               <span className="text-muted-foreground font-normal ml-1">
-                                ({(cacheReadTokens ?? 0).toLocaleString()} tokens)
+                                {t("logs.detail.costBreakdown.tokens", {
+                                  count: cacheReadTokens ?? 0,
+                                  value: (cacheReadTokens ?? 0).toLocaleString(),
+                                })}
                               </span>
                             )}
                           </span>
@@ -152,12 +164,17 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                       )}
                       {(costBreakdown?.cache_creation_cost ?? 0) > 0 && (
                         <div className="flex text-sm">
-                          <span className="text-muted-foreground font-medium w-1/3">Prompt Cache Write Cost:</span>
+                          <span className="text-muted-foreground font-medium w-1/3">
+                            {t("logs.detail.costBreakdown.cacheWriteCost")}
+                          </span>
                           <span className="text-foreground">
                             {formatCost(isCached ? 0 : costBreakdown?.cache_creation_cost)}
                             {(cacheCreationTokens ?? 0) > 0 && (
                               <span className="text-muted-foreground font-normal ml-1">
-                                ({(cacheCreationTokens ?? 0).toLocaleString()} tokens)
+                                {t("logs.detail.costBreakdown.tokens", {
+                                  count: cacheCreationTokens ?? 0,
+                                  value: (cacheCreationTokens ?? 0).toLocaleString(),
+                                })}
                               </span>
                             )}
                           </span>
@@ -168,12 +185,17 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                 }
                 return (
                   <div className="flex text-sm">
-                    <span className="text-muted-foreground font-medium w-1/3">Input Cost:</span>
+                    <span className="text-muted-foreground font-medium w-1/3">
+                      {t("logs.detail.costBreakdown.inputCost")}
+                    </span>
                     <span className="text-foreground">
                       {formatCost(inputCost)}
                       {promptTokens !== undefined && (
                         <span className="text-muted-foreground font-normal ml-1">
-                          ({promptTokens.toLocaleString()} prompt tokens)
+                          {t("logs.detail.costBreakdown.promptTokens", {
+                            count: promptTokens,
+                            value: promptTokens.toLocaleString(),
+                          })}
                         </span>
                       )}
                     </span>
@@ -181,19 +203,26 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                 );
               })()}
               <div className="flex text-sm">
-                <span className="text-muted-foreground font-medium w-1/3">Output Cost:</span>
+                <span className="text-muted-foreground font-medium w-1/3">
+                  {t("logs.detail.costBreakdown.outputCost")}
+                </span>
                 <span className="text-foreground">
                   {formatCost(outputCost)}
                   {completionTokens !== undefined && (
                     <span className="text-muted-foreground font-normal ml-1">
-                      ({completionTokens.toLocaleString()} completion tokens)
+                      {t("logs.detail.costBreakdown.completionTokens", {
+                        count: completionTokens,
+                        value: completionTokens.toLocaleString(),
+                      })}
                     </span>
                   )}
                 </span>
               </div>
               {costBreakdown?.tool_usage_cost !== undefined && costBreakdown.tool_usage_cost > 0 && (
                 <div className="flex text-sm">
-                  <span className="text-muted-foreground font-medium w-1/3">Tool Usage Cost:</span>
+                  <span className="text-muted-foreground font-medium w-1/3">
+                    {t("logs.detail.costBreakdown.toolUsageCost")}
+                  </span>
                   <span className="text-foreground">{formatCost(costBreakdown.tool_usage_cost)}</span>
                 </div>
               )}
@@ -212,7 +241,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
             {!isCached && (
               <div className="pt-2 border-t border-border max-w-2xl">
                 <div className="flex text-sm font-semibold">
-                  <span className="text-foreground w-1/3">Original LLM Cost:</span>
+                  <span className="text-foreground w-1/3">{t("logs.detail.costBreakdown.originalCost")}</span>
                   <span className="text-foreground">{formatCost(originalCost)}</span>
                 </div>
               </div>
@@ -227,14 +256,16 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                     {costBreakdown.discount_percent !== undefined && costBreakdown.discount_percent !== 0 && (
                       <div className="flex text-sm text-muted-foreground">
                         <span className="font-medium w-1/3">
-                          Discount ({formatPercent(costBreakdown.discount_percent)}):
+                          {t("logs.detail.costBreakdown.discountPercent", {
+                            percent: formatPercent(costBreakdown.discount_percent),
+                          })}
                         </span>
                         <span className="text-foreground">-{formatCost(costBreakdown.discount_amount)}</span>
                       </div>
                     )}
                     {costBreakdown.discount_amount !== undefined && costBreakdown.discount_percent === undefined && (
                       <div className="flex text-sm text-muted-foreground">
-                        <span className="font-medium w-1/3">Discount Amount:</span>
+                        <span className="font-medium w-1/3">{t("logs.detail.costBreakdown.discountAmount")}</span>
                         <span className="text-foreground">-{formatCost(costBreakdown.discount_amount)}</span>
                       </div>
                     )}
@@ -247,7 +278,9 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                     {costBreakdown.margin_percent !== undefined && costBreakdown.margin_percent !== 0 && (
                       <div className="flex text-sm text-muted-foreground">
                         <span className="font-medium w-1/3">
-                          Margin ({formatPercent(costBreakdown.margin_percent)}):
+                          {t("logs.detail.costBreakdown.marginPercent", {
+                            percent: formatPercent(costBreakdown.margin_percent),
+                          })}
                         </span>
                         <span className="text-foreground">
                           +
@@ -259,7 +292,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                     )}
                     {costBreakdown.margin_fixed_amount !== undefined && costBreakdown.margin_fixed_amount !== 0 && (
                       <div className="flex text-sm text-muted-foreground">
-                        <span className="font-medium w-1/3">Margin:</span>
+                        <span className="font-medium w-1/3">{t("logs.detail.costBreakdown.margin")}</span>
                         <span className="text-foreground">+{formatCost(costBreakdown.margin_fixed_amount)}</span>
                       </div>
                     )}
@@ -271,10 +304,12 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
             {/* Final Summary */}
             <div className="mt-4 pt-4 border-t border-border max-w-2xl">
               <div className="flex items-center">
-                <span className="font-bold text-sm text-foreground w-1/3">Final Calculated Cost:</span>
+                <span className="font-bold text-sm text-foreground w-1/3">
+                  {t("logs.detail.costBreakdown.finalCost")}
+                </span>
                 <span className="text-sm font-bold text-foreground">
                   {formatCost(totalCost)}
-                  {isCached && " (Cached)"}
+                  {isCached && t("logs.detail.costBreakdown.cached")}
                 </span>
               </div>
             </div>

@@ -1,8 +1,11 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import { BarChart3, Bot, Building2, Globe, LineChart, ShoppingCart, Tags, User, Users } from "lucide-react";
 import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import i18n from "@/i18n/i18n";
 import { hasCapability, type Capability } from "@/utils/capabilities";
 import { all_admin_roles } from "@/utils/roles";
 export type UsageOption =
@@ -27,80 +30,80 @@ export interface UsageViewSelectProps {
 }
 interface OptionConfig {
   value: UsageOption;
-  label: string;
-  description: string;
+  label: ParseKeys;
+  description: ParseKeys;
   icon: React.ReactNode;
   capability?: Capability;
   adminOnly?: boolean;
-  showForAdmin?: string;
-  showForNonAdmin?: string;
-  descriptionForAdmin?: string;
-  descriptionForNonAdmin?: string;
+  showForAdmin?: ParseKeys;
+  showForNonAdmin?: ParseKeys;
+  descriptionForAdmin?: ParseKeys;
+  descriptionForNonAdmin?: ParseKeys;
   badgeText?: string;
 }
 const OPTIONS: OptionConfig[] = [
   {
     value: "global",
-    label: "Global Usage",
-    showForAdmin: "Global Usage",
-    showForNonAdmin: "Your Usage",
-    description: "View usage across all resources",
-    descriptionForAdmin: "View usage across all resources",
-    descriptionForNonAdmin: "View your usage",
+    label: "usage.viewSelect.options.global.label",
+    showForAdmin: "usage.viewSelect.options.global.adminLabel",
+    showForNonAdmin: "usage.viewSelect.options.global.nonAdminLabel",
+    description: "usage.viewSelect.options.global.description",
+    descriptionForAdmin: "usage.viewSelect.options.global.adminDescription",
+    descriptionForNonAdmin: "usage.viewSelect.options.global.nonAdminDescription",
     icon: <Globe className="size-4" />,
   },
   {
     value: "my-usage",
-    label: "Your Usage",
-    description: "View your own usage",
+    label: "usage.viewSelect.options.myUsage.label",
+    description: "usage.viewSelect.options.myUsage.description",
     icon: <User className="size-4" />,
     adminOnly: true,
   },
   {
     value: "organization",
-    label: "Organization Usage",
-    description: "View usage across all organizations",
+    label: "usage.viewSelect.options.organization.label",
+    description: "usage.viewSelect.options.organization.description",
     icon: <Building2 className="size-4" />,
     capability: "viewOrganizationUsage",
   },
   {
     value: "team",
-    label: "Team Usage",
-    description: "View usage by team",
+    label: "usage.viewSelect.options.team.label",
+    description: "usage.viewSelect.options.team.description",
     icon: <Users className="size-4" />,
   },
   {
     value: "customer",
-    label: "Customer Usage",
-    description: "View usage by customer accounts",
+    label: "usage.viewSelect.options.customer.label",
+    description: "usage.viewSelect.options.customer.description",
     icon: <ShoppingCart className="size-4" />,
     adminOnly: true,
   },
   {
     value: "tag",
-    label: "Tag Usage",
-    description: "View usage grouped by tags",
+    label: "usage.viewSelect.options.tag.label",
+    description: "usage.viewSelect.options.tag.description",
     icon: <Tags className="size-4" />,
     adminOnly: true,
   },
   {
     value: "agent",
-    label: "Agent Usage (A2A)",
-    description: "View usage by AI agents",
+    label: "usage.viewSelect.options.agent.label",
+    description: "usage.viewSelect.options.agent.description",
     icon: <Bot className="size-4" />,
     capability: "viewAgentUsage",
   },
   {
     value: "user",
-    label: "User Usage",
-    description: "View usage by individual users",
+    label: "usage.viewSelect.options.user.label",
+    description: "usage.viewSelect.options.user.description",
     icon: <User className="size-4" />,
     adminOnly: true,
   },
   {
     value: "user-agent-activity",
-    label: "User Agent Activity",
-    description: "View detailed user agent activity logs",
+    label: "usage.viewSelect.options.userAgentActivity.label",
+    description: "usage.viewSelect.options.userAgentActivity.description",
     icon: <LineChart className="size-4" />,
     adminOnly: true,
   },
@@ -132,10 +135,11 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   userRole,
   canViewTagUsage = false,
   isOrgAdmin = false,
-  title = "Usage",
-  description = "Select the usage data you want to view",
+  title = i18n.t("usage.viewSelect.title"),
+  description = i18n.t("usage.viewSelect.description"),
   "data-id": dataId,
 }) => {
+  const { t } = useTranslation();
   const term = useTerminology();
   const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
@@ -150,8 +154,8 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
       }
       return {
         value: option.value,
-        label,
-        description: term(desc),
+        label: t(label),
+        description: term(t(desc)),
         icon: option.icon,
         badgeText: option.badgeText,
       };

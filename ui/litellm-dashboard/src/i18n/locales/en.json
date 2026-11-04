@@ -7711,6 +7711,1730 @@
       "empty": "No MCP servers found"
     }
   },
+  "logs": {
+    "common": {
+      "podRouting": {
+        "roundRobin": "Round robin",
+        "sessionAffinity": "Session affinity",
+        "sessionAffinityRetry": "Session affinity (retry)"
+      }
+    },
+    "detail": {
+      "drawer": {
+        "title": "Request details",
+        "titleWithId": "Request {{id}} details",
+        "session": "Session",
+        "trace": "Trace",
+        "copyTraceId": "Copy trace id",
+        "requestCount": "{{count}} req",
+        "cachedCount": "{{hits}}/{{total}} cached",
+        "truncated": "Showing most recent {{shown}} of {{total}}",
+        "sortDuration": "Duration",
+        "sortStartTime": "Start time",
+        "tokens": "{{count}} tok",
+        "failure": "Failure",
+        "success": "Success"
+      },
+      "header": {
+        "backTo": "Back to {{label}}",
+        "requestId": "Request ID",
+        "provider": "Provider",
+        "copied": "Copied!",
+        "copyLabel": "Copy {{label}}",
+        "escToClose": "ESC to close",
+        "environment": "Env: {{environment}}"
+      },
+      "sidebarToggle": {
+        "expand": "Expand trace sidebar",
+        "collapse": "Collapse trace sidebar"
+      },
+      "classifyTag": {
+        "title": "Tier classification call made by the auto-router, not a request the caller sent",
+        "label": "Classify"
+      },
+      "content": {
+        "errorFallback": "An error occurred",
+        "requestFailed": "Request Failed",
+        "requestDetails": "Request Details",
+        "model": "Model",
+        "provider": "Provider",
+        "callType": "Call Type",
+        "user": "User",
+        "modelId": "Model ID",
+        "apiBase": "API Base",
+        "pod": "Pod",
+        "podCount": "{{count}} pods",
+        "ipAddress": "IP Address",
+        "credential": "Credential",
+        "guardrail": "Guardrail",
+        "loadingDetails": "Loading request & response data...",
+        "copied": "Copied!",
+        "errorCode": "Error Code:",
+        "errorMessage": "Message:",
+        "tags": "Tags",
+        "maskedCount": "{{count}} masked"
+      },
+      "metrics": {
+        "title": "Metrics",
+        "inputTokens": "Input Tokens",
+        "outputTokens": "Output Tokens",
+        "tokens": "Tokens",
+        "reasoningTokens": "Reasoning Tokens",
+        "cost": "Cost",
+        "duration": "Duration",
+        "timeToFirstToken": "Time to First Token",
+        "responseCache": "Response Cache",
+        "responseCacheTooltip": "Whether this request was served from LiteLLM's response cache (e.g. Redis / in-memory), skipping the LLM provider call entirely. This is separate from provider prompt caching; a Miss here does not mean prompt caching failed.",
+        "hit": "Hit",
+        "miss": "Miss",
+        "cacheKey": "Cache Key",
+        "cacheKeyTooltip": "The key LiteLLM computed for this request in the response cache. Requests with the same cache key share a cached response; a different key means the request content did not match any cached entry.",
+        "promptCacheReadTokens": "Prompt Cache Read Tokens",
+        "promptCacheCreationTokens": "Prompt Cache Creation Tokens",
+        "overhead": "LiteLLM Overhead",
+        "overheadValue": "{{value}} ms",
+        "retries": "Retries",
+        "noRetries": "None",
+        "startTime": "Start Time",
+        "endTime": "End Time",
+        "infoLabel": "{{label}} info",
+        "docs": "Docs"
+      },
+      "batch": {
+        "title": "Batch Results",
+        "batchId": "Batch ID",
+        "successful": "Successful Requests",
+        "failed": "Failed Requests",
+        "models": "Models"
+      },
+      "requestResponse": {
+        "title": "Request & Response",
+        "pretty": "Pretty",
+        "json": "JSON",
+        "request": "Request",
+        "response": "Response",
+        "copyJson": "Copy JSON",
+        "responseUnavailable": "Response data not available"
+      },
+      "guardrailJumpLink": {
+        "evaluated_one": "{{count}} guardrail evaluated",
+        "evaluated_other": "{{count}} guardrails evaluated",
+        "notRun": ", {{count}} not run"
+      },
+      "guardrailLabel": {
+        "count": "{{count}} guardrails"
+      },
+      "metadata": {
+        "title": "Metadata",
+        "copy": "Copy Metadata"
+      },
+      "routing": {
+        "title": "Routing",
+        "tier": "Tier",
+        "requestType": "Request type",
+        "decidedBy": "Decided by",
+        "classifierModel": "Classifier model",
+        "confidence": "Confidence",
+        "probabilities": "Probabilities",
+        "classifierCost": "Classifier cost",
+        "score": "Score",
+        "routedTo": "Routed to",
+        "escalated": "Escalated",
+        "signals": "Signals",
+        "calibration": "Calibration",
+        "routerType": {
+          "complexity": "Auto-Router v2",
+          "adaptive": "Adaptive router",
+          "quality": "Quality router"
+        },
+        "scoreRange": {
+          "below": "below {{value}}",
+          "between": "{{from}} to {{to}}",
+          "atOrAbove": "at or above {{value}}"
+        },
+        "cause": {
+          "planModeExitTool": "Plan-mode floor (exit_plan_mode tool)",
+          "planModeKeyword": "Plan-mode floor: \"{{keyword}}\"",
+          "planMode": "Plan-mode floor",
+          "housekeepingKeyword": "Client housekeeping call: \"{{keyword}}\"",
+          "housekeeping": "Client housekeeping call, classifier skipped",
+          "simpleMediumBoundary": "the Simple to Medium boundary",
+          "reasoningOverride": "Heuristic, {{tier}} override (2 or more reasoning markers, score of at least {{floor}})",
+          "heuristicScorer": "Heuristic scorer",
+          "heuristicV2": "Heuristic v2",
+          "capabilityClassifier": "Capability",
+          "capabilityClassifierFallback": "Capable tier, Capability classifier failed",
+          "llmV2Classifier": "FUSE v2",
+          "llmV2Fallback": "Capable tier, FUSE v2 classifier failed",
+          "heuristicFirstShortCircuit": "Heuristic scorer, classifier skipped",
+          "hybridShortCircuit": "Heuristic scorer, score clear of every boundary",
+          "classifierPlugin": "Custom classifier plugin",
+          "semanticKeywordMatch": "Semantic keyword match",
+          "sessionAffinityPin": "Pinned to session",
+          "sessionAffinityEscalation": "Escalated from session pin",
+          "userTurnContinuation": "Continuation turn, classifier skipped",
+          "modalityEscalation": "Escalated for image input",
+          "modalityPinOverride": "Overrode session pin for image input",
+          "qualityTier": "Quality tier mapping",
+          "bandit": "Adaptive bandit",
+          "defaultFallback": "Default model, no route matched",
+          "classifierFallback": "Fallback tier, classifier failed",
+          "defaultModelFallback": "Default model, classifier failed",
+          "llmClassifierModel": "LLM classifier ({{model}})",
+          "llmClassifier": "LLM classifier",
+          "ossClassifier": "OSS classifier",
+          "keywordMatchKeyword": "Keyword match: \"{{keyword}}\"",
+          "keywordMatch": "Keyword match",
+          "unknown": "Unknown"
+        },
+        "escalation": {
+          "yesKeyword": "Yes, keyword \"{{keyword}}\"",
+          "yes": "Yes",
+          "requestedKeyword": "Requested via \"{{keyword}}\"; already at the highest tier",
+          "requested": "Requested; already at the highest tier"
+        },
+        "capability": {
+          "title": "Capability estimates",
+          "subtitle": "Efficient model solve chance",
+          "raw": "Raw",
+          "calibrated": "Calibrated",
+          "threshold": "Threshold",
+          "boundary": "Boundary",
+          "rule": "Rule"
+        },
+        "fuseV2": {
+          "title": "FUSE v2 estimates",
+          "efficientRaw": "Efficient (raw)",
+          "capableRaw": "Capable (raw)",
+          "efficientCalibrated": "Efficient (calibrated)",
+          "capableCalibrated": "Capable (calibrated)",
+          "appliedGap": "Applied gap",
+          "allowedGap": "Allowed gap",
+          "percentagePoints": " percentage points"
+        },
+        "heuristicV2": {
+          "title": "Heuristic v2 estimates",
+          "successByTier": "Success by tier",
+          "threshold": "Threshold",
+          "predictedTier": "Predicted tier"
+        }
+      },
+      "guardrails": {
+        "title": "Guardrails & Policy Compliance",
+        "evaluated_one": "{{count}} guardrail evaluated",
+        "evaluated_other": "{{count}} guardrails evaluated",
+        "passedCount": "{{count}} Passed",
+        "flaggedCount": "{{count}} Flagged",
+        "notRunCount": "{{count}} Not run",
+        "totalOverhead": "Total: {{ms}}ms overhead",
+        "exportLog": "Export Compliance Log",
+        "evaluationDetails": "Evaluation Details",
+        "durationMs": "{{ms}}ms",
+        "rawResponse": "Raw Guardrail Response",
+        "outcome": {
+          "passed": "PASSED",
+          "flagged": "FLAGGED",
+          "failed": "FAILED",
+          "notRun": "NOT RUN"
+        },
+        "matchDetails": {
+          "title": "Match Details ({{count}})",
+          "type": "Type",
+          "method": "Method",
+          "action": "Action",
+          "detail": "Detail"
+        },
+        "lifecycle": {
+          "title": "Request Lifecycle",
+          "requestReceived": "Request received",
+          "preCall": "Pre-call guardrail: {{name}}",
+          "llmCall": "LLM call",
+          "duringCall": "During-call guardrail: {{name}}",
+          "postCall": "Post-call guardrail: {{name}}",
+          "responseReturned": "Response returned",
+          "offset": "T+{{ms}}ms"
+        },
+        "card": {
+          "matchedOfChecked": "{{matched}}/{{checked}} matched",
+          "matched": "{{count}} matched",
+          "confidence": "{{value}}% conf",
+          "risk": "Risk {{score}}/10",
+          "riskTooltip": "Risk score: {{score}}/10",
+          "textRecords_one": "{{value}} text record",
+          "textRecords_other": "{{value}} text records",
+          "costEstimated": "Estimated guardrail cost (reported only; not counted against spend or budgets)",
+          "cost": "Guardrail cost",
+          "maskedEntities": "Masked Entities"
+        },
+        "classification": {
+          "title": "Classification",
+          "category": "Category:",
+          "reference": "Reference:",
+          "confidence": "Confidence:",
+          "reason": "Reason:"
+        }
+      },
+      "bedrock": {
+        "detected": "detected",
+        "notDetected": "not detected",
+        "textGuarded": "text guarded {{guarded}}/{{total}}",
+        "imagesGuarded": "images guarded {{guarded}}/{{total}}",
+        "action": "Action:",
+        "actionReason": "Action Reason:",
+        "blockedResponse": "Blocked Response:",
+        "coverage": "Coverage:",
+        "usage": "Usage:",
+        "outputs": "Outputs",
+        "nonTextOutput": "(non-text output)",
+        "assessment": "Assessment #{{index}}",
+        "latencyMs": "{{value}} ms",
+        "wordPolicy": "Word Policy",
+        "customWords": "Custom Words",
+        "managedWordLists": "Managed Word Lists",
+        "contentPolicy": "Content Policy",
+        "columns": {
+          "type": "Type",
+          "action": "Action",
+          "detected": "Detected",
+          "strength": "Strength",
+          "confidence": "Confidence",
+          "score": "Score",
+          "threshold": "Threshold"
+        },
+        "contextualGrounding": "Contextual Grounding",
+        "sensitiveInformation": "Sensitive Information",
+        "piiEntities": "PII Entities",
+        "customRegexes": "Custom Regexes",
+        "topicPolicy": "Topic Policy",
+        "invocationMetrics": "Invocation Metrics",
+        "latency": "Latency (ms)",
+        "textCoverage": "text {{guarded}}/{{total}}",
+        "imagesCoverage": "images {{guarded}}/{{total}}",
+        "automatedReasoningFindings": "Automated Reasoning Findings",
+        "rawResponse": "Raw Bedrock Guardrail Response"
+      },
+      "contentFilter": {
+        "error": "Error",
+        "noDetections": "No detections found",
+        "totalDetections": "Total Detections:",
+        "actions": "Actions:",
+        "blockedCount": "{{count}} blocked",
+        "maskedCount": "{{count}} masked",
+        "passed": "passed",
+        "byType": "By Type:",
+        "patternsCount": "{{count}} patterns",
+        "keywordsCount": "{{count}} keywords",
+        "categoriesCount": "{{count}} categories",
+        "patternsMatched": "Patterns Matched",
+        "pattern": "Pattern:",
+        "action": "Action:",
+        "blockedWords": "Blocked Words Detected",
+        "keyword": "Keyword:",
+        "description": "Description:",
+        "categoryKeywords": "Category Keywords Detected",
+        "category": "Category:",
+        "severity": "Severity:",
+        "rawData": "Raw Detection Data"
+      },
+      "presidio": {
+        "title": "Detected Entities ({{count}})",
+        "score": "Score: {{value}}",
+        "position": "Position: {{start}}-{{end}}",
+        "entityType": "Entity Type:",
+        "positionLabel": "Position:",
+        "characters": "Characters {{start}}-{{end}}",
+        "confidence": "Confidence:",
+        "recognizer": "Recognizer:",
+        "identifier": "Identifier:",
+        "explanation": "Explanation:"
+      },
+      "compliance": {
+        "title": "Regulatory Compliance",
+        "euAiAct": "EU AI Act",
+        "gdpr": "GDPR",
+        "compliant": "COMPLIANT",
+        "nonCompliant": "NON-COMPLIANT",
+        "unavailable": "UNAVAILABLE",
+        "checking": "Checking compliance...",
+        "euAiActFailed": "Failed to check EU AI Act compliance",
+        "gdprFailed": "Failed to check GDPR compliance"
+      },
+      "eval": {
+        "title": "LLM Judge Results",
+        "passed": "PASSED",
+        "failed": "FAILED",
+        "threshold": " (threshold: {{value}})",
+        "scoreTooltip": "Weighted average of all criterion scores. Each criterion has a weight (%) set when the eval was created — higher-weight criteria count more toward the final score.",
+        "judge": "Judge: {{model}}",
+        "iteration": "Iter: {{value}}",
+        "judgeError": "Judge error: {{error}}",
+        "columns": {
+          "criterion": "Criterion",
+          "weight": "Weight",
+          "score": "Score",
+          "weighted": "Weighted",
+          "weightedTooltip": "Score × Weight — how much each criterion contributes to the final score",
+          "comment": "Comment"
+        },
+        "total": "Total",
+        "noBreakdown": "Score: {{score}} — no per-criterion breakdown available."
+      },
+      "costBreakdown": {
+        "title": "Cost Breakdown",
+        "total": "Total:",
+        "cached": " (Cached)",
+        "inputCost": "Input Cost:",
+        "tokens": "({{value}} tokens)",
+        "cacheReadCost": "Prompt Cache Read Cost:",
+        "cacheWriteCost": "Prompt Cache Write Cost:",
+        "promptTokens": "({{value}} prompt tokens)",
+        "outputCost": "Output Cost:",
+        "completionTokens": "({{value}} completion tokens)",
+        "toolUsageCost": "Tool Usage Cost:",
+        "originalCost": "Original LLM Cost:",
+        "discountPercent": "Discount ({{percent}}):",
+        "discountAmount": "Discount Amount:",
+        "marginPercent": "Margin ({{percent}}):",
+        "margin": "Margin:",
+        "finalCost": "Final Calculated Cost:"
+      },
+      "vectorStore": {
+        "title": "Vector Store Requests",
+        "query": "Query:",
+        "vectorStoreId": "Vector Store ID:",
+        "provider": "Provider:",
+        "logoAlt": "{{name}} logo",
+        "startTime": "Start Time:",
+        "endTime": "End Time:",
+        "duration": "Duration:",
+        "durationMs": "{{value}}ms",
+        "searchResults": "Search Results",
+        "result": "Result {{index}}",
+        "score": "Score: <value/>"
+      },
+      "configInfo": {
+        "title": "Request/Response Data Not Available",
+        "description": "To view request and response details, enable prompt storage in your LiteLLM configuration by adding the following to your <code>proxy_config.yaml</code> file, or toggle the setting in <strong>Admin Settings → Logging Settings</strong>.",
+        "note": "Note: This will only affect new requests after the configuration change."
+      },
+      "tools": {
+        "title": "Tools",
+        "summary": "{{provided}} provided, {{called}} called",
+        "called": "called",
+        "notCalled": "not called",
+        "description": "Description",
+        "formatted": "Formatted",
+        "json": "JSON",
+        "parameters": "Parameters",
+        "columns": {
+          "parameter": "Parameter",
+          "type": "Type",
+          "description": "Description"
+        },
+        "calledWith": "Called With"
+      },
+      "realtime": {
+        "noEvents": "No recognized realtime events found",
+        "session": "Session",
+        "turnCount_one": "{{count}} turn",
+        "turnCount_other": "{{count}} turns",
+        "config": {
+          "model": "Model",
+          "voice": "Voice",
+          "temperature": "Temperature",
+          "maxOutputTokens": "Max Output Tokens",
+          "inputAudioFormat": "Input Audio Format",
+          "outputAudioFormat": "Output Audio Format",
+          "turnDetection": "Turn Detection",
+          "tools": "Tools",
+          "toolCount": "{{count}} tool(s)"
+        },
+        "instructions": "Instructions",
+        "turnTokens": "{{input}} in / {{output}} out tokens",
+        "conversation": "conv: {{id}}...",
+        "input": "Input",
+        "output": "Output",
+        "tokenBreakdown": "{{label}} Token Breakdown"
+      },
+      "sectionHeader": {
+        "input": "Input",
+        "output": "Output",
+        "tokens": "Tokens: {{value}}",
+        "cost": "Cost: ${{value}}",
+        "turns": "Turns: {{count}}",
+        "copyInput": "Copy input",
+        "copyOutput": "Copy output",
+        "copy": "Copy"
+      },
+      "inputCard": {
+        "copied": "Input copied"
+      },
+      "outputCard": {
+        "copied": "Output copied",
+        "noResponse": "No response data available"
+      },
+      "historyTree": {
+        "label_one": "HISTORY ({{count}} message)",
+        "label_other": "HISTORY ({{count}} messages)"
+      },
+      "collapsibleMessage": {
+        "charCount": "({{value}} chars)"
+      },
+      "toolCall": {
+        "badge": "function"
+      },
+      "tokenFlow": {
+        "summary": "{{total}} ({{prompt}} prompt tokens + {{completion}} completion tokens)"
+      },
+      "truncatedValue": {
+        "copy": "Copy"
+      },
+      "jsonViewer": {
+        "noData": "No data"
+      },
+      "classifierAudit": {
+        "input": {
+          "title": "Classifier input",
+          "description": "Provider request payload. A cached call or disabled message logging may have no capture."
+        },
+        "originating": {
+          "title": "Originating request, credentials masked",
+          "description": "Comparison only. This source request was not appended to the classifier input."
+        },
+        "response": {
+          "title": "Classifier response",
+          "description": "The returned verdict and any explanation supplied by the classifier. Later routing rules may change the tier."
+        },
+        "copy": "Copy {{title}}",
+        "truncated": "This stored copy is truncated. The complete payload is unavailable from the configured log storage.",
+        "notCaptured": "Not captured or message logging disabled"
+      }
+    },
+    "page": {
+      "loading": "Loading",
+      "tabs": {
+        "requestLogs": "Request Logs",
+        "auditLogs": "Audit Logs",
+        "deletedKeys": "Deleted Keys",
+        "deletedTeams": "Deleted Teams"
+      }
+    },
+    "request": {
+      "panel": {
+        "backToLogs": "Back to Logs",
+        "liveTail": "Live Tail",
+        "refreshingEvery15s": "Refreshing every 15s",
+        "hideHealthChecks": "Hide Health Checks",
+        "resetFilters": "Reset Filters"
+      },
+      "toolbar": {
+        "customRange": "Custom Range",
+        "rangeSeparator": "to"
+      },
+      "timeRange": {
+        "lastMinute": "Last 1 Minute",
+        "last15Minutes": "Last 15 Minutes",
+        "lastHour": "Last Hour",
+        "last4Hours": "Last 4 Hours",
+        "last24Hours": "Last 24 Hours",
+        "last7Days": "Last 7 Days"
+      },
+      "table": {
+        "emptyTitle": "No requests yet",
+        "emptyFilteredTitle": "No matching requests",
+        "emptyDescription": "Requests proxied through LiteLLM will appear here.",
+        "emptyFilteredDescription": "No requests match your filters for this time range.",
+        "loading": "Loading request logs…",
+        "searchPlaceholder": "Search logs by ID…",
+        "filtersTitle": "Filters",
+        "filtersDescription": "Narrow down request logs"
+      },
+      "filters": {
+        "teamId": "Team ID",
+        "teamPlaceholder": "Search or select a team",
+        "noTeams": "No teams found",
+        "keyAlias": "Key Alias",
+        "keyAliasPlaceholder": "Search a key alias",
+        "noKeyAliases": "No key aliases found",
+        "modelIdSublabel": "Model ID: {{modelId}}",
+        "model": "Model",
+        "modelPlaceholder": "Search a model",
+        "noModels": "No models found",
+        "userId": "User ID",
+        "userPlaceholder": "Search an internal user",
+        "noUsers": "No users found",
+        "endUser": "End User",
+        "endUserPlaceholder": "Search an end user",
+        "noEndUsers": "No end users in this time range",
+        "customErrorCode": "Use custom code: {{code}}",
+        "errorCode": "Error Code",
+        "errorCodePlaceholder": "Select or type an error code",
+        "noErrorCodes": "No error codes found",
+        "spanType": "Span Type",
+        "allTypes": "All Types",
+        "status": "Status",
+        "allStatuses": "All Statuses",
+        "cache": "Cache",
+        "allRequests": "All Requests",
+        "credential": "Credential",
+        "allCredentials": "All Credentials",
+        "errorMessage": "Error Message",
+        "errorMessagePlaceholder": "Enter error message…",
+        "keyHash": "Key Hash",
+        "keyHashPlaceholder": "Enter key hash…",
+        "sessionId": "Session ID",
+        "sessionIdPlaceholder": "Enter session ID…",
+        "publicModelOrSearchTool": "Public model / search tool",
+        "publicModelOrSearchToolPlaceholder": "Enter public model or search tool…"
+      },
+      "columns": {
+        "copyCallId": "Copy x-litellm-call-id",
+        "time": "Time",
+        "type": "Type",
+        "sessionLlmCount_one": "{{count}} LLM",
+        "sessionLlmCount_other": "{{count}} LLM",
+        "sessionAgentCount_one": "{{count}} Agent",
+        "sessionAgentCount_other": "{{count}} Agent",
+        "sessionMcpCount_one": "{{count}} MCP",
+        "sessionMcpCount_other": "{{count}} MCP",
+        "sessionCacheHitCount_one": "{{count}} cache hit",
+        "sessionCacheHitCount_other": "{{count}} cache hit",
+        "status": "Status",
+        "batchSucceeded": "{{successful}}/{{total}} succeeded",
+        "batchFailed": "{{failed}} of {{total}} batch requests failed",
+        "success": "Success",
+        "failure": "Failure",
+        "sessionId": "Session ID",
+        "requestId": "Request ID",
+        "batchTooltip": "Batch {{batchId}} (row: {{requestId}})",
+        "batchCost": "batch cost",
+        "cost": "Cost",
+        "sessionTotal": "session total",
+        "mcpSpend_one": "incl. {{spend}} from {{count}} MCP",
+        "mcpSpend_other": "incl. {{spend}} from {{count}} MCP",
+        "duration": "Duration (s)",
+        "milliseconds": "{{value}}ms",
+        "ttft": "TTFT (s)",
+        "teamName": "Team Name",
+        "keyHash": "Key Hash",
+        "keyAlias": "Key Alias",
+        "model": "Model",
+        "tokens": "Tokens",
+        "internalUser": "Internal User",
+        "endUser": "End User",
+        "tags": "Tags"
+      },
+      "badges": {
+        "agent": "Agent",
+        "batch": "Batch"
+      }
+    },
+    "audit": {
+      "panel": {
+        "enterpriseTitle": "✨ Enterprise Feature.",
+        "enterpriseDescription": "This is a LiteLLM Enterprise feature, and requires a valid key to use.",
+        "previewIntro": "Here's a preview of what Audit Logs offer:",
+        "previewAlt": "Audit Logs Preview"
+      },
+      "table": {
+        "emptyTitle": "No audit logs yet",
+        "emptyFilteredTitle": "No matching audit logs",
+        "emptyDescription": "Administrative changes to keys, teams, users, and models will appear here.",
+        "emptyFilteredDescription": "No audit log entries match your filters.",
+        "loading": "Loading audit logs…",
+        "searchPlaceholder": "Search audit logs by ID…",
+        "filtersTitle": "Filters",
+        "filtersDescription": "Narrow down audit log entries",
+        "objectId": "Object ID",
+        "objectIdPlaceholder": "Enter object ID…",
+        "changedBy": "Changed By",
+        "changedByPlaceholder": "Enter user ID…",
+        "teamId": "Team ID",
+        "teamIdPlaceholder": "Enter team ID…",
+        "keyHash": "Key Hash",
+        "keyHashPlaceholder": "Enter key hash…",
+        "action": "Action",
+        "allActions": "All Actions",
+        "table": "Table",
+        "allTables": "All Tables"
+      },
+      "columns": {
+        "timestamp": "Timestamp",
+        "action": "Action",
+        "table": "Table",
+        "objectId": "Object ID",
+        "changedBy": "Changed By",
+        "apiKeyHash": "API Key (Hash)"
+      },
+      "tableNames": {
+        "keys": "Keys",
+        "teams": "Teams",
+        "users": "Users",
+        "organizations": "Organizations",
+        "models": "Models",
+        "agents": "Agents"
+      },
+      "drawer": {
+        "title": "Audit log details",
+        "copyJson": "Copy JSON",
+        "noDifferingFields": "No differing fields detected",
+        "token": "Token:",
+        "spend": "Spend:",
+        "maxBudget": "Max Budget:",
+        "before": "Before",
+        "after": "After",
+        "details": "Details",
+        "table": "Table",
+        "objectId": "Object ID",
+        "copyObjectId": "Copy object ID",
+        "changedBy": "Changed By",
+        "apiKeyHash": "API Key (Hash)",
+        "copyApiKeyHash": "Copy API key hash"
+      }
+    },
+    "deletedKeys": {
+      "page": {
+        "comingSoonTitle": "Coming soon to Enterprise",
+        "comingSoonDescription": "Deleted key auditing is graduating from beta into our Enterprise audit & compliance suite."
+      },
+      "table": {
+        "emptyTitle": "No deleted keys found",
+        "emptyDescription": "Keys deleted from this proxy will show up here.",
+        "loading": "Loading deleted keys…"
+      },
+      "columns": {
+        "keyId": "Key ID",
+        "keyAlias": "Key Alias",
+        "teamAlias": "Team Alias",
+        "spendUsd": "Spend (USD)",
+        "budgetUsd": "Budget (USD)",
+        "unlimited": "Unlimited",
+        "userEmail": "User Email",
+        "userId": "User ID",
+        "createdAt": "Created At",
+        "createdBy": "Created By",
+        "deletedAt": "Deleted At",
+        "deletedBy": "Deleted By"
+      }
+    },
+    "deletedTeams": {
+      "page": {
+        "comingSoonTitle": "Coming soon to Enterprise",
+        "comingSoonDescription": "Deleted team auditing is graduating from beta into our Enterprise audit & compliance suite."
+      },
+      "table": {
+        "emptyTitle": "No deleted teams found",
+        "emptyDescription": "Teams deleted from this proxy will show up here.",
+        "loading": "Loading deleted teams…"
+      },
+      "columns": {
+        "teamName": "Team Name",
+        "teamId": "Team ID",
+        "created": "Created",
+        "spendUsd": "Spend (USD)",
+        "budgetUsd": "Budget (USD)",
+        "unlimited": "Unlimited",
+        "models": "Models",
+        "organization": "Organization",
+        "deletedAt": "Deleted At",
+        "deletedBy": "Deleted By"
+      }
+    }
+  },
+  "activityMetrics": {
+    "topKeys": {
+      "title": "Top Virtual Keys by Spend",
+      "loading": "Loading top keys...",
+      "failed": "Could not load top keys.",
+      "retry": "Retry",
+      "team": "Team: {{teamId}}",
+      "user": "User: {{user}}",
+      "usage": "{{requests}} requests | {{tokens}} tokens"
+    },
+    "stats": {
+      "totalRequests": "Total Requests",
+      "totalSuccessfulRequests": "Total Successful Requests",
+      "totalTokens": "Total Tokens",
+      "totalSpend": "Total Spend",
+      "avgResponseTime": "Avg Response Time",
+      "avgTokensPerRequest": "{{value}} avg per successful request",
+      "spendPerRequest": "${{value}} per successful request",
+      "timedRequests": "over {{value}} timed successful requests"
+    },
+    "panels": {
+      "spendPerDay": "Spend per day",
+      "totalTokens": "Total Tokens",
+      "requestsPerDay": "Requests per day",
+      "avgResponseTimePerDay": "Avg Response Time per day",
+      "successVsFailed": "Success vs Failed Requests",
+      "promptCaching": "Prompt Caching Metrics",
+      "cacheRead": "Cache Read: {{tokens}} tokens",
+      "cacheCreation": "Cache Creation: {{tokens}} tokens",
+      "totalTokensOverTime": "Total Tokens Over Time",
+      "totalRequestsOverTime": "Total Requests Over Time"
+    },
+    "summary": {
+      "overallUsage": "Overall Usage",
+      "unknownItem": "Unknown Item",
+      "requests": "{{requests}} requests",
+      "avgResponse": "{{value}} avg response"
+    }
+  },
+  "loggingSettingsView": {
+    "eventTypes": {
+      "success": "Success Only",
+      "failure": "Failure Only",
+      "successAndFailure": "Success & Failure"
+    },
+    "loggingIntegrations": "Logging Integrations",
+    "parametersConfigured_one": "{{count}} parameters configured",
+    "parametersConfigured_other": "{{count}} parameters configured",
+    "noLoggingIntegrations": "No logging integrations configured",
+    "disabledCallbacks": "Disabled Callbacks",
+    "disabledForKey": "Disabled for this key",
+    "disabled": "Disabled",
+    "noCallbacksDisabled": "No callbacks disabled",
+    "title": "Logging Settings",
+    "description": "Active logging integrations and disabled callbacks for this key"
+  },
+  "autoRotationView": {
+    "timestamp": "{{date}} at {{time}}",
+    "title": "Auto-Rotation",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "every": "Every {{interval}}",
+    "lastRotation": "Last Rotation",
+    "nextScheduledRotation": "Next Scheduled Rotation",
+    "noHistory": "No rotation history available",
+    "notEnabled": "Auto-rotation is not enabled for this key",
+    "description": "Automatic key rotation settings and status for this key"
+  },
+  "routerSettingsSummary": {
+    "empty": "No router settings configured",
+    "routingStrategy": "Routing Strategy:",
+    "numRetries": "Number of Retries: {{value}}",
+    "allowedFailures": "Allowed Failures: {{value}}",
+    "cooldownTime": "Cooldown Time: {{value}}s",
+    "timeout": "Timeout: {{value}}s",
+    "retryAfter": "Retry After: {{value}}s",
+    "tagFilteringEnabled": "Tag Filtering: Enabled",
+    "fallbacks": "Fallbacks:"
+  },
+  "labeledField": {
+    "copy": "Copy {{label}}"
+  },
+  "guardrailSelector": {
+    "premiumOnly": "Setting guardrails is a premium feature.",
+    "placeholder": "Select guardrails"
+  },
+  "policySelector": {
+    "premiumOnly": "Setting policies is a premium feature.",
+    "placeholder": "Select policies (production or published versions)"
+  },
+  "usage": {
+    "pageView": {
+      "accessDenied": "You don't have access to that usage view",
+      "linkCopied": "Link copied",
+      "copyShareLink": "Copy Share Link",
+      "spendLoadFailed": "Failed to load spend data",
+      "tabs": {
+        "overview": "Overview",
+        "modelActivity": "Model Activity",
+        "keyActivity": "Key Activity",
+        "userActivity": "User Activity",
+        "mcpServerActivity": "MCP Server Activity",
+        "endpointActivity": "Endpoint Activity",
+        "errors": "Errors"
+      },
+      "exportData": "Export Data",
+      "gatewayByEndpoint": {
+        "title": "Gateway Requests by Endpoint",
+        "subtitle": "Successful and failed requests per route",
+        "successful": "Successful",
+        "failed": "Failed"
+      },
+      "modelSearch": {
+        "label": "Search models",
+        "placeholder": "Search by model name",
+        "clear": "Clear model search",
+        "noMatch": "No models match \"{{query}}\" in this date range"
+      },
+      "credentialBanner": {
+        "title": "Reusable credentials are automatically tracked as tags",
+        "description": "When a reusable credential is used, it will appear as a tag prefixed with <prefix/>in this view.",
+        "close": "Close"
+      },
+      "clientScope": {
+        "allUsers": "All users",
+        "myUsage": "My usage"
+      },
+      "exportTitle": "Export Usage Data"
+    },
+    "page": {
+      "loadingSettings": "Loading usage settings"
+    },
+    "clientSelect": {
+      "label": "View client usage",
+      "placeholder": "View client usage"
+    },
+    "modelViewToggle": {
+      "publicModelName": "Public Model Name",
+      "litellmModelName": "Litellm Model Name"
+    },
+    "userRecordLink": {
+      "view": "View user record"
+    },
+    "clientPanel": {
+      "tokenBreakdown": {
+        "unavailable": "Unavailable",
+        "cacheReads": "Cache reads",
+        "cacheWrites": "Cache writes",
+        "uncachedInput": "Uncached input",
+        "output": "Output",
+        "title": "Token breakdown",
+        "subtitle": "{{total}} total tokens",
+        "cacheShare": "{{percent}}% of these tokens are cache reads.",
+        "explanation": "Total tokens include input, cached input and output. Cached input is priced differently, so token count alone does not explain spend. Compare the same person and dates when checking the count shown by a client."
+      },
+      "scope": {
+        "allUsers": "All users",
+        "selectedUser": "Selected user",
+        "allMembers": "All members",
+        "myUsage": "My usage",
+        "label": "Usage scope",
+        "ariaLabel": "Usage scope"
+      },
+      "errors": {
+        "totalsFailed": "Could not load client totals",
+        "signIn": "Sign in to view your client usage",
+        "loadFailed": "Could not load client usage"
+      },
+      "back": "Back to Usage",
+      "member": {
+        "label": "Team member",
+        "ariaLabel": "Team member",
+        "allMembers": "All members"
+      },
+      "person": {
+        "label": "Filter by person",
+        "allUsers": "All users"
+      },
+      "loading": "Loading client usage",
+      "tryAgain": "Try again",
+      "noUsage": "No {{client}} usage recorded in this date range.",
+      "summary": {
+        "spend": "Spend",
+        "totalTokens": "Total tokens",
+        "requests": "Requests"
+      },
+      "noRequests": "No {{client}} requests in the selected range. Try another date range.",
+      "chooseAnotherPerson": " You can also choose another person.",
+      "retryModels": "Retry model breakdown",
+      "footnote": {
+        "scoped": "Based on retained request logs within the exact selected time range.",
+        "allUsers": "All-user totals use UTC daily aggregates for the selected dates. Filtering by person uses the exact selected times. Cache values are reported counts.",
+        "spend": "Spend is the cost recorded by LiteLLM."
+      }
+    },
+    "viewSelect": {
+      "title": "Usage",
+      "description": "Select the usage data you want to view",
+      "options": {
+        "global": {
+          "label": "Global Usage",
+          "adminLabel": "Global Usage",
+          "nonAdminLabel": "Your Usage",
+          "description": "View usage across all resources",
+          "adminDescription": "View usage across all resources",
+          "nonAdminDescription": "View your usage"
+        },
+        "myUsage": {
+          "label": "Your Usage",
+          "description": "View your own usage"
+        },
+        "organization": {
+          "label": "Organization Usage",
+          "description": "View usage across all organizations"
+        },
+        "team": {
+          "label": "Team Usage",
+          "description": "View usage by team"
+        },
+        "customer": {
+          "label": "Customer Usage",
+          "description": "View usage by customer accounts"
+        },
+        "tag": {
+          "label": "Tag Usage",
+          "description": "View usage grouped by tags"
+        },
+        "agent": {
+          "label": "Agent Usage (A2A)",
+          "description": "View usage by AI agents"
+        },
+        "user": {
+          "label": "User Usage",
+          "description": "View usage by individual users"
+        },
+        "userAgentActivity": {
+          "label": "User Agent Activity",
+          "description": "View detailed user agent activity logs"
+        }
+      }
+    },
+    "statStrip": {
+      "spend": "Spend",
+      "budgetHint": "of {{budget}} budget",
+      "noBudget": "No budget set",
+      "totalRequests": "Total Requests",
+      "successfulCount": "<count/> ok",
+      "failedCount": "<count/> failed",
+      "totalTokens": "Total Tokens",
+      "exactTokens": "{{tokens}} tokens",
+      "cacheReadHint": "{{tokens}} cache read",
+      "viewTokenBreakdown": "View token breakdown",
+      "tokenPopover": {
+        "title": "What counts toward total tokens?",
+        "inputTokens": "Input tokens",
+        "cacheReads": "Cache reads",
+        "cacheWrites": "Cache writes",
+        "outputTokens": "Output tokens",
+        "totalTokens": "Total tokens",
+        "pricingNote": "Input includes cache reads and writes. Cached input has separate pricing, so total tokens alone cannot explain the cost.",
+        "clientNote": "A client may show a different subset of tokens. Compare the same person, client and time range before comparing counts."
+      },
+      "avgCostPerRequest": "Avg cost / request",
+      "avgLatency": "Avg latency",
+      "successRateHint": "{{rate}}% success rate"
+    },
+    "overview": {
+      "topVirtualKeys": "Top Virtual Keys",
+      "topUsersBySpend": "Top Users by Spend",
+      "otherSeries": "Other",
+      "weekOf": "Wk of {{date}}"
+    },
+    "breakdownChart": {
+      "metricNoun": {
+        "spend": "spend",
+        "tokens": "tokens",
+        "requests": "requests"
+      },
+      "granularity": {
+        "daily": "Daily",
+        "weekly": "Weekly"
+      },
+      "title": "{{granularity}} usage",
+      "subtitle": "{{granularity}} {{metric}} by model (top 8, rest grouped as Other)",
+      "bucketSize": "Bucket size",
+      "scaleLabel": "Scale",
+      "topModels": "Top models",
+      "loadingTopModels": "Loading top models"
+    },
+    "breakdown": {
+      "metricLabel": "Metric",
+      "groupByLabel": "Group by",
+      "empty": "No usage in this range",
+      "byProvider": "by {{provider}}"
+    },
+    "topAgents": {
+      "viewActivity": "View activity",
+      "tokens": "{{tokens}} tokens",
+      "viewAgentUsage": "View {{agent}} usage",
+      "empty": "No agent traffic in this range",
+      "subtitleLowCoverage": "Daily usage by agent. {{percent}}% of tokens came with a User-Agent; the rest is unattributed",
+      "subtitle": "Daily usage by agent, from each request's User-Agent",
+      "title": "Top agents",
+      "metricLabel": "Agent metric"
+    },
+    "agentCatalog": {
+      "descriptions": {
+        "claudeDesktop": "Anthropic's desktop assistant",
+        "claudeCode": "Anthropic's coding agent",
+        "claudeUnspecified": "Client not identified",
+        "codex": "OpenAI's coding agent",
+        "opencode": "Open-source terminal coding agent",
+        "cursor": "AI code editor",
+        "copilot": "GitHub's coding assistant",
+        "hermes": "Open-source agent",
+        "grok": "xAI's assistant",
+        "aider": "AI pair programming in the terminal",
+        "openaiAgents": "OpenAI Agents SDK",
+        "githubActions": "CI workflows",
+        "litellmSdk": "litellm Python SDK",
+        "openaiSdk": "OpenAI client library",
+        "anthropicSdk": "Anthropic client library",
+        "curl": "Command line",
+        "cline": "Open-source coding agent",
+        "kiloCode": "Open-source coding agent",
+        "langchain": "Agent framework",
+        "pydanticAi": "Agent framework",
+        "python": "Scripts and HTTP clients",
+        "node": "Scripts and HTTP clients",
+        "customClient": "Custom client"
+      }
+    },
+    "errors": {
+      "entities": {
+        "title": "Failures by identity",
+        "subtitle": "Keys, teams, users and models ranked by failed requests",
+        "groupByLabel": "Group by",
+        "empty": "No {{entities}} with failed requests in this range",
+        "tableLabel": "{{entities}} ranked by failed requests",
+        "columns": {
+          "requests": "Requests",
+          "failed": "Failed",
+          "errorRate": "Error rate",
+          "topStatus": "Top status"
+        }
+      },
+      "statusLabels": {
+        "badRequest": "Bad Request",
+        "unauthorized": "Unauthorized",
+        "paymentRequired": "Payment Required",
+        "forbidden": "Forbidden",
+        "notFound": "Not Found",
+        "requestTimeout": "Request Timeout",
+        "payloadTooLarge": "Payload Too Large",
+        "unprocessableEntity": "Unprocessable Entity",
+        "rateLimited": "Rate Limited",
+        "internalServerError": "Internal Server Error",
+        "badGateway": "Bad Gateway",
+        "serviceUnavailable": "Service Unavailable",
+        "gatewayTimeout": "Gateway Timeout",
+        "notRecorded": "Not recorded",
+        "serverError": "Server Error",
+        "clientError": "Client Error",
+        "error": "Error"
+      },
+      "series": {
+        "other": "Other",
+        "noStatus": "No status"
+      },
+      "empty": {
+        "noRequests": "No requests in this range",
+        "noFailedRequests": "No failed requests in this range"
+      },
+      "userScoped": {
+        "title": "Errors are deployment-wide",
+        "description": "Clear the user filter in Global Usage to see failure analytics"
+      },
+      "failed": {
+        "title": "Error activity could not be loaded",
+        "description": "The proxy did not answer the failed-request query. Reload the page to try again."
+      },
+      "stats": {
+        "errorRate": "Error rate",
+        "failedOfTotal": "{{failed}} of {{total}} requests",
+        "failedRequests": "Failed requests",
+        "clientErrors": "Client errors (4xx)",
+        "serverErrors": "Server errors (5xx)",
+        "rateLimited": "Rate limited (429)",
+        "authFailures": "Auth failures (401/403)"
+      },
+      "rateChart": {
+        "title": "Error rate over time",
+        "subtitle": "Failed requests as a share of all requests, per day",
+        "viewLabel": "Show"
+      },
+      "statusChart": {
+        "title": "Failed requests by status code",
+        "subtitle": "Per day, stacked by HTTP status",
+        "totalLabel": "failed",
+        "legendLabel": "Status codes in the chart"
+      },
+      "statusList": {
+        "title": "By status code",
+        "subtitle": "Share of all failed requests",
+        "listLabel": "Failed requests by status code"
+      },
+      "inspectInLogs": "Inspect failed requests in Logs"
+    },
+    "subscriptionCost": {
+      "attributionRule": "A subscription fee is counted once for each monthly billing period whose start date falls inside the selected dates. Fixed costs sit beside metered spend and are never added to it, to key or team spend, or to budgets.",
+      "card": {
+        "accountNotSignedIn": "Account not signed in on the proxy",
+        "setFee": "Set monthly fee",
+        "edit": "Edit",
+        "remove": "Remove",
+        "noDeployments": "None",
+        "notTracked": "Fixed cost not tracked",
+        "noPeriodsInRange": "None in range",
+        "title": "Subscription fixed costs",
+        "loadFailed": "Could not load subscription accounts for this range.",
+        "noAccounts": "No subscription accounts",
+        "fixedCostNone": "Fixed cost in range: none",
+        "fixedCostTotal": "Fixed cost in range: {{total}}",
+        "meteredSpend": "Usage-billed spend in range, all providers: ${{spend}}"
+      },
+      "removeDialog": {
+        "title": "Remove this monthly fee?",
+        "description": "<account/> goes back to \"Fixed cost not tracked\". Its requests stay included in the subscription",
+        "cancel": "Cancel",
+        "confirm": "Remove fee"
+      },
+      "columns": {
+        "provider": "Provider",
+        "account": "Account",
+        "deployments": "Deployments",
+        "monthlyFee": "Monthly fee",
+        "billingPeriods": "Billing periods in range",
+        "fixedCost": "Fixed cost in range"
+      },
+      "feeModal": {
+        "errors": {
+          "feeRequired": "Enter a monthly fee",
+          "feePositive": "Monthly fee must be greater than 0",
+          "currencyCode": "Currency must be a three-letter code",
+          "periodStart": "Pick a billing period start date"
+        },
+        "editTitle": "Edit monthly fee",
+        "setTitle": "Set monthly fee",
+        "description": "{{provider}} account {{accountId}}",
+        "fields": {
+          "monthlyFee": "Monthly fee",
+          "currency": "Currency",
+          "billingPeriodStart": "Billing period start",
+          "label": "Label (optional)"
+        },
+        "cancel": "Cancel",
+        "save": "Save"
+      },
+      "toasts": {
+        "feeSaved": "Monthly fee saved",
+        "feeRemoved": "Monthly fee removed"
+      }
+    },
+    "entitySummary": {
+      "tooltips": {
+        "totalCost": "Request cost plus flat cost for reserved capacity. Select this tile to see the breakdown.",
+        "requestCost": "Usage-based cost of the requests this entity sent during the selected period, priced per token.",
+        "flatCost": "Reserved provisioned throughput, billed per hour whether or not requests are sent. Reported here only; it does not count toward team, key, user, or organization budgets.",
+        "ptuHours": "Provisioned throughput consumed, in PTU-hours: the tokens sent to PTU deployments converted through the Azure sizing table for each model. Divide it by the PTUs reserved times the hours in the period to see how much of the reservation was used."
+      }
+    },
+    "entityUsage": {
+      "chart": {
+        "flatCostSeries": "Flat cost",
+        "metricTitle": {
+          "spend": "Spend",
+          "tokens": "Tokens",
+          "requests": "Requests"
+        },
+        "granularity": {
+          "daily": "Daily",
+          "weekly": "Weekly"
+        },
+        "title": "{{metric}} by {{dimension}}",
+        "dimension": {
+          "model": "model",
+          "deployment": "deployment"
+        },
+        "subtitle": "{{granularity}} {{metric}}, top 8 stacked",
+        "flatCostOnTop": ", flat cost on top",
+        "bucketSize": "Bucket size",
+        "scaleLabel": "Scale"
+      },
+      "filterLabel": "Filter by {{entity}}",
+      "filterPlaceholder": "Select {{entity}} to filter...",
+      "breakdownTable": {
+        "share": "Share",
+        "spend": "Spend",
+        "successful": "Successful",
+        "failed": "Failed",
+        "tokens": "Tokens"
+      },
+      "topPublicModelNames": "Top Public Model Names",
+      "topLitellmModels": "Top Litellm Models",
+      "spendOverview": "{{entity}} Spend Overview",
+      "spendPerEntity": "Spend Per {{entity}}",
+      "trackCostPer": "Track cost per {{entity}}",
+      "noSpendData": "No {{entity}} spend data",
+      "topVirtualKeys": "Top Virtual Keys",
+      "topAgents": "Top Agents",
+      "topAgentsDrivingSpend": "Top Agents Driving Spend",
+      "providerUsage": "Provider Usage",
+      "tabs": {
+        "cost": "Cost",
+        "requestTokenConsumption": "Request / Token Consumption",
+        "modelActivity": "Model Activity",
+        "agentActivity": "Agent Activity",
+        "keyActivity": "Key Activity",
+        "endpointActivity": "Endpoint Activity"
+      },
+      "spendLoadFailed": "Failed to load spend data",
+      "agentLoadFailed": "Failed to load agent data"
+    },
+    "providerSpend": {
+      "columns": {
+        "provider": "Provider",
+        "spend": "Spend",
+        "successful": "Successful",
+        "failed": "Failed",
+        "tokens": "Tokens"
+      },
+      "includedInSubscription": "Included in subscription",
+      "totalProviderSpend": "Total provider spend",
+      "noData": "No provider usage data",
+      "title": "Spend by Provider",
+      "showZeroSpend": "Show Zero Spend",
+      "showUnknown": "Show Unknown",
+      "showUnknownHint": "Requests that failed to route to a provider"
+    },
+    "teamUserSpend": {
+      "columns": {
+        "team": "Team",
+        "user": "User",
+        "spend": "Spend",
+        "requests": "Requests",
+        "successful": "Successful",
+        "failed": "Failed",
+        "tokens": "Tokens"
+      },
+      "title": "Spend Per User Within Team",
+      "downloadCsv": "Download CSV",
+      "attributionNote": "Attributed per request from spend logs, so it includes JWT/SSO traffic that does not use a virtual key",
+      "loadFailed": "Spend per user failed to load",
+      "selectTeam": "Select a team to see spend per user",
+      "noUserSpend": "No user spend in this range",
+      "noUser": "(no user)"
+    },
+    "topModelView": {
+      "columns": {
+        "model": "Model",
+        "spendUsd": "Spend (USD)",
+        "successful": "Successful",
+        "failed": "Failed",
+        "tokens": "Tokens"
+      },
+      "limitLabel": "Number of models to show",
+      "viewModeLabel": "Top model view mode"
+    },
+    "endpointUsage": {
+      "table": {
+        "columns": {
+          "endpoint": "Endpoint",
+          "successfulFailed": "Successful / Failed",
+          "totalRequest": "Total Request",
+          "successRate": "Success Rate",
+          "totalTokens": "Total Tokens",
+          "spend": "Spend"
+        },
+        "successfulRequests": "Successful requests",
+        "title": "Endpoints",
+        "endpointSingular": "endpoint",
+        "endpointPlural": "endpoints",
+        "noData": "No endpoint usage data"
+      },
+      "barChart": {
+        "title": "Success vs Failed Requests by Endpoint"
+      },
+      "lineChart": {
+        "title": "Endpoint Usage Trends"
+      }
+    },
+    "clientUsage": {
+      "unknownModel": "Unknown model",
+      "unknownProvider": "Unknown provider",
+      "errors": {
+        "selectUserOrTeam": "Select a user or team to view client usage",
+        "incompleteData": "The proxy returned incomplete client usage data",
+        "outsideUser": "The proxy returned usage outside the selected user",
+        "outsideTeam": "The proxy returned usage outside the selected team",
+        "signIn": "Sign in to view client usage",
+        "chooseAdministeredTeam": "Choose a team you administer",
+        "chooseTeamMember": "Choose a member of the selected team",
+        "chooseTeamBeforeMember": "Choose an administered team before viewing another member's usage",
+        "invalidRange": "Select a valid date range",
+        "loadFailed": "Could not load client usage"
+      }
+    },
+    "clientModels": {
+      "errors": {
+        "incompleteData": "The proxy returned incomplete model usage data",
+        "duplicateData": "The proxy returned duplicate model usage data. Try again.",
+        "totalsMismatch": "Model usage does not match these client totals yet. Refresh or choose a shorter range.",
+        "tooLarge": "Choose a shorter date range to load the model breakdown",
+        "invalidJson": "Could not load complete model usage. Try again.",
+        "loadFailed": "Could not load the model breakdown"
+      }
+    },
+    "keyActivity": {
+      "searching": "Searching...",
+      "matchingKeys_one": "{{value}} matching keys",
+      "matchingKeys_other": "{{value}} matching keys",
+      "keyCount_one": "{{value}} keys",
+      "keyCount_other": "{{value}} keys",
+      "loadingDetails": "Loading key details...",
+      "detailFailed": "Could not load key details.",
+      "retry": "Retry",
+      "noDailyDetails": "No daily details available",
+      "loadingChartData": "Loading chart data...",
+      "overallUsage": "Overall Usage",
+      "stats": {
+        "spend": "Spend",
+        "requests": "Requests",
+        "ok": "ok",
+        "failed": "failed",
+        "tokens": "Tokens",
+        "tokensHint": "{{input}} in · {{output}} out",
+        "avgCost": "Avg cost / request",
+        "cacheReadHint": "{{value}} cache read tokens"
+      },
+      "searchFailed": "Search failed",
+      "firstPageFailed": "Could not load keys for this range.",
+      "loadingKeys": "Loading keys...",
+      "requestsSrOnly": "requests",
+      "retrySearch": "Retry search",
+      "searchKeysFailed": "Could not search keys. ",
+      "noMatches": "No keys match \"<query/>\" in this date range",
+      "searchLabel": "Search keys",
+      "searchPlaceholder": "Search alias, hash, user ID, or email",
+      "clearSearch": "Clear key search",
+      "panelTitle": "Virtual keys",
+      "columns": {
+        "key": "Key",
+        "spend": "Spend",
+        "requests": "Requests"
+      },
+      "searchAllFailed": "Could not search all keys. ",
+      "loadingMore": "Loading more keys...",
+      "loadMoreFailed": "Could not load more keys."
+    },
+    "topKeys": {
+      "keyNotInDatabase": "This key is no longer in the database (deleted, or a CLI/SSO session key), so its details can't be opened",
+      "columns": {
+        "keyId": "Key ID",
+        "keyAlias": "Key Alias",
+        "user": "User",
+        "tags": "Tags",
+        "spend": "Spend (USD)"
+      },
+      "tagTooltip": {
+        "name": "Tag Name:",
+        "spend": "Spend:"
+      },
+      "showFewerTags": "Show fewer tags",
+      "showAllTags": "Show all tags",
+      "limitLabel": "Number of top keys to show",
+      "viewLabel": "View",
+      "chartTooltip": {
+        "keyAlias": "Key Alias: ",
+        "keyId": "Key ID: ",
+        "spend": "Spend: "
+      },
+      "close": "Close"
+    },
+    "userActivity": {
+      "firstPageFailed": "Could not load users for this range.",
+      "retry": "Retry",
+      "loading": "Loading users...",
+      "empty": "No user activity in this date range",
+      "columns": {
+        "user": "User",
+        "spend": "Spend",
+        "requests": "Requests",
+        "successful": "Successful",
+        "failed": "Failed",
+        "totalTokens": "Total tokens"
+      },
+      "userCount_one": "<value/> users",
+      "userCount_other": "<value/> users",
+      "loadingMore": "Loading more users...",
+      "loadMoreFailed": "Could not load more users.",
+      "loadMore": "Load more",
+      "panelTitle": "User activity",
+      "noUser": "(no user)"
+    },
+    "topUsers": {
+      "failed": "Could not load top users.",
+      "retry": "Retry",
+      "loading": "Loading users...",
+      "empty": "No user activity in this date range",
+      "columns": {
+        "user": "User",
+        "spend": "Spend",
+        "requests": "Requests"
+      }
+    },
+    "keyModelUsage": {
+      "columns": {
+        "model": "Model",
+        "spend": "Spend (USD)",
+        "successful": "Successful",
+        "failed": "Failed",
+        "tokens": "Tokens"
+      },
+      "title": "Model Usage",
+      "table": "Table",
+      "chart": "Chart"
+    },
+    "valueFormatters": {
+      "milliseconds": "{{value}}ms",
+      "seconds": "{{value}}s"
+    },
+    "export": {
+      "modal": {
+        "title": "Export {{entity}} Usage",
+        "success": "{{entity}} usage data exported successfully as {{format}}",
+        "failed": "Failed to export data",
+        "cancel": "Cancel",
+        "exporting": "Exporting...",
+        "exportFormat": "Export {{format}}"
+      },
+      "format": {
+        "label": "Format",
+        "csv": "CSV (Excel, Google Sheets)",
+        "json": "JSON (includes metadata)"
+      },
+      "summary": {
+        "filterCount_one": "{{count}} filter",
+        "filterCount_other": "{{count}} filters"
+      },
+      "type": {
+        "label": "Export type",
+        "daily": {
+          "title": "Day-by-day breakdown by {{entityType}}",
+          "description": "Daily metrics for each {{entityType}}"
+        },
+        "dailyWithKeys": {
+          "title": "Day-by-day breakdown by {{entityType}} and key",
+          "description": "Daily metrics for each {{entityType}}, split by API key"
+        },
+        "dailyWithModels": {
+          "title": "Day-by-day by {{entityType}} and model",
+          "description": "Daily metrics split by model"
+        },
+        "dailyWithUsers": {
+          "title": "Day-by-day breakdown by {{entityType}} and user",
+          "description": "Daily metrics for each {{entityType}}, split by key owner"
+        }
+      },
+      "header": {
+        "noOptionsPlaceholder": "No {{entityType}}s with usage in this range",
+        "noOptionsFound": "No options found",
+        "clear": "Clear {{label}}",
+        "filters": "filters",
+        "exportData": "Export Data"
+      }
+    },
+    "cloudzero": {
+      "validation": {
+        "apiKeyRequired": "Please enter your CloudZero API key",
+        "connectionIdRequired": "Please enter the CloudZero connection ID"
+      },
+      "toasts": {
+        "loadFailedWithReason": "Failed to load existing settings: {{error}}",
+        "unknownError": "Unknown error",
+        "loadFailed": "Failed to load existing settings",
+        "noAccessToken": "No access token available",
+        "saved": "CloudZero settings saved successfully",
+        "saveFailed": "Failed to save CloudZero settings",
+        "exported": "Export to CloudZero completed successfully",
+        "exportFailed": "Failed to export to CloudZero",
+        "csvComingSoon": "CSV export functionality coming soon!",
+        "csvFailed": "Failed to export CSV"
+      },
+      "destinations": {
+        "cloudzero": "Export to CloudZero",
+        "csv": "Export to CSV"
+      },
+      "title": "Export Data",
+      "destinationLabel": "Export Destination",
+      "existing": {
+        "title": "Existing CloudZero Configuration",
+        "apiKey": "API Key: ",
+        "connectionId": "Connection ID: "
+      },
+      "form": {
+        "apiKeyLabel": "CloudZero API Key",
+        "apiKeyPlaceholder": "Enter your CloudZero API key",
+        "connectionIdLabel": "Connection ID",
+        "connectionIdPlaceholder": "Enter CloudZero connection ID"
+      },
+      "csv": {
+        "title": "CSV Export",
+        "description": "Export your usage data as a CSV file for analysis in spreadsheet applications."
+      },
+      "cancel": "Cancel",
+      "exportToCloudZero": "Export to CloudZero",
+      "exportCsv": "Export CSV"
+    },
+    "perUser": {
+      "unknownAgent": "Unknown",
+      "notAvailable": "N/A",
+      "columns": {
+        "userId": "User ID",
+        "userEmail": "User Email",
+        "userAgent": "User Agent",
+        "successGenerations": "Success Generations",
+        "totalTokens": "Total Tokens",
+        "failedRequests": "Failed Requests",
+        "totalCost": "Total Cost"
+      },
+      "title": "Per User Usage",
+      "subtitle": "Individual developer usage metrics",
+      "tabs": {
+        "details": "User Details",
+        "distribution": "Usage Distribution"
+      },
+      "noData": "No per-user usage data",
+      "distribution": {
+        "title": "User Usage Distribution",
+        "subtitle": "Number of users by successful request frequency",
+        "buckets": {
+          "range1To9": "1-9 requests",
+          "range10To99": "10-99 requests",
+          "range100To999": "100-999 requests",
+          "range1kTo9k": "1K-9.9K requests",
+          "range10kTo99k": "10K-99.9K requests",
+          "range100kPlus": "100K+ requests"
+        },
+        "userCount_one": "{{count}} users",
+        "userCount_other": "{{count}} users"
+      }
+    },
+    "userAgentActivity": {
+      "noActiveUsers": "No active users in this period",
+      "weekLabel": "Week {{number}}",
+      "monthLabel": "Month {{number}}",
+      "charts": {
+        "dau": "Daily Active Users - Last 7 Days",
+        "wau": "Weekly Active Users - Last 7 Weeks",
+        "mau": "Monthly Active Users - Last 7 Months"
+      },
+      "summary": {
+        "title": "Summary by User Agent",
+        "subtitle": "Performance metrics for different user agents",
+        "noData": "No Data",
+        "successRequests": "Success Requests",
+        "totalTokens": "Total Tokens",
+        "totalCost": "Total Cost"
+      },
+      "filter": {
+        "label": "Filter by User Agents",
+        "placeholder": "All User Agents",
+        "clear": "Clear user agent filter",
+        "empty": "No user agents found"
+      },
+      "activity": {
+        "activeUsersTitle": "DAU, WAU & MAU per Agent",
+        "perUserTitle": "Per User Usage (Last 30 Days)",
+        "activeUsersSubtitle": "Active users across different time periods",
+        "perUserSubtitle": "Usage per end user",
+        "periodLabel": "Active users period",
+        "viewLabel": "Activity view"
+      }
+    },
+    "customerSelect": {
+      "lookupError": "Unable to load selected customers",
+      "loadError": "Unable to load customers",
+      "placeholder": "Search customers by ID or alias...",
+      "empty": "No customers found",
+      "loading": "Loading customers...",
+      "clearAll": "Clear all customers"
+    },
+    "chartLoader": {
+      "processingDate": "Processing date selection...",
+      "loading": "Loading chart data...",
+      "processingDateHint": "This will only take a moment",
+      "loadingHint": "Fetching your data"
+    }
+  },
+  "telemetry": {
+    "destinationText": {
+      "every": "every {{seconds}} s",
+      "http": "One JSON report per worker {{every}} and on shutdown, by HTTP POST to LITELLM_TELEMETRY_ENDPOINT. A failed send is retried next window",
+      "localTable_one": "One report per worker {{every}} and on shutdown, stored in this proxy's LiteLLM_TelemetryReport table for {{count}} days. Nothing leaves the proxy. Admins can export from GET /telemetry/reports",
+      "localTable_other": "One report per worker {{every}} and on shutdown, stored in this proxy's LiteLLM_TelemetryReport table for {{count}} days. Nothing leaves the proxy. Admins can export from GET /telemetry/reports",
+      "none": "No destination is chosen, so nothing is recorded"
+    },
+    "destination": {
+      "localTable": "Local table (LiteLLM_TelemetryReport in this proxy's database)",
+      "http": "HTTP (POST to LITELLM_TELEMETRY_ENDPOINT)",
+      "title": "Destination",
+      "missing": "Telemetry is on but no destination is chosen, so nothing is recorded",
+      "setByEnvironment": "Set by LITELLM_TELEMETRY_DESTINATION"
+    },
+    "groupList": {
+      "slicesBy": "Slices by: ",
+      "counts": "Counts",
+      "sends": "Sends",
+      "helpsCatch": "Helps catch: "
+    },
+    "switch": {
+      "label": "Telemetry",
+      "on": "On",
+      "off": "Off"
+    },
+    "report": {
+      "sampleTitle": "Sample report",
+      "lastTitle": "Last report sent from this worker",
+      "sampleDescription": "Made-up traffic through the real filter, with the groups that are on (all groups while telemetry is off)",
+      "lastDescription": "Exactly what this worker last sent or stored"
+    },
+    "page": {
+      "loading": "Loading telemetry settings...",
+      "loadFailed": "Could not load telemetry settings: ",
+      "title": "Telemetry",
+      "description": "Choose what privacy-safe, aggregated usage data this proxy shares",
+      "tabs": {
+        "proxy": "Proxy requests",
+        "ui": "Admin UI"
+      },
+      "uiNote": "Sent only while Page navigation is on, to this proxy at POST /telemetry/ui_events, and counted into the same report as proxy traffic"
+    },
+    "howSent": {
+      "title": "How and when it is sent",
+      "changesApply": "Changes apply from the next window",
+      "offByDefault": "Off by default. Each switch adds aggregated counts, never prompts, responses, keys, ids or header values. LITELLM_TELEMETRY_DISABLED=true turns everything off"
+    },
+    "enterpriseDialog": {
+      "premiumTitle": "Contact your enterprise representative",
+      "title": "Telemetry is an enterprise-only feature",
+      "premiumDescription": "Telemetry can't be turned on from this page. Reach out to your LiteLLM enterprise representative to turn it on for this proxy.",
+      "description": "Telemetry is only available on LiteLLM Enterprise, and this proxy isn't on an enterprise license."
+    },
+    "groups": {
+      "heartbeat": {
+        "title": "Heartbeat",
+        "counts": "Random instance id, LiteLLM version, report window, which groups are on",
+        "helps": "Which versions are running"
+      },
+      "requestSuccess": {
+        "title": "Request success",
+        "slices": "endpoint, LiteLLM status, provider status, stream, handled by Rust, LiteLLM cache hit",
+        "counts": "requests, provider attempts, latency to headers and to first byte",
+        "helps": "Error-rate and latency regressions, Rust vs Python"
+      },
+      "tokenInfo": {
+        "title": "Token info",
+        "slices": "provider prompt-cache hit",
+        "counts": "input, output and cache-read token sums",
+        "helps": "Broken prompt caching or token counting"
+      },
+      "requestTaxonomy": {
+        "title": "Request taxonomy",
+        "slices": "provider, salted deployment hash",
+        "counts": "one row per provider attempt with its status",
+        "helps": "Which provider is failing, retries and fallbacks"
+      },
+      "eventDetails": {
+        "title": "Event details",
+        "counts": "message block counts and types, allowlisted header names (no values), provider time to first token",
+        "helps": "Which request shapes and clients fail"
+      },
+      "instanceConfiguration": {
+        "title": "Instance configuration",
+        "counts": "names of allowlisted config keys that are set (no values)",
+        "helps": "Which features an upgrade must keep working"
+      },
+      "pageNavigation": {
+        "title": "Page navigation",
+        "counts": "Admin UI page views and tab switches by route name (no ids or typed text)",
+        "helps": "Which pages and tabs get used"
+      }
+    }
+  },
   "organizations": {
     "view": {
       "loading": "Loading...",

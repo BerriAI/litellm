@@ -2,9 +2,11 @@ import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import i18n from "@/i18n/i18n";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import type { ColumnDef } from "@tanstack/react-table";
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { TopModelData } from "../types";
 
 interface KeyModelUsageViewProps {
@@ -17,30 +19,30 @@ const COMPACT_TABLE_ROW_HEIGHT = 32;
 
 const columns: ColumnDef<TopModelData>[] = [
   {
-    header: "Model",
+    header: () => i18n.t("usage.keyModelUsage.columns.model"),
     accessorKey: "model",
     cell: ({ row }) => row.original.model || "-",
   },
   {
-    header: "Spend (USD)",
+    header: () => i18n.t("usage.keyModelUsage.columns.spend"),
     accessorKey: "spend",
     meta: { numeric: true },
     cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
   },
   {
-    header: "Successful",
+    header: () => i18n.t("usage.keyModelUsage.columns.successful"),
     accessorKey: "successful_requests",
     meta: { numeric: true },
     cell: ({ row }) => <span className="text-success">{row.original.successful_requests?.toLocaleString() || 0}</span>,
   },
   {
-    header: "Failed",
+    header: () => i18n.t("usage.keyModelUsage.columns.failed"),
     accessorKey: "failed_requests",
     meta: { numeric: true },
     cell: ({ row }) => <span className="text-destructive">{row.original.failed_requests?.toLocaleString() || 0}</span>,
   },
   {
-    header: "Tokens",
+    header: () => i18n.t("usage.keyModelUsage.columns.tokens"),
     accessorKey: "tokens",
     meta: { numeric: true },
     cell: ({ row }) => row.original.tokens?.toLocaleString() || 0,
@@ -48,6 +50,7 @@ const columns: ColumnDef<TopModelData>[] = [
 ];
 
 const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
+  const { t } = useTranslation();
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
 
   if (topModels.length === 0) {
@@ -57,20 +60,20 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle className="text-base font-semibold">Model Usage</CardTitle>
+        <CardTitle className="text-base font-semibold">{t("usage.keyModelUsage.title")}</CardTitle>
         <CardAction>
           <div className="flex space-x-2">
             <button
               onClick={() => setViewMode("table")}
               className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
             >
-              Table
+              {t("usage.keyModelUsage.table")}
             </button>
             <button
               onClick={() => setViewMode("chart")}
               className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
             >
-              Chart
+              {t("usage.keyModelUsage.chart")}
             </button>
           </div>
         </CardAction>

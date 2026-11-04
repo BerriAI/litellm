@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -18,17 +19,18 @@ export function TelemetryEnterpriseDialog({
   onOpenChange: (open: boolean) => void;
   premiumUser: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <Dialog open={open} onOpenChange={(next) => onOpenChange(next)}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {premiumUser ? "Contact your enterprise representative" : "Telemetry is an enterprise-only feature"}
+            {premiumUser ? t("telemetry.enterpriseDialog.premiumTitle") : t("telemetry.enterpriseDialog.title")}
           </DialogTitle>
           <DialogDescription>
             {premiumUser
-              ? "Telemetry can't be turned on from this page. Reach out to your LiteLLM enterprise representative to turn it on for this proxy."
-              : "Telemetry is only available on LiteLLM Enterprise, and this proxy isn't on an enterprise license."}
+              ? t("telemetry.enterpriseDialog.premiumDescription")
+              : t("telemetry.enterpriseDialog.description")}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter showCloseButton />

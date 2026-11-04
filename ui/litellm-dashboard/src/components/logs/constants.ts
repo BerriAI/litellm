@@ -34,9 +34,9 @@ export const CREDENTIAL_LABELS: Record<string, string> = {
 };
 
 export const KUBERNETES_POD_ROUTING_LABELS = {
-  round_robin: "Round robin",
-  session_affinity: "Session affinity",
-  session_affinity_retry: "Session affinity (retry)",
+  round_robin: "logs.common.podRouting.roundRobin",
+  session_affinity: "logs.common.podRouting.sessionAffinity",
+  session_affinity_retry: "logs.common.podRouting.sessionAffinityRetry",
 } as const;
 
 export const QUICK_SELECT_OPTIONS: { label: string; value: number; unit: string }[] = [

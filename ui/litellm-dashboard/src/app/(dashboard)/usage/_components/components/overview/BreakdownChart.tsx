@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import type { DailyData } from "@/components/UsagePage/types";
@@ -60,17 +61,18 @@ export function BreakdownControls({
   onChange: (next: BreakdownState) => void;
   showDimension?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Segmented
-        label="Metric"
+        label={t("usage.breakdown.metricLabel")}
         value={state.metric}
         options={METRIC_OPTIONS}
         onChange={(metric) => onChange({ ...state, metric })}
       />
       {showDimension && (
         <Segmented
-          label="Group by"
+          label={t("usage.breakdown.groupByLabel")}
           value={state.dimension}
           options={DIMENSION_OPTIONS}
           onChange={(dimension) => onChange({ ...state, dimension })}
@@ -134,6 +136,7 @@ export function Leaderboard({
   dense?: boolean;
   colorByKey?: ReadonlyMap<string, string>;
 }) {
+  const { t } = useTranslation();
   const colorOf = (name: string) => {
     if (colorByKey) return colorForModel(name, colorByKey);
     const index = series.labels.indexOf(name);
@@ -142,7 +145,7 @@ export function Leaderboard({
   const value = (row: LeaderRow) => rankValue(row, metric);
   const rows = ranking.slice(0, limit);
   if (rows.length === 0) {
-    return <p className="py-8 text-center text-xs text-muted-foreground">No usage in this range</p>;
+    return <p className="py-8 text-center text-xs text-muted-foreground">{t("usage.breakdown.empty")}</p>;
   }
   const half = columns === 2 ? Math.ceil(rows.length / 2) : rows.length;
   const groups = columns === 2 ? [rows.slice(0, half), rows.slice(half)] : [rows];
@@ -168,7 +171,9 @@ export function Leaderboard({
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium text-foreground">{row.key}</span>
                   {providerForModel(row.key) && (
-                    <span className="block truncate text-xs text-muted-foreground">by {providerForModel(row.key)}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {t("usage.breakdown.byProvider", { provider: providerForModel(row.key) })}
+                    </span>
                   )}
                 </span>
               </span>
