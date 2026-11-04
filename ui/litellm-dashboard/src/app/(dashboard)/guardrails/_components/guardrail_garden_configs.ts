@@ -394,7 +394,7 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     defaultOn: false,
   },
   collieai: {
-    provider: "CollieAi",
+    provider: "Collieai",
     guardrailNameSuggestion: "CollieAi",
     mode: ["pre_call", "post_call"],
     defaultOn: true,

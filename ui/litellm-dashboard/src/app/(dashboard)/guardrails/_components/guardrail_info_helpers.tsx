@@ -93,7 +93,7 @@ export const guardrail_provider_map: Record<string, string> = {
   "LLM Shield Proxy": "llm_shield_proxy",
   Conduct: "conduct",
   DecisionModel: "decision_model",
-  CollieAi: "collieai",
+  Collieai: "collieai",
 };
 
 // Search aliases matched alongside the provider label in the add-guardrail provider combobox

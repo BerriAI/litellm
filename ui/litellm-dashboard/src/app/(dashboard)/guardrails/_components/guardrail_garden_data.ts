@@ -585,7 +585,7 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     category: "partner",
     logo: guardrailLogoMap["CollieAi"],
     tags: ["Security", "Prompt Injection", "PII", "Policy", "Monitoring"],
-    providerKey: "CollieAi",
+    providerKey: "Collieai",
   },
 ];
 
