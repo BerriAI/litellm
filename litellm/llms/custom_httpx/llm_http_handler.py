@@ -2430,6 +2430,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
             )
+            logging_obj.record_native_bedrock_guardrail(initial_response)
 
         return await self._finalize_anthropic_messages_response(
             initial_response=initial_response,

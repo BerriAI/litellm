@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
+    AmazonAnthropicClaudeStreamDecoder,
     AmazonOpenAICompatibleStreamDecoder,
     AWSEventStreamDecoder,
     _stream_decoder,
@@ -1120,6 +1121,7 @@ async def test_converse_streaming_completion_yields_text_and_finish_reason(
             ),
         )
     )
+
     def handle_request(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/converse-stream")
         return httpx.Response(200, content=event_stream_body, headers=_event_stream_headers())
@@ -1179,9 +1181,7 @@ def test_mistral_invoke_stream_yields_text_and_finish_reason(
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
         "A court case moves through the courts."
     )
-    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == [
-        "stop"
-    ]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"]
 
 
 def test_converse_streaming_tool_call_arguments_are_valid_json(
@@ -1721,6 +1721,7 @@ def test_filter_headers_for_aws_signature():
 @pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
 def test_invoke_decoder_reports_only_missing_aws_dependency(missing):
     from unittest.mock import patch
+
     from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
     failure = ModuleNotFoundError("missing dependency", name=missing)
@@ -1835,9 +1836,7 @@ async def test_converse_stream_thinking_merges_into_content_with_think_tags() ->
             "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "c2lnbmF0dXJl"}}}
         ),
         _converse_event_frame("contentBlockStop", {"contentBlockIndex": 0}),
-        _converse_event_frame(
-            "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Hi I am Anthropic, "}}
-        ),
+        _converse_event_frame("contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Hi I am Anthropic, "}}),
         _converse_event_frame(
             "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "I am a helpful assistant"}}
         ),

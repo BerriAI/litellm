@@ -3835,3 +3835,32 @@ def test_bedrock_removed_tool_change_does_not_add_beta(explicit_beta: bool) -> N
 
     assert result["messages"] == [{"role": "user", "content": "Reply with OK"}]
     assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)
+
+
+@pytest.mark.parametrize("trace", ["enabled", "disabled"])
+def test_bedrock_messages_applies_the_deployment_guardrail_config_as_invoke_headers(trace: str) -> None:
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    headers, _ = AmazonAnthropicClaudeMessagesConfig().validate_anthropic_messages_environment(
+        headers={},
+        model="anthropic.claude-sonnet-5-v1:0",
+        messages=[],
+        optional_params={},
+        litellm_params={"guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "2", "trace": trace}},
+    )
+    assert headers["X-Amzn-Bedrock-GuardrailIdentifier"] == "gid"
+    assert headers["X-Amzn-Bedrock-GuardrailVersion"] == "2"
+    assert headers["X-Amzn-Bedrock-Trace"] == trace.upper()
+
+
+def test_bedrock_messages_without_guardrail_config_sends_no_guardrail_headers() -> None:
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    headers, _ = AmazonAnthropicClaudeMessagesConfig().validate_anthropic_messages_environment(
+        headers={}, model="anthropic.claude-sonnet-5-v1:0", messages=[], optional_params={}, litellm_params={}
+    )
+    assert not any(name.startswith("X-Amzn-Bedrock-Guardrail") for name in headers)
