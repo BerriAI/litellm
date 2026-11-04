@@ -35,6 +35,7 @@ from e2e_config import (
     PROMPT_CACHING_OPT_IN_ENV,
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
+    PROXY_WIDE_CONFIG_OPT_IN_ENV,
     SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
     SAGEMAKER_NOVA_OPT_IN_ENV,
     SECRET_MANAGER_OPT_IN_ENV,
@@ -54,7 +55,6 @@ from models import TeamNewBody, UserNewBody, UserNewResponse
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
 from provider_edge import replay_leftover_error
 from proxy_client import ProxyClient, build_proxy_client
-from stack_lock import stack_lock
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
 _CALL_PASSED = pytest.StashKey[bool]()
@@ -77,6 +77,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
         "sagemaker_nova": SAGEMAKER_NOVA_OPT_IN_ENV,
         "sagemaker_nova2_lite": SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
+        "proxy_wide_config": PROXY_WIDE_CONFIG_OPT_IN_ENV,
     }
 )
 
@@ -164,11 +165,6 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "quiet_stack: measures the proxy itself, so it runs while no other test on this host is hitting the stack; "
-        "every other test waits for it to finish",
-    )
-    config.addinivalue_line(
-        "markers",
         "provider_edge_host: routes provider traffic through the pytest host's edge in every fixture mode, so the "
         "gateway must reach the pytest host; deselected unless E2E_PROVIDER_EDGE_HOST_REACHABLE is set",
     )
@@ -199,6 +195,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "sagemaker_nova2_lite: needs a deployed SageMaker Nova 2 Lite endpoint the proxy's AWS credentials can invoke; "
         "deselected unless SAGEMAKER_NOVA2_LITE_ENDPOINT names it",
+    )
+    config.addinivalue_line(
+        "markers",
+        "proxy_wide_config: turns on a proxy-wide setting through /config/update, so it runs on a stack no other suite "
+        "is driving; deselected unless E2E_PROXY_WIDE_CONFIG_STACK is set",
     )
 
 
@@ -269,7 +270,7 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     ahead of xdist's own collection-finish report, and the controller schedules no
     test until every worker has reported, so this is the idle footprint of a stack
     that just passed its readiness gate. The fixture hands the capture to the
-    idle-budget test in router/test_reliability_memory_e2e.py."""
+    idle-budget test in perf/test_reliability_memory_e2e.py."""
     if session.config.getoption("collectonly") or not any(_uses_idle_rss(item) for item in session.items):
         return
     session.config.stash[_IDLE_RSS] = read_rss_everywhere(build_proxy_client(), timeout=IDLE_RSS_READ_TIMEOUT_SECONDS)
@@ -297,12 +298,6 @@ def _proxy_fail_reason() -> str | None:
     if CONTROL_PLANE_BASE_URL != PROXY_BASE_URL:
         return _liveness_reason("control plane", CONTROL_PLANE_BASE_URL)
     return None
-
-
-@pytest.hookimpl(wrapper=True)
-def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None, object, object]:
-    with stack_lock(exclusive=item.get_closest_marker("quiet_stack") is not None):
-        return (yield)
 
 
 @pytest.hookimpl(tryfirst=True)

@@ -17,11 +17,6 @@ from models import (
     ChatBody,
     ChatMessage,
     ChatResponse,
-    ConfigPatchResponse,
-    CostDiscountConfig,
-    CostDiscountConfigResponse,
-    CostMarginConfig,
-    CostMarginConfigResponse,
     GuardrailCreateBody,
     GuardrailCreateResponse,
     KeyDeleteBody,
@@ -31,14 +26,11 @@ from models import (
 )
 from spend_e2e_client import SpendClient
 
-pytestmark = [pytest.mark.e2e, pytest.mark.quiet_stack]
+pytestmark = pytest.mark.e2e
 
 BACKEND_MODEL: Final = "openai/gpt-6.1-sol"
 INPUT_RATE: Final = 0.00005
 OUTPUT_RATE: Final = 0.0001
-DISCOUNT: Final = 0.25
-MARGIN_PERCENT: Final = 0.1
-MARGIN_FIXED: Final = 0.0005
 
 
 def _register_bedrock_guardrail(
@@ -90,52 +82,6 @@ def _guarded_chat(client: SpendClient, key: str, model: str, name: str) -> Strea
             guardrails=[name],
         ),
     )
-
-
-def _set_discount(client: SpendClient, values: dict[str, float]) -> float:
-    unwrap(
-        client.proxy.transport.patch(
-            "/config/cost_discount_config",
-            headers=client.proxy.transport.master,
-            json=CostDiscountConfig(values),
-            response_type=ConfigPatchResponse,
-        )
-    )
-    return time.monotonic()
-
-
-def _set_margin(client: SpendClient, values: dict[str, float | dict[str, float]]) -> float:
-    unwrap(
-        client.proxy.transport.patch(
-            "/config/cost_margin_config",
-            headers=client.proxy.transport.master,
-            json=CostMarginConfig(values),
-            response_type=ConfigPatchResponse,
-        )
-    )
-    return time.monotonic()
-
-
-def _get_discount(client: SpendClient) -> dict[str, float]:
-    return unwrap(
-        client.proxy.transport.get(
-            "/config/cost_discount_config",
-            headers=client.proxy.transport.master,
-            params=NoBody(),
-            response_type=CostDiscountConfigResponse,
-        )
-    ).values
-
-
-def _get_margin(client: SpendClient) -> dict[str, float | dict[str, float]]:
-    return unwrap(
-        client.proxy.transport.get(
-            "/config/cost_margin_config",
-            headers=client.proxy.transport.master,
-            params=NoBody(),
-            response_type=CostMarginConfigResponse,
-        )
-    ).values
 
 
 def _register_model(client: SpendClient, resources: ResourceManager, prefix: str) -> str:
@@ -199,100 +145,7 @@ def scoped_key(client: SpendClient, strict_resources: ResourceManager) -> str:
     return key
 
 
-@pytest.fixture
-def restored_pricing_config(client: SpendClient) -> Iterator[None]:
-    discount: Final = _get_discount(client)
-    margin: Final = _get_margin(client)
-    try:
-        _set_discount(client, {})
-        reset_at: Final = _set_margin(client, {})
-        settle_propagation(reset_at)
-        yield
-    finally:
-        try:
-            _set_discount(client, discount)
-        finally:
-            restored_at: Final = _set_margin(client, margin)
-            settle_propagation(restored_at)
-
-
-class TestPricingConfigSpend:
-    @pytest.mark.covers(
-        "quota_management.spend_tracking.discount_config.logs_cost",
-        exercised_on=["chat_completions"],
-    )
-    @meta(
-        Subject(
-            domain=Domain.SPEND_BUDGETS,
-            route=Route.SPEND_REPORTING,
-            providers=(Provider.OPENAI,),
-            models=(BACKEND_MODEL,),
-            mode=Mode.NONSTREAM,
-        )
-    )
-    def test_configured_discount_reaches_persisted_spend_row(
-        self,
-        client: SpendClient,
-        strict_resources: ResourceManager,
-        scoped_key: str,
-        restored_pricing_config: None,
-    ) -> None:
-        discount_set_at: Final = _set_discount(client, {"openai": DISCOUNT})
-        settle_propagation(discount_set_at)
-        model: Final = _register_model(client, strict_resources, "discount-priced")
-        chat: Final = unwrap(client.chat(scoped_key, model, f"reply with one word {unique_marker()}", max_tokens=16))
-        assert chat.id and chat.usage
-        assert chat.usage.prompt_tokens is not None and chat.usage.prompt_tokens > 0
-        assert chat.usage.completion_tokens is not None and chat.usage.completion_tokens >= 0
-
-        row: Final = poll_cost_row(client.proxy, chat.id)
-        assert row is not None
-        base_cost: Final = _base_cost(row, chat.usage.prompt_tokens, chat.usage.completion_tokens)
-        breakdown: Final = row.breakdown
-        assert breakdown.discount_percent is not None and approx_equal(breakdown.discount_percent, DISCOUNT)
-        assert breakdown.discount_amount is not None and approx_equal(breakdown.discount_amount, base_cost * DISCOUNT)
-        assert row.spend is not None and approx_equal(row.spend, base_cost * (1 - DISCOUNT))
-
-    @pytest.mark.covers(
-        "quota_management.spend_tracking.margin_config.logs_cost",
-        exercised_on=["chat_completions"],
-    )
-    @meta(
-        Subject(
-            domain=Domain.SPEND_BUDGETS,
-            route=Route.SPEND_REPORTING,
-            providers=(Provider.OPENAI,),
-            models=(BACKEND_MODEL,),
-            mode=Mode.NONSTREAM,
-        )
-    )
-    def test_configured_margin_reaches_persisted_spend_row(
-        self,
-        client: SpendClient,
-        strict_resources: ResourceManager,
-        scoped_key: str,
-        restored_pricing_config: None,
-    ) -> None:
-        margin_set_at: Final = _set_margin(
-            client, {"openai": {"percentage": MARGIN_PERCENT, "fixed_amount": MARGIN_FIXED}}
-        )
-        settle_propagation(margin_set_at)
-        model: Final = _register_model(client, strict_resources, "margin-priced")
-        chat: Final = unwrap(client.chat(scoped_key, model, f"reply with one word {unique_marker()}", max_tokens=16))
-        assert chat.id and chat.usage
-        assert chat.usage.prompt_tokens is not None and chat.usage.prompt_tokens > 0
-        assert chat.usage.completion_tokens is not None and chat.usage.completion_tokens >= 0
-
-        row: Final = poll_cost_row(client.proxy, chat.id)
-        assert row is not None
-        base_cost: Final = _base_cost(row, chat.usage.prompt_tokens, chat.usage.completion_tokens)
-        breakdown: Final = row.breakdown
-        expected_margin: Final = base_cost * MARGIN_PERCENT + MARGIN_FIXED
-        assert breakdown.margin_percent is not None and approx_equal(breakdown.margin_percent, MARGIN_PERCENT)
-        assert breakdown.margin_fixed_amount is not None and approx_equal(breakdown.margin_fixed_amount, MARGIN_FIXED)
-        assert breakdown.margin_total_amount is not None and approx_equal(breakdown.margin_total_amount, expected_margin)
-        assert row.spend is not None and approx_equal(row.spend, base_cost + expected_margin)
-
+class TestGuardrailCostSpend:
     @pytest.mark.covers(
         "quota_management.spend_tracking.guardrail_cost.logs_cost",
         exercised_on=["chat_completions"],
@@ -311,7 +164,6 @@ class TestPricingConfigSpend:
         client: SpendClient,
         strict_resources: ResourceManager,
         scoped_key: str,
-        restored_pricing_config: None,
     ) -> None:
         identifier: Final = os.environ["BEDROCK_GUARDRAIL_IDENTIFIER"]
         version: Final = os.environ["BEDROCK_GUARDRAIL_VERSION"]

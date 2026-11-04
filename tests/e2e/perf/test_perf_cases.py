@@ -48,7 +48,7 @@ from setup.ramp import step_properties
 from setup.run import run_plan
 from setup.telemetry import read_gateway_telemetry, telemetry_sampler
 
-pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]
+pytestmark = pytest.mark.perf
 _SPEND_SAMPLE: Final = 40
 _WARMUP_SECONDS: Final = 60
 

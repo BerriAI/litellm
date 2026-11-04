@@ -33,7 +33,6 @@ from transport import HttpTransport
 
 pytestmark = [
     pytest.mark.perf,
-    pytest.mark.quiet_stack,
     pytest.mark.skipif(os.environ.get("E2E_UI_PERF_DISPOSABLE") != "1", reason="Dedicated disposable database only"),
 ]
 
