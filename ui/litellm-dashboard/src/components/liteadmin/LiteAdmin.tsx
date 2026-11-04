@@ -29,7 +29,7 @@ import { createGatewayClient } from "@/components/llm_calls/gateway_client";
 import { getProxyBaseUrl } from "@/components/networking";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field";
 import { Kbd } from "@/components/ui/kbd";
@@ -159,10 +159,10 @@ export function AriaUsageTrigger() {
   const state = useContext(LiteAdminContext);
   if (!state) return null;
   return (
-    <Button variant="outline" size="sm" render={<Link href={uiHref("aria")} />} className="gap-1.5">
+    <Link href={uiHref("aria")} className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1.5")}>
       <AriaAvatar size={18} />
       Ask Aria
-    </Button>
+    </Link>
   );
 }
 
