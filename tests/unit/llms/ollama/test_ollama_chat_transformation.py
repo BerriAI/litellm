@@ -1,10 +1,12 @@
 import asyncio
 import inspect
+import logging
 import os
 import sys
 from typing import Final, cast
 
 import pytest
+import respx
 from pydantic import BaseModel
 
 sys.path.insert(
@@ -23,6 +25,7 @@ import json
 from unittest.mock import ANY, MagicMock, patch
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.types.utils import Choices, EmbeddingResponse, Message, ModelResponse, ModelResponseStream
 from unittest import mock
 
@@ -854,6 +857,99 @@ class TestOllamaReasoningContentStreaming:
 
 
 class TestOllamaToolCallTransformation:
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_transform_request_keeps_parallel_call_ids_paired_with_results(self, stream: bool):
+        config: Final = OllamaChatConfig()
+        messages: Final = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_first",
+                            "type": "function",
+                            "function": {
+                                "name": "read_fixture",
+                                "arguments": '{"path": "first.txt"}',
+                            },
+                        },
+                        {
+                            "id": "call_second",
+                            "type": "function",
+                            "function": {
+                                "name": "read_fixture",
+                                "arguments": '{"path": "second.txt"}',
+                            },
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_second",
+                    "content": "second result",
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_first",
+                    "content": "first result",
+                },
+            ],
+        )
+
+        result: Final = config.transform_request(
+            model="ollama_chat/test-model",
+            messages=messages,
+            optional_params={"stream": stream},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["tool_calls"] == [
+            {
+                "id": "call_first",
+                "function": {"name": "read_fixture", "arguments": {"path": "first.txt"}},
+            },
+            {
+                "id": "call_second",
+                "function": {"name": "read_fixture", "arguments": {"path": "second.txt"}},
+            },
+        ]
+        assert [message.get("tool_call_id") for message in result["messages"][1:]] == [
+            "call_second",
+            "call_first",
+        ]
+
+    def test_transform_request_does_not_invent_an_id_for_an_unidentified_call(self):
+        config: Final = OllamaChatConfig()
+        messages: Final = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": None,
+                            "type": "function",
+                            "function": {"name": "read_fixture", "arguments": "{}"},
+                        }
+                    ],
+                }
+            ],
+        )
+
+        result: Final = config.transform_request(
+            model="ollama_chat/test-model",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["tool_calls"] == [{"function": {"name": "read_fixture", "arguments": {}}}]
+
     def test_transform_request_preserves_tool_calls(self):
         """
         tool_calls on assistant messages must survive transform_request.
@@ -1114,3 +1210,102 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "http://gateway.example.com/ollama/api/chat"
     )
+
+
+_DEEPWIKI_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+}
+
+
+def _ollama_chat_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("http://ollama.test:11434/api/chat").respond(
+        json={
+            "model": "qwen3:0.6b",
+            "message": {"role": "assistant", "content": "Sunny"},
+            "done": True,
+            "prompt_eval_count": 5,
+            "eval_count": 3,
+        }
+    )
+
+
+def test_ollama_chat_answers_400_for_a_hosted_mcp_tool_it_cannot_run(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _ollama_chat_route(respx_mock)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        litellm.completion(
+            model="ollama_chat/qwen3:0.6b",
+            messages=[{"role": "user", "content": "weather in Paris?"}],
+            tools=[_DEEPWIKI_MCP_TOOL, _WEATHER_TOOL],
+            api_base="http://ollama.test:11434",
+        )
+
+    assert raised.value.status_code == 400
+    assert "qwen3:0.6b on ollama_chat cannot run the hosted MCP tool `deepwiki`" in str(raised.value)
+    assert not route.called
+
+
+@pytest.mark.parametrize(
+    ("tools", "sent_tools"),
+    [([_DEEPWIKI_MCP_TOOL, _WEATHER_TOOL], [_WEATHER_TOOL]), ([_DEEPWIKI_MCP_TOOL], None)],
+    ids=["beside-a-function", "alone"],
+)
+def test_ollama_chat_drop_params_sends_only_the_tools_ollama_can_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tools: list[object], sent_tools: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _ollama_chat_route(respx_mock)
+
+    response: Final = litellm.completion(
+        model="ollama_chat/qwen3:0.6b",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=tools,
+        api_base="http://ollama.test:11434",
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content).get("tools") == sent_tools
+    assert response.choices[0].message.content == "Sunny"
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("effort", ("minimal", "xhigh"))
+def test_reasoning_effort_mapped_to_think_off_warns_once(effort: str, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3", drop_params=False
+        )
+
+    warnings: Final = _warnings_naming(caplog, "reasoning_effort")
+    assert result["think"] is False
+    assert len(warnings) == 1
+    assert f"reasoning_effort={effort!r}" in warnings[0]
+    assert "qwen3" in warnings[0]
+
+
+@pytest.mark.parametrize("effort, think", (("none", False), ("low", True), ("high", True)))
+def test_reasoning_effort_with_a_matching_think_value_does_not_warn(
+    effort: str, think: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3", drop_params=False
+        )
+
+    assert result["think"] is think
+    assert _warnings_naming(caplog, "reasoning_effort") == ()

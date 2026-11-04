@@ -8,6 +8,7 @@ function homeProps(overrides: Partial<ComponentProps<typeof MoyaiChatHome>> = {}
   return {
     children: <span>Chat composer</span>,
     imageMode: false,
+    researchMode: false,
     draft: "",
     busy: false,
     conversations: [],
@@ -24,10 +25,15 @@ function conversation(id: string, updatedAt: number): Conversation {
 describe("MoyaiChatHome", () => {
   it("should render the Moyai welcome and composer", () => {
     render(<MoyaiChatHome {...homeProps()} />);
-    expect(screen.getByRole("heading", { level: 1, name: "What are we building?" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "What are we working on?" })).toBeInTheDocument();
     expect(screen.getByText("Chat composer")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Recent chats" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("No recent chats in this browser yet.");
+  });
+
+  it("should render the research welcome when research mode is enabled", () => {
+    render(<MoyaiChatHome {...homeProps({ researchMode: true })} />);
+    expect(screen.getByRole("heading", { level: 1, name: "What should we research?" })).toBeInTheDocument();
   });
 
   it("should show the three most recently updated chats and open the selected one", () => {

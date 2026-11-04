@@ -20,6 +20,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.config_resolvers import FieldSource, SettingsStore, source_for
 from litellm.router import Router
+from litellm.router_api import SETTING_FIELDS
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints import (
     ROUTER_SETTINGS_FIELDS,
@@ -124,12 +125,18 @@ async def get_router_settings(
             # generic `hasattr` loop below would miss them.
             current_values["routing_groups"] = [
                 group.model_dump(exclude=frozenset(("model_priorities",)) if group.model_priorities is None else None)
-                for group in llm_router.routing_groups.values()
+                for group in llm_router.registry().routing_groups().values()
             ]
+            router_settings: Final = llm_router.settings()
             for field in router_fields:
                 if field.field_name == "routing_groups":
                     continue
-                if hasattr(llm_router, field.field_name):
+                if field.field_name in SETTING_FIELDS:
+                    if router_settings.is_set(field.field_name):
+                        current_values[field.field_name] = getattr(router_settings, field.field_name)
+                elif field.field_name == "model_group_alias":
+                    current_values[field.field_name] = llm_router.registry().aliases()
+                elif hasattr(llm_router, field.field_name):
                     current_values[field.field_name] = getattr(llm_router, field.field_name, None)
 
         # Merge with config values (config takes precedence)

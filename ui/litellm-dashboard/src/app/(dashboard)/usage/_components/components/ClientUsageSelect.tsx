@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { parseUsageClient, UsageClient } from "./overview/agentCatalog";
 
@@ -13,10 +14,11 @@ export default function ClientUsageSelect({
   value: UsageClient | null;
   onChange: (client: UsageClient | null) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <SearchSelect
-      aria-label="View client usage"
-      placeholder="View client usage"
+      aria-label={t("usage.clientSelect.label")}
+      placeholder={t("usage.clientSelect.placeholder")}
       value={value}
       options={CLIENT_OPTIONS}
       onValueChange={(client) => onChange(parseUsageClient(client))}

@@ -687,11 +687,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         responses_so_far: Sequence["ModelResponseStream"],
         litellm_logging_obj: "LiteLLMLoggingObj | None",
     ) -> "ModelResponse":
-        """``stream_chunk_builder`` folds every choice of a stream into one index-0
-        choice, so the stream is rebuilt one choice index at a time (every chunk
-        kept, its choices narrowed to that index, so usage-only chunks still
-        count) and the rebuilt choices are stitched into one response, each
-        carrying the index the stream gave it."""
         choice_indices: Final = tuple(
             sorted(frozenset(choice.index for response in responses_so_far for choice in response.choices))
         )

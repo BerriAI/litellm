@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     sanitize_cloud_object_component,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
 from litellm.types.utils import StandardBatchLineItemsPayload, StandardLoggingPayload
@@ -296,30 +297,28 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         else:
             await self._send_individual_logs(items_to_process)
 
-    def _get_object_name(self, kwargs: dict, logging_payload: StandardLoggingPayload, response_obj: Any) -> str:
+    def _get_object_name(
+        self, kwargs: Mapping[str, object], logging_payload: StandardLoggingPayload, response_obj: Any
+    ) -> str:
         """
         Get the object name to use for the current payload
         """
         current_date: Final = self._get_object_date_from_datetime(datetime.now(timezone.utc))
+        metadata: Final = as_str_mapping((as_str_mapping(kwargs.get("litellm_params")) or {}).get("metadata")) or {}
+        gcs_log_id: Final = metadata.get("gcs_log_id")
+        safe_log_id: Final = sanitize_cloud_object_component(
+            gcs_log_id if isinstance(gcs_log_id, str) else None, fallback=""
+        )
+        if safe_log_id:
+            return f"{current_date}/custom-{uuid.uuid4().hex}-{safe_log_id}"
         if logging_payload.get("error_str", None) is not None:
-            object_name = self._generate_failure_object_name(
-                request_date_str=current_date,
-            )
-        else:
-            object_name = self._generate_success_object_name(
-                request_date_str=current_date,
-                response_id=response_obj.get("id", ""),
-            )
-
-        # used for testing
-        _litellm_params: Final = kwargs.get("litellm_params", None) or {}
-        _metadata: Final = _litellm_params.get("metadata", None) or {}
-        if "gcs_log_id" in _metadata:
-            safe_log_id: Final = sanitize_cloud_object_component(_metadata.get("gcs_log_id"), fallback="")
-            if safe_log_id:
-                object_name = f"{current_date}/custom-{uuid.uuid4().hex}-{safe_log_id}"
-
-        return object_name
+            return self._generate_failure_object_name(request_date_str=current_date)
+        raw_response_id: Final[object] = response_obj.get("id", "")
+        response_id: Final = raw_response_id if isinstance(raw_response_id, str) else ""
+        return self._generate_success_object_name(
+            request_date_str=current_date,
+            response_id=logged_event_key(kwargs, response_id),
+        )
 
     async def get_request_response_payload(
         self,

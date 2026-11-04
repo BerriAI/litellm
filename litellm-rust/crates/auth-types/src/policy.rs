@@ -71,7 +71,8 @@ impl ProviderAuthPolicy {
 #[cfg(test)]
 mod tests {
     use super::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
-    use crate::{CredentialPlacement, ResolvedCredential, SecretValue};
+    use crate::{CredentialPlacement, ResolvedCredential};
+    use litellm_secret_value::SecretValue;
 
     const RULES: &[CredentialRule] = &[CredentialRule {
         kind: CredentialPlanKind::Static,
