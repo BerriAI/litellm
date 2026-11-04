@@ -8899,7 +8899,11 @@
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "output_cost_per_token_above_272k_tokens_priority": 3e-05,
         "output_cost_per_token_priority": 2e-05,
-        "search_context_cost_per_query": {"search_context_size_high":0.01,"search_context_size_low":0.01,"search_context_size_medium":0.01},
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -8952,7 +8956,11 @@
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "output_cost_per_token_above_272k_tokens_priority": 3e-05,
         "output_cost_per_token_priority": 2e-05,
-        "search_context_cost_per_query": {"search_context_size_high":0.01,"search_context_size_low":0.01,"search_context_size_medium":0.01},
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -9644,7 +9652,11 @@
         "output_cost_per_token_above_272k_tokens": 1.65e-05,
         "output_cost_per_token_above_272k_tokens_priority": 3.3e-05,
         "output_cost_per_token_priority": 2.2e-05,
-        "search_context_cost_per_query": {"search_context_size_high":0.01,"search_context_size_low":0.01,"search_context_size_medium":0.01},
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -16419,7 +16431,10 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "provider_specific_entry": {"us":1.1,"fast":2},
+        "provider_specific_entry": {
+            "us": 1.1,
+            "fast": 2
+        },
         "supports_output_config": true,
         "supports_speed": true,
         "supports_fast_mode": true,
@@ -28970,7 +28985,11 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
+        "search_free_requests": {
+            "count": 1500,
+            "period": "day",
+            "shared_group": "gemini-2-flash"
+        },
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token_batches": 5e-07,
         "input_cost_per_token_batches": 1.5e-07,
@@ -29085,7 +29104,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query"
     },
     "gemini-3-pro-image-preview": {
@@ -29138,7 +29161,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-image": {
@@ -29189,7 +29216,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-image-preview": {
@@ -29233,7 +29264,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-lite-image": {
@@ -29329,7 +29364,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -29391,7 +29430,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token_batches": 2.5e-07
@@ -29452,7 +29495,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -29539,7 +29586,11 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
+        "search_free_requests": {
+            "count": 1500,
+            "period": "day",
+            "shared_group": "gemini-2-flash"
+        },
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token_batches": 5e-08,
         "input_cost_per_token_batches": 5e-08,
@@ -29594,7 +29645,11 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
+        "search_free_requests": {
+            "count": 1500,
+            "period": "day",
+            "shared_group": "gemini-2-flash"
+        },
         "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
@@ -29641,7 +29696,11 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
+        "search_free_requests": {
+            "count": 1500,
+            "period": "day",
+            "shared_group": "gemini-2-flash"
+        },
         "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
@@ -29829,7 +29888,11 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "search_free_requests": {"count": 10000, "period": "day", "shared_group": "gemini-2.5-pro"},
+        "search_free_requests": {
+            "count": 10000,
+            "period": "day",
+            "shared_group": "gemini-2.5-pro"
+        },
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_token_above_200k_tokens_priority": 4.5e-06,
         "input_cost_per_token_batches": 6.25e-07,
@@ -29866,8 +29929,16 @@
         "output_cost_per_token_flex": 6e-06,
         "output_cost_per_token_priority": 2.16e-05,
         "prompt_cache_min_tokens": 4096.0,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -29948,7 +30019,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -30005,7 +30080,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3-flash-preview": {
@@ -30029,8 +30108,16 @@
         "output_cost_per_token_batches": 1.5e-06,
         "output_cost_per_token_flex": 1.5e-06,
         "output_cost_per_token_priority": 5.4e-06,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -30113,7 +30200,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_batches": 7.5e-07,
@@ -30179,7 +30270,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -30241,7 +30336,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -30267,8 +30366,16 @@
         "output_cost_per_token_priority": 6.75e-06,
         "prompt_cache_min_tokens": 4096.0,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -30415,8 +30522,16 @@
         "output_cost_per_token_flex": 6e-06,
         "output_cost_per_token_priority": 2.16e-05,
         "prompt_cache_min_tokens": 4096.0,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -30503,7 +30618,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -30831,7 +30950,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "supports_reasoning": false
     },
@@ -30876,7 +30999,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-flash-lite-preview": {
@@ -30938,7 +31065,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token_batches": 2.5e-07
@@ -31088,7 +31219,11 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
+        "search_free_requests": {
+            "count": 1500,
+            "period": "day",
+            "shared_group": "gemini-2-flash"
+        },
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token_batches": 5e-07,
         "input_cost_per_audio_token_priority": 1.8e-06,
@@ -31201,7 +31336,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "supports_reasoning": true
     },
@@ -31265,8 +31404,16 @@
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_batches": 1.5e-06,
         "rpm": 1000.0,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -31343,7 +31490,11 @@
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
         "rpm": 1000.0,
-        "search_context_cost_per_query": {"search_context_size_low":0.035,"search_context_size_medium":0.035,"search_context_size_high":0.035},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.035,
+            "search_context_size_medium": 0.035,
+            "search_context_size_high": 0.035
+        },
         "source": "https://ai.google.dev/gemini-api/docs/models/deep-research-pro-preview-12-2025",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -31417,7 +31568,11 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "search_free_requests": {"count": 1500, "period": "day", "shared_group": "gemini-2-flash"},
+        "search_free_requests": {
+            "count": 1500,
+            "period": "day",
+            "shared_group": "gemini-2-flash"
+        },
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token_batches": 1.5e-07,
         "input_cost_per_audio_token_priority": 5.4e-07,
@@ -31623,7 +31778,11 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "search_free_requests": {"count": 10000, "period": "day", "shared_group": "gemini-2.5-pro"},
+        "search_free_requests": {
+            "count": 10000,
+            "period": "day",
+            "shared_group": "gemini-2.5-pro"
+        },
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_token_batches": 6.25e-07,
         "input_cost_per_token_flex": 6.25e-07,
@@ -31721,7 +31880,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token_batches": 2.5e-07,
@@ -31784,7 +31947,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -31841,7 +32008,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token_batches": 5e-07,
@@ -31905,7 +32076,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_batches": 7.5e-07,
@@ -31972,7 +32147,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -32035,7 +32214,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -32098,7 +32281,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -32194,7 +32381,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_flex": 1e-06,
@@ -32258,7 +32449,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_flex": 1e-06,
@@ -32286,8 +32481,16 @@
         "output_cost_per_token_batches": 1.5e-06,
         "output_cost_per_token_flex": 1.5e-06,
         "output_cost_per_token_priority": 5.4e-06,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -32402,7 +32605,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_batches": 7.5e-07,
@@ -32468,7 +32675,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -32530,7 +32741,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -32555,8 +32770,16 @@
         "output_cost_per_token_flex": 1.875e-06,
         "output_cost_per_token_priority": 6.75e-06,
         "prompt_cache_min_tokens": 4096.0,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -41522,7 +41745,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "meta/muse-voice-transcribe-1.0": {
-        "input_cost_per_second": 0.00005,
+        "input_cost_per_second": 5e-05,
         "litellm_provider": "meta",
         "mode": "audio_transcription",
         "source": "https://dev.meta.ai/docs/speech-to-text",
@@ -52343,7 +52566,6 @@
             "/v1/images/edits",
             "/v1/batch"
         ]
-
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -52377,7 +52599,6 @@
             "/v1/images/edits",
             "/v1/batch"
         ]
-
     },
     "vertex_ai/gemini-3.1-flash-image": {
         "cache_read_input_token_cost": 5e-08,
@@ -52410,7 +52631,6 @@
             "/v1/images/edits",
             "/v1/batch"
         ]
-
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
@@ -52435,7 +52655,6 @@
             "/v1/images/edits",
             "/v1/batch"
         ]
-
     },
     "vertex_ai/gemini-3.1-flash-lite-image": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -52530,7 +52749,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -52593,7 +52816,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_audio_token_batches": 2.5e-07
@@ -52655,7 +52882,11 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
@@ -61612,11 +61843,41 @@
         "output_cost_per_second_480p": 0.096075,
         "output_cost_per_second_720p": 0.216,
         "output_cost_per_second_1080p": 0.5346,
-        "supported_modalities": ["text", "image", "video", "audio"],
-        "supported_output_modalities": ["video"],
-        "supported_endpoints": ["/v1/videos"],
-        "provider_specific_entry": {"volcengine_video_frames": {"480p": {"16:9": "854x480", "4:3": "752x560", "1:1": "640x640", "3:4": "560x752", "9:16": "480x854", "21:9": "992x432"}, "720p": {"16:9": "1280x720", "4:3": "1112x834", "1:1": "960x960", "3:4": "834x1112", "9:16": "720x1280", "21:9": "1470x630"}}},
-        "metadata": {"comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s). List 70 CNY per million tokens at 480p and 720p and 77 at 1080p without a video input, matching Ark's per-resolution table and its 1080p 16:9 example of 3.74 CNY/s, converted at 7.0 CNY/USD like the other volcengine entries. Accepts up to 50 reference assets (30 images, 10 videos, 10 audios) and clips of 4-30s; per-asset billing beyond the free allowance is not encoded. Requests with a video input bill at a lower rate per token and are rejected, since their cost is not known at create time. provider_specific_entry.volcengine_video_frames is the frame Ark renders per resolution tier and ratio, verified with ffprobe at 480p for every ratio and at 720p for 16:9 and 4:3; the other 720p ratios are from the Seedance 2.0 model card."}
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "volcengine_video_frames": {
+                "480p": {
+                    "16:9": "854x480",
+                    "4:3": "752x560",
+                    "1:1": "640x640",
+                    "3:4": "560x752",
+                    "9:16": "480x854",
+                    "21:9": "992x432"
+                },
+                "720p": {
+                    "16:9": "1280x720",
+                    "4:3": "1112x834",
+                    "1:1": "960x960",
+                    "3:4": "834x1112",
+                    "9:16": "720x1280",
+                    "21:9": "1470x630"
+                }
+            }
+        },
+        "metadata": {
+            "comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s). List 70 CNY per million tokens at 480p and 720p and 77 at 1080p without a video input, matching Ark's per-resolution table and its 1080p 16:9 example of 3.74 CNY/s, converted at 7.0 CNY/USD like the other volcengine entries. Accepts up to 50 reference assets (30 images, 10 videos, 10 audios) and clips of 4-30s; per-asset billing beyond the free allowance is not encoded. Requests with a video input bill at a lower rate per token and are rejected, since their cost is not known at create time. provider_specific_entry.volcengine_video_frames is the frame Ark renders per resolution tier and ratio, verified with ffprobe at 480p for every ratio and at 720p for 16:9 and 4:3; the other 720p ratios are from the Seedance 2.0 model card."
+        }
     },
     "volcengine/doubao-seedance-2-0-260128": {
         "litellm_provider": "volcengine",
@@ -61627,11 +61888,41 @@
         "output_cost_per_second_720p": 0.141942857,
         "output_cost_per_second_1080p": 0.354085714,
         "output_cost_per_second_4k": 0.722057143,
-        "supported_modalities": ["text", "image", "video", "audio"],
-        "supported_output_modalities": ["video"],
-        "supported_endpoints": ["/v1/videos"],
-        "provider_specific_entry": {"volcengine_video_frames": {"480p": {"16:9": "864x496", "4:3": "752x560", "1:1": "640x640", "3:4": "560x752", "9:16": "496x864", "21:9": "992x432"}, "720p": {"16:9": "1280x720", "4:3": "1112x834", "1:1": "960x960", "3:4": "834x1112", "9:16": "720x1280", "21:9": "1470x630"}}},
-        "metadata": {"comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 46 CNY per million tokens at 480p and 720p, 51 at 1080p, and 26 at 4k without a video input, matching Ark's per-resolution table and its 1080p and 4k 16:9 examples of 2.48 and 5.05 CNY/s, converted at 7.0 CNY/USD like the other volcengine entries. Clips of 4-15s; 4k is exclusive to this tier. Requests with a video input bill at a lower rate per token and are rejected, since their cost is not known at create time. provider_specific_entry.volcengine_video_frames is the frame Ark renders per resolution tier and ratio, verified with ffprobe at 480p for every ratio and at 720p for 16:9 and 4:3; the other 720p ratios are from the Seedance 2.0 model card."}
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "volcengine_video_frames": {
+                "480p": {
+                    "16:9": "864x496",
+                    "4:3": "752x560",
+                    "1:1": "640x640",
+                    "3:4": "560x752",
+                    "9:16": "496x864",
+                    "21:9": "992x432"
+                },
+                "720p": {
+                    "16:9": "1280x720",
+                    "4:3": "1112x834",
+                    "1:1": "960x960",
+                    "3:4": "834x1112",
+                    "9:16": "720x1280",
+                    "21:9": "1470x630"
+                }
+            }
+        },
+        "metadata": {
+            "comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 46 CNY per million tokens at 480p and 720p, 51 at 1080p, and 26 at 4k without a video input, matching Ark's per-resolution table and its 1080p and 4k 16:9 examples of 2.48 and 5.05 CNY/s, converted at 7.0 CNY/USD like the other volcengine entries. Clips of 4-15s; 4k is exclusive to this tier. Requests with a video input bill at a lower rate per token and are rejected, since their cost is not known at create time. provider_specific_entry.volcengine_video_frames is the frame Ark renders per resolution tier and ratio, verified with ffprobe at 480p for every ratio and at 720p for 16:9 and 4:3; the other 720p ratios are from the Seedance 2.0 model card."
+        }
     },
     "volcengine/doubao-seedance-2-0-fast-260128": {
         "litellm_provider": "volcengine",
@@ -61640,11 +61931,41 @@
         "output_cost_per_second": 0.114171429,
         "output_cost_per_second_480p": 0.053089714,
         "output_cost_per_second_720p": 0.114171429,
-        "supported_modalities": ["text", "image", "video", "audio"],
-        "supported_output_modalities": ["video"],
-        "supported_endpoints": ["/v1/videos"],
-        "provider_specific_entry": {"volcengine_video_frames": {"480p": {"16:9": "864x496", "4:3": "752x560", "1:1": "640x640", "3:4": "560x752", "9:16": "496x864", "21:9": "992x432"}, "720p": {"16:9": "1280x720", "4:3": "1112x834", "1:1": "960x960", "3:4": "834x1112", "9:16": "720x1280", "21:9": "1470x630"}}},
-        "metadata": {"comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 37 CNY per million tokens without a video input, converted at 7.0 CNY/USD like the other volcengine entries. Clips of 4-15s at 480p or 720p. Requests with a video input bill at a lower rate per token and are rejected, since their cost is not known at create time. provider_specific_entry.volcengine_video_frames is the frame Ark renders per resolution tier and ratio, verified with ffprobe at 480p for every ratio and at 720p for 16:9 and 4:3; the other 720p ratios are from the Seedance 2.0 model card."}
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "volcengine_video_frames": {
+                "480p": {
+                    "16:9": "864x496",
+                    "4:3": "752x560",
+                    "1:1": "640x640",
+                    "3:4": "560x752",
+                    "9:16": "496x864",
+                    "21:9": "992x432"
+                },
+                "720p": {
+                    "16:9": "1280x720",
+                    "4:3": "1112x834",
+                    "1:1": "960x960",
+                    "3:4": "834x1112",
+                    "9:16": "720x1280",
+                    "21:9": "1470x630"
+                }
+            }
+        },
+        "metadata": {
+            "comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 37 CNY per million tokens without a video input, converted at 7.0 CNY/USD like the other volcengine entries. Clips of 4-15s at 480p or 720p. Requests with a video input bill at a lower rate per token and are rejected, since their cost is not known at create time. provider_specific_entry.volcengine_video_frames is the frame Ark renders per resolution tier and ratio, verified with ffprobe at 480p for every ratio and at 720p for 16:9 and 4:3; the other 720p ratios are from the Seedance 2.0 model card."
+        }
     },
     "volcengine/doubao-seedance-2-0-mini-260615": {
         "litellm_provider": "volcengine",
@@ -61653,11 +61974,39 @@
         "output_cost_per_second": 0.070971429,
         "output_cost_per_second_480p": 0.033001714,
         "output_cost_per_second_720p": 0.070971429,
-        "supported_modalities": ["text", "image"],
-        "supported_output_modalities": ["video"],
-        "supported_endpoints": ["/v1/videos"],
-        "provider_specific_entry": {"volcengine_video_frames": {"480p": {"16:9": "864x496", "4:3": "752x560", "1:1": "640x640", "3:4": "560x752", "9:16": "496x864", "21:9": "992x432"}, "720p": {"16:9": "1280x720", "4:3": "1112x834", "1:1": "960x960", "3:4": "834x1112", "9:16": "720x1280", "21:9": "1470x630"}}},
-        "metadata": {"comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 23 CNY per million tokens without a video input, converted at 7.0 CNY/USD like the other volcengine entries. Clips of 4-15s at 480p or 720p. Only text and image inputs are declared; the mini tier's reference video and audio caps were not verified. Requests with a video input bill at a lower rate per token and are rejected, since their cost is not known at create time. provider_specific_entry.volcengine_video_frames is the frame Ark renders per resolution tier and ratio, verified with ffprobe at 480p for every ratio and at 720p for 16:9 and 4:3; the other 720p ratios are from the Seedance 2.0 model card."}
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "provider_specific_entry": {
+            "volcengine_video_frames": {
+                "480p": {
+                    "16:9": "864x496",
+                    "4:3": "752x560",
+                    "1:1": "640x640",
+                    "3:4": "560x752",
+                    "9:16": "496x864",
+                    "21:9": "992x432"
+                },
+                "720p": {
+                    "16:9": "1280x720",
+                    "4:3": "1112x834",
+                    "1:1": "960x960",
+                    "3:4": "834x1112",
+                    "9:16": "720x1280",
+                    "21:9": "1470x630"
+                }
+            }
+        },
+        "metadata": {
+            "comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 23 CNY per million tokens without a video input, converted at 7.0 CNY/USD like the other volcengine entries. Clips of 4-15s at 480p or 720p. Only text and image inputs are declared; the mini tier's reference video and audio caps were not verified. Requests with a video input bill at a lower rate per token and are rejected, since their cost is not known at create time. provider_specific_entry.volcengine_video_frames is the frame Ark renders per resolution tier and ratio, verified with ffprobe at 480p for every ratio and at 720p for 16:9 and 4:3; the other 720p ratios are from the Seedance 2.0 model card."
+        }
     },
     "bedrock/us-east-1/zai.glm-5": {
         "input_cost_per_token": 1e-06,
@@ -63518,7 +63867,13 @@
             {
                 "name": "claude-adaptive-thinking",
                 "pattern": "claude-[a-z]+-(?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
-                "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "fill_missing_for_providers": [
+                    "anthropic",
+                    "azure_ai",
+                    "bedrock",
+                    "bedrock_converse",
+                    "vertex_ai-anthropic_models"
+                ],
                 "description": "Claude at version 4.6 or higher, in any id shape that contains claude-<family>-: minors 4.6 through 4.99, any later major-minor, and bare 5+ majors so a new family shaped like claude-fable-5 matches. Requiring the claude- prefix keeps non-Claude names such as team-sonnet-5-1 out. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. Turns on adaptive thinking for new versions and new families with no code change.",
                 "model_info": {
                     "supports_adaptive_thinking": true
@@ -63527,7 +63882,13 @@
             {
                 "name": "claude-legacy-thinking",
                 "pattern": "claude-[a-z]+-4[-._]6(?!\\d)",
-                "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "fill_missing_for_providers": [
+                    "anthropic",
+                    "azure_ai",
+                    "bedrock",
+                    "bedrock_converse",
+                    "vertex_ai-anthropic_models"
+                ],
                 "description": "Claude at version 4.6 exactly, in any id shape that contains claude-<family>-4-6 (dotted and underscored minors included, dated releases such as claude-sonnet-4-6-20260219 too). The 4.6 family is adaptive-thinking yet still accepts legacy thinking.type=enabled with budget_tokens, so the caller's hard budget cap is forwarded verbatim instead of being rewritten to an uncapped output_config.effort. The lookahead keeps two-digit minors such as 4-60 from matching. 4.7+ and 5+ majors reject the legacy shape and stay on the adaptive translation.",
                 "model_info": {
                     "supports_legacy_thinking": true
@@ -63544,7 +63905,13 @@
             {
                 "name": "claude-mid-conversation-system",
                 "pattern": "claude-[a-z]+-(?:4[-._](?:[89]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
-                "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "fill_missing_for_providers": [
+                    "anthropic",
+                    "azure_ai",
+                    "bedrock",
+                    "bedrock_converse",
+                    "vertex_ai-anthropic_models"
+                ],
                 "description": "Claude at version 4.8 or higher, in any id shape that contains claude-<family>-: minors 4.8 through 4.99, any later major-minor, and bare 5+ majors so a new family like claude-fable-5 matches. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. Anthropic introduced mid-conversation system messages with Opus 4.8 and every newer Claude keeps them; 4.7 and below reject the system role inside messages.",
                 "model_info": {
                     "supports_mid_conversation_system": true
@@ -63553,7 +63920,13 @@
             {
                 "name": "claude-tool-search",
                 "pattern": "claude-[a-z]+-(?:4[-._](?:[5-9]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
-                "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "fill_missing_for_providers": [
+                    "anthropic",
+                    "azure_ai",
+                    "bedrock",
+                    "bedrock_converse",
+                    "vertex_ai-anthropic_models"
+                ],
                 "description": "Claude at version 4.5 or higher, in any id shape that contains claude-<family>-: minors 4.5 through 4.99, any later major-minor, and bare 5+ majors so a new family like claude-fable-5 matches. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. Anthropic's tool search docs list every Claude 4.5 and newer model as supported and Opus 4.1 and earlier as unsupported, so the flag follows the version instead of a per-model list. azure_ai is included because Microsoft Foundry runs tool search for Claude on both Anthropic-hosted and Azure-hosted deployments.",
                 "model_info": {
                     "supports_tool_search": true
@@ -63570,7 +63943,11 @@
             {
                 "name": "openai-reasoning-family-baseline",
                 "pattern": "^(?!.*search-api)(?:[a-z0-9_.-]+/)*(?:ft:)?(?:o[1-9]\\d*(?![a-z0-9])|gpt-[5-9](?:\\.\\d+)?(?![0-9.])|(?:gpt-\\d+(?:\\.\\d+)?(?:-[a-z0-9]+)*-)?(?:codex|deep-research|chat-latest)(?![a-z0-9]))",
-                "fill_missing_for_providers": ["azure", "azure_ai", "openai"],
+                "fill_missing_for_providers": [
+                    "azure",
+                    "azure_ai",
+                    "openai"
+                ],
                 "description": "OpenAI reasoning families by id shape, under any provider namespace and with an optional ft: prefix: the o-series (o1, o3-pro, o4-mini), gpt-5 through gpt-9 majors including dotted minors and suffixed variants (gpt-5.5-cyber, gpt-6-astra), and the codex, deep-research and chat-latest lines when standalone or on a gpt base. gpt-5-search-api is excluded because it is a search-only surface. Every model here is a reasoning model, and the Responses API drops the caller's reasoning param for any mapped OpenAI model whose info lacks supports_reasoning, so an id the registry has not named yet keeps its reasoning settings instead of silently losing them. Rules lose to exact entries. Carries no mode and no pricing, so cost stays on the standard unpriced behavior.",
                 "model_info": {
                     "supports_reasoning": true
@@ -73263,7 +73640,9 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -74604,7 +74983,9 @@
     },
     "global.xai.grok-4.7": {
         "supports_regex_lookaround": false,
-        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
         "supports_bedrock_runtime_chat_completions_response_format": true,
         "cache_read_input_token_cost": 5e-07,
@@ -74630,7 +75011,9 @@
     },
     "us.xai.grok-4.7": {
         "supports_regex_lookaround": false,
-        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
         "supports_bedrock_runtime_chat_completions_response_format": true,
         "cache_read_input_token_cost": 5.5e-07,
@@ -75079,7 +75462,11 @@
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
         "rpm": 1000.0,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -75124,7 +75511,11 @@
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
         "output_cost_per_token_priority": 1.35e-05,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -75170,7 +75561,11 @@
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
         "output_cost_per_token_priority": 1.35e-05,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -75252,7 +75647,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-"claude-haiku-5-5": {
+    "claude-haiku-5-5": {
         "input_cost_per_token_above_100k_tokens_batches": 2.5e-07,
         "output_cost_per_token_above_100k_tokens_batches": 1.25e-06,
         "cache_creation_input_token_cost_above_100k_tokens_batches": 3.125e-07,
@@ -76179,7 +76574,11 @@
         "output_cost_per_reasoning_token": 5e-06,
         "output_cost_per_token": 5e-06,
         "output_cost_per_token_batches": 2.5e-06,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -76225,7 +76624,11 @@
         "output_cost_per_reasoning_token": 5e-06,
         "output_cost_per_token": 5e-06,
         "output_cost_per_token_batches": 2.5e-06,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -76279,7 +76682,11 @@
         "output_cost_per_token_priority": 1.8e-05,
         "prompt_cache_min_tokens": 4096.0,
         "rpm": 2000.0,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -76338,7 +76745,11 @@
         "output_cost_per_token_priority": 1.8e-05,
         "prompt_cache_min_tokens": 6144.0,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -76396,7 +76807,11 @@
         "output_cost_per_token_priority": 3.6e-05,
         "prompt_cache_min_tokens": 6144.0,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -76624,7 +77039,11 @@
         "mode": "chat",
         "output_cost_per_token": 4e-05,
         "prompt_cache_min_tokens": 512.0,
-        "search_context_cost_per_query": {"search_context_size_high":0.02,"search_context_size_low":0.02,"search_context_size_medium":0.02},
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.02,
+            "search_context_size_low": 0.02,
+            "search_context_size_medium": 0.02
+        },
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
@@ -76988,5 +77407,605 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "bedrock/claude_platform/claude-fable-5": {
+        "supports_web_search": true,
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_1hr": 2e-05,
+        "cache_creation_input_token_cost_batches": 6.25e-06,
+        "cache_read_input_token_cost": 1e-06,
+        "cache_read_input_token_cost_batches": 5e-07,
+        "input_cost_per_token": 1e-05,
+        "input_cost_per_token_batches": 5e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "output_cost_per_token_batches": 2.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "thinking_always_on": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 512,
+        "supports_native_structured_output": true,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-fable-5-1": {
+        "supports_web_search": true,
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_1hr": 2e-05,
+        "cache_creation_input_token_cost_batches": 6.25e-06,
+        "cache_read_input_token_cost": 2.5e-07,
+        "cache_read_input_token_cost_batches": 1.25e-07,
+        "input_cost_per_token": 1e-05,
+        "input_cost_per_token_batches": 5e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "output_cost_per_token_batches": 2.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "thinking_always_on": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_forced_tool_use": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 512,
+        "supports_native_structured_output": true,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-haiku-4-5": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 2e-06,
+        "cache_creation_input_token_cost_batches": 6.25e-07,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_batches": 5e-08,
+        "input_cost_per_token": 1e-06,
+        "input_cost_per_token_batches": 5e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "output_cost_per_token_batches": 2.5e-06,
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_structured_output": true,
+        "supports_computer_use": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-haiku-5-5": {
+        "input_cost_per_token_above_100k_tokens_batches": 2.5e-07,
+        "output_cost_per_token_above_100k_tokens_batches": 1.25e-06,
+        "cache_creation_input_token_cost_above_100k_tokens_batches": 3.125e-07,
+        "cache_read_input_token_cost_above_100k_tokens_batches": 2.5e-08,
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_1hr": 2e-07,
+        "cache_creation_input_token_cost_batches": 6.25e-08,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_batches": 5e-09,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_batches": 5e-08,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_batches": 2.5e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_native_structured_output": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "supports_output_config": true,
+        "supports_forced_tool_use": true,
+        "thinking_always_on": false,
+        "prompt_cache_min_tokens": 512,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing",
+        "supports_web_search": true,
+        "input_cost_per_token_above_100k_tokens": 5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.5e-06,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5e-08
+    },
+    "bedrock/claude_platform/claude-opus-4-5": {
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_native_structured_output": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-opus-4-6": {
+        "supports_web_search": true,
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_native_structured_output": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "supports_output_config": true,
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-opus-4-7": {
+        "supports_web_search": true,
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_native_structured_output": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 2048,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-opus-4-8": {
+        "supports_web_search": true,
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_native_structured_output": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-opus-5": {
+        "supports_web_search": true,
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_native_structured_output": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 512,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-opus-5-5": {
+        "supports_web_search": true,
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 5e-06,
+        "cache_creation_input_token_cost_above_1hr": 8e-06,
+        "cache_creation_input_token_cost_batches": 2.5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_batches": 1e-07,
+        "input_cost_per_token": 4e-06,
+        "input_cost_per_token_batches": 2e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2e-05,
+        "output_cost_per_token_batches": 1e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "thinking_always_on": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_forced_tool_use": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_native_structured_output": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 512,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-sonnet-4-5": {
+        "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
+        "cache_creation_input_token_cost_batches": 1.875e-06,
+        "cache_read_input_token_cost_batches": 1.5e-07,
+        "deprecation_date": "2026-11-30",
+        "input_cost_per_token_batches": 1.5e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_batches": 7.5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_native_structured_output": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-sonnet-4-6": {
+        "supports_web_search": true,
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_batches": 1.875e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_read_input_token_cost_batches": 1.5e-07,
+        "input_cost_per_token": 3e-06,
+        "input_cost_per_token_batches": 1.5e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_batches": 7.5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "supports_legacy_thinking": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_native_structured_output": true,
+        "supports_max_reasoning_effort": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 1024,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-sonnet-5": {
+        "supports_web_search": true,
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 4e-06,
+        "cache_creation_input_token_cost_batches": 1.25e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_batches": 1e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_batches": 1e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_batches": 5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_native_structured_output": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
+    },
+    "bedrock/claude_platform/claude-sonnet-5-5": {
+        "supports_anthropic_compaction": true,
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 4e-06,
+        "cache_creation_input_token_cost_batches": 1.25e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_batches": 5e-08,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_batches": 1e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_batches": 5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_adaptive_thinking": true,
+        "supports_mid_conversation_system": true,
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_native_structured_output": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        },
+        "supports_output_config": true,
+        "supports_forced_tool_use": false,
+        "thinking_always_on": true,
+        "prompt_cache_min_tokens": 512,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing",
+        "supports_web_search": true
     }
 }
