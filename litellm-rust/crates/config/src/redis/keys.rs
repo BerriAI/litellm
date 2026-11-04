@@ -149,7 +149,7 @@ pub(super) const SETTINGS: &[Setting] = &[
     Setting::new("ssl_min_version", Handling::Warn, true, &[]),
     Setting::new("ssl_ocsp_context", Handling::Warn, true, &[]),
     Setting::new("ssl_ocsp_expected_cert", Handling::Warn, true, &[]),
-    Setting::new("ssl_password", Handling::Warn, true, &[]),
+    Setting::new("ssl_password", Handling::Read, true, &[]),
     Setting::new("ssl_validate_ocsp", Handling::Warn, true, &[]),
     Setting::new("ssl_validate_ocsp_stapled", Handling::Warn, true, &[]),
     Setting::new(
@@ -224,7 +224,6 @@ fn consequence(kwarg: &str) -> &'static str {
         "ssl_ciphers" | "ssl_min_version" => {
             "rustls negotiates TLS 1.2+ with its own ECDHE AEAD suites"
         }
-        "ssl_password" => "an encrypted client key cannot be read, so the TLS handshake fails",
         "credential_provider" | "redis_connect_func" => {
             "the Python object is not callable from Rust, so static username and password are used"
         }

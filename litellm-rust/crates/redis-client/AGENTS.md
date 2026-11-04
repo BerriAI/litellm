@@ -49,6 +49,7 @@
 
 ## TLS, credentials and Sentinel
 - `TlsOptions` follows redis-py 5.3.1. It verifies the certificate by default, skips the hostname check by default (`ssl_check_hostname=False`), and trusts the system roots plus `ca_certs`
+- rustls only reads unencrypted keys, so a PKCS#8 `ENCRYPTED PRIVATE KEY` is decrypted with `key_password` before it reaches redis-rs. A legacy `Proc-Type: 4,ENCRYPTED` PEM key is refused with `KeyError::LegacyEncryption` rather than decrypted by hand-rolled OpenSSL key derivation
 - redis-rs loads the system trust store for every TLS connection and fails if that fails, even with `ca_certs` set. Where the macOS keychain is blocked (agent sandboxes), run the TLS tests with `SSL_CERT_FILE=/etc/ssl/cert.pem`
 - `Credentials` are static and sent at connect. URL userinfo wins over them, like redis-py's `from_url`
 - Sentinel discovers the master on each new connection and drops it on a transport failure or READONLY, like redis-py's `SentinelConnectionPool`

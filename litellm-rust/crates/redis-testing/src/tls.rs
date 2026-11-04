@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use pkcs8::{LineEnding, PrivateKeyInfo, pkcs5::pbes2};
 use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, DnType, IsCa, KeyPair};
 use tempfile::TempDir;
 use testcontainers_modules::testcontainers::{
@@ -15,12 +16,15 @@ use crate::{
 };
 
 pub const SERVER_NAME: &str = "localhost";
+pub const CLIENT_KEY_PASSWORD: &str = "redis-testing-key-password";
 
 pub struct TlsFiles {
     _directory: TempDir,
     pub ca: PathBuf,
     pub client_cert: PathBuf,
     pub client_key: PathBuf,
+    /// `client_key` as a PKCS#8 `ENCRYPTED PRIVATE KEY` under `CLIENT_KEY_PASSWORD`
+    pub encrypted_client_key: PathBuf,
 }
 
 struct Generated {
@@ -117,6 +121,7 @@ fn generate() -> Result<Generated, Error> {
     let ca_path = write("ca.pem", ca.pem())?;
     let client_cert = write("client.pem", client.pem())?;
     let client_key_path = write("client.key", client_key.serialize_pem())?;
+    let encrypted_client_key = write("client-encrypted.key", encrypt(&client_key)?)?;
     Ok(Generated {
         ca_pem: ca.pem(),
         server_cert: server.pem(),
@@ -126,6 +131,16 @@ fn generate() -> Result<Generated, Error> {
             ca: ca_path,
             client_cert,
             client_key: client_key_path,
+            encrypted_client_key,
         },
     })
+}
+
+// The parameters `openssl pkcs8 -topk8` uses by default: PBES2 with PBKDF2-HMAC-SHA256 and AES-256-CBC
+fn encrypt(key: &KeyPair) -> Result<String, pkcs8::Error> {
+    let der = key.serialize_der();
+    let params = pbes2::Parameters::pbkdf2_sha256_aes256cbc(2048, b"redis-testing-salt", &[7; 16])?;
+    let encrypted =
+        PrivateKeyInfo::try_from(der.as_slice())?.encrypt_with_params(params, CLIENT_KEY_PASSWORD)?;
+    Ok(encrypted.to_pem("ENCRYPTED PRIVATE KEY", LineEnding::LF)?.to_string())
 }

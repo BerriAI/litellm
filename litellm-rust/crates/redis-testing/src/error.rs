@@ -12,6 +12,8 @@ pub enum Error {
     Command { command: String, code: i64 },
     #[error("generating test TLS certificates")]
     Certificate(#[from] rcgen::Error),
+    #[error("encrypting the test client key")]
+    KeyEncryption(#[from] pkcs8::Error),
     #[error("writing test TLS files")]
     Files(#[source] io::Error),
     #[error("Sentinel did not promote the replica")]

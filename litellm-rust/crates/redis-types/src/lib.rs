@@ -111,6 +111,8 @@ pub struct TlsOptions {
     pub ca_path: Option<PathBuf>,
     pub certfile: Option<PathBuf>,
     pub keyfile: Option<PathBuf>,
+    /// Unlocks an encrypted `keyfile`, redis-py's `ssl_password`
+    pub key_password: Option<SecretValue>,
     pub verify_certificate: bool,
     pub check_hostname: bool,
 }
@@ -123,6 +125,7 @@ impl TlsOptions {
             ca_path: None,
             certfile: None,
             keyfile: None,
+            key_password: None,
             verify_certificate: true,
             check_hostname: false,
         }

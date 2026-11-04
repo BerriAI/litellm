@@ -75,6 +75,7 @@ pub(super) struct TlsInput {
     pub(super) ca_path: Option<Entry>,
     pub(super) certfile: Option<Entry>,
     pub(super) keyfile: Option<Entry>,
+    pub(super) key_password: Option<Entry>,
     pub(super) check_hostname: Option<Entry>,
 }
 
@@ -172,6 +173,7 @@ impl Options {
                 ca_path: get("ssl_ca_path"),
                 certfile: get("ssl_certfile"),
                 keyfile: get("ssl_keyfile"),
+                key_password: get("ssl_password"),
                 check_hostname: get("ssl_check_hostname"),
             },
             namespace: get("namespace"),
