@@ -1,39 +1,24 @@
-use std::{
-    sync::{Arc, Mutex, PoisonError},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use litellm_python_compat::Value;
-use litellm_redis_store::auth_cache::{AuthCache, DeclaredGets, DeclaredWrite, Error, Settings};
-use pyo3::{exceptions::PyRuntimeError, prelude::*};
+use litellm_redis_store::auth_cache::{AuthCache, DeclaredWrite, Error, Settings};
+use pyo3::prelude::*;
 
-use super::{PyNumber, call, request::NativeRequestRedis, store_error, value::PyValue};
-use crate::execution::{run_async_value, run_sync_value};
+use super::{
+    NativePending, PyNumber, kind_error, redis_async, redis_sync, request::NativeRequestRedis,
+    store_error, ttl, value::PyValue,
+};
 use crate::redis::client::NativeRedisClient;
 
-pyo3::create_exception!(
-    _native,
-    NativeAuthCacheError,
-    pyo3::exceptions::PyException,
-    "An auth cache operation failed. Args are (kind, message), kind one of \"breaker_open\", \"timeout\", \"transport\", \"rejected\", \"decode\", \"encode\" or \"memory\"."
-);
-
 fn auth_cache_error(error: Error) -> PyErr {
-    use litellm_redis_client::Error as RedisError;
-    let kind = match &error {
-        Error::Redis(RedisError::BreakerOpen) => "breaker_open",
-        Error::Redis(RedisError::Transport(error)) if error.is_timeout() => "timeout",
-        Error::Redis(RedisError::Transport(_)) => "transport",
-        Error::Redis(RedisError::Server(_)) => "rejected",
-        Error::Redis(RedisError::Decode(_)) | Error::Decode(_) => "decode",
-        Error::Encode(_) => "encode",
-        Error::Memory(_) => "memory",
-    };
-    NativeAuthCacheError::new_err((kind, litellm_error::Report::new(&error).to_string()))
+    kind_error(error.kind(), &error)
 }
 
-fn ttl(seconds: Option<f64>) -> Option<Duration> {
-    seconds.map(|seconds| Duration::from_secs_f64(seconds.max(0.0)))
+/// A `set_pre_call` or `delete_pre_call`, settled once and raising when Redis refused it.
+fn declared_write(declared: DeclaredWrite) -> NativePending {
+    NativePending::new("async_set_cache", auth_cache_error, async move {
+        declared.resolve().await
+    })
 }
 
 fn values(values: Vec<Option<Value>>) -> Vec<Option<PyValue>> {
@@ -72,19 +57,15 @@ impl NativeAuthCache {
 
     fn get<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_get_cache")?;
-        run_async_value(py, async move {
-            let value = scope.scope(store.get(&key)).await.map_err(store_error)?;
-            Ok(value.map(PyValue))
+        redis_async(py, "async_get_cache", store_error, async move {
+            store.get(&key).await.map(|value| value.map(PyValue))
         })
     }
 
     fn get_sync(&self, py: Python<'_>, key: String) -> PyResult<Option<PyValue>> {
         let store = self.0.clone();
-        let scope = call(py, "get_cache")?;
-        run_sync_value(py, async move {
-            let value = scope.scope(store.get(&key)).await.map_err(store_error)?;
-            Ok(value.map(PyValue))
+        redis_sync(py, "get_cache", store_error, async move {
+            store.get(&key).await.map(|value| value.map(PyValue))
         })
     }
 
@@ -97,12 +78,8 @@ impl NativeAuthCache {
         ttl_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_set_cache")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.set(&key, value.0, ttl(ttl_seconds)))
-                .await
-                .map_err(store_error)
+        redis_async(py, "async_set_cache", store_error, async move {
+            store.set(&key, value.0, ttl(ttl_seconds)).await
         })
     }
 
@@ -115,12 +92,8 @@ impl NativeAuthCache {
         ttl_seconds: Option<f64>,
     ) -> PyResult<()> {
         let store = self.0.clone();
-        let scope = call(py, "set_cache")?;
-        run_sync_value(py, async move {
-            scope
-                .scope(store.set_str(&key, value.0, ttl(ttl_seconds)))
-                .await
-                .map_err(store_error)
+        redis_sync(py, "set_cache", store_error, async move {
+            store.set_str(&key, value.0, ttl(ttl_seconds)).await
         })
     }
 
@@ -132,24 +105,24 @@ impl NativeAuthCache {
         key: String,
         value: PyValue,
         ttl_seconds: Option<f64>,
-    ) -> PyResult<Option<NativeDeclaredAuthWrite>> {
+    ) -> PyResult<Option<NativePending>> {
         Ok(self
             .0
             .set_pre_call(&request.0, &key, value.0, ttl(ttl_seconds))
             .map_err(store_error)?
-            .map(NativeDeclaredAuthWrite::new))
+            .map(declared_write))
     }
 
     fn delete_pre_call(
         &self,
         request: &NativeRequestRedis,
         key: String,
-    ) -> PyResult<Option<NativeDeclaredAuthWrite>> {
+    ) -> PyResult<Option<NativePending>> {
         Ok(self
             .0
             .delete_pre_call(&request.0, &key)
             .map_err(store_error)?
-            .map(NativeDeclaredAuthWrite::new))
+            .map(declared_write))
     }
 
     #[pyo3(signature = (entries, ttl_seconds = None))]
@@ -164,12 +137,8 @@ impl NativeAuthCache {
             .into_iter()
             .map(|(key, value)| (key, value.0))
             .collect();
-        let scope = call(py, "async_set_cache_pipeline")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.set_many(entries, ttl(ttl_seconds)))
-                .await
-                .map_err(store_error)
+        redis_async(py, "async_set_cache_pipeline", store_error, async move {
+            store.set_many(entries, ttl(ttl_seconds)).await
         })
     }
 
@@ -186,34 +155,25 @@ impl NativeAuthCache {
             .into_iter()
             .map(|(key, value, seconds)| (key, value.0, ttl(seconds)))
             .collect();
-        let scope = call(py, "async_set_cache_pipeline_with_ttls")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.write_back(request.as_ref(), entries))
-                .await
-                .map_err(auth_cache_error)
-        })
+        redis_async(
+            py,
+            "async_set_cache_pipeline_with_ttls",
+            auth_cache_error,
+            async move { store.write_back(request.as_ref(), entries).await },
+        )
     }
 
     fn delete<'py>(&self, py: Python<'py>, keys: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_delete_cache")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.delete(&keys))
-                .await
-                .map_err(auth_cache_error)
+        redis_async(py, "async_delete_cache", auth_cache_error, async move {
+            store.delete(&keys).await
         })
     }
 
     fn delete_sync(&self, py: Python<'_>, keys: Vec<String>) -> PyResult<()> {
         let store = self.0.clone();
-        let scope = call(py, "delete_cache")?;
-        run_sync_value(py, async move {
-            scope
-                .scope(store.delete(&keys))
-                .await
-                .map_err(auth_cache_error)
+        redis_sync(py, "delete_cache", auth_cache_error, async move {
+            store.delete(&keys).await
         })
     }
 
@@ -223,23 +183,23 @@ impl NativeAuthCache {
         &self,
         request: &NativeRequestRedis,
         keys: Vec<String>,
-    ) -> Option<NativeDeclaredAuthReads> {
-        self.0
-            .declare_get_many(&request.0, &keys)
-            .map(|declared| NativeDeclaredAuthReads(Mutex::new(Some(declared))))
+    ) -> Option<NativePending> {
+        self.0.declare_get_many(&request.0, &keys).map(|declared| {
+            NativePending::new("async_batch_get_cache", auth_cache_error, async move {
+                declared.resolve().await.map(values)
+            })
+        })
     }
 
     /// One round trip for keys missing in memory; resolves to `None` without Redis.
     fn get_many<'py>(&self, py: Python<'py>, keys: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_batch_get_cache")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.get_many(&keys))
+        redis_async(py, "async_batch_get_cache", auth_cache_error, async move {
+            store
+                .get_many(&keys)
                 .await
                 .transpose()
                 .map(|read| read.map(values))
-                .map_err(auth_cache_error)
         })
     }
 
@@ -250,13 +210,12 @@ impl NativeAuthCache {
         amount: PyNumber,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_increment_if_present")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.increment_if_present(&key, amount.0))
-                .await
-                .map_err(auth_cache_error)
-        })
+        redis_async(
+            py,
+            "async_increment_if_present",
+            auth_cache_error,
+            async move { store.increment_if_present(&key, amount.0).await },
+        )
     }
 
     fn get_local(&self, key: &str) -> PyResult<Option<PyValue>> {
@@ -281,58 +240,5 @@ impl NativeAuthCache {
     /// `(management objects, user-key objects)` held in memory.
     fn len_local(&self) -> PyResult<(usize, usize)> {
         self.0.len_local().map_err(store_error)
-    }
-}
-
-/// A `declare_get_many` on a request's pre-call batch. `resolve` answers it once.
-#[pyclass(frozen, name = "NativeDeclaredAuthReads")]
-pub(crate) struct NativeDeclaredAuthReads(Mutex<Option<DeclaredGets>>);
-
-#[pymethods]
-impl NativeDeclaredAuthReads {
-    fn resolve<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let declared = self
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-            .ok_or_else(|| PyRuntimeError::new_err("this auth cache read was already resolved"))?;
-        let scope = call(py, "async_batch_get_cache")?;
-        run_async_value(py, async move {
-            scope
-                .scope(declared.resolve())
-                .await
-                .map(values)
-                .map_err(auth_cache_error)
-        })
-    }
-}
-
-/// A `set_pre_call` or `delete_pre_call`. `resolve` settles it once, raising when Redis refused it.
-#[pyclass(frozen, name = "NativeDeclaredAuthWrite")]
-pub(crate) struct NativeDeclaredAuthWrite(Mutex<Option<DeclaredWrite>>);
-
-impl NativeDeclaredAuthWrite {
-    fn new(declared: DeclaredWrite) -> Self {
-        Self(Mutex::new(Some(declared)))
-    }
-}
-
-#[pymethods]
-impl NativeDeclaredAuthWrite {
-    fn resolve<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let declared = self
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-            .ok_or_else(|| PyRuntimeError::new_err("this auth cache write was already resolved"))?;
-        let scope = call(py, "async_set_cache")?;
-        run_async_value(py, async move {
-            scope
-                .scope(declared.resolve())
-                .await
-                .map_err(auth_cache_error)
-        })
     }
 }

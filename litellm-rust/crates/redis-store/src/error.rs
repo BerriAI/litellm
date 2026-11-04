@@ -12,6 +12,8 @@ pub enum ErrorKind {
     Rejected,
     #[strum(serialize = "decode")]
     Decode,
+    #[strum(serialize = "encode")]
+    Encode,
     #[strum(serialize = "memory")]
     Memory,
 }

@@ -41,9 +41,7 @@ mod _native {
     #[pymodule_export]
     use crate::redis::client::native_redis_breaker_states;
     #[pymodule_export]
-    use crate::redis::store::auth_cache::{
-        NativeAuthCache, NativeAuthCacheError, NativeDeclaredAuthReads, NativeDeclaredAuthWrite,
-    };
+    use crate::redis::store::auth_cache::NativeAuthCache;
     #[pymodule_export]
     use crate::redis::store::request::NativeRequestRedis;
     #[pymodule_export]
@@ -130,9 +128,6 @@ mod tests {
                 "NativeRedisClient",
                 "NativeRequestRedis",
                 "NativeAuthCache",
-                "NativeAuthCacheError",
-                "NativeDeclaredAuthReads",
-                "NativeDeclaredAuthWrite",
                 "NativePending",
                 "NativeRouterCooldowns",
                 "NativeRouterUsage",

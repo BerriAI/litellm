@@ -6,7 +6,7 @@ use litellm_python_compat::{Value, json, repr::to_str};
 use litellm_redis_client::{Declared, RedisBatch, RedisClient};
 
 use crate::tier::{Clock, system_clock};
-use crate::{DecodeError, Number, RequestRedis, codec::python_value};
+use crate::{DecodeError, ErrorKind, Number, RequestRedis, codec::python_value};
 
 /// `InMemoryCache`'s TTL for a write that names none and has no `default_in_memory_ttl`.
 pub const MEMORY_TTL: Duration = Duration::from_secs(600);
@@ -48,6 +48,17 @@ pub enum Error {
     Decode(#[from] DecodeError),
     #[error("the value is not JSON serializable: {0}")]
     Encode(#[from] litellm_python_compat::Error),
+}
+
+impl Error {
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Redis(error) => error.into(),
+            Self::Decode(_) => ErrorKind::Decode,
+            Self::Encode(_) => ErrorKind::Encode,
+            Self::Memory(_) => ErrorKind::Memory,
+        }
+    }
 }
 
 /// `is_user_key_cache_key`: user-key objects are cached under a bare `hash_token` digest, every
