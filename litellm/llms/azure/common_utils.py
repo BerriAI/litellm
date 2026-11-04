@@ -197,16 +197,20 @@ def _exception_chain(error: BaseException) -> Iterator[BaseException]:
         link = link.__cause__ or link.__context__
 
 
-_REQUEST_FAILURE_TYPES: Final = (BaseLLMException, APIError, httpx.HTTPError)
+_REQUEST_FAILURE_TYPES: Final = (APIError, httpx.HTTPError)
 
 
-def _belongs_to_the_same_attempt(link: BaseException) -> bool:
-    return isinstance(link, EntraRejectionError) or not isinstance(link, _REQUEST_FAILURE_TYPES)
+def _ends_the_failed_attempt(link: BaseException, failed_attempt: BaseException) -> bool:
+    return not isinstance(link, EntraRejectionError) and (
+        isinstance(link, _REQUEST_FAILURE_TYPES) or type(link) is type(failed_attempt)
+    )
 
 
 def _links_within_the_failed_attempt(error: BaseException) -> Iterator[BaseException]:
     yield error
-    yield from itertools.takewhile(_belongs_to_the_same_attempt, itertools.islice(_exception_chain(error), 1, None))
+    yield from itertools.takewhile(
+        lambda link: not _ends_the_failed_attempt(link, error), itertools.islice(_exception_chain(error), 1, None)
+    )
 
 
 def entra_rejection_in(error: BaseException) -> EntraRejectionError | None:

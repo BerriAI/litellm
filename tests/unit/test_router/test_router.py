@@ -25848,6 +25848,60 @@ async def test_router_fallback_auth_failure_after_an_entra_rejection_still_cools
     assert fallback_route.call_count == 1
     assert excinfo.value.all_deployments_in_cooldown is True
 
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "stream_request",
+    [
+        pytest.param(
+            lambda router, **caller_fields: router.acompletion(
+                model="entra-model", messages=[{"role": "user", "content": "hi"}], stream=True, **caller_fields
+            ),
+            id="chat_completions",
+        ),
+        pytest.param(
+            lambda router, **caller_fields: router.aanthropic_messages(
+                model="entra-model",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=5,
+                stream=True,
+                **caller_fields,
+            ),
+            id="messages",
+        ),
+    ],
+)
+async def test_router_caller_entra_rejection_on_a_stream_leaves_the_shared_deployment_routable(
+    monkeypatch: pytest.MonkeyPatch,
+    stream_request: Callable[..., Awaitable[object]],
+) -> None:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    def rejected_token() -> str:
+        raise ClientAuthenticationError(message="AADSTS7000215: Invalid client secret provided.")
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "azure_ad_token_provider": rejected_token,
+                },
+                "model_info": {"id": "entra-deployment"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await stream_request(router, client_secret="not-the-credential")
+
+    with pytest.raises(litellm.AuthenticationError):
+        await stream_request(router)
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_async_openai_model_client():
     router = Router(
