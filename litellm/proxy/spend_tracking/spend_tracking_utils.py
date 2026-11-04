@@ -1388,6 +1388,25 @@ def _stored_request_body(
     )
 
 
+def _redacted_when_message_logging_is_off(
+    request_body: Mapping[str, object], litellm_params: Mapping[str, object], kwargs: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    """Redaction runs on the body that is about to be stored, after any latest_turn selection."""
+    if kwargs is None:
+        return request_body
+    from litellm.litellm_core_utils.redact_messages import perform_redaction, should_redact_message_logging
+
+    model_call_details: Final = {
+        "litellm_params": litellm_params,
+        "standard_callback_dynamic_params": kwargs.get("standard_callback_dynamic_params"),
+    }
+    if not should_redact_message_logging(model_call_details=model_call_details):
+        return request_body
+    redacted: Final = _convert_mapping_to_json_serializable(without_classifier_audit(request_body))
+    perform_redaction(model_call_details=redacted, result=None)
+    return redacted
+
+
 def _is_request_body_credential(key: str, value: object) -> bool:
     return isinstance(value, str) and _REQUEST_BODY_CREDENTIAL_MASKER.is_sensitive_key(key)
 
@@ -2049,31 +2068,14 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = dict(_request_body)
                     _request_body["tools"] = realtime_tools
 
-            # Apply message redaction if turn_off_message_logging is enabled
-            if kwargs is not None:
-                from litellm.litellm_core_utils.redact_messages import (
-                    perform_redaction,
-                    should_redact_message_logging,
-                )
-
-                # Build model_call_details dict to check redaction settings
-                model_call_details: Final = {
-                    "litellm_params": litellm_params,
-                    "standard_callback_dynamic_params": kwargs.get("standard_callback_dynamic_params"),
-                }
-
-                # If redaction is enabled, convert to serializable dict before redacting
-                if should_redact_message_logging(model_call_details=model_call_details):
-                    _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
-                    perform_redaction(model_call_details=_request_body, result=None)
-
+            selected_request_body: Final = _stored_request_body(
+                _request_body,
+                _REQUEST_BODY_ADAPTER.validate_python(standard_payload)
+                if isinstance(standard_payload, Mapping)
+                else None,
+            )
             stored_request_body: Final = _sanitize_proxy_server_request_body(
-                _stored_request_body(
-                    _request_body,
-                    _REQUEST_BODY_ADAPTER.validate_python(standard_payload)
-                    if isinstance(standard_payload, Mapping)
-                    else None,
-                )
+                _redacted_when_message_logging_is_off(selected_request_body, litellm_params, kwargs)
             )
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)

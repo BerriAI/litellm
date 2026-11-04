@@ -7416,6 +7416,39 @@ def test_latest_turn_mode_stores_a_classifier_row_as_the_trimmed_originating_req
     assert "caller system prompt" not in json.dumps(stored)
 
 
+def test_latest_turn_mode_keeps_message_redaction_on_a_classifier_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    originating: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "route me"}],
+    }
+    classifier_body: Final = {
+        "model": "classifier",
+        "messages": [{"role": "user", "content": "Current ask:\nroute me"}],
+    }
+    standard_payload: Final = {
+        "call_type": "acompletion",
+        "classifier_input": classifier_body,
+        "originating_request_masked": originating,
+        "response": {"choices": [{"message": {"content": "simple"}}]},
+    }
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": classifier_body}},
+            kwargs={
+                "standard_logging_object": standard_payload,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": True},
+            },
+        )
+    )
+    assert stored["model"] == "classifier"
+    assert "route me" not in json.dumps(stored)
+    assert "originating_request_masked" not in stored
+
+
 def test_latest_turn_mode_ignores_an_originating_request_supplied_by_the_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
