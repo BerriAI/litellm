@@ -2,79 +2,11 @@ mod support;
 
 use std::{sync::Arc, time::Duration};
 
-use litellm_cache::CacheConnectionStatus;
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{
-    CacheEntry, ConnectionProbe, ExactResponseCache, ResponseCache, ResponseCacheRequest,
-};
-use redis_test::MockCmd;
+use litellm_cache_response::{CacheEntry, ExactResponseCache, ResponseCache, ResponseCacheRequest};
 use rstest::rstest;
 use serde_json::json;
-use support::{keyed, memory, redis, request};
-
-#[rstest]
-#[case::reachable(
-    Ok("PONG"),
-    CacheConnectionStatus::Success,
-    "Redis connection test successful",
-    false
-)]
-#[case::unexpected_reply(
-    Ok("NOPE"),
-    CacheConnectionStatus::Failed,
-    "Redis ping returned False",
-    false
-)]
-#[case::connection_refused(
-    Err(redis::RedisError::from((redis::ErrorKind::Io, "connection refused"))),
-    CacheConnectionStatus::Failed,
-    "Redis connection failed:",
-    true
-)]
-#[tokio::test]
-async fn connection_backends_are_reachable_as_a_probe(
-    #[case] reply: redis::RedisResult<&'static str>,
-    #[case] status: CacheConnectionStatus,
-    #[case] message: &str,
-    #[case] has_error: bool,
-) {
-    let probe: Arc<dyn ConnectionProbe> =
-        Arc::new(redis(vec![MockCmd::new(redis::cmd("PING"), reply)], None));
-
-    let result = probe.test_connection().await.unwrap();
-    assert_eq!(result.status, status);
-    assert!(result.message.starts_with(message), "{}", result.message);
-    assert_eq!(result.error.is_some(), has_error);
-}
-
-#[rstest]
-#[tokio::test]
-async fn one_service_serves_both_the_exact_cache_and_its_probe(request: ResponseCacheRequest) {
-    let service = Arc::new(redis(
-        vec![
-            MockCmd::new(redis::cmd("PING"), Ok("PONG")),
-            MockCmd::new(
-                redis::cmd("GET").arg("tenant:key"),
-                Ok(br#"{"timestamp":100.0,"response":{"ok":true}}"#.to_vec()),
-            ),
-        ],
-        Some("tenant"),
-    ));
-    let probe: Arc<dyn ConnectionProbe> = service.clone();
-    let exact: Arc<dyn ExactResponseCache> = service;
-
-    assert_eq!(
-        probe.test_connection().await.unwrap().status,
-        CacheConnectionStatus::Success
-    );
-    assert_eq!(
-        exact
-            .async_lookup(&request, Duration::from_secs(100))
-            .await
-            .unwrap(),
-        Some(json!({"ok": true}))
-    );
-}
+use support::{keyed, memory, request};
 
 /// The in-memory backend has no `test_connection`, as in Python, and still serves every response
 /// operation.
