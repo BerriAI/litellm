@@ -1790,6 +1790,46 @@ class TestContextCachingEndpoints:
         self.mock_async_client.post.assert_not_called()
 
 
+def _marked(role: Literal["system", "user"], text: str) -> dict:
+    return {"role": role, "content": [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]}
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "Q1"},
+                {"role": "assistant", "content": "A1"},
+                _marked("user", "Q2"),
+            ],
+            id="marked-latest-turn",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Q1"},
+                {"role": "assistant", "content": "A1"},
+                _marked("user", "Q2"),
+                {"role": "assistant", "content": "A2"},
+                {"role": "user", "content": "Q3"},
+            ],
+            id="marked-middle-turn",
+        ),
+        pytest.param(
+            [_marked("system", "sys"), {"role": "user", "content": "Q1"}],
+            id="marked-system",
+        ),
+    ],
+)
+def test_separate_cached_messages_keeps_conversation_order(messages):
+    from litellm.llms.vertex_ai.context_caching.transformation import separate_cached_messages
+
+    cached_messages, non_cached_messages = separate_cached_messages(messages)
+
+    assert cached_messages + non_cached_messages == messages
+
+
 def test_cached_messages_end_on_supported_turn():
     from litellm.llms.vertex_ai.context_caching.transformation import (
         cached_messages_end_on_supported_turn,
