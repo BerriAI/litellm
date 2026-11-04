@@ -1,20 +1,25 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use futures_util::future::BoxFuture;
+use litellm_core_utils::settings::Lookup;
 use litellm_host_python::{PythonContext, attach_blocking};
 use litellm_secret_value::SecretValue;
-use litellm_secrets::{Error, source::SecretSource};
+use litellm_secrets::{
+    Error,
+    source::{SecretSource, Secrets},
+};
 
-use pyo3::prelude::*;
+use pyo3::{prelude::*, types::PyTuple};
 
 use super::error::external_error;
 
 const SECRET_MANAGER_MODULE: &str = "litellm.rust_bridge.host.secret_manager";
 
-/// Reads each secret through the host module's `read_secret_str`, so the configured manager, the key
-/// management settings and the environment fallback behave exactly as they do in Python.
+/// Reads secrets through the host module's `read_secrets`, so the configured manager, the key
+/// management settings and the environment fallback behave exactly as they do in Python. A batch of
+/// names is one host call.
 pub(super) struct PythonSecrets {
-    get_secret_str: Arc<Py<PyAny>>,
+    read_secrets: Arc<Py<PyAny>>,
     context: PythonContext,
 }
 
@@ -22,17 +27,41 @@ impl PythonSecrets {
     pub(super) fn new(py: Python<'_>) -> PyResult<Self> {
         Ok(Self::reading_with(
             py.import(SECRET_MANAGER_MODULE)?
-                .getattr("read_secret_str")?
+                .getattr("read_secrets")?
                 .unbind(),
             PythonContext::capture(py)?,
         ))
     }
 
-    fn reading_with(get_secret_str: Py<PyAny>, context: PythonContext) -> Self {
+    fn reading_with(read_secrets: Py<PyAny>, context: PythonContext) -> Self {
         Self {
-            get_secret_str: Arc::new(get_secret_str),
+            read_secrets: Arc::new(read_secrets),
             context,
         }
+    }
+
+    async fn read(&self, names: Vec<String>) -> Result<Vec<Option<SecretValue>>, Error> {
+        let read_secrets = Arc::clone(&self.read_secrets);
+        match attach_blocking(self.context.clone(), move |py| {
+            PyTuple::new(py, names)
+                .and_then(|names| read_secrets.bind(py).call1((names,)))
+                .and_then(|values| values.extract::<Vec<Option<String>>>())
+                .map(|values| values.into_iter().map(|value| value.map(SecretValue::new)).collect())
+                .map_err(|error| external_error(py, error))
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => Python::attach(|py| Err(external_error(py, error))),
+        }
+    }
+}
+
+struct ReadSecrets(HashMap<String, SecretValue>);
+
+impl Lookup for ReadSecrets {
+    fn get(&self, name: &str) -> Option<String> {
+        self.0.get(name).map(|value| value.expose().to_owned())
     }
 }
 
@@ -41,23 +70,27 @@ impl SecretSource for PythonSecrets {
         &'a self,
         name: &'a str,
     ) -> BoxFuture<'a, Result<Option<SecretValue>, Error>> {
-        let get_secret_str = Arc::clone(&self.get_secret_str);
-        let context = self.context.clone();
-        let name = name.to_owned();
         Box::pin(async move {
-            match attach_blocking(context, move |py| {
-                get_secret_str
-                    .bind(py)
-                    .call1((name,))
-                    .and_then(|value| value.extract::<Option<String>>())
-                    .map(|value| value.map(SecretValue::new))
-                    .map_err(|error| external_error(py, error))
-            })
-            .await
-            {
-                Ok(result) => result,
-                Err(error) => Python::attach(|py| Err(external_error(py, error))),
-            }
+            Ok(self
+                .read(vec![name.to_owned()])
+                .await?
+                .into_iter()
+                .next()
+                .flatten())
+        })
+    }
+
+    fn resolve<'a>(&'a self, names: &'a [&str]) -> BoxFuture<'a, Result<Secrets, Error>> {
+        Box::pin(async move {
+            let values = self
+                .read(names.iter().map(|name| (*name).to_owned()).collect())
+                .await?;
+            let found = names
+                .iter()
+                .zip(values)
+                .filter_map(|(name, value)| Some(((*name).to_owned(), value?)))
+                .collect();
+            Ok(Arc::new(ReadSecrets(found)) as Secrets)
         })
     }
 }
@@ -84,14 +117,17 @@ import threading
 read_on = None
 request_var = contextvars.ContextVar('request_var', default=None)
 seen_context_values = []
+calls = []
 raised = KeyboardInterrupt('secret manager stopped')
-def get_secret_str(name):
+values = {'MISTRAL_API_KEY': 'vault-key', 'MISTRAL_API_BASE': 'https://mistral.internal'}
+def read_secrets(names):
     global read_on
     read_on = threading.get_ident()
     seen_context_values.append(request_var.get())
-    if name == 'RAISING':
+    calls.append(names)
+    if 'RAISING' in names:
         raise raised
-    return {'MISTRAL_API_KEY': 'vault-key'}.get(name)
+    return tuple(values.get(name) for name in names)
 ",
                 Some(&namespace),
                 None,
@@ -113,7 +149,7 @@ def get_secret_str(name):
                 .unwrap();
             (
                 namespace
-                    .get_item("get_secret_str")
+                    .get_item("read_secrets")
                     .unwrap()
                     .unwrap()
                     .unbind(),
@@ -141,7 +177,7 @@ def get_secret_str(name):
     #[case::found("MISTRAL_API_KEY", Some("vault-key"))]
     #[case::missing("OTHER", None)]
     #[tokio::test]
-    async fn returns_what_get_secret_str_returns(
+    async fn returns_what_read_secrets_returns(
         secrets: (PythonSecrets, Py<PyDict>),
         #[case] name: &str,
         #[case] expected: Option<&str>,
@@ -153,10 +189,41 @@ def get_secret_str(name):
 
     #[rstest]
     #[tokio::test]
+    async fn resolve_reads_every_name_in_one_python_call(secrets: (PythonSecrets, Py<PyDict>)) {
+        let resolved = secrets
+            .0
+            .resolve(&["MISTRAL_API_KEY", "OTHER", "MISTRAL_API_BASE"])
+            .await
+            .unwrap();
+
+        assert_eq!(resolved.get("MISTRAL_API_KEY").as_deref(), Some("vault-key"));
+        assert_eq!(resolved.get("OTHER"), None);
+        assert_eq!(
+            resolved.get("MISTRAL_API_BASE").as_deref(),
+            Some("https://mistral.internal")
+        );
+        let calls: Vec<Vec<String>> = Python::attach(|py| global(&secrets.1, py, "calls"));
+        assert_eq!(
+            calls,
+            vec![vec![
+                "MISTRAL_API_KEY".to_owned(),
+                "OTHER".to_owned(),
+                "MISTRAL_API_BASE".to_owned()
+            ]]
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn exceptions_surface_as_the_original_python_object(
         secrets: (PythonSecrets, Py<PyDict>),
     ) {
-        let error = secrets.0.get_secret_str("RAISING").await.unwrap_err();
+        let error = secrets
+            .0
+            .resolve(&["MISTRAL_API_KEY", "RAISING"])
+            .await
+            .err()
+            .unwrap();
 
         Python::attach(|py| {
             let surfaced = python_error(py, &error).expect("the Python exception is preserved");
@@ -186,7 +253,7 @@ def get_secret_str(name):
     #[rstest]
     #[tokio::test]
     async fn reads_see_the_callers_contextvars(secrets: (PythonSecrets, Py<PyDict>)) {
-        secrets.0.get_secret_str("MISTRAL_API_KEY").await.unwrap();
+        secrets.0.resolve(&["MISTRAL_API_KEY"]).await.unwrap();
 
         let seen: Vec<String> = Python::attach(|py| global(&secrets.1, py, "seen_context_values"));
         assert_eq!(seen, vec!["request-value".to_owned()]);

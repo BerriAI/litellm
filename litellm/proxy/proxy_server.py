@@ -7758,7 +7758,6 @@ class ProxyConfig:
         """
         Initialize the relevant secret manager if `key_management_system` is provided
         """
-        previous_client: Final[object] = litellm.secret_manager_client
         if key_management_system is not None:
             if key_management_system == KeyManagementSystem.AZURE_KEY_VAULT.value:
                 ### LOAD FROM AZURE KEY VAULT ###
@@ -7806,11 +7805,6 @@ class ProxyConfig:
                 load_custom_secret_manager(config_file_path=config_file_path)
             else:
                 raise ValueError("Invalid Key Management System selected")
-
-            from litellm.rust_bridge.host.secret_manager import capture_secret_manager
-
-            if litellm.secret_manager_client is not previous_client:
-                capture_secret_manager(litellm.secret_manager_client, key_management_system)
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """

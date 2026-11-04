@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Mapping
-from dataclasses import replace
 from typing import Final, Protocol, cast  # noqa: TID251  # narrows the parametrized path to its protocol
 
 import httpx
@@ -10,7 +9,6 @@ import pytest
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.anthropic.messages.native.handler import anthropic_messages
-from litellm.rust_bridge.host import settings
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
@@ -97,8 +95,6 @@ async def test_secret_manager_supplies_the_anthropic_key_and_base(
         )
         monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
         monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
-        configured: Final = settings.secret_manager
-        monkeypatch.setattr(settings, "secret_manager", lambda: replace(configured(), native=True))
 
         await messages()
 

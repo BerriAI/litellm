@@ -4331,7 +4331,6 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
- "aws-sdk-secretsmanager",
  "bytes",
  "criterion",
  "fancy-regex 0.19.2",
@@ -4360,7 +4359,6 @@ dependencies = [
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
- "litellm-secrets-aws",
  "litellm-secrets-types",
  "litellm-spend-clickhouse",
  "litellm-storage-clickhouse",

@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import re
 from functools import partial
-from types import SimpleNamespace
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
@@ -18,7 +19,6 @@ from pydantic import JsonValue
 
 import litellm
 from litellm.rust_bridge import _native as native
-from litellm.rust_bridge.host.secret_manager import capture_secret_manager, native_secret_manager_config
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.secret_managers.cyberark_secret_manager import CyberArkSecretManager
 from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretManager
@@ -67,10 +67,24 @@ def _vault_body(value: str) -> dict[str, object]:
     }
 
 
-def _native_handle(client: object) -> "_SecretManagerRuntime":
-    handle: Final = native._SecretManagerRuntime.from_client(client)
-    assert handle is not None
-    return handle
+_NATIVE_SYSTEMS: Final = MappingProxyType(
+    {
+        AWSSecretsManagerV2: KeyManagementSystem.AWS_SECRET_MANAGER,
+        HashicorpSecretManager: KeyManagementSystem.HASHICORP_VAULT,
+        CyberArkSecretManager: KeyManagementSystem.CYBERARK,
+    }
+)
+
+
+def _native_handle(
+    client: AWSSecretsManagerV2 | HashicorpSecretManager | CyberArkSecretManager,
+) -> _SecretManagerRuntime:
+    return native._SecretManagerRuntime.from_config(
+        _NATIVE_SYSTEMS[type(client)].value,
+        {name: value for name, value in os.environ.items() if name.startswith(("AWS_", "HCP_VAULT_", "CYBERARK_"))},
+        KeyManagementSettings(aws_region_name="us-east-1").model_dump(mode="json"),
+        enterprise_enabled=True,
+    )
 
 
 @pytest.mark.parametrize("system", ("aws_secret_manager", "hashicorp_vault", "cyberark"))
@@ -107,64 +121,6 @@ async def test_python_native_handle_reuses_backend_across_sync_and_async_reads(s
         assert handle.read_secret("KEY") == expected
 
 
-def test_shared_initializer_captures_credentials_and_tracks_instance_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    with recording_service() as server:
-        server.default_response = ResponseSpec(body={"SecretString": "native-value"})
-        server.expected_requests = 2
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "captured-access")
-        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "captured-secret")
-        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", server.base_url)
-        from litellm.proxy.proxy_server import ProxyConfig
-
-        monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(aws_region_name="us-east-1"))
-        ProxyConfig().initialize_secret_manager(KeyManagementSystem.AWS_SECRET_MANAGER.value)
-        manager: Final = litellm.secret_manager_client
-        assert isinstance(manager, AWSSecretsManagerV2)
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "changed-access")
-        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "http://127.0.0.1:1")
-        first: Final = native._SecretManagerRuntime.from_client(manager)
-        assert first is not None
-        assert native._SecretManagerRuntime.from_client(manager) is first
-        assert first.read_secret("KEY") == "native-value"
-        manager.aws_region_name = "us-west-2"
-        second: Final = native._SecretManagerRuntime.from_client(manager)
-        assert second is not None
-        assert second is not first
-        assert second.read_secret("KEY") == "native-value"
-        assert "Credential=captured-access/" in server.requests[0].headers["authorization"]
-        assert "/us-east-1/" in server.requests[0].headers["authorization"]
-        assert "/us-west-2/" in server.requests[1].headers["authorization"]
-
-
-def test_configuration_replacement_rebuilds_without_invalidating_existing_handles(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    with recording_service() as first_server, recording_service() as second_server:
-        first_server.default_response = ResponseSpec(body=_vault_body("first"))
-        second_server.default_response = ResponseSpec(body=_vault_body("second"))
-        manager: Final = _vault(monkeypatch, first_server.base_url)
-        first: Final = native._SecretManagerRuntime.from_client(manager)
-        assert first is not None
-        assert first.read_secret("KEY") == "first"
-        manager.vault_addr = second_server.base_url
-        second: Final = native._SecretManagerRuntime.from_client(manager)
-        assert second is not None
-        assert second is not first
-        assert second.read_secret("KEY") == "second"
-        assert first.read_secret("KEY") == "first"
-
-
-def test_custom_subclass_is_not_captured_for_a_native_handle() -> None:
-
-    class CustomManager(AWSSecretsManagerV2):
-        def sync_read_secret(self, secret_name: str, primary_secret_name: str | None = None) -> str:
-            return f"custom:{secret_name}"
-
-    manager: Final = CustomManager(aws_region_name="us-east-1")
-    assert native._SecretManagerRuntime.from_client(manager) is None
-    assert manager.sync_read_secret("KEY") == "custom:KEY"
-
-
 @pytest.mark.parametrize("system", ("google_secret_manager", "hashicorp_vault", "cyberark"))
 def test_enterprise_backends_cannot_initialize_without_entitlement(system: str) -> None:
     with pytest.raises(ValueError, match=r"[Ee]nterprise|[Pp]remium"):
@@ -174,19 +130,6 @@ def test_enterprise_backends_cannot_initialize_without_entitlement(system: str) 
 def test_azure_factory_rejects_unencrypted_vault_endpoints() -> None:
     with pytest.raises(ValueError, match="https"):
         native._SecretManagerRuntime.from_config("azure_key_vault", {"AZURE_KEY_VAULT_URI": "http://127.0.0.1:1"})
-
-
-def test_direct_builtin_constructor_can_use_native_without_registration(monkeypatch: pytest.MonkeyPatch) -> None:
-    with recording_service() as server:
-        server.default_response = ResponseSpec(body=_vault_body("native-value"))
-        manager: Final = _vault(monkeypatch, server.base_url)
-        handle: Final = native._SecretManagerRuntime.from_client(manager)
-        assert handle is not None
-        assert handle.read_secret("KEY") == "native-value"
-
-
-def test_uncaptured_clients_have_no_native_handle() -> None:
-    assert native._SecretManagerRuntime.from_client(SimpleNamespace()) is None
 
 
 def test_native_failure_is_not_replayed_in_python(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -200,62 +143,6 @@ def test_native_failure_is_not_replayed_in_python(monkeypatch: pytest.MonkeyPatc
         assert len(server.requests) == 1
 
 
-@pytest.mark.parametrize("explicit_capture", (False, True))
-def test_config_capture_preserves_credentials_and_excludes_unrelated_environment(
-    monkeypatch: pytest.MonkeyPatch, explicit_capture: bool
-) -> None:
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "initial-access")
-    monkeypatch.setenv("SECRET_MANAGER_REFRESH_INTERVAL", "45")
-    monkeypatch.setenv("UNRELATED_PRIVATE_TOKEN", "unrelated-secret")
-    manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
-    if explicit_capture:
-        capture_secret_manager(manager, "aws_secret_manager")
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "replacement-access")
-    captured: Final = native_secret_manager_config(manager)
-    assert captured is not None
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "replacement-access")
-
-    retained: Final = native_secret_manager_config(manager)
-
-    assert retained is captured
-    assert retained.system == "aws_secret_manager"
-    assert dict(retained.environment)["AWS_ACCESS_KEY_ID"] == "initial-access"
-    assert dict(retained.environment)["SECRET_MANAGER_REFRESH_INTERVAL"] == "45"
-    assert "UNRELATED_PRIVATE_TOKEN" not in dict(retained.environment)
-    assert "initial-access" not in repr(retained)
-    assert retained.settings == KeyManagementSettings().model_dump(mode="json")
-
-
-def test_kms_sdk_client_capture_preserves_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    import boto3
-
-    monkeypatch.setenv("AWS_REGION_NAME", "captured-region")
-    client: Final = boto3.client(
-        "kms", region_name="us-east-1", aws_access_key_id="access", aws_secret_access_key="secret"
-    )
-    try:
-        capture_secret_manager(client, "aws_kms")
-        monkeypatch.setenv("AWS_REGION_NAME", "replacement-region")
-
-        captured: Final = native_secret_manager_config(client)
-
-        assert captured is not None
-        assert captured.system == "aws_kms"
-        assert dict(captured.environment)["AWS_REGION_NAME"] == "captured-region"
-    finally:
-        client.close()
-
-
-def test_same_named_custom_client_is_not_captured() -> None:
-    class AWSSecretsManagerV2:
-        pass
-
-    client: Final = AWSSecretsManagerV2()
-    capture_secret_manager(client, "aws_secret_manager")
-
-    assert native_secret_manager_config(client) is None
-
-
 @pytest.mark.parametrize("value", ("text", "", True, False, 42, 2**100, [1, "two"], {"nested": True}, None))
 async def test_aws_primary_values_match_python_handler(monkeypatch: pytest.MonkeyPatch, value: JsonValue) -> None:
     with recording_service() as server:
@@ -267,8 +154,7 @@ async def test_aws_primary_values_match_python_handler(monkeypatch: pytest.Monke
         manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
         settings: Final = KeyManagementSettings(primary_secret_name="primary")
         reference: Final = get_secret_from_manager(manager, "aws_secret_manager", "KEY", settings)
-        handle: Final = native._SecretManagerRuntime.from_client(manager)
-        assert handle is not None
+        handle: Final = _native_handle(manager)
         actual: Final = handle.read_secret("KEY", settings.model_dump(mode="json"))
         asynchronous: Final = await handle.read_secret_async("KEY", settings.model_dump(mode="json"))
         assert type(actual) is type(reference) is type(value)
@@ -295,7 +181,9 @@ async def test_aws_primary_values_match_python_reads(monkeypatch: pytest.MonkeyP
         asynchronous: Final = await handle.read_secret_async("KEY", settings_dump)
         assert synchronous == reference
         assert asynchronous == reference
-        assert tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": primary or "KEY"},) * 3
+        assert (
+            tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": primary or "KEY"},) * 3
+        )
 
 
 @pytest.mark.parametrize("primary", (None, "primary"))

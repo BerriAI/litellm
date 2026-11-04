@@ -16,8 +16,6 @@ pub(crate) enum ManagerError {
     UnknownSystem(#[source] serde_json::Error),
     #[error("invalid secret manager settings")]
     Settings(#[source] litellm_error::Source),
-    #[error("native secret manager system does not match configuration")]
-    SystemMismatch,
     #[error("secret manager does not support provider reads")]
     ProviderReads,
     #[error("invalid timeout")]
@@ -49,7 +47,6 @@ impl From<ManagerError> for PyErr {
             ManagerError::Forked => PyRuntimeError::new_err(message),
             ManagerError::UnknownSystem(_)
             | ManagerError::Settings(_)
-            | ManagerError::SystemMismatch
             | ManagerError::ProviderReads
             | ManagerError::Timeout(_)
             | ManagerError::CyberarkSecretMissing(_)
@@ -72,14 +69,8 @@ impl fmt::Debug for PythonSecretError {
     }
 }
 
-pub(super) fn external_error(py: Python<'_>, error: PyErr) -> Error {
+pub(crate) fn external_error(py: Python<'_>, error: PyErr) -> Error {
     Error::ExternalManager(litellm_error::Source::new(PythonSecretError(
-        error.into_value(py),
-    )))
-}
-
-pub(crate) fn read_error(py: Python<'_>, error: PyErr) -> Error {
-    Error::ExternalRead(litellm_error::Source::new(PythonSecretError(
         error.into_value(py),
     )))
 }
