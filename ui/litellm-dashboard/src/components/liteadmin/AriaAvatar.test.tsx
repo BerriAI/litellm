@@ -8,7 +8,7 @@ describe("AriaAvatar", () => {
     setServerRootPath("/");
   });
 
-  it.each(["/", "/litellm"])("renders a decorative cursor without an image request under server root %s", (root) => {
+  it.each(["/", "/litellm"])("renders a decorative icon without an image request under server root %s", (root) => {
     setServerRootPath(root);
 
     render(<AriaAvatar />);
