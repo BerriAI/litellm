@@ -6,7 +6,11 @@ import { PluginModeProvider } from "@/contexts/PluginModeContext";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { DashboardHeader } from "./DashboardHeader";
 
-vi.mock("next/navigation", () => ({ usePathname: () => "/ui/logs" }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/ui/logs",
+  useRouter: () => ({ push: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
 
 beforeEach(() => {
   localStorage.clear();
@@ -52,7 +56,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-async function openTools() {
+function renderHeader() {
   const user = userEvent.setup();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -64,49 +68,53 @@ async function openTools() {
       </PluginModeProvider>
     </QueryClientProvider>,
   );
-  await user.click(screen.getByRole("button", { name: "More options" }));
-  const tools = await screen.findByRole("dialog", { name: "Gateway tools" });
-  return { user, tools };
+  return { user };
 }
 
-describe("mobile header nested controls", () => {
-  it.each(["mouse", "touch"] as const)(
-    "selects a portalled gateway item with %s without dismissing More",
-    async (pointer) => {
-      const { user, tools } = await openTools();
-      await user.click(within(tools).getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
-      const item = await screen.findByRole("menuitem", { name: "Metrics" });
-      if (pointer === "touch") {
-        await user.pointer([
-          { keys: "[TouchA>]", target: item },
-          { keys: "[/TouchA]", target: item },
-        ]);
-      } else {
-        await user.click(item);
-      }
-      expect(within(tools).getByRole("button", { name: "Switch workspace, current: Metrics" })).toBeVisible();
-      expect(screen.getByRole("dialog", { name: "Gateway tools" })).toBeVisible();
-    },
-  );
-
-  it("lets a nested blog link receive the click before closing its menu", async () => {
-    const { user, tools } = await openTools();
-    await user.click(within(tools).getByRole("button", { name: "Blog" }));
-    const link = await screen.findByRole("link", { name: /Gateway update/ });
-    expect(link).toHaveAttribute("href", "https://example.com/update");
-    await user.click(link);
-    expect(screen.queryByRole("menu", { name: "Blog" })).not.toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "Gateway tools" })).toBeVisible();
+describe("dashboard header controls", () => {
+  it("opens search from both header controls", async () => {
+    const { user } = renderHeader();
+    await user.click(screen.getByRole("button", { name: "Search or jump to…" }));
+    expect(await screen.findByRole("dialog", { name: "Command palette" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Search", exact: true }));
+    expect(await screen.findByRole("dialog", { name: "Command palette" })).toBeVisible();
   });
 
-  it("allows filtering and selecting a worker from the nested combobox", async () => {
+  it("offers docs, community and latest posts under the bell", async () => {
+    const { user } = renderHeader();
+    await user.click(screen.getByRole("button", { name: /Notifications/ }));
+    const tools = await screen.findByRole("dialog", { name: "What's new" });
+    expect(await within(tools).findByRole("link", { name: /Gateway update/ })).toHaveAttribute(
+      "href",
+      "https://example.com/update",
+    );
+    expect(within(tools).getByRole("link", { name: "Docs", exact: true })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/",
+    );
+    expect(within(tools).getByRole("link", { name: "Discord", exact: true })).toBeVisible();
+  });
+
+  it("respects the saved blog and community visibility settings", async () => {
+    localStorage.setItem("disableBlogPosts", "true");
+    localStorage.setItem("disableShowPrompts", "true");
+    const { user } = renderHeader();
+    expect(screen.queryByRole("link", { name: "Join Slack" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Notifications/ }));
+    const tools = await screen.findByRole("dialog", { name: "What's new" });
+    expect(within(tools).getByRole("link", { name: "Docs", exact: true })).toBeVisible();
+    expect(within(tools).queryByRole("link", { name: "Blog", exact: true })).not.toBeInTheDocument();
+    expect(within(tools).queryByRole("link", { name: "Discord", exact: true })).not.toBeInTheDocument();
+  });
+
+  it("allows filtering and selecting a worker", async () => {
     localStorage.setItem("litellm_selected_worker_id", "primary");
-    const { user, tools } = await openTools();
-    const worker = await within(tools).findByRole("combobox", { name: "Worker" });
+    const { user } = renderHeader();
+    const worker = await screen.findByRole("combobox", { name: "Worker" });
     await user.clear(worker);
     await user.type(worker, "Backup");
     await user.click(await screen.findByRole("option", { name: "Backup worker" }));
     expect(localStorage.getItem("litellm_selected_worker_id")).toBeNull();
-    expect(screen.getByRole("dialog", { name: "Gateway tools" })).toBeVisible();
   });
 });
