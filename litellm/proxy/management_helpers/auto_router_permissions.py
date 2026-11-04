@@ -28,7 +28,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     check_team_member_model_access,  # pyright: ignore[reportPrivateUsage]  # shared membership authorization owner
 )
 from litellm.proxy.auth.team_grants import team_model_aliases
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_json_strings, decrypt_value_helper, json_value
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.repositories.project_repository import ProjectRepository
@@ -128,6 +128,14 @@ class _MemberComplexityRouterConfig(RequestComplexityRouterConfig):
 class _RouterConfigSource(LiteLLMBaseModel):
     model: str | None = None
     complexity_router_config: Mapping[str, object] | None = None
+
+
+_ROUTER_CONFIG: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
+
+def _decrypted_router_config(existing: Deployment) -> Mapping[str, object] | None:
+    stored: Final = _RouterConfigSource.model_validate(existing.litellm_params.model_dump()).complexity_router_config
+    return _ROUTER_CONFIG.validate_python(decrypt_json_strings(json_value(stored)))
 
 
 class _MembershipKey(TypedDict):
@@ -380,11 +388,7 @@ async def authorize_member_auto_router_write(
     if existing is not None and incoming.model_name not in (None, public_name, existing.model_name):
         raise HTTPException(status_code=403, detail="Team members cannot rename an auto router.")
     supplied_config: Final = _RouterConfigSource.model_validate(params.model_dump()).complexity_router_config
-    stored_config: Final = (
-        _RouterConfigSource.model_validate(existing.litellm_params.model_dump()).complexity_router_config
-        if existing is not None
-        else None
-    )
+    stored_config: Final = _decrypted_router_config(existing) if existing is not None else None
     resolved_config: Final = resolve_complexity_router_config_write(supplied_config, stored_config)
     if resolved_config.supplied_connection_fields:
         raise HTTPException(status_code=403, detail="Team members cannot change classifier connections.")

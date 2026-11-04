@@ -9420,6 +9420,37 @@ class TestTeamMemberAutoRouterWrites:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    async def test_member_save_over_an_encrypted_stored_connection_keeps_it(self, endpoint: str) -> None:
+        from litellm.repositories.model_repository import encrypt_model_litellm_params
+
+        config: Final = {
+            "classifier_type": "jev", "tiers": {"SIMPLE": "allowed"},
+            "jev_classifier_config": {"provider": "laya", "model": "english"},
+        }
+        connection: Final = {"api_key": "retained-laya-secret", "api_base": "https://laya.test"}
+        stored_params: Final = encrypt_model_litellm_params({
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {**config, "jev_classifier_config": {**config["jev_classifier_config"], **connection}},
+        })
+        row: Final = self._row().model_copy(update={"litellm_params": dict(stored_params)})
+        team: Final = self._team().model_copy(update={"models": ["allowed", "laya/english"]})
+        database: Final = self._database(team, row)
+        database.transaction.litellm_proxymodeltable.update.return_value = row
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate({"complexity_router_config": config}),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        actor: Final = UserAPIKeyAuth(
+            user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER, models=["allowed", "laya/english"], config={"timeout": 60},
+        )
+        with self._environment(database, row):
+            await (patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor))
+        written: Final = database.transaction.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved: Final = decrypt_json_strings(json_value(json.loads(written["litellm_params"])["complexity_router_config"]))
+        assert saved["opensource_classifier_config"] == {**config["jev_classifier_config"], **connection}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
     @pytest.mark.parametrize("access", ["owner", "peer", "limited-key"])
     async def test_both_update_entries_enforce_creator_and_stamp_member_scope(
         self, endpoint: str, access: str
