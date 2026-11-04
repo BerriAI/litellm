@@ -734,6 +734,11 @@ class LiteLLMAnthropicMessagesAdapter:
         return "arn:" in model_lower and ":bedrock:" in model_lower
 
     @classmethod
+    def _is_bedrock_claude_target(cls, model: str) -> bool:
+        is_bedrock_route: Final = model.startswith(("bedrock/", "converse/", "invoke/"))
+        return cls.is_bedrock_arn_model(model) or (is_bedrock_route and cls.is_anthropic_claude_model(model))
+
+    @classmethod
     def target_consumes_cache_control(cls, model: str) -> bool:
         return cls.is_anthropic_claude_model(model) or cls.is_bedrock_arn_model(model) or "gemini" in model.lower()
 
@@ -1168,8 +1173,9 @@ class LiteLLMAnthropicMessagesAdapter:
         ``reasoning_effort``, so its Claude models get the non-Claude mapping. Carrying its adaptive effort tier alongside takes two different params,
         because the two are not interchangeable at the provider mapping below.
 
-        Bedrock takes ``output_config`` directly, which attaches the tier and leaves ``thinking``
-        alone. Another bridged Claude target takes ``reasoning_effort`` if it declares that param,
+        Bedrock takes ``output_config`` directly (see ``_translate_output_config_to_openai``), which
+        attaches the tier and leaves ``thinking`` alone. Another bridged Claude target takes
+        ``reasoning_effort`` if it declares that param,
         and used to be sent no tier at all, so an adaptive request arrived byte-identical whichever
         effort the caller asked for. That tier stays a plain string there, since the summary it
         would otherwise be wrapped with already travels inside the forwarded ``thinking`` block,
@@ -1193,9 +1199,6 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         model: Final = new_kwargs.get("model", "")
-        is_bedrock_target: Final = model.startswith(("bedrock/", "converse/", "invoke/")) or self.is_bedrock_arn_model(
-            model
-        )
         is_claude_target: Final = (
             self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)
         ) and custom_llm_provider not in _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS
@@ -1203,11 +1206,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
         if is_claude_target:
             new_kwargs["thinking"] = thinking
-            if is_bedrock_target:
-                if isinstance(output_config, dict):
-                    effort_config: Final = {k: v for k, v in output_config.items() if k != "format"}
-                    if effort_config:
-                        new_kwargs["output_config"] = effort_config  # rebind-ok: out-param store like thinking above
+            if self._is_bedrock_claude_target(model):
                 return
             if not self._target_declares_reasoning_effort(model, custom_llm_provider):
                 return
@@ -1235,6 +1234,28 @@ class LiteLLMAnthropicMessagesAdapter:
                 reasoning_effort, cast(dict[str, object], thinking), model, custom_llm_provider
             )
         )
+
+    def _translate_output_config_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Forward the effort-bearing part of ``output_config`` to a Bedrock Claude target.
+
+        Bedrock Converse takes the tier in ``output_config`` with or without a ``thinking`` block, so
+        it travels on its own instead of only alongside ``thinking``. ``format`` stays behind, since
+        ``_translate_output_format_to_openai`` carries it as ``response_format``.
+        """
+        if "output_config" not in anthropic_message_request or not self._is_bedrock_claude_target(new_kwargs["model"]):
+            return
+
+        output_config: Final = anthropic_message_request["output_config"]
+        if not isinstance(output_config, dict):
+            return
+
+        effort_config: Final = {k: v for k, v in output_config.items() if k != "format"}
+        if effort_config:
+            new_kwargs["output_config"] = effort_config  # rebind-ok: out-param store like its sibling translators
 
     def _translate_output_format_to_openai(
         self,
@@ -1339,6 +1360,10 @@ class LiteLLMAnthropicMessagesAdapter:
             custom_llm_provider=custom_llm_provider,
             drop_params=drop_params,
             report_reasoning_drops=report_reasoning_drops,
+        )
+        self._translate_output_config_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
         )
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(
