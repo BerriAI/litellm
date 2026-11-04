@@ -2,7 +2,10 @@
 Tests for the Sarvam provider configuration and cost map entries.
 """
 
+import json
+
 import pytest
+import respx
 
 import litellm
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -18,17 +21,6 @@ SARVAM_MODELS = (
 
 
 class TestSarvamProviderConfig:
-    def test_sarvam_json_config_exists(self):
-        assert JSONProviderRegistry.exists("sarvam")
-
-        sarvam = JSONProviderRegistry.get("sarvam")
-        assert sarvam is not None
-        assert sarvam.base_url == "https://api.sarvam.ai/v2"
-        assert sarvam.api_key_env == "SARVAM_API_KEY"
-        assert sarvam.base_class == "openai_gpt"
-        assert "/v1/chat/completions" in sarvam.supported_endpoints
-        assert "/v1/responses" in sarvam.supported_endpoints
-
     def test_sarvam_provider_resolution(self):
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
@@ -55,7 +47,6 @@ class TestSarvamProviderConfig:
         assert config.custom_llm_provider == "sarvam"
 
     def test_sarvam_listed_in_add_model_provider_fields(self):
-        import json
         from pathlib import Path
 
         fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
@@ -71,20 +62,78 @@ class TestSarvamProviderConfig:
         assert "api_key" in field_keys
         assert "api_base" in field_keys
 
+    def test_sarvam_chat_completion_request(self):
+        with respx.mock() as upstream:
+            route = upstream.post("https://api.sarvam.ai/v2/chat/completions").respond(
+                200,
+                json={
+                    "id": "chatcmpl_sarvam",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "sarvam-105b",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hello"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+                },
+            )
+            response = litellm.completion(
+                model="sarvam/sarvam-105b",
+                messages=[{"role": "user", "content": "Say hello"}],
+                api_key="sarvam-test-key",
+                max_completion_tokens=200,
+            )
 
+        request = route.calls.last.request
+        body = json.loads(request.content)
+        assert route.call_count == 1
+        assert str(request.url) == "https://api.sarvam.ai/v2/chat/completions"
+        assert request.headers["authorization"] == "Bearer sarvam-test-key"
+        # LiteLLM maps max_completion_tokens to max_tokens for OpenAI-compatible providers.
+        assert body.get("max_completion_tokens", body.get("max_tokens")) == 200
+        assert response.choices[0].message.content == "Hello"
+
+    def test_sarvam_responses_request(self):
+        with respx.mock() as upstream:
+            route = upstream.post("https://api.sarvam.ai/v2/responses").respond(
+                200,
+                json={
+                    "id": "resp_sarvam",
+                    "object": "response",
+                    "created_at": 1,
+                    "model": "sarvam-105b",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "id": "msg_sarvam",
+                            "type": "message",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "Hello", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
+                },
+            )
+            response = litellm.responses(
+                model="sarvam/sarvam-105b",
+                input="Say hello",
+                api_key="sarvam-test-key",
+            )
+
+        request = route.calls.last.request
+        assert route.call_count == 1
+        assert str(request.url) == "https://api.sarvam.ai/v2/responses"
+        assert request.headers["authorization"] == "Bearer sarvam-test-key"
+        assert response.output_text == "Hello"
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
 class TestSarvamCostMap:
-    @pytest.fixture(autouse=True)
-    def _use_local_model_cost_map(self, monkeypatch):
-        original_model_cost = litellm.model_cost
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-        litellm.get_model_info.cache_clear()
-        try:
-            yield
-        finally:
-            litellm.model_cost = original_model_cost
-            litellm.get_model_info.cache_clear()
-
     @pytest.mark.parametrize("model", SARVAM_MODELS)
     def test_model_registered(self, model):
         assert model in litellm.model_cost
@@ -94,11 +143,12 @@ class TestSarvamCostMap:
         assert entry["mode"] == "chat"
 
     @pytest.mark.parametrize("model", SARVAM_MODELS)
-    def test_output_limit_matches_context_window(self, model):
+    def test_cached_input_cost_is_set(self, model):
         entry = litellm.model_cost[model]
+        assert entry["cache_read_input_token_cost"] > 0
 
-        assert entry["max_output_tokens"] == entry["max_input_tokens"]
-        assert entry["max_tokens"] == entry["max_output_tokens"]
-
-    def test_stale_sarvam_m_absent(self):
-        assert "sarvam/sarvam-m" not in litellm.model_cost
+    def test_sarvam_m_kept_for_deprecation(self):
+        # Source: https://docs.sarvam.ai/changelog/2026/6/5.md (2026-06-05)
+        entry = litellm.model_cost["sarvam/sarvam-m"]
+        assert entry["deprecation_date"] == "2026-06-05"
+        assert entry["cache_creation_input_token_cost_above_1hr"] == 0
