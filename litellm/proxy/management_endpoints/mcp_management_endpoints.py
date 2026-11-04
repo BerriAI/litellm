@@ -335,6 +335,11 @@ if MCP_AVAILABLE:
         _validate_upstream_token_header(payload)
 
     def mcp_identifier_conflict_message(conflict: McpIdentifierConflict) -> str:
+        if conflict.field == "url":
+            return (
+                f"Provider MCP registration {conflict.server_id} already uses {conflict.value}. "
+                "Each provider endpoint can be registered once."
+            )
         return (
             f"An MCP server with {conflict.field} '{conflict.value}' already exists "
             f"(server_id={conflict.server_id}). "
@@ -343,7 +348,7 @@ if MCP_AVAILABLE:
 
     def raise_mcp_identifier_conflict(conflict: McpIdentifierConflict) -> NoReturn:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT if conflict.field == "url" else status.HTTP_400_BAD_REQUEST,
             detail={"error": mcp_identifier_conflict_message(conflict)},
         )
 

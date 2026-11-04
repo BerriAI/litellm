@@ -95,7 +95,7 @@ class McpIdentifierConflict:
     string, and ``server_id`` the existing row that owns it.
     """
 
-    field: Literal["server_name", "alias"]
+    field: Literal["server_name", "alias", "url"]
     value: str
     server_id: str
 
@@ -640,6 +640,16 @@ def _identifier_field(data_dict: "Mapping[str, object]", field: str) -> str | No
     return value if isinstance(value, str) else None
 
 
+def _canonical_provider_url_or_none(url: object) -> str | None:
+    """The identity a provider URL update must not share; None leaves an invalid URL to update validation."""
+    from litellm.types.mcp_server.provider_registration import canonical_provider_mcp_url
+
+    try:
+        return canonical_provider_mcp_url(url)
+    except ValueError:
+        return None
+
+
 async def _find_mcp_server_identifier_conflict(
     table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
     *,
@@ -698,6 +708,26 @@ def _mcp_identifier_lock_keys(*identifiers: str | None) -> tuple[int, ...]:
     )
 
 
+async def _find_provider_url_conflict(
+    table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
+    *,
+    provider_url: str | None,
+    exclude_server_id: str | None,
+) -> McpIdentifierConflict | None:
+    if not provider_url:
+        return None
+    from prisma.enums import MCPExecutionMode as StoredExecutionMode
+
+    own_row_guard: Final[tuple[prisma_db_types.LiteLLM_MCPServerTableWhereInput, ...]] = (
+        ({"NOT": [{"server_id": exclude_server_id}]},) if exclude_server_id is not None else ()
+    )
+    same_url: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
+        "AND": [{"execution_mode": StoredExecutionMode.provider}, {"url": provider_url}, *own_row_guard]
+    }
+    row: Final = await table.find_first(where=same_url)
+    return None if row is None else McpIdentifierConflict(field="url", value=provider_url, server_id=row.server_id)
+
+
 async def _mcp_server_write_if_identifier_free(
     prisma_client: PrismaClient,
     *,
@@ -706,14 +736,19 @@ async def _mcp_server_write_if_identifier_free(
     exclude_server_id: str | None,
     write: "Callable[[TableActions[prisma_db_models.LiteLLM_MCPServerTable]], Awaitable[prisma_db_models.LiteLLM_MCPServerTable | None]]",
     lock_server_id: str | None = None,
+    provider_url: str | None = None,
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
-    """Run ``write`` only when no other live row owns ``server_name``/``alias``.
+    """Run ``write`` only when no other live row owns ``server_name``/``alias``, nor,
+    for a provider registration, its canonical ``provider_url``.
 
     The conflict check and the write share a transaction guarded by per-identifier
-    advisory locks, so two concurrent requests for the same name cannot both
-    pass the check and both insert.
+    advisory locks, so two concurrent requests for the same name or provider URL
+    cannot both pass the check and both write. This does not depend on the partial
+    unique index, which setups that skip migration SQL never create.
     """
-    lock_keys: Final = _mcp_identifier_lock_keys(server_name, alias)
+    lock_keys: Final = _mcp_identifier_lock_keys(
+        server_name, alias, f"provider_url:{provider_url}" if provider_url else None
+    )
     async with _db_transaction_manager(prisma_client) as tx:
         for lock_key in lock_keys:
             await tx.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
@@ -722,6 +757,8 @@ async def _mcp_server_write_if_identifier_free(
             server_name=server_name,
             alias=alias,
             exclude_server_id=exclude_server_id,
+        ) or await _find_provider_url_conflict(
+            tx.litellm_mcpservertable, provider_url=provider_url, exclude_server_id=exclude_server_id
         )
         if conflict is not None:
             return conflict
@@ -1165,6 +1202,7 @@ async def create_mcp_server_if_identifier_free(
         alias=_identifier_field(data_dict, "alias"),
         exclude_server_id=None,
         write=_create,
+        provider_url=_identifier_field(data_dict, "url") if data.execution_mode == MCPExecutionMode.provider else None,
     )
     if isinstance(written, McpIdentifierConflict):
         return written
@@ -1360,6 +1398,7 @@ async def _update_mcp_server_row(
     data_dict: Mapping[str, object],
     prepare_update: Callable[["prisma_db_models.LiteLLM_MCPServerTable"], Mapping[str, object]] | None = None,
     expected_updated_at: datetime | None = None,
+    provider_url: str | None = None,
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
     identifier_write: Final = any(field in data_dict for field in ("server_name", "alias"))
     protocol_write: Final = bool({"transport", "mcp_info"}.intersection(data_dict))
@@ -1399,6 +1438,7 @@ async def _update_mcp_server_row(
             exclude_server_id=server_id,
             write=_update,
             lock_server_id=server_id if needs_stored_row else None,
+            provider_url=provider_url,
         )
     return await _mcp_server_write_if_identifier_free(
         prisma_client,
@@ -1407,6 +1447,7 @@ async def _update_mcp_server_row(
         exclude_server_id=server_id,
         write=_update,
         lock_server_id=server_id if needs_stored_row else None,
+        provider_url=provider_url,
     )
 
 
@@ -1433,6 +1474,9 @@ async def update_mcp_server(
             data_dict=data.model_dump(include=fields_set, exclude_unset=True),
             prepare_update=lambda stored: _prepare_provider_registration_update(stored, data, touched_by, fields_set),
             expected_updated_at=expected_updated_at,
+            provider_url=_canonical_provider_url_or_none(data.url)
+            if "url" in (fields_set or data.model_fields_set)
+            else None,
         )
         return (
             updated_provider
