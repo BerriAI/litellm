@@ -1,4 +1,5 @@
 import _hashlib
+import hmac
 from collections.abc import Mapping
 from contextlib import nullcontext
 from typing import Final
@@ -12,6 +13,7 @@ from cryptography.hazmat.primitives import hashes
 from litellm.proxy.common_utils.fips import (
     FipsModeError,
     cryptography_enforces_fips,
+    derive_key_from_salt_key,
     enforce_fips_mode,
     openssl_enforces_fips,
 )
@@ -118,3 +120,16 @@ def test_enforce_fips_mode(
 
     with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
         enforce_fips_mode(general_settings)
+
+
+@pytest.mark.skipif(
+    not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
+)
+@pytest.mark.parametrize("salt_key", ["sk-" + bytes(range(32)).hex(), bytes(range(32)).hex().upper()])
+def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256(
+    monkeypatch: pytest.MonkeyPatch, salt_key: str
+) -> None:
+    label = b"litellm-test:label:"
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    fixed_input = (1).to_bytes(4, "big") + label + b"\x00" + (256).to_bytes(4, "big")
+    assert derive_key_from_salt_key(label) == hmac.digest(bytes(range(32)), fixed_input, "sha256").hex()

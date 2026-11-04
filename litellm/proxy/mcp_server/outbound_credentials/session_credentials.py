@@ -22,6 +22,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, Field, SecretStr, ValidationError
 
+from litellm.proxy.common_utils.fips import derive_key_from_salt_key, openssl_enforces_fips
 from litellm.proxy.mcp_server.outbound_credentials.session_token import (
     AsymmetricSessionKeys,
     OpenedSessionToken,
@@ -59,7 +60,11 @@ def session_keys_from_master_key(master_key: str) -> SessionKeys:
     into the other. The result is cached (the master key is fixed for a process); rotating
     ``master_key`` invalidates every outstanding session, which is the intended behavior
     for a signing-key change.
+
+    When OpenSSL enforces FIPS, the key comes from :func:`derive_key_from_salt_key` instead.
     """
+    if openssl_enforces_fips():
+        return SessionKeys(signing_key=SecretStr(derive_key_from_salt_key(_SESSION_SIGNING_KEY_DOMAIN)))
     signing: Final = hashlib.scrypt(
         master_key.encode(),
         salt=_SESSION_SIGNING_KEY_DOMAIN,

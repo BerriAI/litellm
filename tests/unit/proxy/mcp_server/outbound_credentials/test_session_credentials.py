@@ -1,5 +1,6 @@
 """Tests for the session-token KDF and the edge/token-endpoint resolvers."""
 
+import _hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -230,3 +231,45 @@ def test_signing_config_error_detail_never_leaks_key_material():
     )
     assert isinstance(resolved, SessionSigningConfigError)
     assert pem.splitlines()[1] not in resolved.detail
+
+
+def test_session_key_without_fips_stays_the_scrypt_key_of_the_master_key() -> None:
+    keys = session_keys_from_master_key(MASTER_KEY)
+    assert keys.signing_key.get_secret_value() == "990dce331d97862e3af47815b707c42923fc760e6740d4a77a81583a206f339d"
+
+
+@pytest.mark.skipif(
+    not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
+)
+@pytest.mark.usefixtures("openssl_enforcing_fips")
+def test_keys_under_fips_come_from_the_salt_key_are_distinct_and_the_same_on_every_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + "5a" * 32)
+
+    def derived_keys() -> tuple[str, str, str]:
+        envelope_keys_from_master_key.cache_clear()
+        session_keys_from_master_key.cache_clear()
+        envelope = envelope_keys_from_master_key(MASTER_KEY)
+        session = session_keys_from_master_key(MASTER_KEY)
+        return (
+            envelope.signing_key.get_secret_value(),
+            envelope.encryption_key.get_secret_value(),
+            session.signing_key.get_secret_value(),
+        )
+
+    first = derived_keys()
+    assert first == derived_keys()
+    assert len(set(first)) == 3, first
+    assert first == (
+        "c982eac990e5bd412ab1c417a2c011483178981f0bf70b94650b3ab64e38f124",
+        "8de6fa9aae4ae1d7eb76ef4f88ed50445bb283c8b56454a530a8eca4b7a8a756",
+        "30ab21d7dac030b7cd6521705333be7ae3299670ad173aa1387b501ea06641c5",
+    )
+
+
+@pytest.mark.usefixtures("openssl_enforcing_fips")
+def test_session_key_under_fips_refuses_an_unset_salt_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    with pytest.raises(ValueError, match="LITELLM_SALT_KEY"):
+        session_keys_from_master_key(MASTER_KEY)
