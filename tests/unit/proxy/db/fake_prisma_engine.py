@@ -2,6 +2,7 @@
 marking the DB I/O witness the way ``_TrackedPrismaEngine`` does, so the producer under test
 emits its service event."""
 
+from datetime import timedelta
 from typing import Final, TypeVar
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,11 +22,20 @@ def engine_call(return_value: _T | None = None) -> AsyncMock:
 
 
 class RecordingReadTransaction:
-    """The transaction ``query_raw_within_statement_timeout`` opens on ``read_db``, keeping its ``SET LOCAL`` statements."""
+    """The transaction ``query_raw_within_statement_timeout`` opens on ``read_db``, keeping its ``SET LOCAL`` statements.
 
-    def __init__(self, query_raw: AsyncMock) -> None:
+    The helper's ``pg_settings`` probe sees ``statement_timeout_ms`` as the session's current ``statement_timeout``
+    (0 means unlimited), every other raw read is answered by ``reads``."""
+
+    def __init__(self, reads: AsyncMock, statement_timeout_ms: int = 0) -> None:
         self.statements: tuple[str, ...] = ()
-        self.query_raw: AsyncMock = query_raw
+        self.reads: AsyncMock = reads
+        self.statement_timeout_ms: Final = statement_timeout_ms
+
+    async def query_raw(self, sql: str, *args: object) -> object:
+        if "FROM pg_settings" in sql:
+            return [{"ms": self.statement_timeout_ms}]
+        return await self.reads(sql, *args)
 
     async def execute_raw(self, sql: str) -> int:
         self.statements = (*self.statements, sql)
@@ -38,9 +48,11 @@ class RecordingReadTransaction:
         pass
 
 
-def statement_timeout_reads(prisma: MagicMock, query_raw: AsyncMock) -> RecordingReadTransaction:
+def statement_timeout_reads(
+    prisma: MagicMock, query_raw: AsyncMock, statement_timeout_ms: int = 0
+) -> RecordingReadTransaction:
     """Make ``prisma.read_db.tx()`` hand out one recording transaction whose raw reads answer with ``query_raw``."""
-    transaction: Final = RecordingReadTransaction(query_raw)
+    transaction: Final = RecordingReadTransaction(query_raw, statement_timeout_ms)
     prisma.read_db.tx = MagicMock(return_value=transaction)
     return transaction
 
@@ -71,6 +83,8 @@ class _DelegatingReadTransaction:
         return 0
 
     async def query_raw(self, sql: str, *args: object) -> object:
+        if "FROM pg_settings" in sql:
+            return [{"ms": 0}]
         return await getattr(self.db, "query_raw")(sql, *args)
 
     async def __aenter__(self) -> "_DelegatingReadTransaction":
@@ -82,6 +96,8 @@ class _DelegatingReadTransaction:
 
 class ReadTargetOf:
     """What a prisma fake returns from ``read_db``: ``tx()`` opens a transaction over the fake's ``db``."""
+
+    pool_timeout: Final = timedelta(seconds=10)
 
     def __init__(self, db: object) -> None:
         self.db: Final = db

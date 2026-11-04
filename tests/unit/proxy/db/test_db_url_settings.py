@@ -33,7 +33,9 @@ from pydantic import ValidationError
 
 from litellm.proxy.db.db_url_settings import (
     PG_SSL_REQUEST,
+    PRISMA_DEFAULT_POOL_TIMEOUT,
     DatabaseURLSettings,
+    pool_timeout_from_url,
     token_refresh_params_from_url,
     translate_libpq_ssl_params,
     unsupported_db_scheme,
@@ -1314,3 +1316,18 @@ def test_connection_budget_message_survives_an_unparseable_limit() -> None:
 
     message: Final = postgres_connection_budget_message(writer_limit="ten", reader_limit=None, num_workers="2")
     assert "writer='ten'" in message
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("postgresql://u:p@db:5432/litellm?connection_limit=10&pool_timeout=60", datetime.timedelta(seconds=60)),
+        ("postgresql://u:p@db:5432/litellm?pool_timeout=2.5", datetime.timedelta(seconds=2.5)),
+        ("postgresql://u:p@db:5432/litellm?connection_limit=10", PRISMA_DEFAULT_POOL_TIMEOUT),
+        ("postgresql://u:p@db:5432/litellm?pool_timeout=0", PRISMA_DEFAULT_POOL_TIMEOUT),
+        ("postgresql://u:p@db:5432/litellm?pool_timeout=soon", PRISMA_DEFAULT_POOL_TIMEOUT),
+    ],
+    ids=["set", "fractional", "absent", "zero_waits_forever", "garbage"],
+)
+def test_pool_timeout_from_url(url: str, expected: datetime.timedelta) -> None:
+    assert pool_timeout_from_url(url) == expected

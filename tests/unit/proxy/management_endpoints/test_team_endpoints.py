@@ -17307,7 +17307,7 @@ async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(m
 
     assert any("statement_timeout = 30000" in statement for statement in transaction.statements)
     mock_db_client.db.tx.assert_not_called()
-    sql, *params = transaction.query_raw.call_args.args
+    sql, *params = transaction.reads.call_args.args
     assert params == ["2026-09-01", "2026-09-04", "team-alpha", "team-beta"]
     assert 'FROM "LiteLLM_SpendLogs" sl' in sql
     assert 'sl."startTime" >= $1::timestamp' in sql
@@ -17343,7 +17343,7 @@ async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_clien
         user_api_key_dict=caller, team_ids="team-alpha", start_date="2026-09-01", end_date="2026-09-04"
     )
 
-    sql, *params = transaction.query_raw.call_args.args
+    sql, *params = transaction.reads.call_args.args
     assert params == ["2026-09-01", "2026-09-04", "team-alpha"]
     assert 'sl."user" = $' not in sql
 
@@ -17367,7 +17367,7 @@ async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_cli
         user_api_key_dict=caller, team_ids="team-alpha", start_date="2026-09-01", end_date="2026-09-04"
     )
 
-    sql, *params = transaction.query_raw.call_args.args
+    sql, *params = transaction.reads.call_args.args
     assert params == ["2026-09-01", "2026-09-04", "team-alpha", "bob"]
     assert "sl.team_id IN ($3)" in sql
     assert 'AND sl."user" = $4' in sql
@@ -17390,7 +17390,7 @@ async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_clie
         )
 
     assert exc_info.value.status_code == 404
-    transaction.query_raw.assert_not_called()
+    transaction.reads.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -17418,7 +17418,7 @@ async def test_get_team_spend_by_user_rejects_bad_input(mock_db_client, team_ids
 
     assert exc_info.value.status_code == 400
     assert expected_error in str(exc_info.value.detail)
-    transaction.query_raw.assert_not_called()
+    transaction.reads.assert_not_called()
 
 
 @pytest.mark.asyncio

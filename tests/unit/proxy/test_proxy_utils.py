@@ -3734,8 +3734,65 @@ async def test_query_raw_within_statement_timeout_has_postgres_cancel_the_read_a
 
     assert rows == [{"spend": 1.5}]
     assert transaction.statements == ("SET LOCAL statement_timeout = 30000",)
-    transaction.query_raw.assert_awaited_once_with('SELECT spend FROM "LiteLLM_SpendLogs" WHERE "user" = $1', "u1")
+    transaction.reads.assert_awaited_once_with('SELECT spend FROM "LiteLLM_SpendLogs" WHERE "user" = $1', "u1")
     assert prisma.read_db.tx.call_args.kwargs["timeout"] > timedelta(seconds=30), "Prisma must outlive the Postgres cancel"
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_waits_for_a_pooled_connection_as_long_as_a_plain_read() -> None:
+    """A transaction start must not give up on the pool before a plain ``query_raw`` would, or a busy pool turns
+    25 concurrent spend reads into Prisma P2028 failures that the plain path served fine."""
+    from datetime import timedelta
+
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    prisma.read_db.pool_timeout = timedelta(seconds=60)
+    statement_timeout_reads(prisma, AsyncMock(return_value=[]))
+
+    await query_raw_within_statement_timeout(prisma, "SELECT 1")
+
+    assert prisma.read_db.tx.call_args.kwargs["max_wait"] == timedelta(seconds=60)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("session_statement_timeout_ms", "expected_statements"),
+    [
+        (0, ("SET LOCAL statement_timeout = 30000",)),
+        (60_000, ("SET LOCAL statement_timeout = 30000",)),
+        (30_000, ()),
+        (500, ()),
+    ],
+    ids=["unlimited", "looser", "equal", "stricter"],
+)
+async def test_query_raw_within_statement_timeout_only_lowers_the_session_statement_timeout(
+    session_statement_timeout_ms: int, expected_statements: tuple[str, ...]
+) -> None:
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    transaction: Final = statement_timeout_reads(prisma, AsyncMock(return_value=[]), session_statement_timeout_ms)
+
+    await query_raw_within_statement_timeout(prisma, "SELECT 1")
+
+    assert transaction.statements == expected_statements
+
+
+@pytest.mark.asyncio
+async def test_query_raw_within_statement_timeout_reports_the_stricter_limit_the_read_ran_under() -> None:
+    from litellm.proxy.utils import query_raw_within_statement_timeout
+    from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_error, statement_timeout_reads
+
+    prisma: Final = MagicMock()
+    statement_timeout_reads(prisma, AsyncMock(side_effect=statement_timeout_error()), statement_timeout_ms=500)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await query_raw_within_statement_timeout(prisma, "SELECT 1", what="Spend per user")
+
+    assert exc_info.value.detail == {"error": "Spend per user took longer than 0.5s. Pick a shorter date range"}
 
 
 @pytest.mark.asyncio

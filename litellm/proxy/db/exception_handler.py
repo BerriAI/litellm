@@ -30,11 +30,12 @@ _CONNECTION_CAPACITY_PHRASES: Final = (
     "too many connections for role",
     "too many connections for database",
     "remaining connection slots are reserved",
+    "timed out fetching a new connection from the connection pool",
+    "unable to start a transaction in the given time",
 )
 _PRISMA_POOL_TIMEOUT_CODE: Final = "P2024"
 _LOCK_TIMEOUT_SQLSTATE: Final = "55P03"
 _LOCK_TIMEOUT_PHRASE: Final = "canceling statement due to lock timeout"
-_STATEMENT_TIMEOUT_SQLSTATE: Final = "57014"
 _STATEMENT_TIMEOUT_PHRASE: Final = "canceling statement due to statement timeout"
 
 
@@ -274,10 +275,11 @@ class PrismaDBExceptionHandler:
     def is_database_capacity_error(e: Exception) -> bool:
         """True iff Postgres refused the pool a new connection (SQLSTATE 53300:
         ``too many clients already``, a reserved slot, or a per-role limit) or
-        prisma's own pool timed out handing one over (P2024). The server is up
-        but full, so the failure is neither a transport error (which would tear
-        the engine down and open yet more connections against it) nor a
-        rejection of the rows being written."""
+        prisma's own pool timed out handing one over (P2024 for a query, P2028
+        ``Unable to start a transaction in the given time`` for a transaction).
+        The server is up but full, so the failure is neither a transport error
+        (which would tear the engine down and open yet more connections against
+        it) nor a rejection of the rows being written."""
         import prisma
 
         if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
@@ -306,13 +308,14 @@ class PrismaDBExceptionHandler:
 
     @staticmethod
     def is_statement_timeout_error(e: Exception) -> bool:
-        """True iff Postgres cancelled a statement for exceeding ``statement_timeout`` (SQLSTATE 57014)."""
+        """True iff Postgres cancelled a statement for exceeding ``statement_timeout``.
+
+        Only the message decides: its SQLSTATE 57014 is the same one
+        ``pg_cancel_backend`` and a client-side cancel raise."""
         import prisma
 
         if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
             return False
-        if PrismaDBExceptionHandler.postgres_sqlstate(e) == _STATEMENT_TIMEOUT_SQLSTATE:
-            return True
         return _STATEMENT_TIMEOUT_PHRASE in str(e).lower()
 
     @staticmethod

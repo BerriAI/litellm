@@ -20,7 +20,11 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import db_span
-from litellm.proxy.db.db_url_settings import add_missing_query_params, token_refresh_params_from_url
+from litellm.proxy.db.db_url_settings import (
+    add_missing_query_params,
+    pool_timeout_from_url,
+    token_refresh_params_from_url,
+)
 from litellm.proxy.db.log_db_metrics import db_io_claimed, record_db_io
 from litellm.proxy.db.prisma_query_span import parse_prisma_query
 from litellm.proxy.db.token_auth import (
@@ -903,6 +907,11 @@ class PrismaWrapper:
         def is_connected(self) -> bool: ...
 
         async def disconnect(self, timeout: float | timedelta | None = None) -> None: ...
+
+    @property
+    def pool_timeout(self) -> timedelta:
+        """How long this wrapper's engine waits for a pooled connection, read from its URL's ``pool_timeout``."""
+        return pool_timeout_from_url(os.getenv(self._db_url_env_var, ""))
 
     def __getattr__(self, name: str):
         """

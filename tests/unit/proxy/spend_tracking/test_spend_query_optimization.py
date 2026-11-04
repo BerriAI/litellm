@@ -205,7 +205,7 @@ async def test_spend_logs_ui_wraps_params_in_at_time_zone_utc(monkeypatch):
 
 def _spend_log_reads(mock_prisma: MagicMock) -> AsyncMock:
     """The raw reads ``/spend/logs/ui`` ran under the statement timeout."""
-    return mock_prisma.read_db.tx.return_value.query_raw
+    return mock_prisma.read_db.tx.return_value.reads
 
 
 def _make_ui_spend_logs_mock(count_total, page_rows):

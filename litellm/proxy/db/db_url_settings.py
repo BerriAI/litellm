@@ -44,12 +44,13 @@ import sys
 import tempfile
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
+from datetime import timedelta
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypeAlias, cast
 
-from pydantic import AliasChoices, BeforeValidator, Field
+from pydantic import AliasChoices, BeforeValidator, Field, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm.proxy.db.pgbouncer import database_url_is_pooled
@@ -298,6 +299,23 @@ def connection_params_from_url(url: str) -> Mapping[str, str | int | float]:
     return reader_shareable_params(
         MappingProxyType({key: value for key, value in urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)})
     )
+
+
+PRISMA_DEFAULT_POOL_TIMEOUT: Final = timedelta(seconds=10)
+_POOL_TIMEOUT_SECONDS: Final = TypeAdapter(float)
+
+
+def pool_timeout_from_url(url: str) -> timedelta:
+    """How long Prisma waits for a pooled connection on ``url``: its ``pool_timeout`` param, else Prisma's default.
+
+    ``pool_timeout=0`` tells Prisma to wait forever, which a transaction's ``max_wait`` cannot express, so it falls
+    back to the default too.
+    """
+    try:
+        seconds: Final = _POOL_TIMEOUT_SECONDS.validate_python(connection_params_from_url(url).get("pool_timeout"))
+    except ValidationError:
+        return PRISMA_DEFAULT_POOL_TIMEOUT
+    return timedelta(seconds=seconds) if seconds > 0 else PRISMA_DEFAULT_POOL_TIMEOUT
 
 
 # A re-minted token URL replaces a URL to the same database, so unlike the

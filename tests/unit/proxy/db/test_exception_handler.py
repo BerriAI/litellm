@@ -842,11 +842,27 @@ def _pool_timeout_error() -> DataError:
     )
 
 
+def _transaction_start_timeout_error() -> EngineRequestError:
+    """The shape prisma raises when ``tx()`` could not get a pooled connection within ``max_wait`` (P2028)."""
+    return EngineRequestError(
+        MagicMock(status=504),
+        '{"is_panic":false,"message":"Transaction API error: Unable to start a transaction in the given time.",'
+        '"error_code":"P2028"}',
+    )
+
+
 @pytest.mark.parametrize(
     "error",
     [
         _capacity_error("sorry, too many clients already"),
         _pool_timeout_error(),
+        _transaction_start_timeout_error(),
+        EngineRequestError(
+            MagicMock(status=500),
+            '{"is_panic":false,"message":"Timed out fetching a new connection from the connection pool. More info: '
+            'http://pris.ly/d/connection-pool (Current connection pool timeout: 1, connection limit: 10)",'
+            '"error_code":"P2024"}',
+        ),
         EngineRequestError(
             MagicMock(status=500),
             '{"is_panic":false,"message":"Error in connector: Error querying the database: FATAL: sorry, too many clients already","backtrace":null}',
@@ -861,7 +877,14 @@ def _pool_timeout_error() -> DataError:
             }
         ),
     ],
-    ids=["53300_connector_dataerror", "P2024_pool_timeout", "engine_500", "raw_query_53300"],
+    ids=[
+        "53300_connector_dataerror",
+        "P2024_pool_timeout",
+        "P2028_transaction_start",
+        "P2024_inside_transaction",
+        "engine_500",
+        "raw_query_53300",
+    ],
 )
 def test_is_database_capacity_error_recognises_postgres_and_pool_exhaustion(error: Exception) -> None:
     """SQLSTATE 53300 and prisma P2024 mean the statement was never sent because
@@ -958,11 +981,21 @@ def test_is_lock_timeout_error_excludes_other_failures(error: Exception) -> None
     [
         (_lock_timeout_error(message="canceling statement due to statement timeout", code="57014"), True),
         (_lock_timeout_error(message="canceling statement due to statement timeout", code=None), True),
+        (_lock_timeout_error(message="canceling statement due to user request", code="57014"), False),
         (_lock_timeout_error(), False),
         (_capacity_error("sorry, too many clients already"), False),
+        (_transaction_start_timeout_error(), False),
         (RuntimeError("canceling statement due to statement timeout"), False),
     ],
-    ids=["meta_57014", "message_only", "lock_timeout_55P03", "capacity_53300", "not_prisma"],
+    ids=[
+        "meta_57014",
+        "message_only",
+        "pg_cancel_backend_57014",
+        "lock_timeout_55P03",
+        "capacity_53300",
+        "P2028_transaction_start",
+        "not_prisma",
+    ],
 )
 def test_is_statement_timeout_error(error: Exception, expected: bool) -> None:
     assert PrismaDBExceptionHandler.is_statement_timeout_error(error) is expected

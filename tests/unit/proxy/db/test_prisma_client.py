@@ -602,3 +602,16 @@ def test_migration_dry_run_summary_needs_database_url(unset_database_url):
     from litellm.proxy.db.prisma_client import PrismaManager
 
     assert PrismaManager.migration_dry_run_summary(use_migrate=True) == (False, "DATABASE_URL is not set.")
+
+
+def test_prisma_wrapper_pool_timeout_comes_from_its_own_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import timedelta
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/litellm?pool_timeout=60")
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://u:p@replica:5432/litellm?pool_timeout=7")
+
+    wrapper: Final = PrismaWrapper(
+        original_prisma=MagicMock(), iam_token_db_auth=False, db_url_env_var="DATABASE_URL_READ_REPLICA"
+    )
+
+    assert wrapper.pool_timeout == timedelta(seconds=7)

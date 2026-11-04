@@ -77,7 +77,7 @@ def build_prisma(query_raw: AsyncMock) -> MagicMock:
 
 def _spend_log_reads(prisma: MagicMock) -> AsyncMock:
     """The raw reads the cache dashboard ran under the statement timeout."""
-    return prisma.read_db.tx.return_value.query_raw
+    return prisma.read_db.tx.return_value.reads
 
 
 def dispatching_query_raw() -> AsyncMock:

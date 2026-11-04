@@ -5315,11 +5315,33 @@ _PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 _PRISMA_DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
 _SPEND_LOG_READ_STATEMENT_TIMEOUT: Final = timedelta(seconds=SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS)
 _STATEMENT_TIMEOUT_TRANSACTION_GRACE: Final = timedelta(seconds=5)
+_STATEMENT_TIMEOUT_MS: Final = TypeAdapter(int)
 
 
 class _ReadTransactionClient(Protocol):
     @property
     def read_db(self) -> PrismaWrapper: ...
+
+
+class _RawReadTransaction(Protocol):
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
+
+    async def execute_raw(self, query: str, *args: object) -> int: ...
+
+
+async def _lower_statement_timeout(transaction: _RawReadTransaction, timeout_ms: int) -> int:
+    """``SET LOCAL statement_timeout`` to ``timeout_ms`` unless the session already runs under a stricter one.
+
+    Returns the limit the read runs under, in milliseconds. 0 means the session has none.
+    """
+    rows: Final = await transaction.query_raw(
+        "SELECT setting::int AS ms FROM pg_settings WHERE name = 'statement_timeout'"
+    )
+    current_ms: Final = _STATEMENT_TIMEOUT_MS.validate_python(next(iter(rows), {}).get("ms", 0))
+    if 0 < current_ms <= timeout_ms:
+        return current_ms
+    await transaction.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
+    return timeout_ms
 
 
 async def query_raw_within_statement_timeout(
@@ -5333,19 +5355,24 @@ async def query_raw_within_statement_timeout(
 
     Prisma's HTTP client gives up on a statement after 30s anyway, so without
     this the Admin UI's error is the same but Postgres keeps running the scan.
-    A cancelled read surfaces as a 503 asking for a narrower date range.
+    A cancelled read surfaces as a 503 asking for a narrower date range. The
+    transaction waits for a pooled connection as long as a plain read would,
+    and never loosens a ``statement_timeout`` the role or database already set.
     """
-    try:
-        async with prisma_client.read_db.tx(timeout=timeout + _STATEMENT_TIMEOUT_TRANSACTION_GRACE) as transaction:
-            await transaction.execute_raw(f"SET LOCAL statement_timeout = {int(timeout / timedelta(milliseconds=1))}")
+    read_db: Final = prisma_client.read_db
+    async with read_db.tx(
+        timeout=timeout + _STATEMENT_TIMEOUT_TRANSACTION_GRACE, max_wait=read_db.pool_timeout
+    ) as transaction:
+        effective_ms: Final = await _lower_statement_timeout(transaction, int(timeout / timedelta(milliseconds=1)))
+        try:
             return await transaction.query_raw(sql, *params)
-    except Exception as e:
-        if not PrismaDBExceptionHandler.is_statement_timeout_error(e):
-            raise
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": f"{what} took longer than {int(timeout.total_seconds())}s. Pick a shorter date range"},
-        ) from e
+        except Exception as e:
+            if not PrismaDBExceptionHandler.is_statement_timeout_error(e):
+                raise
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": f"{what} took longer than {effective_ms / 1000:g}s. Pick a shorter date range"},
+            ) from e
 
 
 async def _lookup_deprecated_key(
