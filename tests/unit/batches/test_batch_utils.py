@@ -2766,9 +2766,9 @@ def test_aggregate_batch_cost_uses_custom_model_info():
     assert result.cost == pytest.approx(expected), f"Expected total cost {expected}, got {result.cost}"
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-@pytest.mark.parametrize("data_residency", ["eu", "us"])
+@pytest.mark.parametrize("data_residency", ["eu", "us", "fedramp"])
 def test_batch_cost_calculator_applies_data_residency_uplift(data_residency, monkeypatch):
-    """batch_cost_calculator should apply the regional uplift multiplier when
+    """batch_cost_calculator should apply the regional or FedRAMP uplift multiplier when
     data_residency is set and the model carries a configured multiplier."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     prev_model_cost = litellm.model_cost
