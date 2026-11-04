@@ -31,7 +31,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
-from functools import lru_cache, partial, wraps
+from functools import lru_cache, partial, reduce, wraps
 from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
@@ -4255,7 +4255,11 @@ class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
         oldest_first: Final = sorted(present, key=lambda name: self.registration_order.get(name, -1))
         registered: Final = (self.registrations[name] for name in oldest_first)
         return MappingProxyType(
-            dict(itertools.chain.from_iterable(entry.items() for entry in (catalog_entry or {}, *registered)))
+            reduce(
+                lambda merged, entry: {**without_price_variants_of(merged, entry), **entry},
+                registered,
+                catalog_entry or {},
+            )
         )
 
     def __iter__(self) -> Iterator[str]:
@@ -4425,7 +4429,11 @@ def register_model(
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
         for _registered_key, _registered_value in _registrations.items():
             _runtime_registered_model_cost[_registered_key] = update_dictionary(
-                dict(_runtime_registered_model_cost.get(_registered_key, {})),
+                dict(
+                    without_price_variants_of(
+                        _runtime_registered_model_cost.get(_registered_key, {}), _registered_value
+                    )
+                ),
                 _RATE_TABLE.validate_python(_registered_value),
             )
             _runtime_registration_order[_registered_key] = next(_REGISTRATION_TICKS)

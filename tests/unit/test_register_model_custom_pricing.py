@@ -27,7 +27,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.utils import _invalidate_model_cost_lowercase_map, reapply_runtime_model_cost_registrations
 
 
 def _snapshot_model_cost_entries(keys):
@@ -1816,4 +1816,32 @@ def test_a_router_deployments_custom_audio_rate_wins_over_the_catalogs_audio_thr
     finally:
         litellm.model_cost.pop(_AUDIO_TIER_CATALOG_KEY, None)
         litellm.model_cost.pop(deployment_id, None)
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_a_replaced_flat_rate_still_outranks_the_earlier_long_context_rate_after_a_reload() -> None:
+    key: Final = "openai/lit-replayed-flat-rate-model"
+    litellm.register_model(
+        {
+            key: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "input_cost_per_token_above_200k_tokens": 2e-06,
+            }
+        }
+    )
+    litellm.register_model({key: {"input_cost_per_token": 5e-07}})
+    try:
+        reapply_runtime_model_cost_registrations()
+        response: Final = litellm.completion(
+            model=key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            mock_response=_prompt_only_reply(250_000, 0),
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(250_000 * 5e-07)
+    finally:
+        litellm.model_cost.pop(key, None)
         _invalidate_model_cost_lowercase_map()
