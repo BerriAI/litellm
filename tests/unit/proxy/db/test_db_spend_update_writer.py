@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
+
+from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from prisma.errors import DataError as PrismaDataError
 from prisma.errors import RawQueryError
 from redis.exceptions import DataError
@@ -2365,6 +2367,33 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
 
 
+class _InMemoryRedis:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.lists: dict[str, list[object]] = {}
+
+    async def async_set_cache(self, key: str, value: str, nx: bool = False, **kwargs: object) -> bool | None:
+        if nx and key in self.store:
+            return None
+        self.store[key] = json.dumps(value)
+        return True
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> str | None:
+        raw = self.store.get(key)
+        return json.loads(raw) if raw is not None else None
+
+    async def async_delete_cache(self, key: str) -> int:
+        return 1 if self.store.pop(key, None) is not None else 0
+
+    async def async_rpush_pipeline(self, rpush_list: list[RedisPipelineRpushOperation]) -> list[int]:
+        for op in rpush_list:
+            self.lists.setdefault(op["key"], []).extend(op["values"])
+        return [len(self.lists[op["key"]]) for op in rpush_list]
+
+    async def async_lpop_pipeline(self, lpop_list: list[RedisPipelineLpopOperation]) -> list[list[object] | None]:
+        return [self.lists.pop(op["key"], None) for op in lpop_list]
+
+
 @pytest.mark.asyncio
 async def test_commit_with_redis_requeues_all_on_db_failure():
     """
@@ -3213,7 +3242,6 @@ async def test_failed_window_spend_commit_requeues_the_increments_and_continues_
     await db_writer.window_spend_update_queue.add_update(transaction)
     db = _WindowSpendFakeDB()
     db.query_raw = AsyncMock(side_effect=Exception("connection reset"))
-    db_writer._flush_tool_discovery_queue = AsyncMock()
 
     await db_writer._commit_spend_updates_to_db_without_redis_buffer(
         prisma_client=_WindowSpendFakePrisma(db),
@@ -3221,7 +3249,6 @@ async def test_failed_window_spend_commit_requeues_the_increments_and_continues_
         proxy_logging_obj=MagicMock(),
     )
 
-    db_writer._flush_tool_discovery_queue.assert_called_once()
     requeued = await db_writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
     assert requeued == (transaction,)
 
@@ -3297,7 +3324,6 @@ async def test_failed_daily_spend_commit_is_requeued_only_when_the_rows_are_prov
     db_writer = DBSpendUpdateWriter()
     await db_writer.daily_spend_update_queue.add_update({"user-key": _daily_txn(user_id="user-1")})
     db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend", failure=failure)
-    db_writer._flush_tool_discovery_queue = AsyncMock()
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.failure_handler = AsyncMock()
 
@@ -3323,7 +3349,6 @@ async def test_failed_daily_spend_commit_drops_only_the_batch_that_was_sent():
         {f"user-{i:03d}": _daily_txn(user_id=f"user-{i:03d}") for i in range(150)}
     )
     db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend", failure=httpx.ReadTimeout("no reply"))
-    db_writer._flush_tool_discovery_queue = AsyncMock()
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.failure_handler = AsyncMock()
 
@@ -3351,7 +3376,6 @@ async def test_failed_daily_spend_commit_requeues_the_rows_and_flushes_the_other
     team_txn = {key: value for key, value in _daily_txn().items() if key != "user_id"} | {"team_id": "team-1"}
     await db_writer.daily_team_spend_update_queue.add_update({"team-key": team_txn})
     db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend")
-    db_writer._flush_tool_discovery_queue = AsyncMock()
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.failure_handler = AsyncMock()
 
@@ -3362,7 +3386,6 @@ async def test_failed_daily_spend_commit_requeues_the_rows_and_flushes_the_other
     assert _daily_upserts(db, "LiteLLM_DailyUserSpend") == []
     (team_upsert,) = _daily_upserts(db, "LiteLLM_DailyTeamSpend")
     assert _row_values(team_upsert, "team_id") == ["team-1"]
-    db_writer._flush_tool_discovery_queue.assert_called_once()
 
     db.failing_table = None
     await db_writer._commit_spend_updates_to_db_without_redis_buffer(
@@ -3589,7 +3612,6 @@ async def test_failed_window_spend_commit_is_requeued_only_when_the_rows_are_pro
     )
     await db_writer.window_spend_update_queue.add_update(transaction)
     db = _WindowSpendFailureDB(failure)
-    db_writer._flush_tool_discovery_queue = AsyncMock()
 
     await db_writer._commit_spend_updates_to_db_without_redis_buffer(
         prisma_client=_WindowSpendFakePrisma(db),
