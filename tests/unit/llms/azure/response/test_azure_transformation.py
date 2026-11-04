@@ -1718,3 +1718,38 @@ async def test_azure_responses_does_not_send_reasoning_content_in_replayed_histo
         prompt,
     ]
     assert history == original
+
+
+@pytest.mark.parametrize(
+    ("as_model", "include_id", "preserve_status"),
+    [(False, True, False), (False, False, True), (True, True, True)],
+    ids=["dictionary-with-id", "dictionary-without-id", "pydantic"],
+)
+def test_azure_content_filter_preserves_existing_reasoning_status_handling(
+    as_model: bool, include_id: bool, preserve_status: bool
+) -> None:
+    replayable: Final = {
+        "type": "reasoning",
+        "summary": [],
+        "encrypted_content": "opaque-saved-reasoning",
+        **({"id": "rs_saved_reasoning"} if include_id else {}),
+    }
+    saved_reasoning: Final = {
+        **replayable,
+        "status": "completed",
+        "content": [{"type": "reasoning_text", "text": "Inspect the file first."}],
+    }
+    history: Final = [ResponseReasoningItem.model_validate(saved_reasoning) if as_model else saved_reasoning]
+    original: Final = deepcopy(history)
+    expected: Final = {**replayable, **({"status": "completed"} if preserve_status else {})}
+
+    request: Final = AzureOpenAIResponsesAPIConfig().transform_responses_api_request(
+        model="gpt-6.1-sol",
+        input=history,
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["input"] == [expected]
+    assert history == original

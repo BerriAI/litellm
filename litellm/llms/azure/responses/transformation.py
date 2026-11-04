@@ -162,7 +162,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _validate_input_param(
         self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
     ) -> str | ResponseInputParam:
-        """Remove output-only fields rejected by Azure when replaying Responses input."""
+        """Omit reasoning content from Azure input without changing existing status handling."""
         from typing import cast
 
         validated_input: Final = super()._validate_input_param(input, drops_set_created_by=drops_set_created_by)
@@ -170,14 +170,13 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if isinstance(validated_input, list):
             filtered_input: Final[list[object]] = []
             for item in validated_input:
-                if isinstance(item, dict) and item.get("type") in ("message", "reasoning"):
-                    filtered_input.append(
-                        {
-                            k: v
-                            for k, v in item.items()
-                            if k != "status" and (k != "content" or item.get("type") != "reasoning")
-                        }
-                    )
+                if not isinstance(item, dict):
+                    filtered_input.append(item)
+                    continue
+                if item.get("type") == "message":
+                    filtered_input.append({k: v for k, v in item.items() if k != "status"})
+                elif item.get("type") == "reasoning":
+                    filtered_input.append({k: v for k, v in item.items() if k != "content"})
                 else:
                     filtered_input.append(item)
             return cast(ResponseInputParam, filtered_input)
