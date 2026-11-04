@@ -5526,6 +5526,33 @@ async def test_bedrock_converse_claude_gets_the_effort_without_a_thinking_block(
     assert "thinking" not in sent
 
 
+_TASK_BUDGET: Final = {"type": "tokens", "total": 20000}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("output_config", "sent_output_config"),
+    [
+        pytest.param({"effort": "low", "task_budget": _TASK_BUDGET}, {"effort": "low"}, id="effort_and_task_budget"),
+        pytest.param({"task_budget": _TASK_BUDGET}, None, id="task_budget_only"),
+    ],
+)
+async def test_bedrock_converse_claude_without_a_thinking_block_gets_only_the_effort_from_output_config(
+    _converse_route: respx.Route,
+    output_config: Mapping[str, object],
+    sent_output_config: Mapping[str, object] | None,
+) -> None:
+    await litellm.anthropic.messages.acreate(
+        model=f"bedrock/converse/{_CONVERSE_EFFORT_MODEL}",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        output_config=output_config,
+        drop_params=True,
+    )
+
+    assert _sent_converse_fields(_converse_route).get("output_config") == sent_output_config
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("drop_params_source", "forwards_effort"),

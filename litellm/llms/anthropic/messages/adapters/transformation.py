@@ -1222,7 +1222,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
         Bedrock Converse takes the tier in ``output_config`` with or without a ``thinking`` block, so
         it travels on its own instead of only alongside ``thinking``. ``format`` stays behind, since
-        ``_translate_output_format_to_openai`` carries it as ``response_format``.
+        ``_translate_output_format_to_openai`` carries it as ``response_format``. Without ``thinking``
+        only ``effort`` goes, since the other keys (``task_budget``) never reached Converse there and
+        it rejects them.
         """
         if "output_config" not in anthropic_message_request or not self._is_bedrock_claude_target(new_kwargs["model"]):
             return
@@ -1231,13 +1233,16 @@ class LiteLLMAnthropicMessagesAdapter:
         if not isinstance(output_config, dict):
             return
 
-        effort_config: Final = {k: v for k, v in output_config.items() if k != "format"}
+        has_thinking: Final = bool(anthropic_message_request.get("thinking"))
+        effort_config: Final = {
+            k: v for k, v in output_config.items() if k == "effort" or (has_thinking and k != "format")
+        }
         if not effort_config:
             return
         model: Final = new_kwargs["model"]
         if (
             drop_params
-            and not anthropic_message_request.get("thinking")
+            and not has_thinking
             and is_bedrock_application_inference_profile_arn(bedrock_capability_model(model, base_model))
         ):
             litellm.verbose_logger.warning(UNRESOLVED_ARN_EFFORT_WITHOUT_THINKING_WARNING, model)
