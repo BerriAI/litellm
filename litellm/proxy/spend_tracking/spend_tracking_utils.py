@@ -3,7 +3,7 @@ import json
 import os
 import re
 import secrets
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
 from functools import reduce
@@ -58,7 +58,6 @@ from litellm.litellm_core_utils.internal_call_metadata import (
 )
 from litellm.litellm_core_utils.litellm_logging import (
     StandardLoggingPayloadSetup,
-    UsageObservation,
     coerce_model_access_groups,
     is_valid_sha256_hash,
     request_model_access_groups_from_litellm_params,
@@ -592,7 +591,6 @@ def get_logging_payload(
     start_time: datetime,
     end_time: datetime,
     llm_router: "Router | None" = None,
-    capture_usage: Callable[[SpendLogsPayload, str | None], None] | None = None,
 ) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
@@ -649,10 +647,12 @@ def get_logging_payload(
             usage = _usage
 
     # A request that failed mid-stream has no usable response_obj usage, and a stream
-    # continued on a fallback only has the fallback's. combined_usage_object holds the
-    # usage of every call the client's answer took, so it wins in both cases.
+    # continued on a fallback or a success that bills a failed follow-up only has its own.
+    # combined_usage_object holds the usage of every call the row bills, so it wins in each case.
     _combined_usage: Final = kwargs.get("combined_usage_object")
-    if (not usage or "continued_partial_usage" in kwargs) and isinstance(_combined_usage, litellm.Usage):
+    if (
+        not usage or "continued_partial_usage" in kwargs or "failed_attempts_billed_on_success" in kwargs
+    ) and isinstance(_combined_usage, litellm.Usage):
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs, metadata)
@@ -980,14 +980,6 @@ def get_logging_payload(
             payload.get("spend"),
         )
 
-        if capture_usage is not None:
-            observed_usage: Final = (
-                StandardLoggingPayloadSetup.get_usage_as_dict({"usage": usage})
-                if usage and kwargs.get("_accounting_usage_observed") is not UsageObservation.UNKNOWN
-                else None
-            )
-            capture_usage(payload, safe_dumps(observed_usage) if observed_usage is not None else None)
-
         # Explicitly clear large intermediate objects to reduce memory pressure
         del response_obj_dict, usage, clean_metadata, additional_usage_values
 
@@ -1092,7 +1084,6 @@ async def _query_raw_rows(
     sql_query: str,
     *args: object,
 ) -> Sequence[Mapping[str, object]] | None:
-    """A raw ``LiteLLM_SpendLogs`` read that Postgres cancels at the statement timeout."""
     return await query_raw_within_statement_timeout(prisma_client, sql_query, *args)
 
 
