@@ -672,7 +672,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 model_response.model_copy(update=MappingProxyType({"choices": [choice]}))
                 for choice in model_response.choices
             )
-            if pre_guardrail_tool_calls and len(model_response.choices) > 1
+            if pre_guardrail_tool_calls
+            and len(model_response.choices) > 1
+            and guardrail_to_apply.inspects_choices_separately()
             else (model_response,)
         )
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
@@ -977,7 +979,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 )
                 if inspected is not None:
                     resolved_request_data["response"] = inspected
-                if inspected is not None and len(inspected.choices) > 1:
+                inspects_each: Final = guardrail_to_apply.inspects_choices_separately()
+                if inspected is not None and len(inspected.choices) > 1 and inspects_each:
                     choice_rounds: Final = tuple(
                         (
                             choice,

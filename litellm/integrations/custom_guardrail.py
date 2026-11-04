@@ -1136,6 +1136,16 @@ class CustomGuardrail(CustomLogger):
         """
         return True
 
+    def inspects_choices_separately(self) -> bool:
+        """Whether a stream's choices may be handed over one at a time.
+
+        An n>1 stream carrying tool calls is inspected choice by choice, so a guardrail reads
+        one candidate completion at a time instead of a response no provider would return. A
+        guardrail whose contract is the whole response, like a legacy post-call hook, overrides
+        this to return False and is handed every choice in one call.
+        """
+        return True
+
     def structured_messages_cover_full_request(self) -> bool:
         """Whether returned ``structured_messages`` span the whole request.
 

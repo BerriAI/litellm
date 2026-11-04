@@ -1683,6 +1683,48 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert [c["function"]["arguments"] for c in sent] == ['{"city": "Paris"}', '{"city": "Rome"}']
 
     @pytest.mark.asyncio
+    async def test_a_legacy_post_call_hook_sees_the_whole_response_once(self) -> None:
+        """The legacy hook's contract is one call with the response the route would have given it,
+        so the per-choice rounds, which exist for guardrails that read one choice at a time, do not
+        apply to it."""
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.policy_engine.pipeline_executor import _LegacyHookStreamAdapter
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class LegacyHookGuardrail(CustomGuardrail):
+            choice_counts: list[int] = []
+
+            async def async_post_call_success_hook(
+                self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+            ) -> None:
+                type(self).choice_counts.append(len(getattr(response, "choices", None) or ()))
+
+        LegacyHookGuardrail.choice_counts = []
+        handler: Final = OpenAIChatCompletionsHandler()
+        adapter: Final = _LegacyHookStreamAdapter(
+            LegacyHookGuardrail(guardrail_name="legacy"), handler, UserAPIKeyAuth(api_key="hashed-key")
+        )
+        chunks: Final = [ModelResponseStream(choices=[
+            StreamingChoices(
+                index=index,
+                delta=Delta(content="looking", tool_calls=[
+                    {"index": 0, "id": f"call_{index}", "type": "function",
+                     "function": {"name": "weather", "arguments": '{"city": "Paris"}'}},
+                ]),
+                finish_reason="tool_calls",
+            )
+            for index in (0, 1)
+        ])]
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=adapter,
+            litellm_logging_obj=None,
+            request_data={},
+            deliver_ended_stream_rewrites=True,
+        )
+        assert LegacyHookGuardrail.choice_counts == [2]
+
+    @pytest.mark.asyncio
     async def test_a_buffered_stream_that_carried_no_choices_is_not_an_error(self) -> None:
         """A stream can end carrying only usage, and a policy step still runs over it."""
         from litellm.types.utils import ModelResponseStream
