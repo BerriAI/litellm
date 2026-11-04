@@ -6044,7 +6044,7 @@ class PrismaClient:
         """
         stale_read_engine: Final = _StaleReadEngine.observe(self.read_db)
         try:
-            return await _query_first_row(self.db, sql_query, *args)
+            return await self.db.query_first(sql_query, *args)
         except Exception as e:
             if "cached plan must not change result type" not in str(e):
                 raise
@@ -6059,7 +6059,7 @@ class PrismaClient:
                 force_recreate=True,
                 stale_read_engine=stale_read_engine,
             )
-            return await _query_first_row(self.db, sql_query, *args)
+            return await self.db.query_first(sql_query, *args)
 
     @backoff.on_exception(
         backoff.expo,
