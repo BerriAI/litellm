@@ -84,7 +84,6 @@ def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
 
 
 def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
-    """Raise FipsModeError with the fips_mode_refusal reason, if there is one."""
     refusal: Final = fips_mode_refusal(general_settings)
     if refusal is not None:
         raise FipsModeError(refusal)
