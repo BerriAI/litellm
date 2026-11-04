@@ -1,12 +1,16 @@
 import asyncio
+import copy
 import json
 import sys
 import types
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import (
@@ -14,10 +18,15 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.realtime_errors import websocket_close_reason
 from litellm.llms.bedrock.common_utils import BedrockError
-from litellm.llms.bedrock.realtime.handler import BedrockRealtime
+from litellm.llms.bedrock.realtime.handler import BedrockRealtime, SessionEndSignals
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
 from litellm.realtime_api import main as realtime_main
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import StandardLoggingPayload, StandardLoggingPayloadErrorInformation
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 
@@ -34,6 +43,66 @@ def _isolate_host_aws_config(monkeypatch, tmp_path):
         "AWS_DEFAULT_REGION",
     ):
         monkeypatch.delenv(env_var, raising=False)
+
+
+def _closing_input() -> SessionEndSignals:
+    signals: Final = SessionEndSignals()
+    signals.input_closing.set()
+    return signals
+
+
+_SPEND_ROW_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_ERROR_INFORMATION_ADAPTER: Final = TypeAdapter(StandardLoggingPayloadErrorInformation | None)
+_BEDROCK_INPUT_CHUNK_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, object]])
+_STANDARD_LOGGING_PAYLOAD_ADAPTER: Final = TypeAdapter(StandardLoggingPayload)
+
+
+def _spend_row(
+    logging_obj: "FakeLogging | LiteLLMLogging",
+) -> tuple[Literal["success", "failure"], StandardLoggingPayloadErrorInformation | None]:
+    return _spend_row_of(logging_obj.model_call_details)
+
+
+def _spend_row_of(
+    model_call_details: dict[str, object],
+) -> tuple[Literal["success", "failure"], StandardLoggingPayloadErrorInformation | None]:
+    now: Final = datetime.now(timezone.utc)
+    row: Final = get_logging_payload(kwargs=model_call_details, response_obj=None, start_time=now, end_time=now)
+    metadata: Final = _SPEND_ROW_METADATA_ADAPTER.validate_json(row["metadata"])
+    return row["status"], _ERROR_INFORMATION_ADAPTER.validate_python(metadata.get("error_information"))
+
+
+class LoggedEventRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: Final[list[tuple[Literal["success", "failure"], dict[str, object]]]] = []
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.events.append(("success", dict(kwargs)))
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.events.append(("failure", dict(kwargs)))
+
+    def payload(self, event: Literal["success", "failure"]) -> StandardLoggingPayload:
+        (logged,) = (kwargs for logged_event, kwargs in self.events if logged_event == event)
+        return _STANDARD_LOGGING_PAYLOAD_ADAPTER.validate_python(logged["standard_logging_object"])
+
+
+class HeldSuccessLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.entered.set()
+        await self.release.wait()
 
 
 class FakePayloadPart:
@@ -85,6 +154,19 @@ class HangingCloseInputStream(FakeInputStream):
         await asyncio.Future()
 
 
+class BodyWriterInputStream(FakeInputStream):
+    """Models the SDK input stream, whose request-body writer task only finishes once the stream is closed"""
+
+    def __init__(self):
+        super().__init__()
+        self._close_requested = asyncio.Event()
+        self.body_writer = asyncio.get_running_loop().create_task(self._close_requested.wait())
+
+    async def close(self):
+        await super().close()
+        self._close_requested.set()
+
+
 class FakeBedrockStream:
     def __init__(self, input_stream=None):
         self.input_stream = input_stream if input_stream is not None else FakeInputStream()
@@ -124,6 +206,11 @@ class FakeLogging:
         self.litellm_trace_id = trace_id
         self.model_call_details = {}
 
+    def attempt_scoped_copy(self):
+        attempt = copy.copy(self)
+        attempt.model_call_details = dict(self.model_call_details)
+        return attempt
+
 
 class DisconnectingClientWS:
     def __init__(self, messages):
@@ -159,12 +246,15 @@ class EndedBedrockStream:
 
 
 class RealtimeClientWS:
-    def __init__(self):
+    def __init__(self, messages=()):
         self.closed = False
         self.sent_to_client = []
         self.scope = {}
+        self._messages = list(messages)
 
     async def receive_text(self):
+        if self._messages:
+            return self._messages.pop(0)
         raise RuntimeError("client disconnected")
 
     async def send_text(self, message):
@@ -178,8 +268,7 @@ class ConnectedClientWS(RealtimeClientWS):
     """Client that sends its scripted messages and then stays connected until the server closes it"""
 
     def __init__(self, messages):
-        super().__init__()
-        self._messages = list(messages)
+        super().__init__(messages)
         self._closed_event = asyncio.Event()
 
     async def receive_text(self):
@@ -249,6 +338,77 @@ class ScriptedBedrockStream:
 
     async def await_output(self):
         return (None, self._receiver)
+
+
+def _sent_event_names(input_stream: FakeInputStream) -> list[str]:
+    return [
+        next(iter(_BEDROCK_INPUT_CHUNK_ADAPTER.validate_json(chunk.value.bytes_)["event"]))
+        for chunk in input_stream.sent
+    ]
+
+
+class SessionEndingInputStream(FakeInputStream):
+    def __init__(self):
+        super().__init__()
+        self.session_ended = asyncio.Event()
+
+    async def send(self, event):
+        await super().send(event)
+        if "sessionEnd" in json.loads(event.value.bytes_.decode("utf-8")).get("event", {}):
+            self.session_ended.set()
+
+    async def close(self):
+        await super().close()
+        self.session_ended.set()
+
+
+class SlowClosingInputStream(SessionEndingInputStream):
+    async def close(self):
+        await asyncio.Event().wait()
+
+
+class OutputEndsAfterSessionEndReceiver(ScriptedBedrockReceiver):
+    def __init__(self, payloads, session_ended):
+        super().__init__(payloads)
+        self._session_ended = session_ended
+
+    async def receive(self):
+        if not self._payloads:
+            await self._session_ended.wait()
+        return await super().receive()
+
+
+class SessionBoundBedrockStream:
+    def __init__(self, payloads=(), input_stream_type=SessionEndingInputStream):
+        self.input_stream = input_stream_type()
+        self._receiver = OutputEndsAfterSessionEndReceiver(payloads, self.input_stream.session_ended)
+
+    async def await_output(self):
+        return (None, self._receiver)
+
+
+class ConnectionResetOnAudioInputStream(FakeInputStream):
+    def __init__(self, connection_reset):
+        super().__init__()
+        self._connection_reset = connection_reset
+
+    async def send(self, event):
+        await asyncio.sleep(0)
+        if self._connection_reset.is_set() or "audioInput" in json.loads(event.value.bytes_.decode("utf-8"))["event"]:
+            self._connection_reset.set()
+            raise RuntimeError("bedrock connection reset")
+        self.sent.append(event)
+
+
+class OutputEndsAfterConnectionResetReceiver(ScriptedBedrockReceiver):
+    def __init__(self, payloads, connection_reset):
+        super().__init__(payloads)
+        self._connection_reset = connection_reset
+
+    async def receive(self):
+        if not self._payloads:
+            await self._connection_reset.wait()
+        return await super().receive()
 
 
 class FakeAWSCredentialsIdentity:
@@ -352,7 +512,7 @@ def stub_aws_sdk_client(monkeypatch):
                     raise stream
                 captured["open_stream"] = stream
                 return stream
-            stream = ScriptedBedrockStream(captured.get("scripted_payloads", []))
+            stream = SessionBoundBedrockStream(captured.get("scripted_payloads", []))
             captured["open_stream"] = stream
             return stream
 
@@ -407,7 +567,9 @@ class TestBedrockRealtimeHandler:
             [json.dumps({"type": "session.update", "session": {"instructions": "You are helpful."}})]
         )
 
-        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
+        )
 
         sent_events = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent]
         event_names = [next(iter(event["event"])) for event in sent_events]
@@ -422,7 +584,7 @@ class TestBedrockRealtimeHandler:
         stream = FakeBedrockStream()
 
         await handler._forward_client_to_bedrock(
-            DisconnectingClientWS([]), stream, config, "amazon.nova-sonic-v1:0", {}
+            DisconnectingClientWS([]), stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
         )
 
         assert stream.input_stream.sent == []
@@ -437,9 +599,13 @@ class TestBedrockRealtimeHandler:
             [json.dumps({"type": "session.update", "session": {"instructions": "You are helpful."}})]
         )
 
-        with pytest.raises(RuntimeError, match="bedrock send failed"):
-            await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+        with pytest.raises(BedrockError) as failure:
+            await handler._forward_client_to_bedrock(
+                client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
+            )
 
+        assert failure.value.status_code == 503
+        assert str(failure.value.__cause__) == "bedrock send failed"
         assert stream.input_stream.closed
 
     @pytest.mark.asyncio
@@ -452,7 +618,10 @@ class TestBedrockRealtimeHandler:
         )
 
         await asyncio.wait_for(
-            handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}), 2
+            handler._forward_client_to_bedrock(
+                client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
+            ),
+            2,
         )
 
         assert not stream.input_stream.closed
@@ -466,7 +635,9 @@ class TestBedrockRealtimeHandler:
             [json.dumps({"type": "session.update", "session": {"instructions": "You are helpful."}})]
         )
 
-        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
+        )
 
         sent_events = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent]
         event_names = [next(iter(event["event"])) for event in sent_events]
@@ -495,6 +666,7 @@ class TestBedrockRealtimeHandler:
                 "amazon.nova-sonic-v1:0",
                 FakeLogging(),
                 {},
+                signals=_closing_input(),
             )
         ]
 
@@ -526,6 +698,7 @@ class TestBedrockRealtimeHandler:
                 "amazon.nova-sonic-v1:0",
                 FakeLogging(),
                 {},
+                signals=_closing_input(),
             )
         ]
 
@@ -597,6 +770,7 @@ class TestBedrockRealtimeHandler:
             "amazon.nova-sonic-v1:0",
             MagicMock(),
             {},
+            signals=_closing_input(),
         ):
             pass
 
@@ -656,7 +830,9 @@ class TestBedrockRealtimeSessionLifecycle:
             [json.dumps({"type": "session.update", "session": {"instructions": "hi", "modalities": ["text"]}})]
         )
 
-        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging())
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging(), signals=SessionEndSignals()
+        )
 
         acked = [json.loads(message) for message in client_ws.sent_to_client]
         updated = [event for event in acked if event["type"] == "session.updated"]
@@ -670,7 +846,9 @@ class TestBedrockRealtimeSessionLifecycle:
         stream = FakeBedrockStream()
         client_ws = DisconnectingClientWS([json.dumps({"type": "session.update", "session": {"instructions": "hi"}})])
 
-        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, signals=SessionEndSignals()
+        )
 
         assert client_ws.sent_to_client == []
 
@@ -693,7 +871,9 @@ class TestBedrockRealtimeSessionLifecycle:
         stream = FakeBedrockStream()
         client_ws = DisconnectingClientWS([update([tool]), update([other_tool]), update([tool])])
 
-        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging())
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging(), signals=SessionEndSignals()
+        )
 
         acked: Final = [json.loads(message) for message in client_ws.sent_to_client]
         assert [event["type"] for event in acked] == ["session.updated", "error", "session.updated"]
@@ -720,10 +900,10 @@ class TestBedrockRealtimeSessionLifecycle:
     async def test_malformed_setting_is_rejected_or_dropped_and_the_session_still_answers(
         self, stub_aws_sdk_client, session, drop_params, expected_errors
     ):
-        stream: Final = ScriptedBedrockStream([])
+        stream: Final = SessionBoundBedrockStream()
         stub_aws_sdk_client["streams"] = [stream]
         user_text: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
-        websocket: Final = ConnectedClientWS(
+        websocket: Final = RealtimeClientWS(
             [
                 json.dumps({"type": "session.update", "session": session}),
                 json.dumps({"type": "conversation.item.create", "item": user_text}),
@@ -761,8 +941,8 @@ class TestBedrockRealtimeProviderFailurePropagation:
     @pytest.mark.asyncio
     async def test_readiness_failure_escapes_and_fallback_replays_session_update(self, stub_aws_sdk_client):
         handler = BedrockRealtime()
-        websocket = ConnectedClientWS([self.SESSION_UPDATE])
-        healthy_stream = ScriptedBedrockStream([])
+        websocket = RealtimeClientWS([self.SESSION_UPDATE])
+        healthy_stream = SessionBoundBedrockStream()
         eager_failure = ServiceUnavailableException("fault injected before the stream was returned")
         stub_aws_sdk_client["streams"] = [UnavailableBedrockStream(), eager_failure, healthy_stream]
 
@@ -848,9 +1028,6 @@ class TestBedrockRealtimeProviderFailurePropagation:
         await spend_dispatch["coro"]
         assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
         assert "response.done" in [json.loads(m)["type"] for m in websocket.sent_to_client]
-        flushed = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent]
-        assert [next(iter(event["event"])) for event in flushed][-2:] == ["promptEnd", "sessionEnd"]
-        assert stream.input_stream.closed
 
         with pytest.raises(BedrockError) as replay:
             await handler.async_realtime(
@@ -877,8 +1054,8 @@ class TestBedrockRealtimeProviderFailurePropagation:
     @pytest.mark.asyncio
     async def test_readiness_failure_on_an_input_first_start_replays_the_input(self, stub_aws_sdk_client):
         handler = BedrockRealtime()
-        websocket = ConnectedClientWS([self.USER_TEXT])
-        healthy_stream = ScriptedBedrockStream([])
+        websocket = RealtimeClientWS([self.USER_TEXT])
+        healthy_stream = SessionBoundBedrockStream()
         stub_aws_sdk_client["streams"] = [UnavailableBedrockStream(), healthy_stream]
 
         with pytest.raises(BedrockError) as failure:
@@ -907,7 +1084,7 @@ class TestBedrockRealtimeProviderFailurePropagation:
             [self.SESSION_UPDATE, json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"})]
         )
 
-        with pytest.raises(RuntimeError, match="bedrock input stream reset"):
+        with pytest.raises(BedrockError) as failure:
             await BedrockRealtime().async_realtime(
                 model="amazon.nova-sonic-v1:0",
                 websocket=websocket,
@@ -915,6 +1092,8 @@ class TestBedrockRealtimeProviderFailurePropagation:
                 **self.AWS_PARAMS,
             )
 
+        assert failure.value.status_code == 503
+        assert str(failure.value.__cause__) == "bedrock input stream reset", "the proxy log keeps the reset's cause"
         assert "response.done" in [json.loads(m)["type"] for m in websocket.sent_to_client]
         await spend_dispatch["coro"]
         assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
@@ -923,10 +1102,10 @@ class TestBedrockRealtimeProviderFailurePropagation:
     async def test_success_dispatch_stamps_the_ownership_marker_only_when_spend_was_logged(
         self, stub_aws_sdk_client, spend_dispatch
     ):
-        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream(self.TEXT_TURN)]
+        stub_aws_sdk_client["streams"] = [SessionBoundBedrockStream(self.TEXT_TURN)]
         await BedrockRealtime().async_realtime(
             model="amazon.nova-sonic-v1:0",
-            websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+            websocket=RealtimeClientWS([self.SESSION_UPDATE]),
             logging_obj=spend_dispatch["logging_obj"],
             **self.AWS_PARAMS,
         )
@@ -935,14 +1114,314 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert spend_dispatch["logging_obj"].model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
 
         idle_logging = FakeLogging()
-        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream([])]
+        stub_aws_sdk_client["streams"] = [SessionBoundBedrockStream()]
         await BedrockRealtime().async_realtime(
             model="amazon.nova-sonic-v1:0",
-            websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+            websocket=RealtimeClientWS([self.SESSION_UPDATE]),
             logging_obj=idle_logging,
             **self.AWS_PARAMS,
         )
         assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in idle_logging.model_call_details
+
+    @pytest.mark.asyncio
+    async def test_bedrock_stream_ending_mid_session_fails_the_session_and_keeps_partial_spend(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        handler: Final = BedrockRealtime()
+        websocket: Final = ConnectedClientWS([self.SESSION_UPDATE])
+        stream: Final = ScriptedBedrockStream(self.TEXT_TURN)
+        stub_aws_sdk_client["streams"] = [stream]
+        logging_obj: Final = spend_dispatch["logging_obj"]
+        request_metadata: Final = {"user_api_key": "hashed-key"}
+        logging_obj.model_call_details["litellm_params"] = {"litellm_metadata": request_metadata}
+
+        with pytest.raises(BedrockError) as failure:
+            await handler.async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+
+        assert failure.value.status_code == 503
+        assert not websocket.closed, "the proxy route owns the client-facing error event and 1011 close"
+        assert "response.done" in [json.loads(m)["type"] for m in websocket.sent_to_client]
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+        status, error_information = _spend_row(logging_obj)
+        assert status == "failure", "the Logs page must show the dropped session as failed while it bills its turn"
+        assert error_information is not None
+        assert error_information.get("error_code") == "503"
+        assert error_information.get("error_message") == failure.value.message
+        assert request_metadata == {"user_api_key": "hashed-key"}, "the request's own metadata stays as it was sent"
+
+        with pytest.raises(BedrockError) as replay:
+            await handler.async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+
+        assert replay.value.status_code == 400, "a router retry must not restart the dropped session"
+        assert str(replay.value).startswith(failure.value.message), "the app's error event leads with the drop"
+        assert websocket_close_reason(str(replay.value), fallback="Internal server error").startswith(
+            failure.value.message
+        ), "the length-capped 1011 close reason must still carry the drop"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("receiver_type", "status_code"),
+        [(ScriptedBedrockReceiver, 503), (BreakingBedrockReceiver, 424)],
+        ids=["output-ends", "output-raises"],
+    )
+    async def test_a_failed_bedrock_output_reaches_the_app_without_waiting_on_the_input_close(
+        self, stub_aws_sdk_client, spend_dispatch, receiver_type, status_code: int
+    ):
+        stream: Final = ScriptedBedrockStream(self.TEXT_TURN, receiver_type=receiver_type)
+        stream.input_stream = HangingCloseInputStream()
+        stub_aws_sdk_client["streams"] = [stream]
+
+        with pytest.raises(BedrockError) as failure:
+            await asyncio.wait_for(
+                BedrockRealtime(close_timeout=30).async_realtime(
+                    model="amazon.nova-sonic-v1:0",
+                    websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                    logging_obj=spend_dispatch["logging_obj"],
+                    **self.AWS_PARAMS,
+                ),
+                timeout=5,
+            )
+
+        assert failure.value.status_code == status_code
+        assert stub_aws_sdk_client["client_closed"], "closing the SDK client still tears the dead stream down"
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("receiver_type", "status_code"),
+        [(ScriptedBedrockReceiver, 503), (BreakingBedrockReceiver, 424)],
+        ids=["output-ends", "output-raises"],
+    )
+    async def test_a_failed_bedrock_output_leaves_no_pending_input_writer(
+        self, stub_aws_sdk_client, spend_dispatch, receiver_type, status_code: int
+    ):
+        stream: Final = ScriptedBedrockStream(self.TEXT_TURN, receiver_type=receiver_type)
+        stream.input_stream = BodyWriterInputStream()
+        stub_aws_sdk_client["streams"] = [stream]
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=spend_dispatch["logging_obj"],
+                **self.AWS_PARAMS,
+            )
+
+        assert failure.value.status_code == status_code
+        await asyncio.wait_for(stream.input_stream.body_writer, timeout=1)
+        await spend_dispatch["coro"]
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_session_logs_one_success_usage_record_and_a_failed_spend_row(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream(self.TEXT_TURN)]
+        recorder: Final = LoggedEventRecorder()
+        logging_obj: Final = LiteLLMLogging(
+            model="amazon.nova-sonic-v1:0",
+            messages=[],
+            stream=False,
+            call_type="_arealtime",
+            start_time=datetime.now(),
+            litellm_call_id="nova-sonic-drop",
+            function_id="nova-sonic-drop",
+            dynamic_async_success_callbacks=[recorder],
+        )
+        logging_obj.update_from_kwargs(
+            kwargs={"litellm_metadata": {"user_api_key": "hashed-key"}},
+            model="amazon.nova-sonic-v1:0",
+            optional_params={},
+            litellm_params={"_arealtime": True},
+            custom_llm_provider="bedrock",
+        )
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+        await spend_dispatch["coro"]
+
+        assert failure.value.status_code == 503
+        ((logged_event, usage_kwargs),) = recorder.events
+        assert logged_event == "success"
+        usage_record: Final = recorder.payload("success")
+        assert usage_record["status"] == "success", "the router's failure event is each logger's one error record"
+        assert [event["type"] for event in usage_record["response"]["results"]] == ["response.done"]
+        assert logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+        status, error_information = _spend_row_of(usage_kwargs)
+        assert status == "failure"
+        assert error_information is not None
+        assert error_information.get("error_code") == "503"
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_session_bills_its_usage_to_loggers_while_the_failure_event_runs(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        usage_event: Final = json.dumps(
+            {"event": {"usageEvent": {"totalInputTokens": 1000, "totalOutputTokens": 50, "totalTokens": 1050}}}
+        )
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream((*self.TEXT_TURN, usage_event))]
+        held: Final = HeldSuccessLogger()
+        recorder: Final = LoggedEventRecorder()
+        logging_obj: Final = LiteLLMLogging(
+            model="amazon.nova-2-5-sonic",
+            messages=[],
+            stream=False,
+            call_type="_arealtime",
+            start_time=datetime.now(),
+            litellm_call_id="nova-sonic-drop-order",
+            function_id="nova-sonic-drop-order",
+            dynamic_async_success_callbacks=[held, recorder],
+            dynamic_async_failure_callbacks=[recorder],
+        )
+        logging_obj.update_from_kwargs(
+            kwargs={"litellm_metadata": {"user_api_key": "hashed-key"}},
+            model="amazon.nova-2-5-sonic",
+            optional_params={},
+            litellm_params={"_arealtime": True},
+            custom_llm_provider="bedrock",
+        )
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-2-5-sonic",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+        success_dispatch: Final = asyncio.create_task(spend_dispatch["coro"])
+        await asyncio.wait_for(held.entered.wait(), timeout=5)
+        logging_obj.failure_handler(failure.value, "", logging_obj.start_time, datetime.now(), for_async_request=True)
+        await logging_obj.async_failure_handler(failure.value, "", logging_obj.start_time, datetime.now())
+        held.release.set()
+        await success_dispatch
+
+        usage_record: Final = recorder.payload("success")
+        assert recorder.payload("failure")["status"] == "failure"
+        assert usage_record["status"] == "success"
+        assert usage_record["total_tokens"] == 1050
+        assert usage_record["response_cost"] > 0
+        ((_, usage_kwargs),) = (logged for logged in recorder.events if logged[0] == "success")
+        status, _ = _spend_row_of(usage_kwargs)
+        assert status == "failure"
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_session_without_request_metadata_still_fails_and_bills_its_turn(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream(self.TEXT_TURN)]
+        logging_obj: Final = spend_dispatch["logging_obj"]
+        logging_obj.model_call_details["litellm_params"] = {"litellm_metadata": None, "metadata": {}}
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+        await spend_dispatch["coro"]
+
+        assert failure.value.status_code == 503
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("receiver_type", "status_code"),
+        [(ScriptedBedrockReceiver, 503), (BreakingBedrockReceiver, 424)],
+        ids=["output-ends", "output-raises"],
+    )
+    async def test_a_session_bedrock_fails_before_any_logged_event_dispatches_no_success(
+        self, stub_aws_sdk_client, spend_dispatch, receiver_type, status_code: int
+    ):
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream((), receiver_type=receiver_type)]
+        logging_obj: Final = spend_dispatch["logging_obj"]
+        logging_obj.model_call_details["litellm_params"] = {"litellm_metadata": {"user_api_key": "hashed-key"}}
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+
+        assert failure.value.status_code == status_code
+        assert "coro" not in spend_dispatch, "a failed session with no usage gets no success event, as on base"
+        assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in logging_obj.model_call_details
+
+    @pytest.mark.asyncio
+    async def test_bedrock_output_ending_right_after_session_end_is_a_clean_finish(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        stream: Final = SessionBoundBedrockStream(self.TEXT_TURN, input_stream_type=SlowClosingInputStream)
+        stub_aws_sdk_client["streams"] = [stream]
+        websocket: Final = RealtimeClientWS([self.SESSION_UPDATE])
+        spend_dispatch["logging_obj"].model_call_details["litellm_params"] = {
+            "litellm_metadata": {"user_api_key": "hashed-key"}
+        }
+
+        await asyncio.wait_for(
+            BedrockRealtime(close_timeout=30).async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=spend_dispatch["logging_obj"],
+                **self.AWS_PARAMS,
+            ),
+            timeout=5,
+        )
+
+        assert _sent_event_names(stream.input_stream)[-1] == "sessionEnd"
+        assert not stream.input_stream.closed, "the input close must still be pending when the output ends"
+        assert websocket.closed
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+        assert spend_dispatch["logging_obj"].model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+        assert _spend_row(spend_dispatch["logging_obj"]) == ("success", None)
+
+    @pytest.mark.asyncio
+    async def test_bedrock_output_ending_after_the_input_side_failed_still_fails_the_session(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        connection_reset: Final = asyncio.Event()
+        stream: Final = ScriptedBedrockStream(
+            self.TEXT_TURN,
+            receiver_type=lambda payloads: OutputEndsAfterConnectionResetReceiver(payloads, connection_reset),
+        )
+        stream.input_stream = ConnectionResetOnAudioInputStream(connection_reset)
+        stub_aws_sdk_client["streams"] = [stream]
+        websocket: Final = ConnectedClientWS([self.SESSION_UPDATE, self.USER_AUDIO])
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=spend_dispatch["logging_obj"],
+                **self.AWS_PARAMS,
+            )
+
+        assert (failure.value.status_code, failure.value.message) == (
+            503,
+            "Bedrock realtime stream ended before the session closed",
+        ), "the app sees one cause whichever side of the stream reports the reset first"
+        assert not websocket.closed, "the proxy route owns the client-facing error event and 1011 close"
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
 
     @pytest.mark.asyncio
     async def test_stream_failure_after_client_disconnect_is_not_a_provider_failure(self, stub_aws_sdk_client):
@@ -982,7 +1461,13 @@ class TestBedrockRealtimeProviderFailurePropagation:
 
         with pytest.raises(ServiceUnavailableException):
             await handler._forward_client_to_bedrock(
-                client_ws, stream, BedrockRealtimeConfig(), "amazon.nova-sonic-v1:0", {}, FakeLogging()
+                client_ws,
+                stream,
+                BedrockRealtimeConfig(),
+                "amazon.nova-sonic-v1:0",
+                {},
+                FakeLogging(),
+                signals=SessionEndSignals(),
             )
 
         assert client_ws.sent_to_client == []
@@ -1128,7 +1613,6 @@ class TestBedrockRealtimeSdkLifecycle:
             )
 
         assert stub_aws_sdk_client["client_closed"]
-        assert stub_aws_sdk_client["input_closed_before_client_close"]
 
     @pytest.mark.asyncio
     async def test_client_without_close_completes_session(self, monkeypatch):

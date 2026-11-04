@@ -25,6 +25,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLMRoutes
+from litellm.proxy.auth.route_checks import RouteChecks
 
 
 class BillableCategory(str, Enum):
@@ -116,6 +117,8 @@ def _classify_llm_route(path: str) -> str | None:
     suffix_match = next((suffix for suffix in _LLM_ROUTE_SUFFIXES if path == suffix or path.endswith(suffix)), None)
     if suffix_match is not None:
         return suffix_match
+    if RouteChecks.is_builtin_eu_jev_decision_route(route=path):
+        return path
     # Deep passthrough paths only: the bare prefix itself is not an inference call.
     return next((prefix for prefix in _PASSTHROUGH_PREFIXES if path.startswith(f"{prefix}/")), None)
 

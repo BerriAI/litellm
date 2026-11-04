@@ -18,8 +18,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy._experimental.mcp_server.oauth_utils import get_request_base_url
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.mcp_server.oauth_utils import get_request_base_url
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
@@ -122,7 +122,7 @@ def _cookie_name(token: str) -> str:
 
 
 async def _session_user(request: Request) -> str | None:
-    from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import (
         get_authenticated_browser_user_id,
     )
 

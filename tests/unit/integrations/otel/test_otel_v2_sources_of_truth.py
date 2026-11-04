@@ -38,6 +38,7 @@ from litellm.integrations.otel.model.payloads import (
     RequestIdentity,
     _upstream_address_port,
 )
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     LiteLLMSpanKind,
@@ -221,6 +222,16 @@ def test_operation_resolution():
     assert resolve_operation(None) is GenAIOperation.CHAT
     # An MCP tool call is an ``execute_tool`` operation, not a chat completion.
     assert resolve_operation("call_mcp_tool") is GenAIOperation.EXECUTE_TOOL
+
+
+def test_passthrough_operation_wins_over_the_call_type() -> None:
+    assert resolve_operation("pass_through_endpoint", GenAIOperation.RETRIEVAL) is GenAIOperation.RETRIEVAL
+    assert resolve_operation("pass_through_endpoint", "retrieval") is GenAIOperation.CHAT
+    event: Final = LLMCallEvent.from_dict(
+        {"call_type": "pass_through_endpoint", "model": "unknown", PASSTHROUGH_OPERATION_KEY: GenAIOperation.RETRIEVAL}
+    )
+    assert event.operation is GenAIOperation.RETRIEVAL
+    assert event.provisional_span_name == "retrieval unknown"
 
 
 @pytest.mark.parametrize("call_type", ["vector_store_search", "avector_store_search"])

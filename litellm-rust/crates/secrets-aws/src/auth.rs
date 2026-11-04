@@ -79,9 +79,7 @@ impl ProvideCredentials for Credentials {
             self.auth
                 .resolve_credentials(self.config.clone(), &|name| self.environment.get(name))
                 .await
-                .map_err(|_| {
-                    CredentialsError::provider_error("secret manager authentication failed")
-                })
+                .map_err(CredentialsError::provider_error)
         })
     }
 }

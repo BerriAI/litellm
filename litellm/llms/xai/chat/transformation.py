@@ -1,3 +1,4 @@
+import copy
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
 from typing import Any, Final
@@ -208,7 +209,8 @@ class XAIChatConfig(OpenAIGPTConfig):
                 tools = [
                     filtered_tool
                     for filtered_tool in (
-                        _FILTERED_TOOL.validate_python(filter_value_from_dict(tool, "strict")) for tool in value
+                        _FILTERED_TOOL.validate_python(filter_value_from_dict(copy.deepcopy(tool), "strict"))  # pyright: ignore[reportUnknownArgumentType]  # tools arrive untyped through the bare-dict params
+                        for tool in value
                     )
                     if filtered_tool is not None
                 ]

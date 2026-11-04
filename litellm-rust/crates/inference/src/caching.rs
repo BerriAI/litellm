@@ -377,5 +377,66 @@ async fn publish(
             facts: facts.clone(),
         }));
     }
-    interceptors.result_ready(facts).await
+    let from_provider = facts.source == ResultSource::Provider;
+    interceptors.result_ready(facts).await.map_err(|error| {
+        if from_provider {
+            Error::post_call(error)
+        } else {
+            error
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use litellm_core_utils::decline::Decline;
+    use litellm_host::interceptors::{RawResponse, RequestContext, WireRequest};
+
+    use super::*;
+
+    struct RejectResult;
+
+    impl Interceptors<Error> for RejectResult {
+        async fn before_provider_request(
+            &self,
+            wire: WireRequest,
+            _: RequestContext,
+        ) -> Result<WireRequest, Error> {
+            Ok(wire)
+        }
+
+        async fn after_provider_response(&self, _: RawResponse) -> Result<(), Error> {
+            Ok(())
+        }
+
+        async fn result_ready(&self, _: ExecutionFacts) -> Result<(), Error> {
+            Err(Error::Declined(Decline::new("result rejected")))
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::provider(ResultSource::Provider, false)]
+    #[case::cache(ResultSource::Cache { key: "cached".into() }, true)]
+    #[tokio::test]
+    async fn result_rejection_only_declines_without_a_provider_call(
+        #[case] source: ResultSource,
+        #[case] may_decline: bool,
+    ) {
+        let facts = ExecutionFacts {
+            provider: ProviderIdentity {
+                model: "model".into(),
+                provider: "provider".into(),
+            },
+            cost: Cost::settle(&source, None),
+            source,
+        };
+        let error = publish(facts, &RejectResult, None).await.unwrap_err();
+        assert_eq!(error.declined().is_some(), may_decline);
+        assert_eq!(error.dispatched(), !may_decline);
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("result rejected")
+        );
+    }
 }

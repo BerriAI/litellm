@@ -279,7 +279,11 @@ def cooldown_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Cooldown
                 upstream,
                 directory,
                 {"PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2"},
-                config=cooldown_config(directory, router_settings(cache, allowed_fails=0), prometheus=False),
+                config=cooldown_config(
+                    directory,
+                    router_settings(cache, allowed_fails=0, allowed_fails_policy={"TimeoutErrorAllowedFails": 0}),
+                    prometheus=False,
+                ),
             )
         )
         yield _CooldownRig(owned.gateway, cache)

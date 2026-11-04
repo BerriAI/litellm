@@ -28,7 +28,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import AWSEventStreamDecoder, SagemakerError
+from ..common_utils import INFERENCE_COMPONENT_HEADER, OBJECT_KEYED_MAPPING, AWSEventStreamDecoder, SagemakerError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -59,7 +59,12 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         inference_component_name: Final = optional_params.get("model_id")
         if not isinstance(inference_component_name, str):
             return headers
-        return {**headers, "X-Amzn-SageMaker-Inference-Component": inference_component_name}
+        other_headers: Final = {
+            name: value
+            for name, value in OBJECT_KEYED_MAPPING.validate_python(headers).items()
+            if not isinstance(name, str) or name.lower() != INFERENCE_COMPONENT_HEADER.lower()
+        }
+        return {**other_headers, INFERENCE_COMPONENT_HEADER: inference_component_name}
 
     def transform_request(
         self,
@@ -76,9 +81,8 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             litellm_params=litellm_params,
             headers=headers,
         )
-        container_request: Final = {
-            key: value for key, value in request.items() if key not in self.aws_authentication_params
-        }
+        header_only_params: Final = frozenset((*self.aws_authentication_params, "model_id"))
+        container_request: Final = {key: value for key, value in request.items() if key not in header_only_params}
         served_model_name: Final = litellm_params.get("hf_model_name")
         if not isinstance(served_model_name, str):
             return container_request

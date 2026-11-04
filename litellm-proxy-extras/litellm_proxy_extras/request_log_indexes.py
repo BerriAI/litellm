@@ -18,6 +18,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from litellm_proxy_extras._logging import logger
+from litellm_proxy_extras.migration_data_checks import (
+    checks_for_index,
+    find_blockers,
+    migration_data_check_timeout_seconds,
+    report,
+)
 from litellm_proxy_extras.migration_lock import held_migration_lock
 
 if TYPE_CHECKING:
@@ -355,6 +361,12 @@ def _build_leaf_index(
             connection.execute(sql.SQL("DROP INDEX CONCURRENTLY {}").format(sql.Identifier(schema, name)))
         elif _adopt_equivalent_index(connection, schema, table, name, index):
             return True
+        blockers: Final = find_blockers(
+            connection, schema, checks_for_index(table, name, index.columns), migration_data_check_timeout_seconds()
+        )
+        if blockers:
+            logger.warning("Not building index %s on %s. %s", name, table, report(blockers))
+            return False
         logger.info("Building index %s on %s concurrently", name, table)
         prefix: Final = sql.SQL("CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ").format(
             sql.Identifier(name), sql.Identifier(schema, table)
