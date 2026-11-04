@@ -615,11 +615,17 @@ def cost_per_token(
         )
         if per_second is not None:
             return per_second
+        if custom_llm_provider == "anthropic":
+            return anthropic_cost_per_token(
+                model=model, usage=usage_block, service_tier=service_tier, model_info=requested_model_info_override
+            )
         return generic_cost_per_token(
             model=model,
             usage=usage_block,
             custom_llm_provider=custom_llm_provider or "",
             service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
             model_info=requested_model_info_override,
         )
 
