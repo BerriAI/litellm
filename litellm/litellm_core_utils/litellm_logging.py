@@ -81,7 +81,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_param
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, served_from_cache, set_hidden_param
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
@@ -2504,7 +2504,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if entry is None or not is_str_keyed_dict(litellm_params):
             return
         metadata: Final[object] = litellm_params.get("metadata")
-        bucket: Final = metadata if is_str_keyed_dict(metadata) else {}
+        bucket: Final = {**metadata} if is_str_keyed_dict(metadata) else {}
         litellm_params["metadata"] = bucket
         with_guardrail_entry(bucket, entry)
 
