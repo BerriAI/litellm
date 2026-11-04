@@ -5318,3 +5318,150 @@ async def test_apply_guardrail_raises_on_flagged_when_not_logging_only():
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     flagged = [e for e in entries if e["guardrail_status"] == "guardrail_flagged"]
     assert len(flagged) == 1
+
+
+_RAI_MATCH = {"sanitizationResult": {"filterResults": {"rai": {"raiFilterResult": {"matchState": "MATCH_FOUND"}}}}}
+_NO_MATCH = {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND", "filterResults": {}}}
+_MASKED = {
+    "sanitizationResult": {
+        "filterResults": {
+            "sdp": {
+                "sdpFilterResult": {
+                    "deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": "call me at [REDACTED]"}}
+                }
+            }
+        }
+    }
+}
+
+
+def _responses_guardrail(armor_response: dict, **kwargs) -> ModelArmorGuardrail:
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        **kwargs,
+    )
+    guardrail.should_run_guardrail = Mock(return_value=True)
+    guardrail.make_model_armor_request = AsyncMock(return_value=armor_response)
+    return guardrail
+
+
+async def _run_pre_call(guardrail: ModelArmorGuardrail, data: dict) -> dict:
+    return await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=MagicMock(spec=DualCache),
+        data=data,
+        call_type="responses",
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_armor_responses_string_input_is_scanned_and_blocked():
+    """A Responses API request has `input`, not `messages`, and must not skip the scan."""
+    guardrail = _responses_guardrail(_RAI_MATCH)
+    data = {"model": "gpt-4", "input": "synthetic harmful prompt", "metadata": {}}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run_pre_call(guardrail, data)
+
+    assert exc_info.value.status_code == 400
+    assert guardrail.make_model_armor_request.await_args.kwargs["content"] == "synthetic harmful prompt"
+
+
+@pytest.mark.asyncio
+async def test_model_armor_responses_list_input_scans_last_user_text():
+    guardrail = _responses_guardrail(_NO_MATCH)
+    data = {
+        "model": "gpt-4",
+        "input": [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "an answer"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "tool text"},
+            {"role": "user", "content": [{"type": "input_text", "text": "follow-up question"}]},
+        ],
+        "metadata": {},
+    }
+
+    result = await _run_pre_call(guardrail, data)
+
+    assert guardrail.make_model_armor_request.await_args.kwargs["content"] == "follow-up question"
+    assert result["input"] == data["input"]
+
+
+@pytest.mark.asyncio
+async def test_model_armor_responses_masks_string_input():
+    guardrail = _responses_guardrail(_MASKED, mask_request_content=True)
+    data = {"model": "gpt-4", "input": "call me at 555-0100", "metadata": {}}
+
+    result = await _run_pre_call(guardrail, data)
+
+    assert result["input"] == "call me at [REDACTED]"
+    assert "messages" not in result
+
+
+@pytest.mark.asyncio
+async def test_model_armor_responses_masks_trailing_user_items_and_keeps_other_items():
+    guardrail = _responses_guardrail(_MASKED, mask_request_content=True)
+    tool_output = {"type": "function_call_output", "call_id": "call_1", "output": "tool text"}
+    data = {
+        "model": "gpt-4",
+        "input": [
+            {"role": "user", "content": "earlier question"},
+            {"role": "assistant", "content": "an answer"},
+            {"role": "user", "content": "call me"},
+            tool_output,
+            {"role": "user", "content": "at 555-0100"},
+        ],
+        "metadata": {},
+    }
+
+    result = await _run_pre_call(guardrail, data)
+
+    assert result["input"] == [
+        {"role": "user", "content": "earlier question"},
+        {"role": "assistant", "content": "an answer"},
+        {"role": "user", "content": "call me at [REDACTED]"},
+        tool_output,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_model_armor_messages_take_precedence_over_input():
+    guardrail = _responses_guardrail(_NO_MATCH)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "chat message"}],
+        "input": "responses input",
+        "metadata": {},
+    }
+
+    await _run_pre_call(guardrail, data)
+
+    assert guardrail.make_model_armor_request.await_args.kwargs["content"] == "chat message"
+
+
+@pytest.mark.asyncio
+async def test_model_armor_no_messages_and_no_usable_input_skips_scan():
+    guardrail = _responses_guardrail(_NO_MATCH)
+
+    for data in ({"model": "gpt-4", "metadata": {}}, {"model": "gpt-4", "input": None, "metadata": {}}):
+        assert await _run_pre_call(guardrail, data) is data
+
+    guardrail.make_model_armor_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_model_armor_moderation_hook_scans_responses_input():
+    guardrail = _responses_guardrail(_RAI_MATCH)
+    data = {"model": "gpt-4", "input": "synthetic harmful prompt", "metadata": {}}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="responses",
+        )
+
+    assert exc_info.value.status_code == 400

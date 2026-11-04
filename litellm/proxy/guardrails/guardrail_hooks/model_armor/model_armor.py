@@ -45,6 +45,7 @@ from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
     MODEL_ARMOR_MAX_FILE_SIZE_BYTES,
     plan_file_scans,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -701,6 +702,40 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     detail=self._build_block_error_detail("Content blocked by Model Armor", armor_response),
                 )
 
+    @staticmethod
+    def _responses_input_messages(responses_input: object) -> list[AllMessageValues]:
+        """The role-carrying items of a Responses API `input`, in the chat message shape the scan reads."""
+        if not isinstance(responses_input, (str, list)):
+            return []
+        return ResponsesAPIRequestUtils.responses_input_to_chat_messages(responses_input)
+
+    @staticmethod
+    def _mask_responses_input(responses_input: object, sanitized_content: str) -> str | list[object]:
+        """Replace the last block of user messages in a Responses API `input` with the sanitized text.
+
+        Mirrors set_last_user_message for chat messages: the trailing run of user messages becomes one
+        user message, and items without a role (tool calls, tool outputs) keep their place.
+        """
+        if isinstance(responses_input, str):
+            return sanitized_content
+        items: Final = list(responses_input) if isinstance(responses_input, list) else []
+        trailing_user: Final[list[int]] = []
+        for index in range(len(items) - 1, -1, -1):
+            item = items[index]
+            if not isinstance(item, dict) or "role" not in item:
+                continue
+            if item["role"] != "user":
+                break
+            trailing_user.append(index)
+        if not trailing_user:
+            return items
+        first: Final = min(trailing_user)
+        return [
+            {"role": "user", "content": sanitized_content} if index == first else item
+            for index, item in enumerate(items)
+            if index not in trailing_user or index == first
+        ]
+
     @log_guardrail_information
     async def async_pre_call_hook(
         self,
@@ -722,7 +757,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        messages: Final = data.get("messages")
+        # Responses API requests carry `input` instead of `messages`; scan it as chat messages
+        responses_input: Final = data.get("input") if not data.get("messages") else None
+        messages: Final = data.get("messages") or self._responses_input_messages(responses_input)
         if not messages:
             verbose_proxy_logger.warning("Model Armor: not running guardrail. No messages in data")
             return data
@@ -787,7 +824,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                         set_last_user_message,
                     )
 
-                    data["messages"] = set_last_user_message(messages, sanitized_content)
+                    if responses_input is not None:
+                        data["input"] = self._mask_responses_input(responses_input, sanitized_content)
+                    else:
+                        data["messages"] = set_last_user_message(messages, sanitized_content)
 
         except ModelArmorAPIError as e:
             self._raise_if_fail_closed(e)
@@ -821,7 +861,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        messages: Final = data.get("messages")
+        # Responses API requests carry `input` instead of `messages`; scan it as chat messages
+        responses_input: Final = data.get("input") if not data.get("messages") else None
+        messages: Final = data.get("messages") or self._responses_input_messages(responses_input)
         if not messages:
             verbose_proxy_logger.warning("Model Armor: not running guardrail. No messages in data")
             return data
@@ -878,7 +920,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                         set_last_user_message,
                     )
 
-                    data["messages"] = set_last_user_message(messages, sanitized_content)
+                    if responses_input is not None:
+                        data["input"] = self._mask_responses_input(responses_input, sanitized_content)
+                    else:
+                        data["messages"] = set_last_user_message(messages, sanitized_content)
 
         except ModelArmorAPIError as e:
             self._raise_if_fail_closed(e)
