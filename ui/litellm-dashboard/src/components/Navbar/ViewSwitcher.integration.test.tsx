@@ -191,7 +191,7 @@ describe("ViewSwitcher", () => {
     expect(assignSpy).toHaveBeenCalledWith("https://moyai.example.com");
   });
 
-  it("should hide Moyai from the switcher until an admin enables it", async () => {
+  it("should hide Moyai from the switcher when an admin turns it off", async () => {
     getUiSettingsMock.mockResolvedValue({
       values: { enable_chat_ui: true, enable_moyai_ui: false, moyai_url: "https://moyai.example.com" },
     });

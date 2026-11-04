@@ -210,7 +210,15 @@ describe("UISettings", () => {
     expect(screen.getByRole("link", { name: "Connect from the Moyai page" })).toHaveAttribute("href", "/ui/moyai");
   });
 
-  it("shows Moyai as disabled without a connect link until an admin enables it", () => {
+  it("shows Moyai as disabled without a connect link when an admin turns it off", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          ...buildSettingsResponse().data,
+          values: { ...buildSettingsResponse().data.values, enable_moyai_ui: false },
+        },
+      }),
+    );
     render(<UISettings />);
 
     expect(screen.getByText("Disabled")).toBeInTheDocument();
@@ -218,11 +226,19 @@ describe("UISettings", () => {
     expect(screen.queryByRole("link", { name: "Connect from the Moyai page" })).not.toBeInTheDocument();
   });
 
-  it("enables Moyai by patching enable_moyai_ui", () => {
+  it("turns Moyai off by patching enable_moyai_ui", () => {
     const mutateMock = vi.fn((_settings, options) => {
       options?.onSuccess?.();
     });
     mockUseUpdateUISettings.mockReturnValue({ mutate: mutateMock, isPending: false, error: null });
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          ...buildSettingsResponse().data,
+          values: { ...buildSettingsResponse().data.values, enable_moyai_ui: true },
+        },
+      }),
+    );
     render(<UISettings />);
 
     act(() => {
@@ -230,7 +246,7 @@ describe("UISettings", () => {
     });
 
     expect(mutateMock).toHaveBeenCalledWith(
-      { enable_moyai_ui: true },
+      { enable_moyai_ui: false },
       expect.objectContaining({ onSuccess: expect.any(Function) }),
     );
     expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");

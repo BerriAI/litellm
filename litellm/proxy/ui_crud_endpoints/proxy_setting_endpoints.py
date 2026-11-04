@@ -376,7 +376,7 @@ class UISettings(LiteLLMBaseModel):
     )
 
     enable_moyai_ui: bool = Field(
-        default=False,
+        default=True,
         description="If true, shows Moyai in the UI workspace switcher and lets admins connect a Moyai deployment.",
     )
 
