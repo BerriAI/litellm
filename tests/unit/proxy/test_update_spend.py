@@ -404,3 +404,36 @@ async def test_systemic_raw_insert_failure_is_retried_not_dropped(sqlstate):
         await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
 
     assert repo.written == []
+
+
+class _RescueFailsRepository:
+    def __init__(self, rescue_error: Exception):
+        self.rescue_error = rescue_error
+
+    async def insert_with_deliveries(self, rows):
+        if any(row.get("accounting_log_disabled") for row in rows):
+            raise self.rescue_error
+        if any(row["request_id"] == "rejected" for row in rows):
+            raise _raw_query_error("22P02")
+
+
+@pytest.mark.asyncio
+async def test_a_transient_failure_while_keeping_a_dropped_rows_charge_is_retried_not_lost():
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    outage = _raw_query_error("40P01")
+    repo = _RescueFailsRepository(outage)
+    rows = [{"request_id": "rejected", "accounting_path": "ledger", "accounting_payload": {"spend": 1.0}}]
+
+    with pytest.raises(type(outage)):
+        await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_charge_rescue_is_logged_and_the_flush_continues():
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _RescueFailsRepository(_raw_query_error("22P02"))
+    rows = [{"request_id": "rejected", "accounting_path": "ledger", "accounting_payload": {"spend": 1.0}}]
+
+    assert await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10) == 9
