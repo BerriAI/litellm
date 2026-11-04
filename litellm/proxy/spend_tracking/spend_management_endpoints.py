@@ -1581,9 +1581,7 @@ async def get_global_spend_report(
                 ORDER BY
                     total_cost DESC;
             """
-            db_response = await _query_spend_logs(
-                prisma_client, sql_query, start_date_obj, end_date_obj, api_key
-            )
+            db_response = await _query_spend_logs(prisma_client, sql_query, start_date_obj, end_date_obj, api_key)
             return db_response
         elif internal_user_id is not None:
             verbose_proxy_logger.debug("Getting /spend for internal_user_id: %s", internal_user_id)

@@ -448,7 +448,11 @@ def _tpm_embedding_leaf(value: object) -> _TPMMediaProjection:
     return _TPMMediaProjection("" if media else value, media)
 
 
-def _is_json_array(value: object) -> TypeIs[list[object] | tuple[object, ...]]:  # guard-ok: validates JSON arrays
+def _is_json_array(
+    value: object,
+) -> TypeIs[  # guard-ok: validates the exact list and tuple types  # mutable-ok: JSON input arrays are mutable
+    list[object] | tuple[object, ...]
+]:
     return isinstance(value, (list, tuple))
 
 
