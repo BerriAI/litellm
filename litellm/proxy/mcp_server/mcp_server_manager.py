@@ -112,6 +112,7 @@ from litellm.proxy.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
 )
 from litellm.proxy.mcp_server.exceptions import (
+    MCPOpenApiUpstreamError,
     MCPServerListError,
     MCPUpstreamAuthError,
 )
@@ -467,6 +468,7 @@ class MCPServerConfig(TypedDict, total=False):
     timeout: float
     max_concurrent_requests: int
     rpm: ReadOnly[int | None]
+    allowed_error_fields: ReadOnly[Sequence[str]]
 
 
 class _ProtectedResourceMetadataPayload(TypedDict, total=False):
@@ -2820,6 +2822,7 @@ class MCPServerManager:
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
                 env_vars=server_config.get("env_vars", None),
+                allowed_error_fields=server_config.get("allowed_error_fields", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(server_config.get("available_on_public_internet", True)),
                 delegate_auth_to_upstream=bool(server_config.get("delegate_auth_to_upstream", False)),
@@ -3032,6 +3035,7 @@ class MCPServerManager:
                         relays_upstream_auth=server.is_client_forwarded_token,
                         auth_type=server.auth_type,
                         upstream_token_header=server.upstream_token_header,
+                        allowed_error_fields=server.allowed_error_fields,
                     )
                     tool_func.__name__ = prefixed_tool_name
                     tool_func.__doc__ = description
@@ -3401,6 +3405,8 @@ class MCPServerManager:
             access_groups=getattr(mcp_server, "mcp_access_groups", None),
             allowed_tools=getattr(mcp_server, "allowed_tools", None),
             disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
+            allowed_error_fields=getattr(mcp_server, "allowed_error_fields", None)
+            or _mcp_info.get("allowed_error_fields"),
             allow_all_keys=mcp_server.allow_all_keys,
             available_on_public_internet=bool(getattr(mcp_server, "available_on_public_internet", True)),
             delegate_auth_to_upstream=bool(getattr(mcp_server, "delegate_auth_to_upstream", False)),
@@ -6091,8 +6097,20 @@ class MCPServerManager:
             # the REST path relays a real 401 with the upstream's WWW-Authenticate. Flattening it
             # into the generic message below would lose both.
             raise
+        except MCPOpenApiUpstreamError as e:
+            if e.details is not None:
+                return CallToolResult(
+                    content=[TextContent(type="text", text=json.dumps(e.details, separators=(",", ":")))],
+                    is_error=True,
+                )
+            error_msg: Final = f"Error calling OpenAPI tool {tool_name}: {e}"
+            verbose_logger.error(error_msg)
+            return CallToolResult(
+                content=[TextContent(type="text", text=error_msg)],
+                is_error=True,
+            )
         except Exception as e:
-            error_msg = f"Error calling OpenAPI tool {tool_name}: {e}"
+            error_msg: Final = f"Error calling OpenAPI tool {tool_name}: {e}"
             verbose_logger.error(error_msg)
             return CallToolResult(
                 content=[TextContent(type="text", text=error_msg)],
