@@ -8511,6 +8511,35 @@ def test_context_window_pre_call_check_counts_an_embedding_image_as_text_on_a_te
         )
 
 
+
+@pytest.mark.parametrize(
+    ("backend", "caption", "fits"),
+    [
+        pytest.param("vertex_ai/gemini-embedding-2", "a red car", True, id="image-backend-short-caption"),
+        pytest.param("vertex_ai/gemini-embedding-2", "word " * 40, False, id="image-backend-oversized-caption"),
+        pytest.param("text-embedding-3-small", "a red car", False, id="text-only-backend-counts-the-image"),
+    ],
+)
+def test_context_window_pre_call_check_counts_each_caption_next_to_an_embedding_image(
+    backend: str, caption: str, fits: bool, caplog
+):
+    router: Final = _embedding_context_router(backend, window=20)
+    deployments: Final = router.registry().deployments("embedder")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+        if fits:
+            kept: Final = router._pre_call_checks(
+                model="embedder", healthy_deployments=deployments, input=[caption, _EMBEDDING_IMAGE_INPUT]
+            )
+            assert len(kept) == 1
+        else:
+            with pytest.raises(litellm.ContextWindowExceededError):
+                router._pre_call_checks(
+                    model="embedder", healthy_deployments=deployments, input=[caption, _EMBEDDING_IMAGE_INPUT]
+                )
+
+    assert "failed to count tokens" not in caplog.text
+
 async def test_acount_pre_call_check_tokens_counts_a_group_of_one_openai_model_with_that_models_tokenizer():
     router: Final = _context_limited_router("openai/gpt-6.1-sol")
 

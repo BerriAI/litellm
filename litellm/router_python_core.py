@@ -14944,7 +14944,7 @@ class PythonCore(DeprecatedRouterMembers):
         Anthropic Messages top-level `system` block.
 
         An embedding batch (a list of texts, token IDs or token ID lists) counts as its
-        longest input.
+        longest input. Media the deployments embed as media is left out of that count.
         """
         from litellm.llms.anthropic.messages.native.utils import (
             anthropic_system_to_openai_message,
@@ -14963,11 +14963,6 @@ class PythonCore(DeprecatedRouterMembers):
         if messages is not None:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
             return self._host.invoke("token_counter")(model=tokenizer_model, messages=counted_messages, tools=tools)
-        if (
-            isinstance(input, list)
-            and (embedding_tokens := self._longest_embedding_input_tokens(input, tokenizer_model)) is not None
-        ):
-            return embedding_tokens
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
@@ -14977,6 +14972,11 @@ class PythonCore(DeprecatedRouterMembers):
             )
 
             text_input, _ = split_embedding_input_tokens(input, partial(deployment_backend_models, deployments))
+            if (
+                isinstance(text_input, list)
+                and (embedding_tokens := self._longest_embedding_input_tokens(text_input, tokenizer_model)) is not None
+            ):
+                return embedding_tokens
             typed_input: Final = cast(  # cast-ok: str | list matches transform input
                 str | ResponseInputParam, text_input
             )
