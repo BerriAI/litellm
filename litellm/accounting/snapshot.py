@@ -105,20 +105,35 @@ def build_accounting_payload(
 _GUARDRAIL_ENTRIES: Final = TypeAdapter(tuple[dict[str, object], ...])
 _GUARDRAIL_METADATA_FIELDS: Final = frozenset({"guardrail_information", "standard_logging_guardrail_information"})
 _GUARDRAIL_ACCOUNTING_FIELDS: Final = frozenset(
-    {"guardrail_id", "guardrail_name", "guardrail_usage", "guardrail_cost_by_unit", "guardrail_cost_in_spend"}
+    {
+        "guardrail_id",
+        "guardrail_name",
+        "guardrail_provider",
+        "guardrail_usage",
+        "guardrail_cost_by_unit",
+        "guardrail_cost_in_spend",
+    }
 )
+_GUARDRAIL_RESPONSE: Final = TypeAdapter(dict[str, object])
 
 
 def _accounting_guardrail_entries(value: object) -> object:
     try:
-        entries: Final = _GUARDRAIL_ENTRIES.validate_python(value)
+        entries: Final = _GUARDRAIL_ENTRIES.validate_python((value,) if isinstance(value, dict) else value)
     except ValidationError:
         return None
     return [_accounting_guardrail_entry(entry) for entry in entries]
 
 
 def _accounting_guardrail_entry(entry: Mapping[str, object]) -> Mapping[str, object]:
-    return {key: item for key, item in entry.items() if key in _GUARDRAIL_ACCOUNTING_FIELDS}
+    kept: Final = {key: item for key, item in entry.items() if key in _GUARDRAIL_ACCOUNTING_FIELDS}
+    response: Final = entry.get("guardrail_response")
+    if not isinstance(response, dict) or "tokens_saved" not in response:
+        return kept
+    return {
+        **kept,
+        "guardrail_response": {"tokens_saved": _GUARDRAIL_RESPONSE.validate_python(response)["tokens_saved"]},
+    }
 
 
 def _accounting_metadata_field(key: str, value: object) -> object:
