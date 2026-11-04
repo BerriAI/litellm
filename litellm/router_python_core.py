@@ -144,7 +144,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     is_registered_custom_provider,
     resolve_model_and_provider_for_metadata,
 )
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.get_model_cost_map import MODEL_COST_ADOPTION_LOCK, GetModelCostMap
 from litellm.litellm_core_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
@@ -1851,19 +1851,20 @@ class PythonCore(DeprecatedRouterMembers):
         self.model_group_affinity_config = model_group_affinity_config
         warn_on_unknown_model_group_affinity_flags(model_group_affinity_config)
 
-        if model_list is not None:
-            # set_model_list will build indices automatically
-            self.set_model_list(model_list)
-            self.healthy_deployments: list = self._core_model_list
-            for m in model_list:
-                if "model" in m["litellm_params"]:
-                    self._core_deployment_latency_map[m["litellm_params"]["model"]] = 0
-        else:
-            self._core_model_list: list = []  # initialize an empty list - to allow _add_deployment and delete_deployment to work
-        # Track this router so a price data reload can rebuild its deployments'
-        # cost-map entries from the list it is serving at that moment, whether
-        # those deployments came from model_list or were added later from the DB.
-        _live_routers.add(self)
+        with MODEL_COST_ADOPTION_LOCK:
+            if model_list is not None:
+                # set_model_list will build indices automatically
+                self.set_model_list(model_list)
+                self.healthy_deployments: list = self._core_model_list
+                for m in model_list:
+                    if "model" in m["litellm_params"]:
+                        self._core_deployment_latency_map[m["litellm_params"]["model"]] = 0
+            else:
+                self._core_model_list: list = []  # initialize an empty list - to allow _add_deployment and delete_deployment to work
+            # Track this router so a price data reload can rebuild its deployments'
+            # cost-map entries from the list it is serving at that moment, whether
+            # those deployments came from model_list or were added later from the DB.
+            _live_routers.add(self)
 
         if allowed_fails is not None:
             self._core_allowed_fails = allowed_fails

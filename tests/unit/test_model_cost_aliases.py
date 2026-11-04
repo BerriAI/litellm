@@ -5,10 +5,17 @@ The ``_expand_model_aliases`` function processes ``aliases`` lists from model
 entries, creating shared dict references for alias entries at load time.
 """
 
-from unittest.mock import patch
+from collections.abc import Mapping
+from unittest.mock import call, patch
+
+import pytest
 
 from litellm import verbose_logger
-from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, _expand_model_aliases
+
+_NOT_A_LIST = "LiteLLM model alias field for '%s' is not a list (got %s) — skipping."
+_SHADOWS = "LiteLLM model alias conflict: alias '%s' (from '%s') already exists as a canonical entry — skipping."
+_TAKEN = "LiteLLM model alias conflict: alias '%s' (from '%s') was already claimed by another entry — skipping."
 
 
 # ---------------------------------------------------------------------------
@@ -243,3 +250,127 @@ class TestAliasIntegration:
     def test_expand_on_empty_dict(self):
         """Expanding an empty dict returns an empty dict."""
         assert _expand_model_aliases({}) == {}
+
+
+def _served(model_cost: Mapping[str, object]) -> list[tuple[object, object, tuple[object, ...] | None]]:
+    return [
+        (key, dict(row) if isinstance(row, dict) else row, row.names if isinstance(row, AliasedCostEntry) else None)
+        for key, row in model_cost.items()
+    ]
+
+
+class TestExpansionMatchesMainExactly:
+    """Every case pins the map, the row objects and the warnings main's Python expansion produced"""
+
+    @pytest.mark.parametrize(
+        ("model_cost", "served", "warnings"),
+        [
+            pytest.param(
+                {"b": {"aliases": ["b1"]}, "a": {"aliases": ["a1", "a2"]}, "c": {}},
+                [
+                    ("b", {}, ("b", "b1")),
+                    ("a", {}, ("a", "a1", "a2")),
+                    ("c", {}, None),
+                    ("b1", {}, ("b", "b1")),
+                    ("a1", {}, ("a", "a1", "a2")),
+                    ("a2", {}, ("a", "a1", "a2")),
+                ],
+                [],
+                id="aliases_follow_rows_in_first_claim_order",
+            ),
+            pytest.param(
+                {"m": {"aliases": None, "mode": "chat"}},
+                [("m", {"aliases": None, "mode": "chat"}, None)],
+                [],
+                id="null_aliases_stay_on_the_row",
+            ),
+            pytest.param(
+                {"m": {"aliases": "m2", "mode": "chat"}},
+                [("m", {"mode": "chat"}, None)],
+                [call(_NOT_A_LIST, "m", "str")],
+                id="non_list_aliases_are_dropped_with_a_warning",
+            ),
+            pytest.param(
+                {"m": {"aliases": []}},
+                [("m", {}, None)],
+                [],
+                id="empty_aliases_are_dropped",
+            ),
+            pytest.param(
+                {"m": {"aliases": ["sample_spec", "n", "m"]}, "n": {"aliases": ["n"]}, "sample_spec": {}},
+                [("m", {}, None), ("n", {}, None), ("sample_spec", {}, None)],
+                [
+                    call(_SHADOWS, "sample_spec", "m"),
+                    call(_SHADOWS, "n", "m"),
+                    call(_SHADOWS, "m", "m"),
+                    call(_SHADOWS, "n", "n"),
+                ],
+                id="an_alias_equal_to_any_key_is_skipped",
+            ),
+            pytest.param(
+                {"m": {"aliases": ["x", "x"]}, "n": {"aliases": ["x"]}},
+                [("m", {}, ("m", "x")), ("n", {}, None), ("x", {}, ("m", "x"))],
+                [call(_TAKEN, "x", "m"), call(_TAKEN, "x", "n")],
+                id="the_first_claim_wins",
+            ),
+            pytest.param(
+                {"m": {"aliases": [1]}, "n": {"aliases": [True, 1.0]}},
+                [("m", {}, ("m", 1)), ("n", {}, None), (1, {}, ("m", 1))],
+                [call(_TAKEN, True, "n"), call(_TAKEN, 1.0, "n")],
+                id="aliases_collide_under_python_equality",
+            ),
+        ],
+    )
+    def test_expansion(
+        self,
+        model_cost: dict[str, dict[str, object]],
+        served: list[tuple[object, object, tuple[object, ...] | None]],
+        warnings: list[object],
+    ):
+        with patch.object(verbose_logger, "warning") as warn:
+            result = _expand_model_aliases(model_cost)
+
+        assert result is model_cost
+        assert _served(result) == served
+        assert warn.call_args_list == warnings
+
+    def test_each_alias_group_shares_one_copied_row(self):
+        row: dict[str, object] = {"aliases": ["m1", "m2"], "nested": [1]}
+        result = _expand_model_aliases({"m": row})
+
+        assert result["m"] is result["m1"] is result["m2"]
+        assert result["m"] is not row
+        assert result["m"]["nested"] is row["nested"]
+
+    @pytest.mark.parametrize(
+        ("model_cost", "error", "message", "warnings"),
+        [
+            pytest.param(
+                {"m": {"aliases": "x"}, "bad": None, "n": {"aliases": "y"}},
+                AttributeError,
+                "'NoneType' object has no attribute 'get'",
+                [call(_NOT_A_LIST, "m", "str")],
+                id="a_row_that_is_not_a_dict",
+            ),
+            pytest.param(
+                {"m": {"aliases": "x"}, "n": {"aliases": ["ok", ["unhashable"]]}},
+                TypeError,
+                "unhashable type: 'list'",
+                [call(_NOT_A_LIST, "m", "str")],
+                id="an_unhashable_alias",
+            ),
+        ],
+    )
+    def test_main_raises_mid_scan_after_its_earlier_warnings_and_leaves_the_map(
+        self,
+        model_cost: dict[str, dict[str, object]],
+        error: type[Exception],
+        message: str,
+        warnings: list[object],
+    ):
+        before = repr(model_cost)
+        with patch.object(verbose_logger, "warning") as warn, pytest.raises(error, match=f"^{message}$"):
+            _expand_model_aliases(model_cost)
+
+        assert warn.call_args_list == warnings
+        assert repr(model_cost) == before

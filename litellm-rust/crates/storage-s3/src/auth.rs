@@ -40,7 +40,7 @@ impl ProvideCredentials for S3Credentials {
                     secret_access_key,
                     self.config.session_token.clone(),
                     None,
-                    "litellm-s3-cache",
+                    "litellm-s3",
                 ));
             }
             self.auth

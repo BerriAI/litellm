@@ -10,6 +10,7 @@
 //! | [`json`] | `json.dumps(value)`, and `json.loads(json.dumps(value))` as a JSON value |
 //! | [`pickle`] | `pickle.loads(data)` and `pickle.dumps(value)` for plain data |
 //! | [`truthy`] | `bool(value)` |
+//! | [`number`] | `float(text)` and `int(text)` |
 //!
 //! [`Value`] is the closed data model these formats share. Live Python objects
 //! (descriptors, `__bool__`, `__str__`, callbacks) are out of scope: those belong to the
@@ -24,6 +25,7 @@
 mod error;
 pub mod json;
 pub mod literal;
+pub mod number;
 pub mod pickle;
 pub mod repr;
 pub mod truthy;

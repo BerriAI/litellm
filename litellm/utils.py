@@ -46,7 +46,7 @@ from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # OpenAI parser module is private
 from openai.types.chat.completion_create_params import ResponseFormat
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, with_config
 
 import litellm
 import litellm.litellm_core_utils
@@ -108,6 +108,7 @@ from litellm.litellm_core_utils.tool_fields import (
     resolve_deployment_tool_fields,
     tools_without_hosted_mcp,
 )
+from litellm.rust_bridge import _native as _model_cost_rules
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
@@ -3818,42 +3819,18 @@ def supports_embedding_image_input(model: str, custom_llm_provider: str | None =
 
 ####### HELPER FUNCTIONS ################
 def update_dictionary(existing_dict: dict[str, object], new_dict: Mapping[str, object]) -> dict[str, object]:
-    for k, v in new_dict.items():
-        if v is not None:
-            # Convert stringified numbers to appropriate numeric types
-            if isinstance(v, str):
-                existing_dict[k] = _convert_stringified_numbers(v)
-            elif isinstance(v, dict):
-                nested_dict = cast(dict[str, object], v)
-                existing_nested_value = existing_dict.get(k)
-                if isinstance(existing_nested_value, dict):
-                    existing_nested_dict = cast(dict[str, object], existing_nested_value)
-                    existing_dict[k] = {**existing_nested_dict, **nested_dict}
-                else:
-                    existing_dict[k] = dict(nested_dict)
-            else:
-                existing_dict[k] = v
-
+    existing_dict.update(_model_cost_rules.update_dictionary(existing_dict, new_dict))
     return existing_dict
 
 
 _update_dictionary = update_dictionary
 
 
-def _convert_stringified_numbers(value):
-    """Convert stringified numbers (including scientific notation) to appropriate numeric types."""
-    if isinstance(value, str):
-        try:
-            # Try to convert to float first to handle scientific notation like "3e-07"
-            if "e" in value.lower() or "." in value:
-                return float(value)
-            # Try to convert to int for whole numbers like "8192"
-            else:
-                return int(value)
-        except (ValueError, TypeError):
-            # If conversion fails, return the original string
-            return value
-    return value
+def _convert_stringified_numbers(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    number: Final = _model_cost_rules.stringified_number(value)
+    return value if number is None else number
 
 
 _BEDROCK_REGION_PREFIXES: Final = (
@@ -3866,8 +3843,6 @@ _BEDROCK_REGION_PREFIXES: Final = (
     "global.",
     "ap-northeast-1.",
 )
-
-_TOKEN_COST_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
 
 
 def _builtin_cost_map() -> dict[str, Mapping[str, object]]:
@@ -3893,79 +3868,12 @@ def _replace_cost_map_entry(
 def _without_synthesized_costs(
     model_info: Mapping[str, object], key: str, value: Mapping[str, object]
 ) -> Mapping[str, object]:
-    """``_get_model_info_helper`` synthesizes ``input_cost_per_token`` / ``output_cost_per_token`` = 0 when the raw
-    entry has neither (#30198). Persisting those zeros would turn a name-priced entry into a free one and make
-    ``_is_cost_explicitly_configured`` disable budget enforcement on the next re-registration."""
     builtin_cost_map: Final = _builtin_cost_map()
-    raw_fields: Final = frozenset(builtin_cost_map.get(str(model_info["key"]), builtin_cost_map.get(key, {})))
-    return MappingProxyType(
-        {
-            name: field_value
-            for name, field_value in model_info.items()
-            if name not in _TOKEN_COST_FIELDS or name in raw_fields or name in value
-        }
-    )
+    raw_entry: Final = builtin_cost_map.get(str(model_info["key"]), builtin_cost_map.get(key, {}))
+    return _model_cost_rules.without_synthesized_costs(model_info, raw_entry, value)
 
 
-_DIRECTION_RATE_FIELDS: Final = MappingProxyType(
-    {
-        "input_cost_per_token": ("input_cost_per_token",),
-        "output_cost_per_token": ("output_cost_per_token", "output_cost_per_reasoning_token"),
-    }
-)
 _RATE_TABLE: Final = TypeAdapter(Mapping[str, object])
-_RATE_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-
-
-def _is_overridden_rate(name: str, overridden_fields: tuple[str, ...]) -> bool:
-    is_variant: Final = name.startswith(tuple(f"{rate_field}_" for rate_field in overridden_fields))
-    return name in overridden_fields or (is_variant and "_cache_" not in name)
-
-
-def _without_overridden_rates(rates: Mapping[str, object], overridden_fields: tuple[str, ...]) -> Mapping[str, object]:
-    return MappingProxyType(
-        {name: rate for name, rate in rates.items() if not _is_overridden_rate(name, overridden_fields)}
-    )
-
-
-def _rate_table_with_flat_prices(
-    name: str, table: object, overridden_fields: tuple[str, ...], flat_prices: Mapping[str, object]
-) -> object:
-    try:
-        if name == "tiered_pricing":
-            return [
-                {**_without_overridden_rates(tier, overridden_fields), **flat_prices}
-                for tier in _RATE_TIERS.validate_python(table)
-            ]
-        if name == "off_peak_pricing":
-            return dict(_without_overridden_rates(_RATE_TABLE.validate_python(table), overridden_fields))
-    except ValidationError:
-        return table
-    return table
-
-
-def _without_overridden_price_variants(
-    entry: Mapping[str, object], value: Mapping[str, object]
-) -> Mapping[str, object]:
-    """A caller's flat ``input_cost_per_token`` / ``output_cost_per_token`` is that direction's price above every
-    token threshold, for every service tier and batch, in every ``tiered_pricing`` tier and off-peak window, so each
-    inherited rate that would stand in for it there, the reasoning-token rate included for output, is dropped, and
-    each tier carries the flat price instead."""
-    flat_prices: Final = MappingProxyType(
-        {cost_field: value[cost_field] for cost_field in _TOKEN_COST_FIELDS if value.get(cost_field) is not None}
-    )
-    overridden_fields: Final = tuple(
-        itertools.chain.from_iterable(_DIRECTION_RATE_FIELDS[cost_field] for cost_field in flat_prices)
-    )
-    if not overridden_fields:
-        return entry
-    return MappingProxyType(
-        {
-            name: _rate_table_with_flat_prices(name, field_value, overridden_fields, flat_prices)
-            for name, field_value in entry.items()
-            if not _is_overridden_rate(name, overridden_fields)
-        }
-    )
 
 
 @with_config(ConfigDict(extra="allow"))
@@ -3982,9 +3890,7 @@ def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mappi
     overrides: Final = {
         name: value for name, value in registration.items() if value is not None and is_server_derived_pricing_key(name)
     }
-    return _PRICING_MODEL_INFO.validate_python(
-        update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
-    )
+    return _PRICING_MODEL_INFO.validate_python(_model_cost_rules.with_pricing_overrides(model_info, overrides))
 
 
 @dataclass(frozen=True, slots=True)
@@ -4013,7 +3919,9 @@ def _fallback_registration(key: str, provider: str, value: Mapping[str, object])
     generalized: Final[Mapping[str, object]] = match_capability_generalizations(key) or {}
     if match is None:
         return _FallbackRegistration(entry=generalized, matched_builtin=False)
-    inherited: Final = match.entry if match.names_the_row else _without_overridden_price_variants(match.entry, value)
+    inherited: Final = (
+        match.entry if match.names_the_row else _model_cost_rules.without_overridden_price_variants(match.entry, value)
+    )
     own_fields: Final = {name: field_value for name, field_value in inherited.items() if name != "litellm_provider"}
     return _FallbackRegistration(entry={**generalized, **own_fields}, matched_builtin=True)
 
@@ -4143,7 +4051,7 @@ def model_cost_registration_row(key: str, provider: object) -> Mapping[str, obje
     base: Final = _registration_base(
         key, {"litellm_provider": provider}, custom_llm_provider=None, warning_display_name=None
     )
-    return _builtin_cost_map().get(base.key) or base.entry
+    return _model_cost_rules.live_row_or(base.key, base.entry)
 
 
 def _registration_base(
@@ -4174,33 +4082,11 @@ def _registration_base(
     return _RegistrationWrite(key=key, entry=dict(fallback.entry))
 
 
-def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
-    return (
-        frozenset({"explicit_cache_read_input_token_cost"})
-        if value.get("cache_read_input_token_cost") is not None
-        and value.get("explicit_cache_read_input_token_cost") is None
-        else frozenset()
-    )
-
-
 def _registration_write(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
     base: Final = _registration_base(key, value, custom_llm_provider, warning_display_name)
-    # ``get_model_info`` returns ``litellm_provider: None`` when the
-    # provider is unknown (e.g. custom deployments registered via
-    # ``Router.add_deployment``). Persisting that None into
-    # ``litellm.model_cost`` causes ``_check_provider_match`` to drop
-    # custom pricing on subsequent cost lookups.
-    existing_model: Final = {
-        name: field_value
-        for name, field_value in base.entry.items()
-        if name != "litellm_provider" or field_value is not None
-    }
-    return _RegistrationWrite(
-        key=base.key,
-        entry={**update_dictionary(existing_model, value), **dict.fromkeys(_base_fields_replaced_by(value))},
-    )
+    return _RegistrationWrite(key=base.key, entry=_model_cost_rules.registration_row(base.entry, value))
 
 
 def _registration_attempt(
@@ -4362,14 +4248,7 @@ def cost_map_omits_token_price(*keys: object) -> bool:
     ``get_model_info`` substitutes 0 for a missing price, which reads exactly like a declared
     zero. Surfaces that report pricing use this to keep an unpriced deployment at ``None``.
     """
-    entries: Final = tuple(
-        entry
-        for entry in (litellm.model_cost.get(key) for key in keys if isinstance(key, str))
-        if isinstance(entry, dict)
-    )
-    return len(entries) > 0 and not any(
-        "input_cost_per_token" in entry or "output_cost_per_token" in entry for entry in entries
-    )
+    return _model_cost_rules.cost_map_omits_token_price(keys)
 
 
 def register_model(
@@ -6713,9 +6592,6 @@ def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
         return _strip_dated_snapshot_suffix(model_name=model)
 
 
-# Global case-insensitive lookup map for model_cost (built eagerly at module import)
-_model_cost_lowercase_map: dict[str, str] | None = None
-
 # Monotonic counter bumped on every model_cost mutation. Consumers that
 # memoize derived state (e.g. provider-specific indices) can include this
 # value in their cache key so they invalidate even when key add+remove or
@@ -6728,108 +6604,21 @@ def get_model_cost_mutation_generation() -> int:
 
 
 def _invalidate_model_cost_lowercase_map() -> None:
-    """Invalidate the case-insensitive lookup map for model_cost.
-
-    Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
-    Also clears related LRU caches that depend on model_cost data.
-    """
-    global _model_cost_lowercase_map, _model_cost_mutation_generation
-    _model_cost_lowercase_map = None
+    """Call this whenever litellm.model_cost is modified: drops the case-insensitive key index and the LRU caches
+    that depend on model_cost data."""
+    global _model_cost_mutation_generation
     _model_cost_mutation_generation += 1
+    _model_cost_rules.invalidate_model_cost_keys()
 
-    # Clear LRU caches that depend on model_cost data
     _cached_get_model_info.cache_clear()
     cached_get_model_info_helper.cache_clear()
     cached_cost_map_key.cache_clear()
 
 
-def _rebuild_model_cost_lowercase_map() -> dict[str, str]:
-    """Rebuild the case-insensitive lookup map from the current model_cost.
-
-    Returns:
-        The rebuilt map (guaranteed to be not None).
-    """
-    global _model_cost_lowercase_map
-    _model_cost_lowercase_map = {k.lower(): k for k in tuple(litellm.model_cost)}
-    return _model_cost_lowercase_map
-
-
-def _handle_stale_map_entry_rebuild(
-    potential_key_lower: str,
-) -> str | None:
-    """
-    Handle stale _model_cost_lowercase_map entry (key was popped).
-
-    Rebuilds the map and retries the lookup.
-
-    Returns:
-        The matched key if found after rebuild, None otherwise.
-    """
-    matched_key: Final = _rebuild_model_cost_lowercase_map().get(potential_key_lower)
-    if matched_key is not None and matched_key in litellm.model_cost:
-        return matched_key
-    return None
-
-
-def _handle_new_key_with_scan(
-    potential_key_lower: str,
-) -> str | None:
-    """
-    Handle new key added to model_cost without invalidating _model_cost_lowercase_map.
-
-    Scans model_cost for case-insensitive match and rebuilds the map if found.
-
-    Returns:
-        The matched key if found, None otherwise.
-    """
-    global _model_cost_lowercase_map
-    for key in tuple(_builtin_cost_map()):
-        if key.lower() == potential_key_lower:
-            _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
-            return key
-    return None
-
-
 def get_model_cost_key(potential_key: str) -> str | None:
-    """
-    Get the actual key from model_cost, with case-insensitive fallback.
-
-    WARNING: Only O(1) lookup operations are acceptable. O(n) lookups will cause severe
-    CPU overhead. This function is called frequently during router operations.
-
-    ALLOWED HELPER FUNCTIONS (conditionally called, O(n) operations are acceptable):
-    - _rebuild_model_cost_lowercase_map: Rebuilds the lookup map (only when map is None)
-    - _handle_stale_map_entry_rebuild: Rebuilds map when stale entry detected (rare case)
-
-    If you need to add a new helper function with O(n) operations that is conditionally
-    called and confirmed not to cause performance issues, add it to the allowed_helpers
-    list in: tests/code_coverage_tests/check_get_model_cost_key_performance.py
-    """
-    # Exact match (O(1))
-    if potential_key in litellm.model_cost:
-        return potential_key
-
-    # Case-insensitive lookup via map (O(1)); bound locally because another thread's
-    # registration can invalidate the module-level map at any point
-    cached_lowercase_map: Final = _model_cost_lowercase_map
-    lowercase_map: Final = (
-        cached_lowercase_map if cached_lowercase_map is not None else _rebuild_model_cost_lowercase_map()
-    )
-
-    potential_key_lower: Final = potential_key.lower()
-    matched_key = lowercase_map.get(potential_key_lower)
-
-    # Verify key exists (O(1) - handles model_cost.pop() case)
-    if matched_key is not None and matched_key in litellm.model_cost:
-        return matched_key
-
-    # Rebuild map if stale entry detected (O(n) rebuild, but only when stale entry found)
-    if matched_key is not None:
-        matched_key = _handle_stale_map_entry_rebuild(potential_key_lower)
-        if matched_key is not None:
-            return matched_key
-
-    return None
+    """The ``litellm.model_cost`` key for ``potential_key``: the key itself when present, else the key that
+    lowercases to the same name"""
+    return _model_cost_rules.find_model_cost_key(potential_key)
 
 
 _get_model_cost_key = get_model_cost_key

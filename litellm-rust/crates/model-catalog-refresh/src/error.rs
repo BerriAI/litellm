@@ -14,13 +14,31 @@ enum Repr {
     Read(#[source] io::Error),
     #[error("invalid catalog URL")]
     InvalidUrl(#[source] url::ParseError),
-    #[error("unsupported catalog URL scheme {scheme}")]
+    #[error("unsupported catalog URL scheme {scheme:?}")]
     UnsupportedScheme { scheme: String },
+    #[error("expected s3://bucket/key")]
+    InvalidS3Url,
+    #[error("S3 GetObject failed")]
+    S3(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("timed out")]
+    TimedOut,
 }
 
 impl Error {
-    pub fn unsupported_scheme(scheme: String) -> Self {
+    pub(crate) fn unsupported_scheme(scheme: String) -> Self {
         Self(Box::new(Repr::UnsupportedScheme { scheme }))
+    }
+
+    pub(crate) fn invalid_s3_url() -> Self {
+        Self(Box::new(Repr::InvalidS3Url))
+    }
+
+    pub(crate) fn s3(cause: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self(Box::new(Repr::S3(Box::new(cause))))
+    }
+
+    pub(crate) fn timed_out() -> Self {
+        Self(Box::new(Repr::TimedOut))
     }
 }
 
@@ -48,25 +66,10 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::{DoneReason, Reply, Step};
 
     #[rstest]
-    fn exhausted_transport_keeps_its_typed_cause() {
-        let reply = Reply::Transport {
-            error: io::Error::from(io::ErrorKind::ConnectionReset).into(),
-        };
-        let Reply::Transport { error } = reply else {
-            panic!("transport failure")
-        };
-        let step = Step::Done {
-            reason: DoneReason::Exhausted(error),
-        };
-        let Step::Done {
-            reason: DoneReason::Exhausted(error),
-        } = step
-        else {
-            panic!("exhausted attempts")
-        };
+    fn a_read_failure_keeps_its_typed_cause_once() {
+        let error = Error::from(io::Error::from(io::ErrorKind::ConnectionReset));
         let cause = find::<io::Error>(&error).expect("typed I/O cause");
         assert_eq!(cause.kind(), io::ErrorKind::ConnectionReset);
         assert_eq!(

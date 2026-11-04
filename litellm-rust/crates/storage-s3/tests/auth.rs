@@ -1,6 +1,6 @@
 use aws_credential_types::provider::ProvideCredentials;
 use litellm_auth_aws::AwsAuthConfig;
-use litellm_cache_s3::S3Credentials;
+use litellm_storage_s3::S3Credentials;
 use rstest::rstest;
 
 fn explicit(session_token: Option<&str>) -> AwsAuthConfig {

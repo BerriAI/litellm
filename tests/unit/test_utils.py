@@ -18,6 +18,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path, PurePath
+from types import MappingProxyType
 from typing import Final, SupportsIndex, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -2547,18 +2548,17 @@ def test_register_model_with_scientific_notation():
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
-@respx.mock
-def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
+def test_register_model_url_fetch_uses_single_attempt(monkeypatch, scripted_http):
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     before = dict(litellm.model_cost)
     threads_before = {thread.name for thread in threading.enumerate()}
-    route = respx.get("https://example.invalid/custom_pricing.json").mock(return_value=httpx.Response(503))
+    server = scripted_http([httpx.Response(503)], path="/custom_pricing.json")
 
-    litellm.register_model(model_cost="https://example.invalid/custom_pricing.json")
+    litellm.register_model(model_cost=server.url)
 
     threads_after = {thread.name for thread in threading.enumerate()}
-    assert route.call_count == 1
+    assert server.count == 1
     assert not (threads_after - threads_before) & {"litellm-model-cost-map-retry"}
     assert not any(
         thread.name == "litellm-model-cost-map-retry" and thread.is_alive() for thread in threading.enumerate()
@@ -5177,12 +5177,7 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
 
 
 def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.utils import _invalidate_model_cost_lowercase_map, _rebuild_model_cost_lowercase_map
-
-    class _KeyRegisteredMidWalk(str):
-        def lower(self) -> str:
-            litellm.model_cost.setdefault("lit-5853-registered-during-the-rebuild", {"mode": "chat"})
-            return super().lower()
+    from litellm.utils import _invalidate_model_cost_lowercase_map, get_model_cost_key
 
     class _EntryRegisteredMidWalk(dict):
         def get(self, field: str, default: object = None) -> object:
@@ -5190,11 +5185,10 @@ def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: p
             return super().get(field, default)
 
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    litellm.model_cost[_KeyRegisteredMidWalk("LIT-5853-WALKED-LAST")] = _EntryRegisteredMidWalk(mode="chat")
+    litellm.model_cost["LIT-5853-WALKED-LAST"] = _EntryRegisteredMidWalk(mode="chat")
     try:
-        assert _rebuild_model_cost_lowercase_map()["lit-5853-walked-last"] == "LIT-5853-WALKED-LAST"
+        assert get_model_cost_key("lit-5853-walked-last") == "LIT-5853-WALKED-LAST"
         litellm.add_known_models(model_cost_map=litellm.model_cost)
-        assert "lit-5853-registered-during-the-rebuild" in litellm.model_cost
         assert "lit-5853-registered-during-add-known-models" in litellm.model_cost
     finally:
         _invalidate_model_cost_lowercase_map()
@@ -5209,6 +5203,225 @@ class _KeyWhoseLoweringLosesTheRace(str):
 
         _invalidate_model_cost_lowercase_map()
         return super().lower()
+
+
+@pytest.mark.parametrize(
+    ("existing", "new", "expected"),
+    [
+        pytest.param({"a": 1}, {"a": None, "b": None}, {"a": 1}, id="none_is_skipped"),
+        pytest.param({}, {"input_cost_per_token": "3e-07"}, {"input_cost_per_token": 3e-07}, id="scientific_string"),
+        pytest.param({}, {"max_tokens": "8192"}, {"max_tokens": 8192}, id="integer_string"),
+        pytest.param({}, {"max_tokens": " 8_192 "}, {"max_tokens": 8192}, id="padded_integer_string"),
+        pytest.param({}, {"max_tokens": "8192."}, {"max_tokens": 8192.0}, id="point_makes_a_float"),
+        pytest.param({}, {"mode": "chat"}, {"mode": "chat"}, id="text_stays"),
+        pytest.param({}, {"x": "inf"}, {"x": "inf"}, id="infinity_without_e_or_point_stays"),
+        pytest.param({}, {"x": "1e400"}, {"x": float("inf")}, id="overflowing_float"),
+        pytest.param({}, {"x": "9" * 30}, {"x": int("9" * 30)}, id="big_int"),
+        pytest.param(
+            {"m": {"a": 1, "b": 2}},
+            {"m": {"b": 3, "c": 4}},
+            {"m": {"a": 1, "b": 3, "c": 4}},
+            id="dict_merges_over_dict",
+        ),
+        pytest.param({"m": 1}, {"m": {"b": 3}}, {"m": {"b": 3}}, id="dict_replaces_a_scalar"),
+        pytest.param({}, {"m": {"b": "3"}}, {"m": {"b": "3"}}, id="nested_strings_are_kept"),
+        pytest.param({"z": 1, "a": 2}, {"m": 3, "z": 4}, {"z": 4, "a": 2, "m": 3}, id="existing_order_then_new"),
+    ],
+)
+def test_update_dictionary_matches_main(existing: dict, new: dict, expected: dict) -> None:
+    """The same cases as ``update_dictionary_matches_main`` in ``model-catalog/src/register.rs``"""
+    from litellm.utils import update_dictionary
+
+    merged = update_dictionary(existing, new)
+
+    assert merged is existing
+    assert list(merged.items()) == list(expected.items())
+    assert [type(value) for value in merged.values()] == [type(value) for value in expected.values()]
+
+
+def test_update_dictionary_keeps_the_identity_of_values_it_does_not_rewrite() -> None:
+    from litellm.utils import update_dictionary
+
+    tiers = [{"input_cost_per_token": 1}]
+    merged = update_dictionary({}, {"tiered_pricing": tiers})
+
+    assert merged["tiered_pricing"] is tiers
+
+
+def test_update_dictionary_refuses_a_field_name_that_is_not_a_str() -> None:
+    from litellm.utils import update_dictionary
+
+    with pytest.raises(TypeError, match="field names must be str, got int"):
+        update_dictionary({}, {1: "a"})
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param("3E-07", 3e-07, id="upper_exponent"),
+        pytest.param("-0", 0, id="negative_zero_int"),
+        pytest.param("1_0.5", 10.5, id="underscore_float"),
+        pytest.param("1__0", "1__0", id="double_underscore_stays"),
+        pytest.param("\u00a012\u3000", 12, id="unicode_whitespace"),
+        pytest.param("\x1c12", "\x1c12", id="file_separator_is_not_whitespace"),
+        pytest.param("0x10", "0x10", id="hex_stays"),
+        pytest.param(5, 5, id="non_string_passes_through"),
+    ],
+)
+def test_convert_stringified_numbers_matches_cpython(value: object, expected: object) -> None:
+    from litellm.utils import _convert_stringified_numbers
+
+    converted = _convert_stringified_numbers(value)
+
+    assert (converted, type(converted)) == (expected, type(expected))
+
+
+@pytest.mark.parametrize(
+    ("base", "registration", "expected"),
+    [
+        pytest.param(
+            {"litellm_provider": None, "max_tokens": 10},
+            {"input_cost_per_token": 1},
+            {"max_tokens": 10, "input_cost_per_token": 1},
+            id="provider_none_is_dropped",
+        ),
+        pytest.param(
+            {"explicit_cache_read_input_token_cost": 1, "a": 1},
+            {"cache_read_input_token_cost": 2},
+            {"explicit_cache_read_input_token_cost": None, "a": 1, "cache_read_input_token_cost": 2},
+            id="cache_read_clears_explicit",
+        ),
+        pytest.param(
+            {"explicit_cache_read_input_token_cost": 1},
+            {"cache_read_input_token_cost": None},
+            {"explicit_cache_read_input_token_cost": 1},
+            id="cache_read_none_clears_nothing",
+        ),
+    ],
+)
+def test_registration_row_matches_main(base: dict, registration: dict, expected: dict) -> None:
+    """The same cases as ``registration_row_matches_main`` in ``model-catalog/src/register.rs``"""
+    from litellm.rust_bridge._native import registration_row
+
+    assert list(registration_row(base, registration).items()) == list(expected.items())
+
+
+@pytest.mark.parametrize(
+    ("entry", "registration", "expected"),
+    [
+        pytest.param(
+            {
+                "input_cost_per_token": 1,
+                "input_cost_per_token_above_200k_tokens": 2,
+                "input_cost_per_token_cache_hit": 3,
+                "output_cost_per_token_priority": 4,
+            },
+            {"input_cost_per_token": 9},
+            {"input_cost_per_token_cache_hit": 3, "output_cost_per_token_priority": 4},
+            id="input_variants_dropped_cache_kept",
+        ),
+        pytest.param(
+            {"output_cost_per_reasoning_token": 1, "output_cost_per_token_batches": 3},
+            {"output_cost_per_token": 9},
+            {},
+            id="output_drops_reasoning",
+        ),
+        pytest.param(
+            {"tiered_pricing": ({"input_cost_per_token": 1, "range": [0, 10]},)},
+            {"input_cost_per_token": "9"},
+            {"tiered_pricing": [{"range": [0, 10], "input_cost_per_token": "9"}]},
+            id="a_tuple_of_tiers_is_read_as_pydantic_reads_it",
+        ),
+        pytest.param(
+            {"tiered_pricing": [1, {"input_cost_per_token": 1}]},
+            {"input_cost_per_token": 9},
+            {"tiered_pricing": [1, {"input_cost_per_token": 1}]},
+            id="invalid_tiers_are_kept",
+        ),
+        pytest.param(
+            {"tiered_pricing": [{1: "x"}]},
+            {"input_cost_per_token": 9},
+            {"tiered_pricing": [{1: "x"}]},
+            id="a_tier_with_a_non_str_key_is_kept",
+        ),
+        pytest.param(
+            {"off_peak_pricing": MappingProxyType({"input_cost_per_token": 1, "hours": [1, 2]})},
+            {"input_cost_per_token": 9},
+            {"off_peak_pricing": {"hours": [1, 2]}},
+            id="an_off_peak_mapping_drops_overridden",
+        ),
+    ],
+)
+def test_without_overridden_price_variants_matches_main(entry: dict, registration: dict, expected: dict) -> None:
+    """The same cases as ``without_overridden_price_variants_matches_main`` in ``model-catalog/src/register.rs``"""
+    from litellm.rust_bridge._native import without_overridden_price_variants
+
+    assert without_overridden_price_variants(entry, registration) == expected
+
+
+def test_a_key_added_under_another_case_is_found_without_an_invalidation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Main's lowercase map missed a key written straight into ``litellm.model_cost`` until the next invalidation"""
+    from litellm.utils import get_model_cost_key
+
+    monkeypatch.setattr(litellm, "model_cost", {"gpt-4o": {"mode": "chat"}})
+    assert get_model_cost_key("GPT-4O") == "gpt-4o"
+
+    litellm.model_cost["LIT-Direct-Write"] = {"mode": "chat"}
+
+    assert get_model_cost_key("lit-direct-write") == "LIT-Direct-Write"
+
+
+def test_a_popped_key_is_never_returned(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.utils import get_model_cost_key
+
+    monkeypatch.setattr(litellm, "model_cost", {"Old-Name": {"mode": "chat"}, "gpt-4o": {"mode": "chat"}})
+    assert get_model_cost_key("old-name") == "Old-Name"
+
+    litellm.model_cost.pop("Old-Name")
+    litellm.model_cost["Other"] = {"mode": "chat"}
+
+    assert get_model_cost_key("old-name") is None
+
+
+def test_the_later_key_wins_when_two_keys_lowercase_alike(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.utils import _invalidate_model_cost_lowercase_map, get_model_cost_key
+
+    monkeypatch.setattr(litellm, "model_cost", {"Model-A": {}, "MODEL-a": {}})
+    _invalidate_model_cost_lowercase_map()
+
+    assert get_model_cost_key("model-a") == "MODEL-a"
+
+
+def test_a_rebound_model_cost_is_indexed_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.utils import get_model_cost_key
+
+    monkeypatch.setattr(litellm, "model_cost", {"First-Map": {}})
+    assert get_model_cost_key("first-map") == "First-Map"
+
+    monkeypatch.setattr(litellm, "model_cost", {"Second-Map": {}})
+
+    assert get_model_cost_key("second-map") == "Second-Map"
+    assert get_model_cost_key("first-map") is None
+
+
+@pytest.mark.parametrize(
+    ("model_cost", "keys", "expected"),
+    [
+        pytest.param({"a": {"mode": "chat"}}, ("a",), True, id="unpriced_row"),
+        pytest.param({"a": {"input_cost_per_token": 0}}, ("a",), False, id="declared_zero"),
+        pytest.param({"a": {"mode": "chat"}, "b": {"output_cost_per_token": 1}}, ("a", "b"), False, id="one_priced"),
+        pytest.param({}, ("a",), False, id="no_row"),
+        pytest.param({"a": "not a dict"}, ("a", None), False, id="no_dict_row"),
+    ],
+)
+def test_cost_map_omits_token_price_matches_main(
+    monkeypatch: pytest.MonkeyPatch, model_cost: dict, keys: tuple[object, ...], expected: bool
+) -> None:
+    from litellm.utils import cost_map_omits_token_price
+
+    monkeypatch.setattr(litellm, "model_cost", model_cost)
+
+    assert cost_map_omits_token_price(*keys) is expected
 
 
 def test_case_insensitive_model_cost_lookup_survives_an_invalidation_mid_lookup() -> None:
@@ -5246,7 +5459,7 @@ class _EntryReadDuringARegistration(dict[str, object]):
         return super().__contains__(key)
 
 
-@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5", "case-insensitive scan"])
+@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5"])
 def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     monkeypatch: pytest.MonkeyPatch, walk: str
 ) -> None:
@@ -5254,14 +5467,13 @@ def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
     from litellm.llms.openai.chat.gpt_reasoning_transformation import _catalogue_declares_default_effort
-    from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
+    from litellm.utils import _invalidate_model_cost_lowercase_map
 
     walks: Final[Mapping[str, Callable[[], object]]] = {
         "fal_ai": lambda: _keyed_rows("lit-5853-model", "standard"),
         "fireworks_ai": FireworksAIConfig._get_fireworks_index,
         "ollama": lambda: OllamaModelInfo._is_static_ollama_model("ollama/lit-5853-model"),
         "gpt-5": _catalogue_declares_default_effort,
-        "case-insensitive scan": lambda: _handle_new_key_with_scan("lit-5853-model"),
     }
     monkeypatch.setattr(
         litellm,

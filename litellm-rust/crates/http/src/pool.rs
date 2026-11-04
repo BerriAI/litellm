@@ -37,6 +37,29 @@ pub struct HttpClientPool {
     clients: Mutex<Clients>,
 }
 
+fn effective(config: &HttpClientConfig, variant: ClientVariant) -> HttpClientConfig {
+    match variant {
+        ClientVariant::Media => HttpClientConfig {
+            client_certificate: None,
+            proxies: EnvironmentProxies::default(),
+            ..config.clone()
+        },
+        ClientVariant::UnpinnedMedia => HttpClientConfig {
+            client_certificate: None,
+            ..config.clone()
+        },
+        ClientVariant::WebSocket => HttpClientConfig {
+            http2: false,
+            verify: match &config.verify {
+                Verify::BuiltInRoots => Verify::NativeRoots,
+                verify => verify.clone(),
+            },
+            ..config.clone()
+        },
+        ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
+    }
+}
+
 impl HttpClientPool {
     pub fn new(media_resolver: Arc<dyn Resolve>) -> Self {
         Self::with_ttl(media_resolver, CLIENT_TTL)
@@ -55,36 +78,13 @@ impl HttpClientPool {
         config: &HttpClientConfig,
         variant: ClientVariant,
     ) -> Result<Client, Error> {
-        let effective = match variant {
-            ClientVariant::Media => HttpClientConfig {
-                client_certificate: None,
-                proxies: EnvironmentProxies::default(),
-                ..config.clone()
-            },
-            ClientVariant::UnpinnedMedia => HttpClientConfig {
-                client_certificate: None,
-                ..config.clone()
-            },
-            ClientVariant::WebSocket => HttpClientConfig {
-                http2: false,
-                verify: match &config.verify {
-                    Verify::BuiltInRoots => Verify::NativeRoots,
-                    verify => verify.clone(),
-                },
-                ..config.clone()
-            },
-            ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
-        };
-        let key = (effective, variant);
+        let key = (effective(config, variant), variant);
         if let Some(pooled) = self.lock().get(&key)
             && pooled.built_at.elapsed() < self.ttl
         {
             return Ok(Client::new(pooled.client.clone()));
         }
-        let client = self
-            .apply(variant, reqwest::ClientBuilder::try_from(&key.0)?)
-            .build()
-            .map_err(Repr::Client)?;
+        let client = self.build(&key.0, variant)?;
         self.lock().insert(
             key,
             PooledClient {
@@ -93,6 +93,28 @@ impl HttpClientPool {
             },
         );
         Ok(Client::new(client))
+    }
+
+    /// A client built from the same settings as `client` that the pool never holds, for work that must not share
+    /// connections or take the pool's lock, such as a fetch on a runtime that ends with it or across a fork
+    pub fn unpooled_client(
+        &self,
+        config: &HttpClientConfig,
+        variant: ClientVariant,
+    ) -> Result<Client, Error> {
+        self.build(&effective(config, variant), variant)
+            .map(Client::new)
+    }
+
+    fn build(
+        &self,
+        config: &HttpClientConfig,
+        variant: ClientVariant,
+    ) -> Result<reqwest::Client, Error> {
+        Ok(self
+            .apply(variant, reqwest::ClientBuilder::try_from(config)?)
+            .build()
+            .map_err(Repr::Client)?)
     }
 
     fn lock(&self) -> MutexGuard<'_, Clients> {
@@ -221,6 +243,27 @@ mod tests {
         get(&pool, &config("a"), ClientVariant::NoRedirect, &url).await;
         assert_eq!(connections.load(Ordering::SeqCst), 2);
         get(&pool, &config("b"), ClientVariant::Provider, &url).await;
+        assert_eq!(connections.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn unpooled_clients_share_no_connection_with_each_other_or_the_pool() {
+        let (address, connections, _) = serve("HTTP/1.1 204 No Content").await;
+        let url = format!("http://{address}");
+        let pool = pool();
+        get(&pool, &config("a"), ClientVariant::NoRedirect, &url).await;
+        for expected in [2, 3] {
+            let response = pool
+                .unpooled_client(&config("a"), ClientVariant::NoRedirect)
+                .unwrap()
+                .get(&url)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 204);
+            assert_eq!(connections.load(Ordering::SeqCst), expected);
+        }
+        get(&pool, &config("a"), ClientVariant::NoRedirect, &url).await;
         assert_eq!(connections.load(Ordering::SeqCst), 3);
     }
 
