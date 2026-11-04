@@ -98,6 +98,8 @@ _IN_FLIGHT: Final[  # mutable-ok: single-flight dedup registry mutated under its
 
 @with_config(ConfigDict(extra="allow", strict=True))
 class _CopilotUserPayload(TypedDict):
+    access_type_sku: ReadOnly[NotRequired[object]]
+    chat_enabled: ReadOnly[NotRequired[object]]
     endpoints: ReadOnly[NotRequired[object]]
 
 
@@ -280,16 +282,20 @@ def _session_from_response(
             model="",
         ) from e
 
-    payload_endpoints: Final[object] = payload.get("endpoints")
-    endpoints_api: Final[object] = (
-        _COPILOT_ENDPOINTS.validate_python(payload_endpoints).get("api")
-        if isinstance(payload_endpoints, Mapping)
-        else None
-    )
-    api_base: Final = validated_copilot_api_base(endpoints_api, endpoints)
+    if payload.get("chat_enabled") is False or payload.get("access_type_sku") == "no_access":
+        _SESSION_CACHE.delete_cache(cache_key)
+        raise _reject_connection(credential_name)
+
+    api_base: Final = validated_copilot_api_base(_endpoints_api(payload.get("endpoints")), endpoints)
     session: Final = GithubCopilotUserSession(token=github_token, api_base=api_base)
     _cache_session(cache_key, github_token, session, time.time() + GITHUB_COPILOT_USER_SESSION_TTL_SECONDS)
     return session
+
+
+def _endpoints_api(payload_endpoints: object) -> object:
+    if not isinstance(payload_endpoints, Mapping):
+        return None
+    return _COPILOT_ENDPOINTS.validate_python(payload_endpoints).get("api")
 
 
 def _to_int(raw: object) -> int:

@@ -352,6 +352,77 @@ async def test_aresolve_401_raises_and_evicts():
         )
 
 
+ACCOUNT_URL = "https://api.github.com/copilot_internal/user"
+EXCHANGE_URL: Final = "https://api.github.com/copilot_internal/v2/token"
+_CUSTOM_CLIENT_ID: Final = "Ov23liCustomOrgApp"
+_ACCOUNT_API_BASE: Final = "https://api.business.githubcopilot.com"
+
+
+def _account_payload(access_type_sku="copilot_enterprise_seat", chat_enabled=True, api_base=_ACCOUNT_API_BASE):
+    return {"access_type_sku": access_type_sku, "chat_enabled": chat_enabled, "endpoints": {"api": api_base}}
+
+
+def _account_responder(payload=None, status=200, model_payload=None):
+    def respond(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == ACCOUNT_URL:
+            return httpx.Response(status, json=payload or _account_payload(), request=request)
+        if model_payload is not None and request.url.host.endswith("githubcopilot.com"):
+            return httpx.Response(200, json=model_payload, request=request)
+        pytest.fail(f"unexpected request to {request.url}")
+
+    return respond
+
+
+@pytest.fixture(params=[None, _CUSTOM_CLIENT_ID], ids=["default-client-id", "custom-client-id"])
+def copilot_client_id(request, monkeypatch: pytest.MonkeyPatch):
+    if request.param is None:
+        monkeypatch.delenv("GITHUB_COPILOT_CLIENT_ID", raising=False)
+        return
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", request.param)
+
+
+@pytest.mark.asyncio
+async def test_user_lookup_uses_the_github_token_for_any_client_id(copilot_client_id):
+    endpoints: Final = github_host_endpoints("github.com")
+    with github_http(_account_responder()) as requests:
+        first = await aresolve_copilot_user_session("user-a", "gho_org_app", "copilot-cred", endpoints)
+        second = await aresolve_copilot_user_session("user-a", "gho_org_app", "copilot-cred", endpoints)
+
+    assert [str(r.url) for r in requests] == [ACCOUNT_URL]
+    assert requests[0].headers["Authorization"] == "token gho_org_app"
+    assert first.token == second.token == "gho_org_app"
+    assert first.api_base == _ACCOUNT_API_BASE
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _account_payload(access_type_sku="no_access", chat_enabled=False),
+        _account_payload(chat_enabled=False),
+        _account_payload(access_type_sku="no_access"),
+    ],
+)
+def test_user_lookup_without_a_copilot_seat_raises_reconnect(copilot_client_id, payload):
+    with github_http(_account_responder(payload)):
+        with pytest.raises(CallerCredentialAuthenticationError):
+            resolve_copilot_user_session("user-a", "gho_org_app", "copilot-cred", github_host_endpoints("github.com"))
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_rejected_user_lookup_raises_reconnect(copilot_client_id, status):
+    with github_http(_account_responder(status=status)):
+        with pytest.raises(CallerCredentialAuthenticationError):
+            resolve_copilot_user_session("user-a", "gho_org_app", "copilot-cred", github_host_endpoints("github.com"))
+
+
+def test_user_lookup_api_base_must_stay_on_copilot_hosts(copilot_client_id):
+    with github_http(_account_responder(_account_payload(api_base="https://evil.example"))):
+        session = resolve_copilot_user_session(
+            "user-a", "gho_org_app", "copilot-cred", github_host_endpoints("github.com")
+        )
+    assert session.api_base == "https://api.githubcopilot.com"
+
+
 def _kwargs_with_connection(
     token: str = "gho_user_token",
     github_host: str | None = "github.com",
@@ -775,6 +846,23 @@ def test_e2e_embedding_per_user_caller_authorization_cannot_override_session(per
             extra_headers=dict(_EVIL_AUTH_HEADERS),
         )
     _assert_session_token_on_the_wire(requests)
+
+
+def test_e2e_per_user_sends_the_github_token_to_the_accounts_copilot_host(per_user_credential, copilot_client_id):
+    with (
+        github_http(_account_responder(model_payload=_embedding_response_payload())) as requests,
+        _no_authenticator(),
+    ):
+        litellm.embedding(
+            model="github_copilot/text-embedding-3-small",
+            input=["hi"],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_secret_fields("user-a", "gho_org_app"),
+        )
+    assert EXCHANGE_URL not in [str(r.url) for r in requests]
+    upstream = [r for r in requests if r.url.host.endswith("githubcopilot.com")]
+    assert upstream[0].url.host == httpx.URL(_ACCOUNT_API_BASE).host
+    assert upstream[0].headers["authorization"] == "Bearer gho_org_app"
 
 
 def test_e2e_responses_per_user_caller_authorization_cannot_override_session(per_user_credential):
