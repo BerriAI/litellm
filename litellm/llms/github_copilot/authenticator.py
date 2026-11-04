@@ -81,9 +81,10 @@ def _copilot_api_base_for_token(access_token: str) -> str | None:
         if validated != api_base.rstrip("/"):
             return None
         _COPILOT_API_BASE_CACHE.set_cache(cache_key, validated)
-        return validated
     except Exception:
         return None
+    else:
+        return validated
 
 
 def github_api_headers(
