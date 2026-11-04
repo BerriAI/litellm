@@ -1581,4 +1581,67 @@ def test_health_test_model_names_the_check_that_failed_for_an_unsaved_model_that
         ), response.text
         assert checks["cost_tracking"][0] == "fail", response.text
         assert "no price resolved for this model" in checks["cost_tracking"][1], response.text
-        assert len(wire.drain()) >= 2, response.text
+        assert len(wire.drain()) == 5, response.text
+
+
+@pytest.mark.timeout(240)
+def test_health_test_model_bills_an_unsaved_model_at_the_custom_prices_in_its_model_info(gateway: Gateway) -> None:
+    with wire_server(lambda request: _test_model_chat_reply(request, cached_tokens=4800)) as wire:
+        response: Final = gateway.request(
+            "POST",
+            "/health/test_model",
+            {
+                "litellm_params": {
+                    "model": f"openai/priced-{uuid.uuid4().hex}",
+                    "api_base": f"{wire.url}/v1",
+                    "api_key": "synthetic-priced-key",
+                },
+                "model_info": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
+                "endpoints": ["/v1/chat/completions"],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        payload: Final = JSON_OBJECT.validate_json(response.content)
+        assert payload["status"] == "success", response.text
+        checks: Final = _check_statuses(object_value(list_value(payload["endpoints"])[0]))
+        assert checks["cost_tracking"][0] == "pass", response.text
+        assert checks["cost_tracking"][1].startswith("turn 1 $0.005024, "), response.text
+        assert "spend log rows written" in checks["cost_tracking"][1], response.text
+        assert len(wire.drain()) == 3, response.text
+
+
+@pytest.mark.timeout(240)
+def test_health_test_model_with_a_different_model_than_the_saved_deployment_calls_that_model(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        wire_server(lambda request: _test_model_chat_reply(request, cached_tokens=4800)) as wire,
+    ):
+        model_name: Final = scenario.model(api_base=f"{wire.url}/v1", api_key="synthetic-override-key")
+        model_id: Final = next(
+            string_value(object_value(info["model_info"])["id"])
+            for info in (object_value(entry) for entry in list_value(gateway.get("/v1/model/info")["data"]))
+            if info["model_name"] == model_name
+        )
+        override: Final = f"openai/override-{uuid.uuid4().hex}"
+
+        response: Final = gateway.request(
+            "POST",
+            "/health/test_model",
+            {"model_id": model_id, "litellm_params": {"model": override}, "endpoints": ["/v1/chat/completions"]},
+        )
+
+        assert response.status_code == 200, response.text
+        payload: Final = JSON_OBJECT.validate_json(response.content)
+        assert payload["model"] == override, response.text
+        assert payload["model_id"] is None, response.text
+        assert _check_statuses(object_value(list_value(payload["endpoints"])[0]))["conversation"][0] == "pass", (
+            response.text
+        )
+        requests: Final = wire.drain()
+        assert [JSON_OBJECT.validate_json(request.body)["model"] for request in requests] == [
+            override.removeprefix("openai/")
+        ] * 3, response.text
+        assert [request.headers["authorization"] for request in requests] == ["Bearer synthetic-override-key"] * 3, (
+            response.text
+        )

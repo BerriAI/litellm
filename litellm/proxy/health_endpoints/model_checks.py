@@ -16,6 +16,7 @@ tool result is used, the follow-up is answered from the earlier turn), prompt ca
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -316,7 +317,10 @@ def _first_choice_message(plain: Mapping[str, object]) -> object:
         choices: Final = _CHOICES.validate_python(plain.get("choices"))
     except ValidationError:
         return dict(_EMPTY_ASSISTANT)
-    return choices[0].get("message", dict(_EMPTY_ASSISTANT)) if choices else dict(_EMPTY_ASSISTANT)
+    message: Final = choices[0].get("message") if choices else None
+    if not isinstance(message, dict):
+        return dict(_EMPTY_ASSISTANT)
+    return {**_EMPTY_ASSISTANT, **_PLAIN_OBJECT.validate_python(message)}
 
 
 def _parse_chat(response: object) -> ParsedTurn | str:
@@ -595,6 +599,12 @@ def _cost_verdict(turn_number: int, cost: float | None) -> CheckResult | None:
     return None
 
 
+def _spend_disagreement(turn: TurnOutcome, logged: float) -> str:
+    if turn.cost is None or math.isclose(logged, turn.cost, rel_tol=1e-6, abs_tol=1e-12):
+        return ""
+    return f"request_id {turn.call_id} row ${logged:.6f} vs response_cost ${turn.cost:.6f}"
+
+
 def _cost_tracking_check(turns: Sequence[TurnOutcome], spend_rows: Mapping[str, float] | None) -> CheckResult:
     if not turns:
         return CheckResult("cost_tracking", "fail", "not checked, no turn returned a response")
@@ -614,6 +624,14 @@ def _cost_tracking_check(turns: Sequence[TurnOutcome], spend_rows: Mapping[str, 
             "cost_tracking",
             "fail",
             f"{priced}, but no LiteLLM_SpendLogs row landed for request_id {', '.join(missing)}",
+        )
+    disagreeing: Final = tuple(_spend_disagreement(turn, spend_rows[turn.call_id]) for turn in turns)
+    if any(disagreeing):
+        return CheckResult(
+            "cost_tracking",
+            "fail",
+            f"{priced}, but the spend log row disagrees with the response cost ("
+            f"{', '.join(note for note in disagreeing if note)})",
         )
     logged: Final = ", ".join(f"${spend_rows[turn.call_id]:.6f}" for turn in turns)
     return CheckResult("cost_tracking", "pass", f"{priced}, spend log rows written ({logged})")

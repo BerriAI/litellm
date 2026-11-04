@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
 import pytest
@@ -11,6 +11,7 @@ from litellm.proxy.health_endpoints.model_checks import (
     RESPONSES_SCRIPT,
     WEATHER_TOOL_RESULT,
     CalledTurn,
+    EndpointResult,
     EndpointScript,
     endpoint_result_payload,
     overall_status,
@@ -150,7 +151,9 @@ def _ids() -> Sequence[str]:
     return ("call-1", "call-2", "call-3", "call-4", "call-5")
 
 
-def _run(script: EndpointScript, provider: _ScriptedProvider, spend_rows: Mapping[str, float] | None = None):
+def _run(
+    script: EndpointScript, provider: _ScriptedProvider, spend_rows: Mapping[str, float] | None = None
+) -> EndpointResult:
     ids: Final = iter(_ids())
 
     async def spend_lookup(request_ids: Sequence[str]) -> Mapping[str, float]:
@@ -166,7 +169,7 @@ def _run(script: EndpointScript, provider: _ScriptedProvider, spend_rows: Mappin
     )
 
 
-def _checks(result) -> Mapping[str, tuple[str, str]]:
+def _checks(result: EndpointResult) -> Mapping[str, tuple[str, str]]:
     return {check.name: (check.status, check.detail) for check in result.checks}
 
 
@@ -179,7 +182,9 @@ def _checks(result) -> Mapping[str, tuple[str, str]]:
     ],
     ids=["chat", "responses", "messages"],
 )
-def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its_own_shape(script, reply, key):
+def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its_own_shape(
+    script: EndpointScript, reply: Callable[..., object], key: str
+) -> None:
     provider: Final = _ScriptedProvider(
         CalledTurn(reply(tool_call=True), 0.004),
         [
@@ -229,6 +234,7 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its
         tool_message: Final = turn_two["messages"][-1]
         assert tool_message == {"role": "tool", "tool_call_id": _TOOL_CALL_ID, "content": WEATHER_TOOL_RESULT}
         assert turn_two["messages"][-2]["tool_calls"][0]["id"] == _TOOL_CALL_ID
+        assert "content" in turn_two["messages"][-2] and turn_two["messages"][-2]["content"] is None, turn_two
         assert turn_three["messages"][-2]["role"] == "system", turn_three
         assert turn_three["messages"][-3]["role"] == "assistant", turn_three
         assert turn_three["messages"][-3]["content"] == _TURN_TWO_ANSWER, turn_three
@@ -462,6 +468,26 @@ def test_a_missing_spend_log_row_fails_cost_tracking_even_when_the_response_was_
         "fail",
         "turn 1 $0.004000, turn 2 $0.000500, turn 3 $0.000400, but no LiteLLM_SpendLogs row landed for "
         "request_id call-2",
+    )
+
+
+def test_a_spend_log_row_that_disagrees_with_the_response_cost_fails_cost_tracking() -> None:
+    provider: Final = _ScriptedProvider(
+        CalledTurn(_chat_reply(tool_call=True), 0.004),
+        [
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0005),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0004),
+        ],
+    )
+
+    checks: Final = _checks(
+        _run(CHAT_COMPLETIONS_SCRIPT, provider, spend_rows={"call-1": 0.004, "call-2": 0.0, "call-3": 0.0004})
+    )
+
+    assert checks["cost_tracking"] == (
+        "fail",
+        "turn 1 $0.004000, turn 2 $0.000500, turn 3 $0.000400, but the spend log row disagrees with the response "
+        "cost (request_id call-2 row $0.000000 vs response_cost $0.000500)",
     )
 
 

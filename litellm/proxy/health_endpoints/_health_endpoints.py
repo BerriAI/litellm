@@ -122,7 +122,11 @@ from litellm.router_api import deployment_usable_by_team
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import Deployment, reject_server_owned_wif_fields
-from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
+from litellm.types.utils import (
+    AdminApiKeySecretReference,
+    CustomPricingLiteLLMParams,
+    admin_api_key_secret_reference,
+)
 
 #### Health ENDPOINTS ####
 
@@ -2641,7 +2645,8 @@ _TEST_MODEL_TAG_PREFIX: Final = "litellm_test_model:"
 _SPEND_LOG_BY_TAG_SQL: Final = """
     SELECT tag, "spend"
     FROM "LiteLLM_SpendLogs" sl, jsonb_array_elements_text(sl."request_tags"::jsonb) AS tag
-    WHERE tag IN (SELECT jsonb_array_elements_text($1::jsonb))
+    WHERE sl."startTime" >= ($2::timestamptz AT TIME ZONE 'UTC')
+      AND tag IN (SELECT jsonb_array_elements_text($1::jsonb))
 """
 
 
@@ -2649,11 +2654,26 @@ def _test_model_tag(call_id: str) -> str:
     return f"{_TEST_MODEL_TAG_PREFIX}{call_id}"
 
 
-async def _spend_rows_once(run_query: _RawQuery, request_ids: frozenset[str]) -> Mapping[str, float]:
+def _custom_pricing_fields(model_info: Mapping[str, object] | None) -> Mapping[str, object]:
+    """The custom prices an unsaved model's ``model_info`` carries, sent on the call the way a saved deployment's
+    prices apply, so the check bills it as the proxy will once it is saved."""
+    return {
+        key: value
+        for key, value in (model_info or {}).items()
+        if key in CustomPricingLiteLLMParams.model_fields and value is not None
+    }
+
+
+async def _spend_rows_once(run_query: _RawQuery, request_ids: frozenset[str], since: datetime) -> Mapping[str, float]:
     """Spend per request id. The row's request_id is the provider's response id, so each turn is found by the
-    tag the check put on it, which the proxy writes to request_tags like any client tag."""
+    tag the check put on it, which the proxy writes to request_tags like any client tag. Only rows started at or
+    after ``since`` are scanned, through the ``startTime`` index, so the check never reads the whole table."""
     rows: Final = _SPEND_LOG_ROWS.validate_python(
-        await run_query(_SPEND_LOG_BY_TAG_SQL, json.dumps(sorted(_test_model_tag(call_id) for call_id in request_ids)))
+        await run_query(
+            _SPEND_LOG_BY_TAG_SQL,
+            json.dumps(sorted(_test_model_tag(call_id) for call_id in request_ids)),
+            since.isoformat(),
+        )
     )
     return MappingProxyType({row.tag.removeprefix(_TEST_MODEL_TAG_PREFIX): row.spend for row in rows})
 
@@ -2662,6 +2682,7 @@ async def _spend_log_rows(
     run_query: _RawQuery,
     request_ids: Sequence[str],
     *,
+    since: datetime,
     wait_seconds: float = TEST_MODEL_SPEND_LOG_WAIT_SECONDS,
     poll_seconds: float = 1.0,
 ) -> Mapping[str, float]:
@@ -2672,7 +2693,9 @@ async def _spend_log_rows(
     """
     deadline: Final = time.monotonic() + wait_seconds
     wanted: Final = frozenset(request_ids)
-    while not wanted <= (found := await _spend_rows_once(run_query, wanted)).keys() and time.monotonic() < deadline:
+    while (
+        not wanted <= (found := await _spend_rows_once(run_query, wanted, since)).keys() and time.monotonic() < deadline
+    ):
         await asyncio.sleep(poll_seconds)
     return found
 
@@ -2695,10 +2718,15 @@ def _test_model_endpoints(
 
 
 async def _logged_cost(logging_obj: LiteLLMLoggingObj, fallback: float | None) -> float | None:
-    """The cost the success handler logged for the call, which lands a moment after the call returns."""
+    """The cost the success handler logged for the call, which lands a moment after the call returns. The wait
+    ends as soon as the handler has built the call's standard logging payload, so an unpriced call does not hold
+    every turn for the full budget."""
     deadline: Final = time.monotonic() + TEST_MODEL_COST_WAIT_SECONDS
-    while (logged := _OBJECT_MAPPING.validate_python(logging_obj.model_call_details).get("response_cost")) is None and (
-        time.monotonic() < deadline
+    while (
+        (logged := (details := _OBJECT_MAPPING.validate_python(logging_obj.model_call_details)).get("response_cost"))
+        is None
+        and "standard_logging_object" not in details
+        and time.monotonic() < deadline
     ):
         await asyncio.sleep(0.05)
     return float(logged) if isinstance(logged, int | float) else fallback
@@ -2714,7 +2742,8 @@ def _turn_caller(
     """The two ways a turn reaches the provider: pinned to a saved deployment through the router, so the
     deployment's own credentials and pricing apply, or straight through litellm with the submitted params.
     Either way the call carries the proxy's own logging object, the way every proxied request does, so the
-    cost read back is the one the spend log row gets."""
+    cost read back is the one the spend log row gets. Every turn skips LiteLLM's response cache, so the reply,
+    and the cache-miss retry of the same prompt, come from the provider and not from a stored answer."""
 
     async def call(script: EndpointScript, body: Mapping[str, object], call_id: str) -> CalledTurn:
         target_params: Final = {"model": pinned_model_id} if pinned_model_id is not None else call_params
@@ -2728,6 +2757,7 @@ def _turn_caller(
                 script.metadata_key: {**proxy_metadata, "tags": [_test_model_tag(call_id)]},
                 "litellm_call_id": call_id,
                 "drop_params": True,
+                "cache": {"no-cache": True},
             },
         )
         prepared["litellm_logging_obj"] = logging_obj
@@ -2785,7 +2815,9 @@ async def test_model(
     answer from turn 2. Three checks come out of it:
 
     - `conversation`: every turn parses, turn 1 calls the tool, turn 2 uses the tool result, turn 3 carries it on
-    - `prompt_caching`: turns 2 and 3 report cached input tokens, with no cache markers in the request
+    - `prompt_caching`: turns 2 and 3 report cached input tokens and turn 3 reads at least as many as turn 2.
+      Chat Completions and Responses send no cache markers, so the provider has to cache the repeated prefix on
+      its own. Messages sends `cache_control` on the latest user message the way Claude Code does
     - `cost_tracking`: every turn carries a non-zero response cost, and the spend log row lands when a
       database is connected
 
@@ -2852,12 +2884,17 @@ async def test_model(
                 status_code=status.HTTP_403_FORBIDDEN, detail={"error": "Only proxy admins can test models."}
             )
 
-        call_params: Final = {key: value for key, value in resolved.litellm_params.items() if key != "mode"}
+        call_params: Final = {
+            **_custom_pricing_fields(resolved.resolved_model_info),
+            **{key: value for key, value in resolved.litellm_params.items() if key != "mode"},
+        }
         mode: Final = _string_mode_or_bad_request(resolved.litellm_params.get("mode")) or resolve_health_check_mode(
             resolved.probe_model_info, _OBJECT_MAPPING.validate_python(call_params)
         )
         selected: Final = _test_model_endpoints(endpoints, mode)
-        overrides_saved_deployment: Final = any(key != "model" for key in resolved.request_litellm_params)
+        overrides_saved_deployment: Final = any(
+            key != "model" or value != resolved.stored_model for key, value in resolved.request_litellm_params.items()
+        )
         pinned_model_id: Final = (
             resolved.deployment_by_id.model_info.id
             if resolved.deployment_by_id is not None and not overrides_saved_deployment
@@ -2880,9 +2917,10 @@ async def test_model(
             proxy_metadata=proxy_metadata,
         )
         run_query: Final[_RawQuery | None] = prisma_client.db.query_raw if prisma_client is not None else None
+        started_at: Final = datetime.now(timezone.utc) - timedelta(minutes=1)
 
         async def spend_lookup(request_ids: Sequence[str]) -> Mapping[str, float]:
-            return await _spend_log_rows(run_query, request_ids) if run_query is not None else {}
+            return await _spend_log_rows(run_query, request_ids, since=started_at) if run_query is not None else {}
 
         results: Final[Sequence[EndpointResult]] = await asyncio.gather(
             *(
