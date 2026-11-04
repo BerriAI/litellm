@@ -35,8 +35,13 @@ mod _native {
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::model_registry::{
-        AliasWarning, ModelCountProblem, bundled_model_cost_map, count_model_entries,
-        expand_model_aliases, git_blob_id, model_count_problem, retry_wait_seconds,
+        AliasWarning, ModelCostMapFetch, ModelCountProblem, PyProvenance, PyRefresh,
+        bundled_model_cost_map, cost_map_omits_token_price, count_model_entries,
+        expand_model_aliases, find_model_cost_key, git_blob_id, install_model_cost_map_provenance,
+        invalidate_model_cost_keys, live_row_or, model_cost_map_provenance, model_count_problem,
+        registration_row, stringified_number, take_fallback_generalization_rules,
+        update_dictionary, with_pricing_overrides, without_overridden_price_variants,
+        without_synthesized_costs,
     };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
@@ -122,7 +127,22 @@ mod tests {
                 "expand_model_aliases",
                 "AliasWarning",
                 "git_blob_id",
-                "retry_wait_seconds",
+                "ModelCostMapFetch",
+                "ModelCostMapProvenance",
+                "ModelCostMapRefresh",
+                "find_model_cost_key",
+                "cost_map_omits_token_price",
+                "live_row_or",
+                "invalidate_model_cost_keys",
+                "install_model_cost_map_provenance",
+                "model_cost_map_provenance",
+                "registration_row",
+                "stringified_number",
+                "take_fallback_generalization_rules",
+                "update_dictionary",
+                "with_pricing_overrides",
+                "without_overridden_price_variants",
+                "without_synthesized_costs",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

@@ -103,6 +103,24 @@ where
     run_sync_on(py, runtime()?, future, map_error)
 }
 
+/// Runs `future` with the GIL released on a current-thread runtime that is dropped before this returns, so no runtime
+/// thread outlives the call and the fork gate is never claimed. For work at import time, before the process has
+/// decided whether it forks workers or reserves itself for forking
+pub fn run_detached_value<T, F>(py: Python<'_>, future: F) -> PyResult<T>
+where
+    T: Send,
+    F: Future<Output = PyResult<T>> + Send,
+{
+    if Handle::try_current().is_ok() {
+        return Err(Error::SyncInsideTokio.into());
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| PyRuntimeError::new_err(Report::new(&error).to_string()))?;
+    release_gil(py, move || runtime.block_on(future))
+}
+
 pub fn run_sync_value<T, F>(py: Python<'_>, future: F) -> PyResult<T>
 where
     T: Send + 'static,
@@ -539,6 +557,21 @@ asyncio.run(exercise())
 
             assert!(extract_bool(py, result));
         });
+    }
+
+    #[rstest]
+    fn a_detached_run_completes_without_claiming_the_fork_gate(
+        #[from(initialized_python)] python: &InitializedPython,
+    ) {
+        let started_before = runtime_started();
+        let value = python.attach(|py| {
+            run_detached_value(py, async {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                Ok(7)
+            })
+        });
+        assert_eq!(value.unwrap(), 7);
+        assert_eq!(runtime_started(), started_before);
     }
 
     #[rstest]

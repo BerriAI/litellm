@@ -9,6 +9,7 @@ import threading
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import wait
 from functools import partial
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -3778,13 +3779,14 @@ CatalogLoader: TypeAlias = Callable[[Mapping[str, Mapping[str, object]]], Awaita
 
 
 @pytest.fixture
-def load_catalog_with(monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None) -> Iterator[CatalogLoader]:
+def load_catalog_with(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, tmp_path: Path
+) -> Iterator[CatalogLoader]:
     async def load(rows: Mapping[str, Mapping[str, object]]) -> None:
-        catalog: Final = {**litellm.get_model_cost_map(url=""), **rows}
-        transport: Final = httpx.MockTransport(lambda _: httpx.Response(200, json=catalog))
+        catalog: Final = tmp_path / "prices.json"
+        catalog.write_text(json.dumps({**litellm.get_model_cost_map(url=""), **rows}))
         monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP")
-        async with httpx.AsyncClient(transport=transport) as client:
-            loaded: Final = await refetch_model_cost_map(url="https://catalog.example/prices.json", client=client)
+        loaded: Final = await refetch_model_cost_map(url=catalog.as_uri())
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
         assert isinstance(loaded, ModelCostMapReloaded)
         monkeypatch.setattr(litellm, "model_cost", loaded.model_cost_map)

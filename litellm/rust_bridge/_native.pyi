@@ -5,6 +5,7 @@ from typing import Never, final
 
 import httpx
 from pydantic import JsonValue
+from typing_extensions import disjoint_base
 
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
@@ -19,10 +20,12 @@ def bundled_model_cost_map() -> bytes: ...
 def count_model_entries(model_cost: Mapping[str, object]) -> int: ...
 def git_blob_id(body: bytes) -> str: ...
 
+@disjoint_base
 class ModelCountProblem:
     @final
     class BelowMinimum(ModelCountProblem):
         __match_args__ = ("actual", "minimum")
+        def __new__(cls, actual: int, minimum: int) -> ModelCountProblem.BelowMinimum: ...
         @property
         def actual(self) -> int: ...
         @property
@@ -31,22 +34,128 @@ class ModelCountProblem:
     @final
     class Shrunk(ModelCountProblem):
         __match_args__ = ("actual", "reference")
+        def __new__(cls, actual: int, reference: int) -> ModelCountProblem.Shrunk: ...
         @property
         def actual(self) -> int: ...
         @property
         def reference(self) -> int: ...
 
-def retry_wait_seconds(
-    attempt: int, max_attempts: int, retry_after_seconds: float | None, rng: random.Random
-) -> float | None: ...
+@disjoint_base
+class ModelCostMapFetch:
+    @final
+    class Adopted(ModelCostMapFetch):
+        __match_args__ = ("body", "revision", "etag")
+        def __new__(cls, body: bytes, revision: str, etag: str | None) -> ModelCostMapFetch.Adopted: ...
+        @property
+        def body(self) -> bytes: ...
+        @property
+        def revision(self) -> str: ...
+        @property
+        def etag(self) -> str | None: ...
+
+    @final
+    class NotModified(ModelCostMapFetch):
+        __match_args__ = ()
+        def __new__(cls) -> ModelCostMapFetch.NotModified: ...
+
+    @final
+    class Failed(ModelCostMapFetch):
+        __match_args__ = ("reason",)
+        def __new__(cls, reason: str) -> ModelCostMapFetch.Failed: ...
+        @property
+        def reason(self) -> str: ...
+
+    @final
+    class Retryable(ModelCostMapFetch):
+        __match_args__ = ("reason", "retry_after")
+        def __new__(cls, reason: str, retry_after: float | None) -> ModelCostMapFetch.Retryable: ...
+        @property
+        def reason(self) -> str: ...
+        @property
+        def retry_after(self) -> float | None: ...
+
+_ModelCostMapRetryReport = Callable[[int, int, str, float], None]
+
+@final
+class ModelCostMapRefresh:
+    def __new__(
+        cls,
+        url: str,
+        *,
+        timeout: float,
+        max_attempts: int,
+        rng: random.Random,
+        on_retry: _ModelCostMapRetryReport,
+        sleep: Callable[[float], object] | None = None,
+    ) -> ModelCostMapRefresh: ...
+    def attempt(
+        self,
+    ) -> (
+        ModelCostMapFetch.Adopted
+        | ModelCostMapFetch.NotModified
+        | ModelCostMapFetch.Failed
+        | ModelCostMapFetch.Retryable
+    ): ...
+    def run(
+        self, first: ModelCostMapFetch.Retryable | None = None
+    ) -> ModelCostMapFetch.Adopted | ModelCostMapFetch.NotModified | ModelCostMapFetch.Failed: ...
+    def run_detached(self) -> ModelCostMapFetch.Adopted | ModelCostMapFetch.NotModified | ModelCostMapFetch.Failed: ...
+    def arun(
+        self,
+    ) -> Future[ModelCostMapFetch.Adopted | ModelCostMapFetch.NotModified | ModelCostMapFetch.Failed]: ...
+
+@final
+class ModelCostMapProvenance:
+    @property
+    def source(self) -> str: ...
+    @property
+    def url(self) -> str | None: ...
+    @property
+    def is_env_forced(self) -> bool: ...
+    @property
+    def fallback_reason(self) -> str | None: ...
+    @property
+    def loaded_at(self) -> float: ...
+    @property
+    def revision(self) -> str | None: ...
+    @property
+    def etag(self) -> str | None: ...
+
+def install_model_cost_map_provenance(
+    *,
+    source: str,
+    url: str | None,
+    is_env_forced: bool,
+    fallback_reason: str | None,
+    revision: str | None,
+    etag: str | None,
+) -> None: ...
+def model_cost_map_provenance() -> ModelCostMapProvenance | None: ...
+def find_model_cost_key(name: str) -> str | None: ...
+def cost_map_omits_token_price(keys: tuple[object, ...]) -> bool: ...
+def live_row_or(key: str, fallback: Mapping[str, object]) -> Mapping[str, object]: ...
+def invalidate_model_cost_keys() -> None: ...
+def take_fallback_generalization_rules(model_cost: dict[str, object]) -> object: ...
+def stringified_number(text: str) -> int | float | None: ...
+def update_dictionary(existing: Mapping[str, object], new: Mapping[str, object]) -> dict[str, object]: ...
+def registration_row(base: Mapping[str, object], registration: Mapping[str, object]) -> dict[str, object]: ...
+def without_overridden_price_variants(
+    entry: Mapping[str, object], registration: Mapping[str, object]
+) -> dict[str, object]: ...
+def without_synthesized_costs(
+    model_info: Mapping[str, object], raw_entry: Mapping[str, object], registration: Mapping[str, object]
+) -> dict[str, object]: ...
+def with_pricing_overrides(model_info: Mapping[str, object], overrides: Mapping[str, object]) -> dict[str, object]: ...
 def model_count_problem(
     fetched_map: Mapping[str, object], backup_model_count: int, min_model_count: int, max_shrink_ratio: float
 ) -> ModelCountProblem.BelowMinimum | ModelCountProblem.Shrunk | None: ...
 
+@disjoint_base
 class AliasWarning:
     @final
     class NotAList(AliasWarning):
         __match_args__ = ("model", "type_name")
+        def __new__(cls, model: object, type_name: str) -> AliasWarning.NotAList: ...
         @property
         def model(self) -> object: ...
         @property
@@ -55,6 +164,7 @@ class AliasWarning:
     @final
     class ShadowsModel(AliasWarning):
         __match_args__ = ("alias", "model")
+        def __new__(cls, alias: object, model: object) -> AliasWarning.ShadowsModel: ...
         @property
         def alias(self) -> object: ...
         @property
@@ -63,6 +173,7 @@ class AliasWarning:
     @final
     class Taken(AliasWarning):
         __match_args__ = ("alias", "model")
+        def __new__(cls, alias: object, model: object) -> AliasWarning.Taken: ...
         @property
         def alias(self) -> object: ...
         @property
@@ -273,6 +384,9 @@ __all__ = [
     "AliasWarning",
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
+    "ModelCostMapFetch",
+    "ModelCostMapProvenance",
+    "ModelCostMapRefresh",
     "ModelCountProblem",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
@@ -292,22 +406,34 @@ __all__ = [
     "atranscription",
     "bundled_model_cost_map",
     "completion",
+    "cost_map_omits_token_price",
     "count_model_entries",
     "embedding",
     "expand_model_aliases",
+    "find_model_cost_key",
     "gil_stats",
     "git_blob_id",
+    "install_model_cost_map_provenance",
+    "invalidate_model_cost_keys",
+    "live_row_or",
     "messages",
+    "model_cost_map_provenance",
     "model_count_problem",
     "ocr",
     "ocr_health_check_document",
     "ocr_passthrough_response",
     "process_state_started",
+    "registration_row",
     "reserve_process_for_forking",
     "responses",
-    "retry_wait_seconds",
+    "stringified_number",
+    "take_fallback_generalization_rules",
     "trace_encode_error",
     "transcription",
+    "update_dictionary",
+    "with_pricing_overrides",
+    "without_overridden_price_variants",
+    "without_synthesized_costs",
 ]
 
 @final

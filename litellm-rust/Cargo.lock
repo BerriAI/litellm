@@ -4250,6 +4250,7 @@ dependencies = [
  "jsonschema",
  "litellm-cost",
  "litellm-error",
+ "litellm-python-compat",
  "macro_rules_attribute",
  "rstest",
  "schemars 1.2.2",
@@ -4266,14 +4267,20 @@ dependencies = [
 name = "litellm-model-catalog-refresh"
 version = "0.1.0"
 dependencies = [
+ "http 1.4.2",
+ "litellm-auth-aws",
+ "litellm-cache-s3",
  "litellm-error",
  "litellm-http",
  "litellm-model-catalog",
+ "litellm-python-compat",
  "reqwest",
  "rstest",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "url",
+ "wiremock",
 ]
 
 [[package]]

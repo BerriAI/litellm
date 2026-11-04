@@ -46,7 +46,9 @@ Every price in a row lowers to one `Price { meter, channel, when }` and its `Uni
 
 `store/` is the catalog's in-memory store and the only place that indexes model names. Its rules are in [src/store/AGENTS.md](src/store/AGENTS.md)
 
-`layers.rs`, `resolve/`, `model_info.rs` and `register.rs` hold types only. The functions over them land with their first caller
+`resolve/` and `model_info.rs` hold types only. The functions over them land with their first caller
+
+`register.rs` is the `register_model` merge rule, `(base row, registration) -> row`, generic over `FieldValue` so python-bridge runs it on Python objects and a JSON host on `serde_json::Value`
 
 Catalog errors use one opaque `Error` with typed causes and JSON Pointer accessors (`path`, `key`, `field`). `Error::rejects` alone decides whether an error fails the document, rejects its row or neither, and `ErrorKind` is the stable name hosts report it by
 

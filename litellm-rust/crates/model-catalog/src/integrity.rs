@@ -1,7 +1,7 @@
 use sha1::{Digest, Sha1};
 
-pub(crate) const SAMPLE_SPEC: &str = "sample_spec";
-pub(crate) const FALLBACK_GENERALIZATIONS: &str = "fallback_generalizations";
+pub const SAMPLE_SPEC: &str = "sample_spec";
+pub const FALLBACK_GENERALIZATIONS: &str = "fallback_generalizations";
 
 /// Why a fetched map is too small to serve
 #[derive(Clone, Copy, Debug, PartialEq)]

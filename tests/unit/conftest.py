@@ -4,8 +4,10 @@ import importlib
 import os
 import shutil
 import tempfile
-from collections.abc import Callable, Coroutine, Iterator
+import threading
+from collections.abc import Callable, Coroutine, Iterator, Sequence
 from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
@@ -478,6 +480,69 @@ FAKE_PROVIDER_CREDENTIALS: Final = MappingProxyType(
 def fake_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     for name, value in FAKE_PROVIDER_CREDENTIALS.items():
         monkeypatch.setenv(name, value)
+
+
+@dataclass
+class ScriptedHttp:
+    """A loopback HTTP server answering request ``n`` with ``replies[n]``, the last reply repeating. An
+    ``httpx.TransportError`` reply closes the connection unanswered"""
+
+    url: str
+    replies: Sequence[httpx.Response | httpx.TransportError]
+    requests: list[dict[str, str]] = field(default_factory=list)  # mutable-ok: the handler thread records each request
+
+    @property
+    def count(self) -> int:
+        return len(self.requests)
+
+    def reply(self) -> httpx.Response | httpx.TransportError:
+        return self.replies[min(self.count, len(self.replies)) - 1]
+
+
+def _scripted_handler(scripted: Callable[[], ScriptedHttp]) -> type[BaseHTTPRequestHandler]:
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self) -> None:
+            server: Final = scripted()
+            server.requests.append({"path": self.path, **{name.lower(): value for name, value in self.headers.items()}})
+            reply: Final = server.reply()
+            self.close_connection = True
+            if isinstance(reply, httpx.TransportError):
+                return
+            self.send_response(reply.status_code)
+            for name, value in reply.headers.multi_items():
+                if name.lower() not in ("content-length", "connection"):
+                    self.send_header(name, value)
+            self.send_header("Content-Length", str(len(reply.content)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(reply.content)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    return Handler
+
+
+@pytest.fixture
+def scripted_http() -> Iterator[Callable[[Sequence[httpx.Response | httpx.TransportError], str], ScriptedHttp]]:
+    servers: Final[list[ThreadingHTTPServer]] = []  # mutable-ok: every server the test started, shut down after it
+
+    def serve(
+        replies: Sequence[httpx.Response | httpx.TransportError], path: str = "/model_prices.json"
+    ) -> ScriptedHttp:
+        holder: Final[list[ScriptedHttp]] = []  # mutable-ok: lets the handler class find its script
+        server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _scripted_handler(lambda: holder[0]))
+        holder.append(ScriptedHttp(url=f"http://127.0.0.1:{server.server_address[1]}{path}", replies=replies))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return holder[0]
+
+    yield serve
+    for server in servers:
+        server.shutdown()
+        server.server_close()
 
 
 @pytest.fixture

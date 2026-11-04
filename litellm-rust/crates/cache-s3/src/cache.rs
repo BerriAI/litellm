@@ -31,6 +31,27 @@ pub struct S3CacheConfig {
     pub auth: AwsAuthConfig,
 }
 
+/// An S3 client config over litellm's HTTP client and AWS credential chain. A custom `endpoint` is addressed path
+/// style, as MinIO and other S3 compatible stores expect
+pub fn s3_config(
+    region: String,
+    endpoint: Option<String>,
+    http: litellm_http::Client,
+    auth: AwsAuthConfig,
+) -> aws_sdk_s3::config::Builder {
+    let base = aws_sdk_s3::Config::builder()
+        .behavior_version(BehaviorVersion::latest())
+        .region(Region::new(region))
+        .http_client(ReqwestHttpClient(http))
+        .credentials_provider(S3Credentials::new(auth))
+        .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
+        .response_checksum_validation(ResponseChecksumValidation::WhenRequired);
+    match endpoint {
+        Some(url) => base.endpoint_url(url).force_path_style(true),
+        None => base,
+    }
+}
+
 pub struct S3Cache<C: CacheCodec> {
     client: aws_sdk_s3::Client,
     codec: C,
@@ -49,17 +70,12 @@ impl<C: CacheCodec> S3Cache<C> {
         runtime: Handle,
     ) -> Self {
         let endpoint_url: Option<String> = config.endpoint.map(|endpoint| endpoint.url);
-        let base = aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .region(Region::new(config.region.clone()))
-            .http_client(ReqwestHttpClient(http))
-            .credentials_provider(S3Credentials::new(config.auth))
-            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
-            .response_checksum_validation(ResponseChecksumValidation::WhenRequired);
-        let builder = match &endpoint_url {
-            Some(url) => base.endpoint_url(url).force_path_style(true),
-            None => base,
-        };
+        let builder = s3_config(
+            config.region.clone(),
+            endpoint_url.clone(),
+            http,
+            config.auth,
+        );
         Self {
             client: aws_sdk_s3::Client::from_conf(builder.build()),
             codec,

@@ -6,14 +6,21 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+http.workspace = true
+litellm-auth-aws.workspace = true
+litellm-cache-s3.workspace = true
+litellm-error.workspace = true
 litellm-http.workspace = true
 litellm-model-catalog.workspace = true
+litellm-python-compat.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "time"] }
 url.workspace = true
 
 [dev-dependencies]
-litellm-error.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 reqwest.workspace = true
 rstest.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
+wiremock.workspace = true

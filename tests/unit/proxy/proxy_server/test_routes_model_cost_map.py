@@ -98,7 +98,7 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 
 
 def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every_status_surface(
-    client, auth_as, monkeypatch, mock_prisma
+    client, auth_as, monkeypatch, mock_prisma, scripted_http
 ):
     import httpx
 
@@ -112,11 +112,8 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     body = _ROOT_COST_MAP.read_bytes()
     expected = {"source_revision": git_blob_id(body), "etag": _SERVED_ETAG}
-    served = httpx.Response(200, headers={"ETag": _SERVED_ETAG}, content=body)
-    monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_model_cost_map._default_reload_client",
-        lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda request: served)),
-    )
+    server = scripted_http([httpx.Response(200, headers={"ETag": _SERVED_ETAG}, content=body)])
+    monkeypatch.setattr(litellm, "model_cost_map_url", server.url)
     monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
     monkeypatch.setattr("litellm.model_cost", {}, raising=False)
 
