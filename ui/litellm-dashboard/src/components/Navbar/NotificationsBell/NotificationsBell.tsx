@@ -16,7 +16,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cva.config";
 import { isNewerVersion } from "@/utils/versionUtils";
-import { Bell } from "lucide-react";
+import { Bell, AlertTriangle } from "lucide-react";
+import DeprecationAlertItem from "./DeprecationAlertItem";
+import { deprecationUsageRange, type DeprecationAlert } from "./deprecationAlerts";
+import { useDeprecationAlerts } from "./useDeprecationAlerts";
 import React, { Fragment } from "react";
 
 export const AUTO_ROUTER_DOCS_URL = "https://docs.litellm.ai/docs/proxy/auto_routing";
@@ -88,28 +91,99 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
   );
 };
 
+const deprecationReadKey = (scope: string, id: string) => JSON.stringify(["litellm:deprecationAlert", scope, id]);
+
+function DeprecationNotification({
+  alert,
+  scope,
+  range,
+}: {
+  alert: DeprecationAlert;
+  scope: string;
+  range: ReturnType<typeof deprecationUsageRange>;
+}) {
+  const readKey = deprecationReadKey(scope, alert.id);
+  const dismissed = useAnnouncementRead(readKey);
+  return (
+    <DeprecationAlertItem
+      alert={alert}
+      scope={scope}
+      range={range}
+      dismissed={dismissed}
+      onDismiss={() => markAnnouncementRead(readKey)}
+    />
+  );
+}
+
 interface NotificationsBellViewProps {
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
+  deprecationAlerts?: readonly DeprecationAlert[];
+  scope?: string;
+  range?: ReturnType<typeof deprecationUsageRange>;
 }
 
-export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({ currentVersion, latestRelease }) => {
+export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
+  currentVersion,
+  latestRelease,
+  deprecationAlerts = [],
+  scope = "",
+  range = deprecationUsageRange(new Date()),
+}) => {
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
   const announcements = upgrade ? [upgrade, AUTO_ROUTER_ANNOUNCEMENT] : [AUTO_ROUTER_ANNOUNCEMENT];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
+
+  const openDeprecations = useUnreadAnnouncementCount(
+    deprecationAlerts.map((alert) => deprecationReadKey(scope, alert.id)),
+  );
+  let label = unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications";
+  if (openDeprecations > 0) {
+    label = `Notifications, ${openDeprecations} model deprecation ${openDeprecations === 1 ? "alert needs" : "alerts need"} attention`;
+  }
 
   return (
     <Popover>
       <PopoverTrigger
         className="flex! h-9! w-9! items-center justify-center rounded-md! text-muted-foreground transition-colors hover:bg-accent! hover:text-foreground!"
-        aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications"}
+        aria-label={label}
       >
         <span className="relative inline-flex">
-          <Bell className="size-4" aria-hidden />
-          {unreadCount > 0 ? <Badge className="absolute -top-0.5 -right-1 size-1.5 p-0" aria-hidden /> : null}
+          <Bell className={cn("size-4", openDeprecations > 0 && "text-amber-700")} aria-hidden />
+          {openDeprecations > 0 ? (
+            <span className="absolute -top-2 -right-2 rounded-full bg-background p-px text-amber-600" aria-hidden>
+              <AlertTriangle className="size-3" fill="currentColor" stroke="var(--background)" strokeWidth={1.5} />
+            </span>
+          ) : null}
+          {openDeprecations === 0 && unreadCount > 0 ? (
+            <Badge className="absolute -top-0.5 -right-1 size-1.5 p-0" aria-hidden />
+          ) : null}
         </span>
       </PopoverTrigger>
-      <PopoverContent align="end" aria-label="Notifications">
+      <PopoverContent
+        align="end"
+        aria-label="Notifications"
+        className="max-h-[min(75vh,640px)] w-[420px] max-w-[calc(100vw-2rem)] overflow-y-auto"
+      >
+        {deprecationAlerts.length > 0 && (
+          <>
+            <div>
+              <p className="text-sm font-semibold">Model deprecation alerts</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Recently used models that need migration. Dismissing hides the warning in this browser; it does not
+                resolve usage.
+              </p>
+            </div>
+            {deprecationAlerts.map((alert) => (
+              <Fragment key={alert.id}>
+                <Separator />
+                <DeprecationNotification alert={alert} scope={scope} range={range} />
+              </Fragment>
+            ))}
+            <Separator />
+            <p className="text-xs font-medium text-muted-foreground">Announcements</p>
+          </>
+        )}
         {announcements.map((announcement, index) => (
           <Fragment key={announcement.readKey}>
             {index > 0 ? <Separator /> : null}
@@ -124,5 +198,14 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({ cu
 export const NotificationsBell: React.FC<{ accessToken: string | null }> = ({ accessToken }) => {
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const { data: latestRelease } = useLatestReleaseInfo(accessToken);
-  return <NotificationsBellView currentVersion={healthData?.litellm_version} latestRelease={latestRelease} />;
+  const { data: deprecationAlerts, scope, range } = useDeprecationAlerts(accessToken);
+  return (
+    <NotificationsBellView
+      currentVersion={healthData?.litellm_version}
+      latestRelease={latestRelease}
+      deprecationAlerts={deprecationAlerts}
+      scope={scope}
+      range={range}
+    />
+  );
 };

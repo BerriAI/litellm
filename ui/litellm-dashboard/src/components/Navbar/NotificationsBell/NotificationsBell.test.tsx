@@ -5,6 +5,14 @@ import React from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("./useDeprecationAlerts", () => ({
+  useDeprecationAlerts: () => ({
+    data: [],
+    scope: "test",
+    range: { start_date: "2026-10-06", end_date: "2026-11-04" },
+  }),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
   useHealthReadinessDetails: vi.fn(),
 }));
@@ -171,5 +179,87 @@ describe("NotificationsBell", () => {
     renderWithProviders(<NotificationsBell accessToken="token" />);
     await user.click(bell(2));
     expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent("Your current version is v1.102.0");
+  });
+});
+
+const DEPRECATION = {
+  id: "sonnet:2026-11-30:imminent",
+  usageModel: "anthropic/claude-sonnet-4-5",
+  requests: 18432,
+  lastUsedDate: "2026-11-04",
+  model: {
+    model_name: "support",
+    litellm_model: "anthropic/claude-sonnet-4-5",
+    deprecation_date: "2026-11-30",
+    days_until_deprecation: 26,
+    status: "imminent" as const,
+  },
+};
+
+describe("model deprecation notifications", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+  it("should show an actionable deprecation alert with recent usage", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <NotificationsBellView
+        currentVersion={null}
+        latestRelease={null}
+        deprecationAlerts={[DEPRECATION]}
+        scope="gateway-admin"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Notifications, 1 model deprecation alert needs attention" }));
+    expect(screen.getByRole("article", { name: "anthropic/claude-sonnet-4-5 retires in 26 days" })).toHaveTextContent(
+      "18,432 requests in the last 30 days",
+    );
+    expect(screen.getByText(/Last used 2026-11-04 UTC/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Resolve in model settings/ })).toHaveAttribute(
+      "href",
+      "/ui/models-and-endpoints?model_group=support",
+    );
+    expect(screen.getByRole("button", { name: "Review affected keys" })).toBeInTheDocument();
+  });
+  it("should dismiss a warning without claiming the model usage is resolved", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <NotificationsBellView
+        currentVersion={null}
+        latestRelease={null}
+        deprecationAlerts={[DEPRECATION]}
+        scope="gateway-admin"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /1 model deprecation alert/ }));
+    await user.click(screen.getByRole("button", { name: "Dismiss", exact: true }));
+    expect(bell(1)).toBeInTheDocument();
+    expect(screen.getByText("Dismissed")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Resolve in model settings/ })).toBeInTheDocument();
+  });
+  it("should resurface a warning when a dismissed model becomes deprecated", async () => {
+    const user = userEvent.setup();
+    const props = { currentVersion: null, latestRelease: null, scope: "gateway-admin" };
+    const view = renderWithProviders(<NotificationsBellView {...props} deprecationAlerts={[DEPRECATION]} />);
+    await user.click(screen.getByRole("button", { name: /1 model deprecation alert/ }));
+    await user.click(screen.getByRole("button", { name: "Dismiss", exact: true }));
+    view.rerender(
+      <NotificationsBellView
+        {...props}
+        deprecationAlerts={[
+          { ...DEPRECATION, id: "sonnet:2026-11-30:deprecated", model: { ...DEPRECATION.model, status: "deprecated" } },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /1 model deprecation alert/ })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "anthropic/claude-sonnet-4-5 is deprecated" })).toBeInTheDocument();
+  });
+  it("should keep dismissals separate for different gateway users", async () => {
+    const user = userEvent.setup();
+    const props = { currentVersion: null, latestRelease: null, deprecationAlerts: [DEPRECATION] };
+    const view = renderWithProviders(<NotificationsBellView {...props} scope="admin-a" />);
+    await user.click(screen.getByRole("button", { name: /1 model deprecation alert/ }));
+    await user.click(screen.getByRole("button", { name: "Dismiss", exact: true }));
+    view.rerender(<NotificationsBellView {...props} scope="admin-b" />);
+    expect(screen.getByRole("button", { name: /1 model deprecation alert/ })).toBeInTheDocument();
   });
 });
