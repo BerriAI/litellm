@@ -1,6 +1,7 @@
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
@@ -67,28 +68,16 @@ def _spend(table: str, key: tuple[tuple[str, str], ...], spend: float) -> Contri
 
 def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[Contribution, ...]:
     spend: Final = _number(row.get("spend"))
-    entities: Final = _fields(metadata["accounting_entities"]) if "accounting_entities" in metadata else row
+    entities: Final = _fields(metadata.get("accounting_entities"))
     identities: Final = (
         ("LiteLLM_VerificationToken", "token", entities.get("api_key")),
         ("LiteLLM_UserTable", "user_id", entities.get("user")),
-        (
-            "LiteLLM_UserTable",
-            "user_id",
-            entities.get("proxy_budget_name")
-            if "accounting_entities" in metadata
-            else metadata.get("accounting_proxy_budget_name"),
-        ),
+        ("LiteLLM_UserTable", "user_id", entities.get("proxy_budget_name")),
         ("LiteLLM_TeamTable", "team_id", entities.get("team_id")),
         ("LiteLLM_OrganizationTable", "organization_id", entities.get("organization_id")),
         ("LiteLLM_EndUserTable", "user_id", entities.get("end_user")),
         ("LiteLLM_AgentsTable", "agent_id", entities.get("agent_id")),
-        (
-            "LiteLLM_ProjectTable",
-            "project_id",
-            entities.get("project_id")
-            if "accounting_entities" in metadata
-            else metadata.get("user_api_key_project_id"),
-        ),
+        ("LiteLLM_ProjectTable", "project_id", entities.get("project_id")),
     )
     groups: Final = _STRINGS.validate_python(metadata.get("accounting_model_access_groups", ()))
     return (
@@ -165,11 +154,7 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     )
     # The legacy daily organization writer uses the charged org argument, not
     # SpendLogs' normalized empty-string identity for a request with no org.
-    daily_row: Final = (
-        {**row, "organization_id": _fields(metadata["accounting_entities"]).get("organization_id")}
-        if "accounting_entities" in metadata
-        else row
-    )
+    daily_row: Final = {**row, "organization_id": _fields(metadata.get("accounting_entities")).get("organization_id")}
     return tuple(_daily_rows(daily_row, shared_key, counters))
 
 
@@ -245,41 +230,58 @@ def _model_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     )
 
 
-def _guardrail_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> Iterator[Contribution]:
+def _utc_date(row: Mapping[str, object]) -> str | None:
     start: Final = row.get("startTime")
-    if not row.get("request_id") or not isinstance(start, (datetime, str)):
-        return
-    parsed: Final = datetime.fromisoformat(start.replace("Z", "+00:00")) if isinstance(start, str) else start
-    date: Final = (
+    try:
+        parsed: Final = datetime.fromisoformat(start.replace("Z", "+00:00")) if isinstance(start, str) else start
+    except ValueError:
+        return None
+    if not isinstance(parsed, datetime):
+        return None
+    return (
         (parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed)
         .astimezone(timezone.utc)
         .date()
         .isoformat()
     )
+
+
+def _guardrail_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[Contribution, ...]:
+    date: Final = _utc_date(row)
     info: Final = metadata.get("guardrail_information") or metadata.get("standard_logging_guardrail_information")
-    if not isinstance(info, list):
-        return
-    for entry in _ROWS.validate_python(info):
-        identity = _text(entry.get("guardrail_id") or entry.get("guardrail_name"))
-        usage = entry.get("guardrail_usage")
-        if not identity or not isinstance(usage, Mapping):
-            continue
-        costs = _guardrail_unit_costs(entry)
-        for unit, units in _fields(entry.get("guardrail_usage")).items():
-            if not isinstance(units, int) or isinstance(units, bool) or units <= 0:
-                continue
-            cost = costs.get(unit) if costs is not None else None
-            yield Contribution(
-                "LiteLLM_DailyGuardrailUsageUnits",
-                (
-                    ("guardrail_id", identity),
-                    ("date", date),
-                    ("team_id", _text(row.get("team_id"))),
-                    ("api_key", _text(row.get("api_key"))),
-                    ("usage_unit", unit),
-                ),
-                (("units", units), ("cost", cost or 0.0), ("untracked_units", units if cost is None else 0)),
-            )
+    if not row.get("request_id") or date is None or not isinstance(info, list):
+        return ()
+    return tuple(chain.from_iterable(_guardrail_entry(row, date, entry) for entry in _ROWS.validate_python(info)))
+
+
+def _guardrail_entry(row: Mapping[str, object], date: str, entry: Mapping[str, object]) -> tuple[Contribution, ...]:
+    identity: Final = _text(entry.get("guardrail_id") or entry.get("guardrail_name"))
+    usage: Final = entry.get("guardrail_usage")
+    if not identity or not isinstance(usage, Mapping):
+        return ()
+    costs: Final = _guardrail_unit_costs(entry)
+    return tuple(
+        _guardrail_unit(row, (identity, date, unit), units, None if costs is None else costs.get(unit))
+        for unit, units in _fields(usage).items()
+        if isinstance(units, int) and not isinstance(units, bool) and units > 0
+    )
+
+
+def _guardrail_unit(
+    row: Mapping[str, object], identity: tuple[str, str, str], units: int, cost: float | None
+) -> Contribution:
+    guardrail_id, date, unit = identity
+    return Contribution(
+        "LiteLLM_DailyGuardrailUsageUnits",
+        (
+            ("guardrail_id", guardrail_id),
+            ("date", date),
+            ("team_id", _text(row.get("team_id"))),
+            ("api_key", _text(row.get("api_key"))),
+            ("usage_unit", unit),
+        ),
+        (("units", units), ("cost", cost or 0.0), ("untracked_units", units if cost is None else 0)),
+    )
 
 
 def _model_task(row: Mapping[str, object]) -> str:

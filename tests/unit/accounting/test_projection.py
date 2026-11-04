@@ -49,16 +49,7 @@ async def test_daily_projection_matches_legacy_writer(status: str, origin: str |
         row, PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj), "user"
     )
     assert legacy is not None
-    projected: Final = next(item for item in project(row) if item.table == "LiteLLM_DailyUserSpend")
-    assert dict(projected.increments) == {name: legacy[name] for name, _ in projected.increments}
-    assert dict(projected.key)["date"] == legacy["date"]
-    assert dict(projected.key)["api_key"] == legacy["api_key"]
-    accounting_input: Final[SpendLogsPayload] = {
-        **payload,
-        "spend": spend,
-        "metadata": json.dumps(metadata),
-        "request_duration_ms": 25,
-    }
+    accounting_input: Final[SpendLogsPayload] = {**row}
     accounting: Final = build_accounting_payload(
         accounting_input,
         entities={"api_key": payload["api_key"], "user": payload["user"]},
@@ -69,7 +60,8 @@ async def test_daily_projection_matches_legacy_writer(status: str, origin: str |
     restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
     stored_daily: Final = next(item for item in project(restored) if item.table == "LiteLLM_DailyUserSpend")
     assert dict(stored_daily.increments) == {name: legacy[name] for name, _ in stored_daily.increments}
-    assert stored_daily.key == projected.key
+    assert dict(stored_daily.key)["date"] == legacy["date"]
+    assert dict(stored_daily.key)["api_key"] == legacy["api_key"]
     assert not {"messages", "response", "proxy_server_request", "requester_ip_address"}.intersection(accounting)
 
 
@@ -199,8 +191,29 @@ async def test_entity_projection_matches_real_request_queues(monkeypatch: pytest
     assert charged
     assert len(client.spend_log_transactions) == 1
     queued: Final = await writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
-    row: Final = _FIELDS.validate_python(client.spend_log_transactions[0])
-    projected: Final = project(row)
+    logged: Final[SpendLogsPayload] = client.spend_log_transactions[0]
+    projected: Final = project(
+        _FIELDS.validate_json(
+            json.dumps(
+                build_accounting_payload(
+                    logged,
+                    entities={
+                        "api_key": logged["api_key"],
+                        "user": "user",
+                        "end_user": "end-user",
+                        "team_id": "team",
+                        "organization_id": "org",
+                        "project_id": "project",
+                        "agent_id": "agent",
+                    },
+                    model_access_groups=(),
+                    windows=(),
+                    router=lambda: None,
+                ),
+                default=str,
+            )
+        )
+    )
     legacy: Final = {(item["entity_type"].value, item["entity_id"]): item["response_cost"] for item in queued}
     assert legacy[("key", proxy_server.hash_token("sk-projection"))] == next(
         dict(item.increments)["spend"] for item in projected if item.table == "LiteLLM_VerificationToken"
@@ -307,7 +320,15 @@ def test_guardrail_projection_skips_unmeasured_counters() -> None:
 
 
 def test_lean_row_without_model_does_not_fabricate_daily_entity_usage() -> None:
-    projected: Final = project({"request_id": "lean", "api_key": "key", "startTime": _NOW, "spend": 0.5})
+    projected: Final = project(
+        {
+            "request_id": "lean",
+            "api_key": "key",
+            "startTime": _NOW,
+            "spend": 0.5,
+            "metadata": {"accounting_entities": {"api_key": "key"}},
+        }
+    )
     assert tuple(item.table for item in projected) == ("LiteLLM_VerificationToken", "LiteLLM_DailyModelUsage")
 
 
@@ -378,3 +399,33 @@ def test_every_daily_row_uses_the_calendar_date_of_the_request(start: object) ->
     }
     assert {"LiteLLM_DailyUserSpend", "LiteLLM_DailyModelUsage"} <= dates.keys()
     assert set(dates.values()) == {"2026-11-02"}
+
+
+def test_unparseable_start_time_skips_only_guardrail_usage() -> None:
+    projected: Final = project(
+        {
+            "request_id": "bad-time",
+            "startTime": "yesterday at noon",
+            "spend": 0.5,
+            "metadata": {
+                "accounting_entities": {"api_key": "key"},
+                "guardrail_information": [{"guardrail_id": "guard", "guardrail_usage": {"text": 2}}],
+            },
+        }
+    )
+    tables: Final = {item.table for item in projected}
+    assert "LiteLLM_VerificationToken" in tables
+    assert "LiteLLM_DailyGuardrailUsageUnits" not in tables
+
+
+def test_guardrail_usage_is_dated_in_utc() -> None:
+    projected: Final = project(
+        {
+            "request_id": "offset",
+            "startTime": "2026-11-02T22:30:00-05:00",
+            "metadata": {"guardrail_information": [{"guardrail_id": "guard", "guardrail_usage": {"text": 1}}]},
+        }
+    )
+    assert [dict(item.key)["date"] for item in projected if item.table == "LiteLLM_DailyGuardrailUsageUnits"] == [
+        "2026-11-03"
+    ]
