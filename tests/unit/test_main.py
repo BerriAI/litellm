@@ -43,6 +43,7 @@ from litellm.caching.caching import Cache
 from litellm.constants import CONTROL_OPTIONS_KEY, INITIAL_RETRY_DELAY, JITTER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.litellm_core_utils.agentic_followup_failure import mark_agentic_followup_failure
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -11140,6 +11141,33 @@ def test_completion_with_retries_internal_server_error_500():
         assert res == {"status": "recovered"}
         assert mock_completion.call_count == 2
         mock_sleep.assert_called_once()
+
+
+async def _with_three_retries(sync_mode: bool, original_function: MagicMock) -> object:
+    messages: Final = [{"role": "user", "content": "hi"}]
+    if sync_mode:
+        return completion_with_retries(
+            model="gpt-4o", messages=messages, num_retries=3, original_function=original_function
+        )
+    return await acompletion_with_retries(
+        model="gpt-4o", messages=messages, num_retries=3, original_function=original_function
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_with_retries_stops_at_a_failed_agentic_follow_up(sync_mode: bool):
+    follow_up_failure: Final = _make_internal_server_error()
+    mark_agentic_followup_failure(follow_up_failure, ())
+    outcomes: Final = [_make_internal_server_error(), follow_up_failure, {"status": "recovered"}]
+    mock_completion: Final = MagicMock(side_effect=outcomes) if sync_mode else AsyncMock(side_effect=outcomes)
+
+    with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(litellm.InternalServerError) as raised:
+            await _with_three_retries(sync_mode, mock_completion)
+
+    assert raised.value is follow_up_failure
+    assert mock_completion.call_count == 2
 
 
 @pytest.mark.asyncio
