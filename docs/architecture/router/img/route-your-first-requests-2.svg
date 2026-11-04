@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 360" role="img" aria-labelledby="t">
+<title id="t">A 429 on deployment a: retry on b and cooldown for a</title>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-core" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead core" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead warn" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="749" height="359" rx="8"/>
+<line class="lifeline" x1="100" y1="58" x2="100" y2="312"/>
+<line class="lifeline" x1="290" y1="58" x2="290" y2="312"/>
+<line class="lifeline" x1="470" y1="58" x2="470" y2="312"/>
+<line class="lifeline" x1="650" y1="58" x2="650" y2="312"/>
+<rect class="box core" x="30" y="18" width="140" height="40" rx="6"/>
+<text class="title center" x="100" y="43">Router</text>
+<rect class="box" x="220" y="18" width="140" height="40" rx="6"/>
+<text class="title center" x="290" y="43">deployment a</text>
+<rect class="box" x="400" y="18" width="140" height="40" rx="6"/>
+<text class="title center" x="470" y="43">deployment b</text>
+<rect class="box store" x="580" y="18" width="140" height="40" rx="6"/>
+<text class="title center" x="650" y="43">routing cache</text>
+
+<path class="edge core" d="M100,92 H289" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="195" y="85">attempt 1</text>
+<circle class="step" cx="80" cy="92" r="9"/><text class="step-text" x="80" y="96">1</text>
+
+<path class="edge warn dashed" d="M290,128 H101" marker-end="url(#arrow-warn)"/>
+<text class="edge-label center" x="195" y="121">429 <tspan class="mono">RateLimitError</tspan></text>
+<circle class="step" cx="80" cy="128" r="9"/><text class="step-text" x="80" y="132">2</text>
+
+<path class="edge core" d="M100,168 H649" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="375" y="161"><tspan class="mono">record_failure</tspan> sets <tspan class="mono">deployment:a:cooldown</tspan> (TTL 5s)</text>
+<circle class="step" cx="80" cy="168" r="9"/><text class="step-text" x="80" y="172">3</text>
+
+<path class="edge core" d="M100,196 H136 V222 H101" marker-end="url(#arrow-core)"/>
+<text class="edge-label" x="146" y="213">retry 1 of 1, skip a</text>
+<circle class="step" cx="80" cy="209" r="9"/><text class="step-text" x="80" y="213">4</text>
+
+<path class="edge core" d="M100,256 H469" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="380" y="249">attempt 2</text>
+<circle class="step" cx="80" cy="256" r="9"/><text class="step-text" x="80" y="260">5</text>
+
+<path class="edge dashed" d="M470,292 H101" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="380" y="285">200</text>
+<circle class="step" cx="80" cy="292" r="9"/><text class="step-text" x="80" y="296">6</text>
+
+<rect class="note" x="30" y="312" width="690" height="30" rx="5"/>
+<text class="center" x="375" y="331">Later requests read the cooldown and only see b</text>
+</svg>

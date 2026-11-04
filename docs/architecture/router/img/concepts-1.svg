@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 876 400" role="img" aria-labelledby="t">
+<title id="t">Router concepts and how they fit together</title>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-core" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead core" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead warn" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="875" height="399" rx="8"/>
+
+<rect class="group" x="20" y="14" width="744" height="106" rx="8"/>
+<text class="group-label" x="32" y="32">WHAT IS CONFIGURED</text>
+<rect class="box" x="32" y="42" width="210" height="62" rx="6"/>
+<text class="title center" x="137" y="66">Deployments</text>
+<text class="small muted center" x="137" y="84">one place that can serve a model</text>
+<rect class="box" x="272" y="42" width="230" height="62" rx="6"/>
+<text class="title center" x="387" y="66">Model groups</text>
+<text class="small muted center" x="387" y="84">deployments sharing a <tspan class="mono">model_name</tspan></text>
+<rect class="box" x="532" y="42" width="220" height="62" rx="6"/>
+<text class="title center" x="642" y="62">Names</text>
+<text class="small muted center" x="642" y="79">aliases, wildcards, routing groups,</text>
+<text class="small muted center" x="642" y="95">team names, deployment ids</text>
+<path class="edge" d="M242,73 H270" marker-end="url(#arrow)"/>
+<path class="edge" d="M502,73 H530" marker-end="url(#arrow)"/>
+
+<rect class="box" x="20" y="170" width="140" height="80" rx="6"/>
+<text class="title center" x="90" y="203">Request</text>
+<text class="mono small muted center" x="90" y="221">model='gpt-4o',</text>
+<text class="small muted center" x="90" y="237">team, tags, messages</text>
+<rect class="box core" x="186" y="170" width="136" height="80" rx="6"/>
+<text class="title center" x="254" y="215">Resolve the name</text>
+<rect class="box core" x="348" y="170" width="150" height="80" rx="6"/>
+<text class="title center" x="423" y="203">Who may use what</text>
+<text class="small muted center" x="423" y="221">teams, access groups,</text>
+<text class="small muted center" x="423" y="237">windows, PTU shares</text>
+<rect class="box core" x="524" y="170" width="165" height="80" rx="6"/>
+<text class="title center" x="606.5" y="191">Filters</text>
+<text class="small muted center" x="606.5" y="208">health, cooldown, blocked,</text>
+<text class="small muted center" x="606.5" y="224">pre-call checks,</text>
+<text class="small muted center" x="606.5" y="240">tags, order</text>
+<rect class="box core" x="715" y="170" width="140" height="80" rx="6"/>
+<text class="title center" x="785" y="206">Strategy</text>
+<text class="small muted center" x="785" y="224">picks one deployment</text>
+
+<path class="edge" d="M160,210 H184" marker-end="url(#arrow)"/>
+<path class="edge core" d="M322,210 H346" marker-end="url(#arrow-core)"/>
+<path class="edge core" d="M498,210 H522" marker-end="url(#arrow-core)"/>
+<path class="edge core" d="M689,210 H713" marker-end="url(#arrow-core)"/>
+<path class="edge dashed" d="M600,104 V140 H254 V168" marker-end="url(#arrow)"/>
+
+<rect class="box store" x="300" y="310" width="150" height="56" rx="6"/>
+<text class="title center" x="375" y="343">Shared routing state</text>
+<rect class="box core" x="524" y="310" width="165" height="56" rx="6"/>
+<text class="title center" x="606.5" y="333">Retries, fallbacks,</text>
+<text class="title center" x="606.5" y="350">cooldowns</text>
+<rect class="box host" x="735" y="310" width="100" height="56" rx="6"/>
+<text class="title center" x="785" y="343">Attempt</text>
+
+<path class="edge" d="M785,250 V308" marker-end="url(#arrow)"/>
+<path class="edge warn" d="M735,338 H691" marker-end="url(#arrow-warn)"/>
+<text class="edge-label center" x="713" y="330">failed</text>
+<path class="edge dashed" d="M524,338 H452" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="488" y="330">writes</text>
+<path class="edge dashed" d="M430,310 V280 H570 V252" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="500" y="274">read by</text>
+<path class="edge core" d="M570,366 V384 H254 V252" marker-end="url(#arrow-core)"/>
+<text class="edge-label end" x="248" y="320">try again</text>
+</svg>

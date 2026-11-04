@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 790 452" role="img" aria-labelledby="t">
+<title id="t">Fallback from group A to group B</title>
+<desc>A 503 from group A survives its retries, the fallback checks allow B, and B answers with 200.</desc>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-core" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead core" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead warn" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="789" height="451" rx="8"/>
+<line class="lifeline" x1="80" y1="58" x2="80" y2="434"/>
+<line class="lifeline" x1="350" y1="58" x2="350" y2="434"/>
+<line class="lifeline" x1="545" y1="58" x2="545" y2="434"/>
+<line class="lifeline" x1="708" y1="58" x2="708" y2="434"/>
+<rect class="box" x="10" y="18" width="140" height="40" rx="6"/>
+<text class="title center" x="80" y="43">Caller</text>
+<rect class="box core" x="280" y="18" width="140" height="40" rx="6"/>
+<text class="title center" x="350" y="43">Fallback walk</text>
+<rect class="box core" x="475" y="18" width="140" height="40" rx="6"/>
+<text class="title center" x="545" y="43">Retry loop</text>
+<rect class="box host" x="638" y="18" width="140" height="40" rx="6"/>
+<text class="title center" x="708" y="43">Fallback checks</text>
+<path class="edge core" d="M106,96 H348" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="94" cy="96" r="8"/>
+<text class="step-text" x="94" y="99.7">1</text>
+<text class="edge-label center" x="225.0" y="88"><tspan class="mono">model=A</tspan></text>
+<path class="edge core" d="M376,138 H543" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="364" cy="138" r="8"/>
+<text class="step-text" x="364" y="141.7">2</text>
+<text class="edge-label center" x="457.5" y="130"><tspan>group A, </tspan><tspan class="mono">num_retries=2</tspan></text>
+<path class="edge warn dashed" d="M519,180 H352" marker-end="url(#arrow-warn)"/>
+<circle class="step" cx="531" cy="180" r="8"/>
+<text class="step-text" x="531" y="183.7">3</text>
+<text class="edge-label center" x="437.5" y="172"><tspan>503 after 3 attempts</tspan></text>
+<path class="edge" d="M376,238 H706" marker-end="url(#arrow)"/>
+<circle class="step" cx="364" cy="238" r="8"/>
+<text class="step-text" x="364" y="241.7">4</text>
+<text class="edge-label center" x="539.0" y="215"><tspan class="mono">fallback_access_check,</tspan></text>
+<text class="edge-label center" x="539.0" y="230"><tspan class="mono">fallback_budget_check</tspan><tspan> for B</tspan></text>
+<path class="edge dashed" d="M682,280 H352" marker-end="url(#arrow)"/>
+<circle class="step" cx="694" cy="280" r="8"/>
+<text class="step-text" x="694" y="283.7">5</text>
+<text class="edge-label center" x="519.0" y="272"><tspan>allowed</tspan></text>
+<path class="edge core" d="M376,322 H543" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="364" cy="322" r="8"/>
+<text class="step-text" x="364" y="325.7">6</text>
+<text class="edge-label center" x="457.5" y="314"><tspan>group B, </tspan><tspan class="mono">num_retries=2</tspan></text>
+<path class="edge dashed" d="M519,364 H352" marker-end="url(#arrow)"/>
+<circle class="step" cx="531" cy="364" r="8"/>
+<text class="step-text" x="531" y="367.7">7</text>
+<text class="edge-label center" x="437.5" y="356"><tspan>200</tspan></text>
+<path class="edge dashed" d="M324,420 H82" marker-end="url(#arrow)"/>
+<circle class="step" cx="336" cy="420" r="8"/>
+<text class="step-text" x="336" y="423.7">8</text>
+<text class="edge-label center" x="205.0" y="397"><tspan>response from B,</tspan></text>
+<text class="edge-label center" x="205.0" y="412"><tspan class="mono">x-litellm-attempted-fallbacks: 1</tspan></text>
+</svg>
