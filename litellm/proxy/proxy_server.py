@@ -426,6 +426,7 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolv
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
+from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload
 from litellm.proxy.auth.auth_checks import (
     ROLE_BASED_PERMISSIONS_ADAPTER,
     ExperimentalUIJWTToken,
@@ -13399,6 +13400,13 @@ async def completion(
             _response.choices[0].text = e.message
             return _response
     except Exception as e:
+        if is_provider_overload(e):
+            raise await base_llm_response_processor.handle_llm_api_exception(
+                e=e,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+                version=version,
+            )
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,

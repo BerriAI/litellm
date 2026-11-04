@@ -94,6 +94,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
     is_model_cost_zero,
@@ -114,6 +115,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    OverloadedProxyException,
     attribute_of,
     error_status_code,
     openai_error_param,
@@ -163,6 +165,7 @@ _ChunkT: Final = TypeVar("_ChunkT")
 KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
 )
+_OPENAI_OVERLOAD_ROUTE_TYPES: Final = frozenset({"acompletion", "atext_completion", "aresponses"})
 
 ProxyRouteType: TypeAlias = Literal[
     "acompletion",
@@ -4533,16 +4536,25 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 )
         client_message: Final = getattr(e, "message", error_msg)
+        redacted_client_message: Final = redact_internal_details_from_client_message(
+            strip_bug_report_notice(client_message) if isinstance(client_message, str) else error_msg
+        )
+        provider_specific_fields: Final = getattr(
+            e, "provider_specific_fields", None
+        ) or relayed_provider_specific_fields(e)
+        if self.route_type in _OPENAI_OVERLOAD_ROUTE_TYPES and is_provider_overload(e):
+            raise OverloadedProxyException(
+                message=redacted_client_message,
+                headers=cast(dict[str, str], safe_headers),  # cast-ok: ProxyException coerces header values to strings
+                provider_specific_fields=provider_specific_fields,
+            )
         raise ProxyException(
-            message=redact_internal_details_from_client_message(
-                strip_bug_report_notice(client_message) if isinstance(client_message, str) else error_msg
-            ),
+            message=redacted_client_message,
             type=openai_error_type(e, _code),
             param=openai_error_param(e),
             openai_code=getattr(e, "code", None),
             code=_code,
-            provider_specific_fields=getattr(e, "provider_specific_fields", None)
-            or relayed_provider_specific_fields(e),
+            provider_specific_fields=provider_specific_fields,
             headers=safe_headers,
         )
 

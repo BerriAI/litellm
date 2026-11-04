@@ -1,8 +1,14 @@
 from typing import Final, TypeVar
 
-from litellm.exceptions import InternalServerError, MidStreamFallbackError
+from litellm.exceptions import APIError, InternalServerError, MidStreamFallbackError
+
+_PROVIDER_OVERLOAD_STATUS_CODE: Final = 529
 
 _Raised = TypeVar("_Raised", bound=Exception)
+
+
+def is_provider_overload(exc: Exception) -> bool:
+    return _provider_status_code(exc) == _PROVIDER_OVERLOAD_STATUS_CODE
 
 
 def _provider_status_code(exc: Exception) -> int | None:
@@ -11,6 +17,8 @@ def _provider_status_code(exc: Exception) -> int | None:
         unwrapped = unwrapped.original_exception
     match unwrapped:
         case InternalServerError(provider_status_code=int() as provider_status):
+            return provider_status
+        case APIError(status_code=int() as provider_status):
             return provider_status
         case _:
             return None
