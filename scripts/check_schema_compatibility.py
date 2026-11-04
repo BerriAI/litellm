@@ -63,12 +63,9 @@ def main() -> int:
     source: Final = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--base-ref", help="compare against the merge base of HEAD and this ref (needs history)")
     source.add_argument("--base-commit", help="compare against this commit as is (works in a shallow clone)")
-    options: Final = parser.parse_args()
-    base: Final = (
-        TypeAdapter(str).validate_python(options.base_commit)
-        if options.base_commit
-        else _merge_base(TypeAdapter(str).validate_python(options.base_ref))
-    )
+    options: Final = TypeAdapter(dict[str, str | None]).validate_python(vars(parser.parse_args()))
+    base_commit: Final = options["base_commit"]
+    base: Final = base_commit if base_commit else _merge_base(options["base_ref"] or "")
     previous: Final = subprocess.run(
         ("git", "show", f"{base}:schema.prisma"), capture_output=True, text=True, check=True
     ).stdout
