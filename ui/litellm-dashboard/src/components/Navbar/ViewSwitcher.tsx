@@ -133,7 +133,12 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       <DropdownMenuTrigger
         aria-label={`Switch workspace, current: ${activeLabel}`}
         render={
-          <Button type="button" variant="outline" size="sm" className={cn("max-w-[220px] gap-1.5 px-3", className)} />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={cn("max-w-[220px] gap-1.5 px-3 dark:bg-transparent", className)}
+          />
         }
       >
         <span data-slot="workspace-label" className="truncate">
