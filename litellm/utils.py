@@ -3916,6 +3916,7 @@ _DIRECTION_RATE_FIELDS: Final = MappingProxyType(
 )
 _RATE_TABLE: Final = TypeAdapter(Mapping[str, object])
 _RATE_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_REGISTRATIONS: Final = TypeAdapter(Mapping[str, Mapping[str, object]])
 
 
 def _is_overridden_rate(name: str, overridden_fields: tuple[str, ...]) -> bool:
@@ -4239,6 +4240,10 @@ _runtime_registered_names: Final[dict[str, tuple[str, ...]]] = {}  # mutable-ok:
 _REGISTRATION_TICKS: Final = itertools.count()
 
 
+def _registration_over(entry: Mapping[str, object], registration: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({**without_price_variants_of(entry, registration), **registration})
+
+
 @dataclass(frozen=True, slots=True)
 class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
     catalog: Mapping[str, Mapping[str, object]]
@@ -4254,13 +4259,7 @@ class _RegistrationsOverCatalog(Mapping[str, Mapping[str, object]]):
             return self.catalog[key]
         oldest_first: Final = sorted(present, key=lambda name: self.registration_order.get(name, -1))
         registered: Final = (self.registrations[name] for name in oldest_first)
-        return MappingProxyType(
-            reduce(
-                lambda merged, entry: {**without_price_variants_of(merged, entry), **entry},
-                registered,
-                catalog_entry or {},
-            )
-        )
+        return reduce(_registration_over, registered, catalog_entry or {})
 
     def __iter__(self) -> Iterator[str]:
         return iter({**dict.fromkeys(self.catalog), **dict.fromkeys(self.registrations)})
@@ -4426,15 +4425,11 @@ def register_model(
         loaded_model_cost = litellm.get_model_cost_map(url=model_cost, max_attempts=1)
 
     if persist_across_reloads:
-        _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
+        _registrations: Final = _REGISTRATIONS.validate_python(loaded_model_cost)
         for _registered_key, _registered_value in _registrations.items():
             _runtime_registered_model_cost[_registered_key] = update_dictionary(
-                dict(
-                    without_price_variants_of(
-                        _runtime_registered_model_cost.get(_registered_key, {}), _registered_value
-                    )
-                ),
-                _RATE_TABLE.validate_python(_registered_value),
+                dict(without_price_variants_of(_runtime_registered_model_cost.get(_registered_key, {}), _registered_value)),
+                _registered_value,
             )
             _runtime_registration_order[_registered_key] = next(_REGISTRATION_TICKS)
 

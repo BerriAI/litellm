@@ -61,7 +61,7 @@ def per_call_model_info(
     zeroed: Final = zeroed_ptu_pricing(deployment, custom) if deployment is not None else None
     return _MODEL_INFO.validate_python(
         {
-            **without_price_variants_of(catalog, custom),
+            **without_price_variants_of(_STR_MAPPING.validate_python(catalog), custom),
             **_token_rates_cleared_for_per_second_overrides(custom),
             **custom,
             **_tiers_with_flat_overrides(catalog, custom),
