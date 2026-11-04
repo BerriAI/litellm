@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from collections.abc import Buffer
 
 _POLL_SECONDS: Final = 0.05
+_WRITE_PIECE_BYTES: Final = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,9 +144,11 @@ class _Connection(io.BufferedIOBase):
             return self.connection.recv_into(buffer)
 
     def write(self, buffer: Buffer, /) -> int:
-        with self._blocking(writing=True):
-            self.connection.sendall(buffer)
-        return memoryview(buffer).nbytes
+        view: Final = memoryview(buffer).cast("B")
+        for start in range(0, view.nbytes, _WRITE_PIECE_BYTES):
+            with self._blocking(writing=True):
+                self.connection.sendall(view[start : start + _WRITE_PIECE_BYTES])
+        return view.nbytes
 
     def close(self) -> None:
         self.selector.close()
@@ -192,7 +195,7 @@ def _close_unless_stalled(
                 connections.put(connection)
                 continue
             if stalled.writing:
-                errors.put(TimeoutError(f"a reply write was still blocked {grace} s after it started"))
+                errors.put(TimeoutError(f"a reply write made no progress for {grace} s"))
             connection.shut()
         closer.join(timeout=_POLL_SECONDS)
 

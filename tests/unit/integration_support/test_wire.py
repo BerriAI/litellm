@@ -5,7 +5,8 @@ import io
 import socket
 import ssl
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from http.client import HTTPConnection, HTTPResponse, HTTPSConnection
 from pathlib import Path
@@ -88,6 +89,16 @@ def _hold_first(request: Request) -> Reply:
     return Reply(body=request.body)
 
 
+def _paced_pieces(client: socket.socket) -> Iterator[bytes]:
+    while piece := client.recv(256 * 1024):
+        yield piece
+        time.sleep(0.02)
+
+
+def _read_slowly(client: socket.socket) -> bytes:
+    return b"".join(_paced_pieces(client))
+
+
 def _post(target: str, body: bytes) -> bytes:
     return b"POST %s HTTP/1.1\r\nhost: peer\r\ncontent-length: %d\r\n\r\n%s" % (target.encode(), len(body), body)
 
@@ -149,8 +160,24 @@ def test_a_reply_its_client_stopped_reading_fails_teardown_instead_of_hanging() 
         client.sendall(b"GET /large HTTP/1.1\r\nhost: peer\r\n\r\n")
         while wire.received.empty():
             time.sleep(0.01)
-        with pytest.raises(AssertionError, match="still blocked"):
+        with pytest.raises(AssertionError, match="no progress"):
             peer.close()
+
+
+@pytest.mark.timeout(60)
+def test_a_long_reply_its_client_is_still_reading_at_teardown_is_not_cut() -> None:
+    peer: Final = ExitStack()
+    wire: Final = peer.enter_context(wire_server(lambda _: Reply(body=UNREAD), keep_alive=True, teardown_grace=0.5))
+    address: Final = urlsplit(wire.url)
+    with socket.create_connection((address.hostname or "", address.port or 0)) as client, ThreadPoolExecutor(1) as pool:
+        client.sendall(b"GET /large HTTP/1.1\r\nhost: peer\r\n\r\n")
+        while wire.received.empty():
+            time.sleep(0.01)
+        reply: Final = pool.submit(_read_slowly, client)
+        time.sleep(1)
+        peer.close()
+        received: Final = reply.result()
+    assert (received[: len(b"HTTP/1.1 200")], received[-len(UNREAD) :] == UNREAD) == (b"HTTP/1.1 200", True)
 
 
 def test_a_complete_request_sent_as_teardown_starts_is_still_answered() -> None:
