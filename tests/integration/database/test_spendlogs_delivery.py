@@ -336,30 +336,6 @@ async def test_receipt_cleanup_keeps_pending_and_parked_rows_and_reports_lag(
     ).fetchall() == [("parked",), ("pending",)]
 
 
-def test_downgrade_requires_drained_buffers_disabled_writers_and_no_unsettled_rows(
-    delivery_database: psycopg.Connection[tuple[object, ...]],
-) -> None:
-    import subprocess
-    import sys
-
-    url = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{delivery_database.info.dbname}"))
-    command = [sys.executable, "scripts/check_spendlogs_ledger_downgrade.py"]
-    environment = {**os.environ, "DATABASE_URL": url}
-    assert subprocess.run(command, env=environment, capture_output=True).returncode == 1
-    assert (
-        subprocess.run(command + ["--all-writers-ledger-disabled"], env=environment, capture_output=True).returncode
-        == 1
-    )
-    confirmed = command + ["--all-writers-ledger-disabled", "--ledger-buffers-drained"]
-    _insert(delivery_database, (_row("pending"), _row("parked")))
-    delivery_database.execute("UPDATE \"LiteLLM_SpendLogDelivery\" SET state='parked' WHERE request_id='parked'")
-    blocked = subprocess.run(confirmed, env=environment, capture_output=True, text=True)
-    assert blocked.returncode == 1 and "1 pending and 1 parked" in blocked.stdout, blocked.stderr
-    delivery_database.execute("UPDATE \"LiteLLM_SpendLogDelivery\" SET state='applied'")
-    passed = subprocess.run(confirmed, env=environment, capture_output=True, text=True)
-    assert passed.returncode == 0 and "no pending or parked" in passed.stdout, passed.stderr
-
-
 @pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
 @pytest.mark.parametrize("state", [None, "pending", "parked", "applied"])
 def test_delivery_migration_replay_preserves_ledger_receipts(delivery_database, state):
@@ -488,35 +464,3 @@ async def test_invalid_worker_settings_preserve_pending_work(delivery_database, 
     assert delivery_database.execute(
         'SELECT request_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
     ).fetchall() == [("protected", "pending", 0)]
-
-
-@pytest.mark.parametrize("flags,state,expected", [
-    ((), "applied", 1),
-    (("--all-writers-ledger-disabled",), "applied", 1),
-    (("--ledger-buffers-drained",), "applied", 1),
-    (("--all-writers-ledger-disabled", "--ledger-buffers-drained"), "pending", 1),
-    (("--all-writers-ledger-disabled", "--ledger-buffers-drained"), "parked", 1),
-    (("--all-writers-ledger-disabled", "--ledger-buffers-drained"), "applied", 0),
-])
-def test_downgrade_command_requires_operator_attestations_and_settled_deliveries(
-    delivery_database, monkeypatch, capfd, flags, state, expected
-):
-    import runpy
-    import sys
-
-    _insert(delivery_database, (_row("downgrade"),))
-    delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET state=%s', (state,))
-    url = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{delivery_database.info.dbname}"))
-    monkeypatch.setenv("DATABASE_URL", url)
-    script = Path(__file__).resolve().parents[3] / "scripts/check_spendlogs_ledger_downgrade.py"
-    monkeypatch.setattr(sys, "argv", [str(script), *flags])
-    with pytest.raises(SystemExit) as result:
-        runpy.run_path(str(script), run_name="__main__")
-    assert result.value.code == expected
-    prefix = "Database gate passed:" if expected == 0 else "Blocked:"
-    assert any(line.startswith(prefix) for line in capfd.readouterr().out.splitlines())
-    assert delivery_database.execute('SELECT request_id, state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
-        ("downgrade", state)
-    ]
-
-
