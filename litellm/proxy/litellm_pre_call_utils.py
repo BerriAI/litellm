@@ -794,6 +794,26 @@ def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
         )
 
 
+# ``guardrail_choice_index`` is written by the OpenAI guardrail handler around each
+# per-choice inspection round and read by guardrail spend logs as fact; a client value
+# has no legitimate meaning and no key or team setting keeps it.
+_GUARDRAIL_RESERVED_REQUEST_FIELDS: Final = frozenset({"guardrail_choice_index"})
+
+
+def _strip_guardrail_reserved_fields(
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    """Drop the guardrail-owned per-choice label from the client request body."""
+    stripped: Final = tuple(sorted(field for field in _GUARDRAIL_RESERVED_REQUEST_FIELDS if field in data))
+    for field in stripped:
+        data.pop(field, None)
+    if stripped:
+        verbose_proxy_logger.debug(
+            "Stripped guardrail-owned fields from request body: %s. The proxy writes these per round.",
+            ", ".join(stripped),
+        )
+
+
 def _strip_router_reserved_metadata(
     data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
@@ -2650,6 +2670,7 @@ async def add_litellm_data_to_request(
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
     _strip_router_reserved_metadata(data)
+    _strip_guardrail_reserved_fields(data)
 
     # Same reason as the strips above: runs after the metadata string-to-dict parse
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
