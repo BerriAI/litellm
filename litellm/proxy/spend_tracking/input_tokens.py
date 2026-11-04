@@ -220,6 +220,35 @@ def _served_by_openai(deployment: object) -> bool:
         return False
     return served_provider == "openai"
 
+def _extract_gemini_text(request_body: dict) -> str:
+    """Extracts all text from Gemini's native 'contents' and 'systemInstruction' schema."""
+    texts: list[str] = []
+
+    # 1. System Instruction text
+    sys_inst = request_body.get("systemInstruction")
+    if isinstance(sys_inst, dict):
+        parts = sys_inst.get("parts")
+        if isinstance(parts, list):
+            for part in parts:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    texts.append(part["text"])
+
+    # 2. Contents text
+    contents = request_body.get("contents")
+    if isinstance(contents, list):
+        for item in contents:
+            if isinstance(item, dict):
+                parts = item.get("parts")
+                if isinstance(parts, list):
+                    for part in parts:
+                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            texts.append(part["text"])
+            elif isinstance(item, str):
+                texts.append(item)
+    elif isinstance(contents, str):
+        texts.append(contents)
+
+    return " ".join(texts)
 
 def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
     try:
@@ -233,6 +262,8 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                 )
             except ValueError:
                 return _count_text_tokens(model=model, text=request_body.get("messages"))
+        if "contents" in request_body:
+            return _count_text_tokens(model=model, text=_extract_gemini_text(request_body))
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:

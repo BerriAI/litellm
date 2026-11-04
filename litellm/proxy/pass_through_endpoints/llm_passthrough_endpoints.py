@@ -3352,6 +3352,18 @@ async def _base_vertex_proxy_route(
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: Mapping[str, str] = {}
+    api_key_to_use = get_litellm_virtual_key(request=request)
+    user_api_key_dict = await user_api_key_auth(
+        request=request,
+        api_key=api_key_to_use,
+    )
+
+    if user_api_key_dict is None:
+        api_key_to_use = get_litellm_virtual_key(request=request)
+        user_api_key_dict = await user_api_key_auth(
+            request=request,
+            api_key=api_key_to_use,
+        )
     if router_credentials is not None:
         await assert_user_can_access_vector_store(
             vector_store=router_credentials,
