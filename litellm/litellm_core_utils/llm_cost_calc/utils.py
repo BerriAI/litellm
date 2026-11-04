@@ -1751,10 +1751,6 @@ def generic_cost_per_token(
         )
         completion_cost += float(video_tokens) * _output_cost_per_video_token
 
-    ## REGIONAL DATA-RESIDENCY / FEDRAMP ENDPOINT UPLIFT
-    # Applied as a flat multiplier across all token costs for the request
-    # when the upstream is a regionalized or FedRAMP OpenAI host (eu./us./gov.api.openai.com).
-    # A request has one host, so at most one of the two multipliers is above 1.0.
     uplift: Final = get_regional_uplift_multiplier(resolved_model_info, data_residency) * get_fedramp_uplift_multiplier(
         resolved_model_info, data_residency
     )

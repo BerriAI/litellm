@@ -2774,7 +2774,7 @@ def test_vertex_uplift_invalid_multiplier_defaults_to_one():
         ({"fedramp_uplift_multiplier": 1.1}, None),
     ],
 )
-def test_fedramp_uplift_defaults_to_one(model_info, data_residency):
+def test_fedramp_uplift_defaults_to_one(model_info: ModelInfo, data_residency: str | None):
     """A malformed or missing FedRAMP multiplier, or a non-FedRAMP host, bills base pricing and never raises."""
     from litellm.litellm_core_utils.llm_cost_calc.utils import get_fedramp_uplift_multiplier
 

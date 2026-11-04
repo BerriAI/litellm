@@ -11547,3 +11547,28 @@ async def test_bedrock_strict_tools_limit_rejection_is_not_sent_again_when_no_to
 
     assert error is not None and "Too many strict tools" in str(error)
     assert len(sent) == 1
+
+
+def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch):
+    """A caller-supplied OpenAI client sends the request to its own base_url, so billing must use that
+    host and not an env-configured FedRAMP or regional base."""
+    import openai
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gov.api.openai.com/v1")
+    captured = {}
+    real_init = litellm.Logging.__init__
+
+    def init_spy(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        captured["logging_obj"] = self
+
+    with patch.object(litellm.Logging, "__init__", init_spy):
+        litellm.completion(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": "hi"}],
+            client=openai.OpenAI(api_key="test-key", base_url="https://api.openai.com/v1"),
+            mock_response="ok",
+        )
+
+    assert captured["logging_obj"].litellm_params.get("data_residency") is None
