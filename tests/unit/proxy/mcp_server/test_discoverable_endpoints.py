@@ -15482,3 +15482,15 @@ def test_root_metadata_owned_by_a_resolved_oauth2_server_never_lists_the_gateway
     assert JWT_BEARER_GRANT_TYPE not in document["grant_types_supported"]
     assert document["grant_types_supported"] == ["authorization_code", "refresh_token"]
     assert document["token_endpoint_auth_methods_supported"] == ["client_secret_post"]
+
+
+def test_resolve_by_name_or_id_hides_disabled_config_server():
+    from litellm.proxy.mcp_server import discoverable_endpoints as de
+
+    server = MagicMock(server_id="cfg-1")
+    with patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mgr:
+        mgr.get_mcp_server_by_name.return_value = server
+        mgr.is_config_server_caller_hidden.return_value = True
+        assert de._resolve_mcp_server_by_name_or_id("cfg", None) is None
+        mgr.is_config_server_caller_hidden.return_value = False
+        assert de._resolve_mcp_server_by_name_or_id("cfg", None) is server

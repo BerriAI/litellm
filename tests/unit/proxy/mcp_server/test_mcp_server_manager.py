@@ -22043,6 +22043,10 @@ class TestMCPEnableDisableManager:
                 new=AsyncMock(return_value=None),
             ),
             patch(
+                "litellm.proxy.mcp_server.db.get_mcp_server",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
                 "litellm.proxy.mcp_server.db.set_config_mcp_server_override",
                 new=AsyncMock(return_value=None),
             ) as override,
@@ -22072,6 +22076,10 @@ class TestMCPEnableDisableManager:
                 new=AsyncMock(return_value=None),
             ),
             patch(
+                "litellm.proxy.mcp_server.db.get_mcp_server",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
                 "litellm.proxy.mcp_server.db.set_config_mcp_server_override",
                 new=AsyncMock(return_value=None),
             ),
@@ -22085,6 +22093,50 @@ class TestMCPEnableDisableManager:
 
         assert server_id in manager.get_filtered_registry()
         assert manager.config_mcp_servers[server_id].allowed_tools == ["safe_tool"]
+
+    @pytest.mark.asyncio
+    async def test_unfiltered_health_does_not_probe_disabled_config_server(self):
+        """A disabled config server is never probed but is still listed (status unknown, enabled False)."""
+        manager = MCPServerManager()
+        server_id = await self._load_config_server(manager)
+        manager._disabled_config_server_ids.add(server_id)
+
+        with patch.object(manager, "_run_health_checks", new=AsyncMock(return_value=[])) as run:
+            listing = await manager.get_all_mcp_servers_with_health_unfiltered()
+
+        run.assert_awaited_once_with([])
+        assert [s.server_id for s in listing] == [server_id]
+        assert listing[0].status == "unknown"
+        assert listing[0].enabled is False
+
+    @pytest.mark.asyncio
+    async def test_noop_toggle_skips_write_reload_and_returns_row(self, monkeypatch):
+        """Disabling an already-disabled config server and enabling an enabled DB row are no-ops."""
+        from litellm.proxy import proxy_server
+
+        manager = MCPServerManager()
+        server_id = await self._load_config_server(manager)
+        manager._disabled_config_server_ids.add(server_id)
+        monkeypatch.setattr(proxy_server, "prisma_client", MagicMock(), raising=False)
+        db_row = LiteLLM_MCPServerTable(server_id="db-on", transport=MCPTransport.http, enabled=True)
+        with (
+            patch("litellm.proxy.mcp_server.db.get_mcp_server", new=AsyncMock(side_effect=[None, db_row, None])),
+            patch("litellm.proxy.mcp_server.db.set_mcp_server_enabled", new=AsyncMock(return_value=None)) as db_write,
+            patch("litellm.proxy.mcp_server.db.set_config_mcp_server_override", new=AsyncMock()) as override,
+            patch.object(manager, "reload_servers_from_database", new=AsyncMock()) as reload,
+        ):
+            cfg = await manager.set_server_enabled(server_id, False, "admin")
+            row = await manager.set_server_enabled("db-on", True, "admin")
+            unknown = await manager.set_server_enabled("nope", True, "admin")
+
+        assert cfg is not None and cfg.server_id == server_id and cfg.enabled is False
+        assert row is db_row and row.enabled is True
+        assert unknown is None
+        # Only the unknown id reaches the write path (which finds no row); the no-ops never write.
+        db_write.assert_awaited_once()
+        assert db_write.await_args.args[1] == "nope"
+        override.assert_not_awaited()
+        reload.assert_not_awaited()
 
     def test_effective_enabled_resolution(self):
         """DB row -> its enabled (None/True legacy = enabled); config id -> not in disabled set."""

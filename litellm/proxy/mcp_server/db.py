@@ -2430,10 +2430,6 @@ async def get_disabled_config_server_ids(prisma_client: PrismaClient) -> set[str
     return {row.server_id for row in rows}
 
 
-async def delete_config_mcp_server_override(prisma_client: PrismaClient, server_id: str) -> None:
-    await _server_state_override_actions(prisma_client).delete(where={"server_id": server_id})
-
-
 async def reject_mcp_server(
     prisma_client: PrismaClient,
     server_id: str,

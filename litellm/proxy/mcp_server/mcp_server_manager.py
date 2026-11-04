@@ -2637,9 +2637,23 @@ class MCPServerManager:
         if prisma_client is None:
             return None
         from litellm.proxy.mcp_server.db import (
+            get_mcp_server,
             set_config_mcp_server_override,
             set_mcp_server_enabled,
         )
+
+        # Idempotent no-op: already in the requested state -> no write, reload, or sync event.
+        existing: Final = await get_mcp_server(prisma_client, server_id)
+        if existing is not None:
+            if self.effective_enabled(server_id, is_db_row_enabled=existing.enabled is not False) == enabled:
+                existing.enabled = enabled
+                return existing
+        elif self.is_config_declared_server(server_id) and (
+            self.effective_enabled(server_id, is_db_row_enabled=None) == enabled
+        ):
+            noop_table: Final = self.build_mcp_server_table(self.config_mcp_servers[server_id])
+            noop_table.enabled = enabled
+            return noop_table
 
         updated: Final = await set_mcp_server_enabled(prisma_client, server_id, enabled, touched_by)
         if updated is not None:
@@ -8048,7 +8062,24 @@ class MCPServerManager:
         if not target_server_ids:
             return []
 
-        return await self._run_health_checks(target_server_ids)
+        # Admin-disabled config servers stay resident in the raw registry but must never be probed
+        # (no upstream connection per poll). Report them with a non-probed "unknown" status; the
+        # status Literal has no "disabled" value, so the UI's Disabled badge conveys the state.
+        probe_ids: Final = [sid for sid in target_server_ids if not self.is_config_server_caller_hidden(sid)]
+        probed: Final = await self._run_health_checks(probe_ids)
+        skipped: Final = [sid for sid in dict.fromkeys(target_server_ids) if self.is_config_server_caller_hidden(sid)]
+        if not skipped:
+            return probed
+        unprobed: list[LiteLLM_MCPServerTable] = []
+        for sid in skipped:
+            server = self.get_mcp_server_by_id(sid)
+            if server is None:
+                continue
+            table = self.build_mcp_server_table(server)
+            table.status = "unknown"
+            table.enabled = False
+            unprobed.append(table)
+        return [*probed, *unprobed]
 
     async def _run_health_checks(self, target_server_ids: list[str]) -> list[LiteLLM_MCPServerTable]:
         if not target_server_ids:
