@@ -351,3 +351,56 @@ async def test_update_spend_logs_drops_row_prisma_cannot_encode_and_keeps_the_re
     assert sorted(written) == ["good-1", "good-2"]
     assert prisma_client.spend_log_transactions == []
     proxy_logging_obj.failure_handler.assert_not_called()
+
+
+def _raw_query_error(sqlstate: str):
+    from prisma.errors import RawQueryError
+
+    return RawQueryError(
+        {
+            "user_facing_error": {
+                "error_code": "P2010",
+                "meta": {"code": sqlstate, "message": f"ERROR: sqlstate {sqlstate}"},
+            }
+        }
+    )
+
+
+class _RawInsertRepository:
+    def __init__(self, sqlstate: str):
+        self.sqlstate = sqlstate
+        self.written: list[str] = []
+
+    async def insert_with_deliveries(self, rows):
+        if any(row["request_id"] == "rejected" for row in rows):
+            raise _raw_query_error(self.sqlstate)
+        self.written.extend(str(row["request_id"]) for row in rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sqlstate", ["22P02", "23502"])
+async def test_raw_insert_rejecting_one_row_drops_only_that_row(sqlstate):
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _RawInsertRepository(sqlstate)
+    rows = [{"request_id": "good-1"}, {"request_id": "rejected"}, {"request_id": "good-2"}]
+
+    await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
+
+    assert sorted(repo.written) == ["good-1", "good-2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sqlstate", ["42P01", "40P01"])
+async def test_systemic_raw_insert_failure_is_retried_not_dropped(sqlstate):
+    from prisma.errors import RawQueryError
+
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _RawInsertRepository(sqlstate)
+    rows = [{"request_id": "good-1"}, {"request_id": "rejected"}]
+
+    with pytest.raises(RawQueryError):
+        await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
+
+    assert repo.written == []

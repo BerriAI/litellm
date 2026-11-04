@@ -9215,7 +9215,7 @@ async def _create_spend_logs_with_poison_isolation(
         await repo.insert_with_deliveries(rows)
         return failure_budget
     except Exception as e:
-        if not (PrismaDBExceptionHandler.is_prisma_data_error(e) or isinstance(e, UnicodeEncodeError)):
+        if not (PrismaDBExceptionHandler.is_rejected_row_error(e) or isinstance(e, UnicodeEncodeError)):
             raise
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
             raise
