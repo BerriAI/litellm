@@ -59,6 +59,8 @@ def _provider_fields() -> dict[str, object]:
         "reasoning_details": [{"type": "reasoning.text", "text": SECRET, "index": 0, "format": "unknown"}],
         "thinking_blocks": [{"type": "thinking", "thinking": SECRET}],
         "reasoningContentBlocks": [{"reasoningText": {"text": SECRET}}],
+        "reasoningContent": {"reasoningText": {"text": SECRET}},
+        "annotations": [{"type": "file", "file": {"name": "notes.pdf", "content": [{"type": "text", "text": SECRET}]}}],
         "citations": [{"cited_text": SECRET}],
         "citationsContent": [{"citations": [{"location": {}}], "content": [{"text": SECRET}]}],
         "citation": {"type": "char_location", "cited_text": SECRET},

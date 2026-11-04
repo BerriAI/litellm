@@ -279,6 +279,8 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
             for key in (
                 "thinking_blocks",
                 "reasoningContentBlocks",
+                "reasoningContent",
+                "annotations",
                 "citations",
                 "citation",
                 "citationsContent",
