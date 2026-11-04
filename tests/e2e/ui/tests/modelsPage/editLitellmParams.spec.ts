@@ -27,7 +27,7 @@ async function readStoredParams(
 }
 
 function paramsEditor(page: PlaywrightPage) {
-  return page.getByPlaceholder('"rpm": 100');
+  return page.getByRole("textbox", { name: "LiteLLM Params", exact: true });
 }
 
 async function editParams(
