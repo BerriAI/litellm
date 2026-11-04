@@ -163,8 +163,14 @@ class MessageThreadOwnership(CustomLogger):
                 await self._record_owner(message_id, user_api_key_dict)
 
     async def _record_owner(self, message_id: str, user_api_key_dict: "UserAPIKeyAuth") -> None:
+        owner_key: Final = _owner_key(message_id)
+        bound_owner: Final = await self._owners.async_get_cache(
+            key=owner_key, litellm_parent_otel_span=user_api_key_dict.parent_otel_span
+        )
+        if bound_owner is not None:
+            return
         await self._owners.async_set_cache(
-            key=_owner_key(message_id),
+            key=owner_key,
             value=_owner(user_api_key_dict),
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             ttl=_OWNER_TTL_SECONDS,

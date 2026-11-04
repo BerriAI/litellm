@@ -130,6 +130,18 @@ async def test_each_continued_turn_hands_its_own_message_to_the_same_key() -> No
 
 
 @pytest.mark.asyncio
+async def test_a_reply_served_again_to_another_key_stays_with_the_key_that_got_it_first() -> None:
+    ownership: Final = hook()
+    for key in (OWNER, INTRUDER):
+        await ownership.async_post_call_success_hook(
+            data={"thread": CREATE}, user_api_key_dict=key, response=anthropic_message("msg_cached")
+        )
+
+    assert await allows(ownership, OWNER, "msg_cached")
+    assert not await allows(ownership, INTRUDER, "msg_cached")
+
+
+@pytest.mark.asyncio
 async def test_other_call_types_pass_untouched() -> None:
     data: Final = continue_from("msg_unknown")
 
