@@ -378,7 +378,7 @@ class _RawInsertRepository:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sqlstate", ["22P02", "23502"])
+@pytest.mark.parametrize("sqlstate", ["22P02", "23502", "54000"])
 async def test_raw_insert_rejecting_one_row_drops_only_that_row(sqlstate):
     from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
 
