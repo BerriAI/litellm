@@ -148,6 +148,11 @@ def _redact_function_call(function_call) -> None:
 
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
+    if (
+        isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices))
+        and getattr(choice, "logprobs", None) is not None
+    ):
+        choice.logprobs = None
     if isinstance(choice, litellm.Choices):
         if choice.message.content is not None:
             choice.message.content = REDACTED_BY_LITELLM
@@ -334,6 +339,8 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
     for choice in choices:
         if isinstance(choice, dict):
             _redact_provider_specific_fields_dict(choice)
+            if choice.get("logprobs") is not None:
+                choice["logprobs"] = None
             if "message" in choice and isinstance(choice["message"], dict):
                 if choice["message"].get("content") is not None:
                     choice["message"]["content"] = redacted_str
