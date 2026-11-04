@@ -7,6 +7,7 @@ import asyncio
 import math
 import os
 import sys
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -775,6 +776,12 @@ class PrometheusLogger(CustomLogger):
                 "litellm_images_generated_metric",
                 "Number of images generated, from the image generation response",
                 labelnames=self.get_labels_for_metric("litellm_images_generated_metric"),
+            )
+
+            self.litellm_model_tool_calls_total = self._counter_factory(
+                "litellm_model_tool_calls_total",
+                "Tool calls the model asked for in its response, by tool name",
+                labelnames=self.get_labels_for_metric("litellm_model_tool_calls_total"),
             )
 
             # Remaining Budget for Team
@@ -1941,6 +1948,11 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
 
+        try:
+            self._increment_model_tool_call_metrics(response_obj=response_obj, enum_values=enum_values)
+        except Exception as e:  # noqa: BLE001  # counting tool calls must never stop the rest of success logging
+            verbose_logger.exception("Prometheus: failed to count the model's tool calls: %s", e)
+
         # MCP tool call metrics
         self._increment_mcp_tool_call_metrics(
             standard_logging_payload=standard_logging_payload,
@@ -2259,6 +2271,23 @@ class PrometheusLogger(CustomLogger):
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
         return None
+
+    def _increment_model_tool_call_metrics(self, response_obj: object, enum_values: UserAPIKeyLabelValues) -> None:
+        from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
+
+        tool_names: Final = response_tool_call_names(response_obj)
+        for tool_name, amount in Counter(tool_names).items():
+            self._inc_model_tool_call_counter(replace(enum_values, tool_name=tool_name), amount=amount)
+
+    def _inc_model_tool_call_counter(self, tool_enum_values: UserAPIKeyLabelValues, amount: int) -> None:
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_model_tool_calls_total,
+            "litellm_model_tool_calls_total",
+            tool_enum_values,
+            label_context=PrometheusLabelFactoryContext(tool_enum_values),
+            amount=amount,
+        )
 
     def _increment_mcp_tool_call_metrics(
         self,
