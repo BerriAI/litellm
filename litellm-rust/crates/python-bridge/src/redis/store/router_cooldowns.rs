@@ -1,19 +1,15 @@
-use std::{
-    sync::{Arc, Mutex, PoisonError},
-    time::Duration,
-};
+use std::sync::Arc;
 
-use litellm_redis_store::router_cooldowns::{Cooldown, DeclaredCooldowns, RouterCooldowns};
+use litellm_redis_store::router_cooldowns::{Cooldown, RouterCooldowns};
 use pyo3::{
-    exceptions::PyRuntimeError,
     prelude::*,
     types::{PyDict, PyTuple},
 };
 
 use super::{
-    PyNumber, call, policy::router_tier_policies, request::NativeRequestRedis, store_error,
+    NativePending, PyNumber, policy::router_tier_policies, redis_async, redis_sync,
+    request::NativeRequestRedis, store_error, ttl,
 };
-use crate::execution::{run_async_value, run_sync_value};
 use crate::redis::client::NativeRedisClient;
 
 /// One router's cooldown store. The router's sync completion path calls `put`, `active`,
@@ -53,6 +49,21 @@ impl<'py> IntoPyObject<'py> for PyCooldown {
     }
 }
 
+/// `[(model_id, cooldown), ...]` the way `RedisCache` hands the router its batch read.
+struct PyActive(Vec<(String, Cooldown)>);
+
+impl<'py> IntoPyObject<'py> for PyActive {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
+        active_to_py(py, self.0)?
+            .into_pyobject(py)
+            .map(Bound::into_any)
+    }
+}
+
 fn active_to_py(
     py: Python<'_>,
     active: Vec<(String, Cooldown)>,
@@ -88,16 +99,9 @@ impl NativeRouterCooldowns {
         ttl_seconds: f64,
     ) -> PyResult<()> {
         let store = self.0.clone();
-        let scope = call(py, "set_cache")?;
-        run_sync_value(py, async move {
-            scope
-                .scope(store.put(
-                    &model_id,
-                    &cooldown.0,
-                    Duration::from_secs_f64(ttl_seconds.max(0.0)),
-                ))
-                .await
-                .map_err(store_error)
+        let ttl = ttl(Some(ttl_seconds)).unwrap_or_default();
+        redis_sync(py, "set_cache", store_error, async move {
+            store.put(&model_id, &cooldown.0, ttl).await
         })
     }
 
@@ -109,16 +113,11 @@ impl NativeRouterCooldowns {
         ttl_seconds: f64,
     ) -> PyResult<i64> {
         let store = self.0.clone();
-        let scope = call(py, "increment_cache")?;
-        run_sync_value(py, async move {
-            scope
-                .scope(store.increment_allowed_fails(
-                    &model_id,
-                    suffix.as_deref(),
-                    Duration::from_secs_f64(ttl_seconds.max(0.0)),
-                ))
+        let ttl = ttl(Some(ttl_seconds)).unwrap_or_default();
+        redis_sync(py, "increment_cache", store_error, async move {
+            store
+                .increment_allowed_fails(&model_id, suffix.as_deref(), ttl)
                 .await
-                .map_err(store_error)
         })
     }
 
@@ -128,30 +127,16 @@ impl NativeRouterCooldowns {
         model_ids: Vec<String>,
     ) -> PyResult<Vec<Bound<'py, PyTuple>>> {
         let store = self.0.clone();
-        let scope = call(py, "batch_get_cache")?;
-        let active = run_sync_value(py, async move {
-            scope
-                .scope(store.active(&model_ids))
-                .await
-                .map_err(store_error)
+        let active = redis_sync(py, "batch_get_cache", store_error, async move {
+            store.active(&model_ids).await
         })?;
         active_to_py(py, active)
     }
 
     fn aactive<'py>(&self, py: Python<'py>, model_ids: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_batch_get_cache")?;
-        run_async_value(py, async move {
-            let active = scope
-                .scope(store.active(&model_ids))
-                .await
-                .map_err(store_error)?;
-            Python::attach(|py| {
-                Ok(active_to_py(py, active)?
-                    .into_iter()
-                    .map(Bound::unbind)
-                    .collect::<Vec<_>>())
-            })
+        redis_async(py, "async_batch_get_cache", store_error, async move {
+            store.active(&model_ids).await.map(PyActive)
         })
     }
 
@@ -159,27 +144,27 @@ impl NativeRouterCooldowns {
         &self,
         request: &NativeRequestRedis,
         model_ids: Vec<String>,
-    ) -> PyResult<NativeDeclaredCooldowns> {
+    ) -> PyResult<NativePending> {
         let declared = self
             .0
             .declare_active(&request.0, &model_ids)
             .map_err(store_error)?;
-        Ok(NativeDeclaredCooldowns {
-            store: self.0.clone(),
-            declared: Mutex::new(Some(declared)),
-        })
+        let store = self.0.clone();
+        Ok(NativePending::new(
+            "async_batch_get_cache",
+            store_error,
+            async move { store.resolve_active(declared).await.map(PyActive) },
+        ))
     }
 
     fn minimum(&self, py: Python<'_>, model_ids: Vec<String>) -> PyResult<Option<PyNumber>> {
         let store = self.0.clone();
-        let scope = call(py, "batch_get_cache")?;
-        let minimum = run_sync_value(py, async move {
-            scope
-                .scope(store.minimum(&model_ids))
+        redis_sync(py, "batch_get_cache", store_error, async move {
+            store
+                .minimum(&model_ids)
                 .await
-                .map_err(store_error)
-        })?;
-        Ok(minimum.map(PyNumber))
+                .map(|minimum| minimum.map(PyNumber))
+        })
     }
 
     fn evict_local(&self, model_id: &str) -> PyResult<()> {
@@ -196,38 +181,5 @@ impl NativeRouterCooldowns {
             snapshot.set_item(key, PyCooldown(cooldown))?;
         }
         Ok(snapshot)
-    }
-}
-
-/// An `active` read declared on a request's pre-call batch. `resolve` answers it once.
-#[pyclass(frozen, name = "NativeDeclaredCooldowns")]
-pub(crate) struct NativeDeclaredCooldowns {
-    store: Arc<RouterCooldowns>,
-    declared: Mutex<Option<DeclaredCooldowns>>,
-}
-
-#[pymethods]
-impl NativeDeclaredCooldowns {
-    fn resolve<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let declared = self
-            .declared
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-            .ok_or_else(|| PyRuntimeError::new_err("this cooldown read was already resolved"))?;
-        let store = self.store.clone();
-        let scope = call(py, "async_batch_get_cache")?;
-        run_async_value(py, async move {
-            let active = scope
-                .scope(store.resolve_active(declared))
-                .await
-                .map_err(store_error)?;
-            Python::attach(|py| {
-                Ok(active_to_py(py, active)?
-                    .into_iter()
-                    .map(Bound::unbind)
-                    .collect::<Vec<_>>())
-            })
-        })
     }
 }

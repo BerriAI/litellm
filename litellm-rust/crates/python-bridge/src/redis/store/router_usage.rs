@@ -3,8 +3,7 @@ use std::{sync::Arc, time::Duration};
 use litellm_redis_store::router_usage::{Counter, Kind, RouterUsage};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
-use super::{PyNumber, call, policy::router_tier_policies, store_error};
-use crate::execution::run_async_value;
+use super::{PyNumber, policy::router_tier_policies, redis_async, store_error};
 use crate::redis::client::NativeRedisClient;
 
 /// One router's global TPM/RPM counters. Every caller on `main` is async.
@@ -55,13 +54,11 @@ impl NativeRouterUsage {
         ttl_seconds: u64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_increment")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.increment(&counter.0, value.0, Duration::from_secs(ttl_seconds)))
+        redis_async(py, "async_increment", store_error, async move {
+            store
+                .increment(&counter.0, value.0, Duration::from_secs(ttl_seconds))
                 .await
                 .map(PyNumber)
-                .map_err(store_error)
         })
     }
 
@@ -76,18 +73,16 @@ impl NativeRouterUsage {
         requests: i64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_increment_pipeline")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.increment_deployment(
+        redis_async(py, "async_increment_pipeline", store_error, async move {
+            store
+                .increment_deployment(
                     &deployment_id,
                     model.as_deref(),
                     &minute,
                     tokens.0,
                     requests,
-                ))
+                )
                 .await
-                .map_err(store_error)
         })
     }
 
@@ -101,12 +96,8 @@ impl NativeRouterUsage {
             .into_iter()
             .map(|counter| counter.0)
             .collect::<Vec<_>>();
-        let scope = call(py, "async_batch_get_cache")?;
-        run_async_value(py, async move {
-            let read = scope
-                .scope(store.get_many(&counters))
-                .await
-                .map_err(store_error)?;
+        redis_async(py, "async_batch_get_cache", store_error, async move {
+            let read = store.get_many(&counters).await?;
             Ok(read
                 .into_iter()
                 .map(|count| count.map(PyNumber))
