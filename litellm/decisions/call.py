@@ -684,12 +684,12 @@ def _ir_call(
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
     provider_config: Final = route.provider_config
-    checked_fields: Final = (
-        replace(fields, questions=_OPENAI_QUESTIONS_ADAPTER.validate_python(fields.questions))
-        if isinstance(fields, OpenAIDecisionRequestFields)
-        else fields
-    )
     try:
+        checked_fields: Final = (
+            replace(fields, questions=_OPENAI_QUESTIONS_ADAPTER.validate_python(fields.questions))
+            if isinstance(fields, OpenAIDecisionRequestFields)
+            else fields
+        )
         headers: Final = decisions_outbound_headers(extra_headers, route.custom_llm_provider, kwargs)
         support: Final = _resolved_support(
             provider_config, route.model, route.custom_llm_provider, headers, kwargs, checked_fields

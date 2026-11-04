@@ -232,7 +232,6 @@ _INVALID_BODIES: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = (
     ("missing questions", {"input": _INPUT}),
     ("missing input", {"questions": _QUESTIONS}),
     ("numeric input", {"input": 5, "questions": _QUESTIONS}),
-    ("assistant message input", {"input": [{"role": "assistant", "content": "hi"}], "questions": _QUESTIONS}),
     ("empty questions", {"input": _INPUT, "questions": []}),
     ("questions as a map", {"input": _INPUT, "questions": {"q": _PREDICATE}}),
     ("predicate without instructions", {"input": _INPUT, "questions": [{"type": "predicate", "name": "q"}]}),
@@ -258,15 +257,9 @@ _IMAGE_INPUT: Final[list[JsonValue]] = [
         ],
     }
 ]
-_OPENAI_IMAGE_MESSAGES: Final[list[JsonValue]] = [
-    {
-        "role": "user",
-        "type": "message",
-        "content": [
-            {"type": "input_text", "text": _INPUT},
-            {"type": "input_image", "image_url": _PNG_DATA_URL, "detail": "auto"},
-        ],
-    }
+_ASSISTANT_TURN_INPUT: Final[list[JsonValue]] = [
+    {"role": "user", "content": _INPUT},
+    {"role": "assistant", "content": "hi"},
 ]
 _MESSAGE_LIST_INPUT: Final[list[JsonValue]] = [
     {"role": "user", "content": _INPUT},
@@ -487,6 +480,23 @@ def test_invalid_bodies_are_refused_at_the_gateway_without_an_upstream_call(gate
         assert _upstream_calls(gateway, handle) == []
 
 
+def test_system_one_providers_refuse_assistant_turns_unless_the_deployment_drops_params(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _PERPLEXITY.upstream_reply())
+        strict: Final = _deployment(scenario, handle, _PERPLEXITY)
+        refused: Final = _decide(gateway, strict, input=_ASSISTANT_TURN_INPUT)
+        assert refused.status_code == 400, refused.text
+        assert "['assistant messages']" in refused.text and "drop_params" in refused.text, refused.text
+        assert _upstream_calls(gateway, handle) == []
+
+        dropping: Final = _deployment(scenario, handle, _PERPLEXITY, drop_params=True)
+        accepted: Final = _decide(gateway, dropping, input=_ASSISTANT_TURN_INPUT)
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json() == _PERPLEXITY.litellm_response()
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["body"] == _PERPLEXITY.upstream_body()
+
+
 @pytest.mark.parametrize("provider", _TEXT_ONLY_PROVIDERS, ids=_provider_id)
 def test_text_only_providers_refuse_images_unless_the_deployment_drops_params(
     gateway: Gateway, provider: _Provider
@@ -519,14 +529,14 @@ def test_cloudflare_receives_images_from_either_format_in_its_images_field(gatew
         assert [call["body"] for call in _upstream_calls(gateway, handle)] == [expected_body] * 2
 
 
-def test_openai_forwards_image_input_in_its_own_message_shape(gateway: Gateway) -> None:
+def test_openai_gets_image_input_as_sent(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _OPENAI.upstream_reply())
         model: Final = _deployment(scenario, handle, _OPENAI)
         response: Final = _decide(gateway, model, input=_IMAGE_INPUT)
         assert response.status_code == 200, response.text
         (call,) = _upstream_calls(gateway, handle)
-        assert call["body"] == {"model": _OPENAI.body_model, "input": _OPENAI_IMAGE_MESSAGES, "questions": _QUESTIONS}
+        assert call["body"] == {"model": _OPENAI.body_model, "input": _IMAGE_INPUT, "questions": _QUESTIONS}
 
 
 def test_openai_box_answers_reach_the_caller_as_boxes_not_refusals(gateway: Gateway) -> None:

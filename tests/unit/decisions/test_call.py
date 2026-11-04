@@ -196,6 +196,18 @@ def test_decisions_request_is_logged_even_when_its_questions_fail_validation():
     assert logged["questions"][0]["instructions"] == QUESTION_TEXT
 
 
+def test_decisions_questions_sent_as_a_map_are_rejected_as_an_invalid_request():
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
+        _prepare_decisions_call(
+            **CONNECTION,
+            decision_input="My card was charged twice.",
+            questions={"billing": {"type": "predicate", "instructions": QUESTION_TEXT}},
+            audio=None,
+            videos=None,
+            kwargs={},
+        )
+
+
 def test_non_utf8_bytes_in_the_request_are_logged_and_rejected_with_a_400():
     logging_obj: Final = _logging_obj("adecisions")
     raw_input: Final = b"\xff\xfe not utf-8"
