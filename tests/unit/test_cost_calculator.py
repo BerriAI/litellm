@@ -4531,6 +4531,103 @@ def test_batch_cost_calculator_falls_back_to_text_batch_rate_for_modalities():
     assert prompt_cost == pytest.approx(100 * 1e-7)
 
 
+def _cached_audio_batch_usage() -> Usage:
+    return Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=1000, audio_tokens=1000, cached_tokens_details=CachedTokensDetails(audio_tokens=1000)
+        ),
+    )
+
+
+def _cached_text_batch_usage() -> Usage:
+    return Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=1000),
+    )
+
+
+@pytest.mark.parametrize(
+    ("audio_batch_cache_price", "usage", "expected_rate"),
+    [
+        pytest.param(None, _cached_audio_batch_usage(), 1e-7, id="cached-audio-bills-the-standard-audio-cache-price"),
+        pytest.param(None, _cached_text_batch_usage(), 3e-8, id="cached-text-bills-the-standard-cache-price"),
+        pytest.param(8e-8, _cached_audio_batch_usage(), 8e-8, id="an-explicit-audio-batch-cache-price-still-wins"),
+    ],
+)
+def test_batch_cost_calculator_bills_cached_tokens_at_the_standard_cache_price_when_the_row_has_no_batch_cache_price(
+    audio_batch_cache_price: float | None, usage: Usage, expected_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 3e-7,
+        "input_cost_per_audio_token": 1e-6,
+        "cache_read_input_token_cost": 3e-8,
+        "cache_read_input_audio_token_cost": 1e-7,
+        "input_cost_per_token_batches": 1.5e-7,
+        "input_cost_per_audio_token_batches": 5e-7,
+        "cache_read_input_audio_token_cost_batches": audio_batch_cache_price,
+    }
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model="gemini-2.5-flash", custom_llm_provider="vertex_ai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(1000 * expected_rate)
+
+
+def test_batch_cost_calculator_bills_long_context_cached_tokens_at_the_standard_long_context_cache_price() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 1.25e-6,
+        "input_cost_per_token_above_200k_tokens": 2.5e-6,
+        "cache_read_input_token_cost": 1.25e-7,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-7,
+        "input_cost_per_token_batches": 6.25e-7,
+        "input_cost_per_token_above_200k_tokens_batches": 1.25e-6,
+    }
+    usage: Final = Usage(
+        prompt_tokens=300_000,
+        completion_tokens=0,
+        total_tokens=300_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=300_000),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model="gemini-2.5-pro", custom_llm_provider="vertex_ai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(300_000 * 2.5e-7)
+
+
+def _batch_and_standard_cached_audio_cost(model: str, provider: str) -> tuple[str, float, float]:
+    batch_prompt_cost, _ = batch_cost_calculator(_cached_audio_batch_usage(), model, provider)
+    standard_prompt_cost, _ = litellm.cost_per_token(
+        model=model, custom_llm_provider=provider, usage_object=_cached_audio_batch_usage()
+    )
+    return model, batch_prompt_cost, standard_prompt_cost
+
+
+def test_batch_cached_audio_never_costs_more_than_standard_on_any_row_with_a_batch_input_price(
+    _local_model_cost_map: None,
+) -> None:
+    rows: Final = tuple(
+        (name, entry["litellm_provider"])
+        for name, entry in litellm.model_cost.items()
+        if isinstance(entry, dict)
+        and entry.get("input_cost_per_token_batches") is not None
+        and entry.get("cache_read_input_audio_token_cost") is not None
+    )
+    assert rows, "no cost map row prices both Batch input and Standard cached audio"
+
+    costs: Final = tuple(_batch_and_standard_cached_audio_cost(name, provider) for name, provider in rows)
+    overpriced: Final = tuple(cost for cost in costs if cost[1] > cost[2])
+
+    assert overpriced == ()
+
+
 @pytest.mark.parametrize(
     ("image_batch_rate", "image_tokens", "expected_completion_cost"),
     (
@@ -6254,7 +6351,7 @@ def test_batch_cost_calculator_bills_cached_tokens_at_the_flat_batch_cached_rate
     assert prompt_cost == pytest.approx(100 * 1e-6 + 900 * 1e-7)
 
 
-def test_batch_cost_calculator_bills_cached_tokens_at_the_batch_input_rate_without_a_cached_batch_rate(
+def test_batch_cost_calculator_bills_cached_tokens_at_the_standard_cache_rate_without_a_cached_batch_rate(
     _tiered_batch_models: None,
 ) -> None:
     from litellm.cost_calculator import batch_cost_calculator
@@ -6263,7 +6360,7 @@ def test_batch_cost_calculator_bills_cached_tokens_at_the_batch_input_rate_witho
         usage=_cached_usage(300_048, 300_045, 11), model=_FLAT_CACHE_BATCH_MODEL, custom_llm_provider="openai"
     )
 
-    assert prompt_cost == pytest.approx(300_048 * 3e-6)
+    assert prompt_cost == pytest.approx(3 * 3e-6 + 300_045 * 2e-7)
 
 
 def _cache_write_usage(prompt_tokens: int, cache_write_tokens: int, completion_tokens: int) -> Usage:

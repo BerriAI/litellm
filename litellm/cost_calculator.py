@@ -3323,15 +3323,35 @@ def batch_cost_calculator(
     return total_prompt_cost * vertex_uplift, total_completion_cost * vertex_uplift
 
 
+def _standard_rate(model_info: ModelInfo, key: str, prompt_tokens: int) -> float | None:
+    return get_cost_per_unit(model_info, get_modality_token_cost_key(model_info, key, prompt_tokens), None)
+
+
+def _cached_audio_batch_fallback(
+    model_info: ModelInfo, batch_cache_read_rate: float | None, cache_read_rate: float | None, prompt_tokens: int
+) -> float:
+    if batch_cache_read_rate is not None:
+        return batch_cache_read_rate
+    standard_audio_rate: Final = _standard_rate(model_info, "cache_read_input_audio_token_cost", prompt_tokens)
+    if standard_audio_rate is not None:
+        return standard_audio_rate
+    return 0.0 if cache_read_rate is None else cache_read_rate
+
+
 def _batch_prompt_cost(
     usage: Usage,
     model_info: ModelInfo,
     input_rate: float,
-    cache_read_rate: float | None,
+    batch_cache_read_rate: float | None,
     cache_creation_rate: float | None,
     cache_creation_rates_by_ttl: Mapping[str, float],
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
+    cache_read_rate: Final = (
+        _standard_rate(model_info, "cache_read_input_token_cost", usage.prompt_tokens)
+        if batch_cache_read_rate is None
+        else batch_cache_read_rate
+    )
     cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
     cached_audio_tokens: Final = details["cache_hit_audio_tokens"] if cache_read_rate is not None else 0
     bills_cache_writes: Final = cache_creation_rate is not None or bool(cache_creation_rates_by_ttl)
@@ -3352,7 +3372,11 @@ def _batch_prompt_cost(
         + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
         + (cached_tokens - cached_audio_tokens) * (cache_read_rate or 0.0)
         + cached_audio_tokens
-        * _batch_rate(model_info, "cache_read_input_audio_token_cost_batches", cache_read_rate or 0.0)
+        * _batch_rate(
+            model_info,
+            "cache_read_input_audio_token_cost_batches",
+            _cached_audio_batch_fallback(model_info, batch_cache_read_rate, cache_read_rate, usage.prompt_tokens),
+        )
         + (
             calculate_cache_writing_cost(
                 written_tokens,
