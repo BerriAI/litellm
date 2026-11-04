@@ -328,7 +328,9 @@ def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(sp
 
 def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
     mapped: Final = VertexGeminiConfig().map_openai_params(
-        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        non_default_params={
+            "audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}
+        },
         optional_params={},
         model="gemini-2.5-flash-preview-tts",
         drop_params=False,
@@ -3468,9 +3470,7 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
-        async def dispatch_attempt_failure_handlers(
-            self, exception: Exception, traceback_exception: str
-        ) -> None:
+        async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
             return None
 
         def attempt_scoped_copy(self) -> "DummyLogging":
@@ -3600,9 +3600,7 @@ def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expe
     ]
     metadata: Final = {
         "groundingChunks": chunks,
-        "groundingSupports": [
-            {"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}
-        ],
+        "groundingSupports": [{"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}],
     }
     annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
     expected: Final = [
@@ -10425,6 +10423,106 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
 
+def _top_level_format_audio(audio_format: str) -> Mapping[str, object]:
+    return {"voice": "Kore", "format": audio_format}
+
+
+def _format_beside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore"}, "format": audio_format}
+
+
+def _format_inside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore", "format": audio_format}}
+
+
+_FORMAT_PLACEMENTS: Final = (
+    _top_level_format_audio,
+    _format_beside_speech_config_audio,
+    _format_inside_speech_config_audio,
+)
+
+
+@pytest.mark.parametrize("audio_format", ("mp3", "opus", "flac", "PCM16"))
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
+@pytest.mark.parametrize("model", ("gemini/gemini-3.8-flash-tts", "vertex_ai/gemini-3.8-flash-tts"))
+def test_chat_audio_unsupported_format_is_a_400_naming_the_model_and_format(
+    model: str, audio: Callable[[str], Mapping[str, object]], audio_format: str
+) -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError) as raised:
+        completion(
+            model=model,
+            messages=[{"role": "user", "content": "Say hello"}],
+            modalities=["audio"],
+            audio=audio(audio_format),
+            api_key="test-key",
+            vertex_project="test-project",
+            vertex_location="us-central1",
+        )
+
+    assert raised.value.status_code == 400
+    assert f"gemini-3.8-flash-tts does not take the audio format '{audio_format}'" in str(raised.value)
+
+
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
+@pytest.mark.parametrize("request_drop_params, global_drop_params", ((True, False), (False, True)))
+def test_chat_audio_unsupported_format_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    request_drop_params: bool,
+    global_drop_params: bool,
+    audio: Callable[[str], Mapping[str, object]],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    optional_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"modalities": ["audio"], "audio": audio("mp3")},
+        optional_params={},
+        model="gemini-3.8-flash-tts",
+        drop_params=request_drop_params,
+    )
+
+    assert optional_params == {
+        "responseModalities": ["AUDIO"],
+        "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+    }
+
+
+def test_chat_audio_unsupported_format_error_caps_the_echoed_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": "x" * 300}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format '{'x' * 100}'" in str(raised.value)
+    assert "x" * 101 not in str(raised.value)
+
+
+@pytest.mark.parametrize("audio_format", [5, {"codec": "mp3"}, ["x"] * 300])
+def test_chat_audio_non_string_format_error_names_the_value_as_sent(audio_format: object) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": audio_format}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format {repr(audio_format)[:100]}. Set format" in str(raised.value)
+
+
+def test_map_audio_params_rejects_an_unsupported_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="audio format 'mp3'"):
+        VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "mp3"})
+
+
+def test_map_audio_params_maps_a_pcm16_voice() -> None:
+    assert VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "pcm16"}) == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
+    }
+
+
 _CACHED_PROMPT_USAGE_METADATA = {
     "promptTokenCount": 1536,
     "candidatesTokenCount": 40,
@@ -10761,6 +10859,90 @@ async def test_gemini_sends_a_boolean_for_a_gateway_default_written_as_text_or_n
     sent: Final = await _sent_thinking_config("gemini-3.8-flash", {"reasoning_effort": "high"})
 
     assert sent["includeThoughts"] is expected
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+_GEMINI_ROUTES: Final = (
+    pytest.param(VertexGeminiConfig, "vertex_ai", id="vertex_ai"),
+    pytest.param(GoogleAIStudioGeminiConfig, "gemini", id="gemini"),
+)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_a_hosted_mcp_tool_answers_400_on_gemini_without_drop_params(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        config_class().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="gemini-3.8-flash",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert f"gemini-3.8-flash on {route} " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+    assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(
+    monkeypatch, caplog, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = config_class().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="gemini-3.8-flash",
+            drop_params=True,
+        )
+    assert "deepwiki" not in json.dumps(mapped)
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert any(
+        "`deepwiki`" in record.getMessage() and f" on {route} (" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "tools" not in mapped
+    assert "tool_choice" not in mapped
+
+
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every_hosted_mcp_tool(
+    monkeypatch, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={
+            "tools": [_HOSTED_MCP_TOOL],
+            "functions": [_WEATHER_FUNCTION_TOOL["function"]],
+            "tool_choice": "none",
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "deepwiki" not in json.dumps(mapped)
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
 
 
 class _BodyInChunks(httpx.SyncByteStream, httpx.AsyncByteStream):

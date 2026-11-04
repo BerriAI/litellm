@@ -28,7 +28,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, lax_bool
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -307,9 +307,10 @@ def count_tokens_feature_betas(
     )
 
 
-def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None) -> bool:
+def supports_anthropic_cache_control(
+    model: str, custom_llm_provider: str | None, model_info: Mapping[str, object] | None = None
+) -> bool:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-    from litellm.utils import supports_prompt_caching
 
     try:
         provider: Final = custom_llm_provider if custom_llm_provider is not None else get_llm_provider(model=model)[1]
@@ -318,8 +319,25 @@ def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None
     return (
         provider in ("anthropic", "bedrock", "vertex_ai", "azure_ai")
         and "claude" in model.lower()
-        and supports_prompt_caching(model=model, custom_llm_provider=provider)
+        and _deployment_supports_prompt_caching(model, provider, model_info)
     )
+
+
+def _deployment_supports_prompt_caching(model: str, provider: str, model_info: Mapping[str, object] | None) -> bool:
+    from litellm.utils import catalog_with_runtime_registrations, get_model_info, supports_prompt_caching
+
+    declared: Final = None if model_info is None else lax_bool(model_info.get("supports_prompt_caching"))
+    if declared is not None:
+        return declared
+    live: Final = supports_prompt_caching(model=model, custom_llm_provider=provider)
+    if model_info is None:
+        return live
+    try:
+        key: Final = get_model_info(model=model, custom_llm_provider=provider).get("key")
+    except Exception:  # noqa: BLE001  # an unmapped model keeps the live answer
+        return live
+    catalog_entry: Final = catalog_with_runtime_registrations().get(key)
+    return live if catalog_entry is None else catalog_entry.get("supports_prompt_caching") is True
 
 
 def _tool_config_point_control(points: object) -> Mapping[object, object] | None:
@@ -1297,7 +1315,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return None
         return anthropic_beta_header.split(",")
 
-    def get_computer_tool_beta_header(self, computer_tool_version: str) -> str:
+    def get_computer_tool_beta_header(self, computer_tool_version: str) -> str | None:
         """
         Get the appropriate beta header for a given computer tool version.
 
@@ -1305,16 +1323,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             computer_tool_version: The computer tool version (e.g., 'computer_20250124', 'computer_20241022')
 
         Returns:
-            The corresponding beta header string
+            The corresponding beta header string, or None for a version with no known beta
         """
         computer_tool_beta_mapping: Final = {
+            "computer_20251124": "computer-use-2025-11-24",
             "computer_20250124": "computer-use-2025-01-24",
             "computer_20241022": "computer-use-2024-10-22",
         }
-        return computer_tool_beta_mapping.get(
-            computer_tool_version,
-            "computer-use-2024-10-22",  # Default fallback
-        )
+        return computer_tool_beta_mapping.get(computer_tool_version)
 
     def get_anthropic_beta_list(
         self,
@@ -1346,9 +1362,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
 
-        if computer_tool_used:
-            beta_header: Final = self.get_computer_tool_beta_header(computer_tool_used)
-            betas.append(beta_header)
+        if computer_tool_used and (computer_tool_beta := self.get_computer_tool_beta_header(computer_tool_used)):
+            betas.append(computer_tool_beta)
 
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
@@ -1437,9 +1452,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-        if computer_tool_used:
-            beta_header: Final = self.get_computer_tool_beta_header(computer_tool_used)
-            betas.add(beta_header)
+        if computer_tool_used and (computer_tool_beta := self.get_computer_tool_beta_header(computer_tool_used)):
+            betas.add(computer_tool_beta)
         # if pdf_used:
         #     betas.add("pdfs-2024-09-25")
         if file_id_used:

@@ -154,11 +154,42 @@ pub fn complete_anthropic_url(
 ) -> String {
     let api_base = resolve_anthropic_api_base(api_base, env_lookup);
 
-    let api_base = api_base.trim_end_matches('/');
-    if api_base.ends_with(MESSAGES_PATH) {
+    ensure_api_route(&api_base, MESSAGES_PATH)
+}
+
+/// Python's `urlsplit(url).path`, for the URLs an `api_base` holds.
+fn url_path(url: &str) -> &str {
+    let before_fragment = url.split('#').next().unwrap_or_default();
+    let before_query = before_fragment.split('?').next().unwrap_or_default();
+    match before_query.split_once("://") {
+        Some((_, rest)) => rest.find('/').map_or("", |slash| &rest[slash..]),
+        None => before_query,
+    }
+}
+
+/// Python's `_strip_trailing_slashes_keeping_the_scheme`.
+fn strip_trailing_slashes(api_base: &str) -> String {
+    let stripped = api_base.trim_end_matches('/');
+    if stripped.ends_with(':') && !stripped.contains('/') && !stripped.contains('?') {
         return api_base.to_string();
     }
-    format!("{api_base}{MESSAGES_PATH}")
+    match stripped.split_once('?') {
+        Some((before, query)) if url_path(stripped).ends_with('/') => {
+            format!("{}?{query}", before.trim_end_matches('/'))
+        }
+        _ => stripped.to_string(),
+    }
+}
+
+/// Python's `ensure_api_route`: an `api_base` whose path already ends in the route is kept as
+/// it is, query string included; anything else gets the route appended to the whole string.
+fn ensure_api_route(api_base: &str, route: &str) -> String {
+    let base = strip_trailing_slashes(api_base);
+    let route = route.trim_start_matches('/');
+    if url_path(&base).ends_with(&format!("/{route}")) {
+        return base;
+    }
+    format!("{}/{route}", strip_trailing_slashes(&base))
 }
 
 pub fn existing_betas(headers: &[(String, String)]) -> BetaSet {
@@ -1921,5 +1952,25 @@ mod tests {
             serde_json::from_value::<MessagesModelCapabilities>(input).unwrap(),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::bare_host("https://api.example.com", "https://api.example.com/v1/messages")]
+    #[case::trailing_slash("https://api.example.com/", "https://api.example.com/v1/messages")]
+    #[case::route_present(
+        "https://api.example.com/v1/messages/",
+        "https://api.example.com/v1/messages"
+    )]
+    #[case::route_and_query(
+        "https://api.example.com/v1/messages?beta=true",
+        "https://api.example.com/v1/messages?beta=true"
+    )]
+    #[case::query_without_route(
+        "https://api.example.com/?x=1",
+        "https://api.example.com?x=1/v1/messages"
+    )]
+    #[case::scheme_only("https://", "https:///v1/messages")]
+    fn the_messages_url_follows_python_ensure_api_route(#[case] api_base: &str, #[case] url: &str) {
+        assert_eq!(complete_anthropic_url(Some(api_base), &|_| None), url);
     }
 }

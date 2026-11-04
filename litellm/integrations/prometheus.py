@@ -3036,7 +3036,7 @@ class PrometheusLogger(CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
@@ -3059,10 +3059,14 @@ class PrometheusLogger(CustomLogger):
         try:
             _tags: Final = StandardLoggingPayloadSetup.get_request_tags(
                 litellm_params=request_data,
-                proxy_server_request=request_data.get("proxy_server_request", {}),
+                proxy_server_request=_logged_fields(request_data.get("proxy_server_request")),
             )
-            _metadata: Final = request_data.get("metadata", {}) or {}
-            model_id: Final = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
+            _metadata: Final = _logged_fields(request_data.get("metadata"))
+            model_id: Final = (
+                _logged_fields(_metadata.get("model_info")).get("id")
+                or _logged_fields(request_data.get("model_info")).get("id")
+                or _logged_fields(request_data.get("standard_logging_object")).get("model_id")
+            )
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
             api_provider: Final = self._extract_api_provider_from_request_data(
                 request_data

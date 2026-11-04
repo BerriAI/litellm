@@ -27,6 +27,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     AnthropicCacheControlHook,
     configured_injection_points,
+    routed_model_info,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
@@ -758,9 +759,7 @@ def _api_base_kwarg(kwargs: Mapping[str, object]) -> str | None:
     return api_base if isinstance(api_base, str) else None
 
 
-def _dispatched_model_name(
-    model: str, custom_llm_provider: str, api_base: str | None, litellm_params: GenericLiteLLMParams | None = None
-) -> str:
+def _dispatched_model_name(model: str, custom_llm_provider: str) -> str:
     from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 
     provider_model, _ = resolve_model_and_provider_for_metadata(model=model, custom_llm_provider=custom_llm_provider)
@@ -773,7 +772,6 @@ def _will_bridge_to_chat_completions(
     use_chat_completions_api: bool,
     model_info: object,
     api_base: str | None,
-    litellm_params: GenericLiteLLMParams | None = None,
 ) -> bool:
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
@@ -790,7 +788,7 @@ def _will_bridge_to_chat_completions(
         return True
     return _bridges_to_chat_completions(
         _resolve_responses_api_provider_config(
-            _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base, litellm_params),
+            _dispatched_model_name(normalized_model[0], custom_llm_provider),
             custom_llm_provider,
             model_info,
             api_base,
@@ -815,7 +813,6 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
         bool(kwargs.get("use_chat_completions_api")),
         kwargs.get("model_info"),
         api_base,
-        litellm_params,
     )
 
 
@@ -882,6 +879,7 @@ def _stamp_injection_points_for_the_hook(
         custom_llm_provider,
         kwargs.get("api_base") or kwargs.get("base_url"),
         kwargs.get("prompt_cache_options"),
+        routed_model_info(kwargs.get("model_info")),
     )
 
 
@@ -997,7 +995,6 @@ async def aresponses(
                     bool(kwargs.get("use_chat_completions_api")),
                     kwargs.get("model_info"),
                     _api_base_kwarg(kwargs),
-                    GenericLiteLLMParams(**kwargs),
                 ),
             ):
                 _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
@@ -1173,7 +1170,6 @@ def _apply_prompt_management_to_responses_call(
                 use_chat_completions_api,
                 kwargs.get("model_info"),
                 _api_base_kwarg(kwargs),
-                GenericLiteLLMParams(**kwargs),
             ),
         ):
             _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)

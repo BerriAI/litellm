@@ -112,6 +112,57 @@ def test_redaction_reuses_message_rules_for_request_body_and_provider_fields(sha
     assert result == original_result and params == original_params
 
 
+def _reasoning_items() -> list[dict[str, object]]:
+    return [{"type": "reasoning", "id": "rs_redaction", "summary": [{"type": "summary_text", "text": SECRET}]}]
+
+
+def _message_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "answer", "reasoning_items": _reasoning_items()}}]
+    )
+
+
+def _delta_choices() -> dict[str, object]:
+    return {"choices": [{"index": 0, "delta": {"content": "answer", "reasoning_items": _reasoning_items()}}]}
+
+
+@pytest.mark.parametrize(
+    ("details", "result"),
+    [
+        pytest.param({}, _message_response(), id="message_object"),
+        pytest.param({}, _message_response().model_dump(), id="message_dict"),
+        pytest.param({}, _delta_choices(), id="delta_dict"),
+        pytest.param(
+            {"stream": True, "complete_streaming_response": ModelResponseStream(**_delta_choices())},
+            None,
+            id="stream_chunk",
+        ),
+        pytest.param({"standard_logging_object": {"response": _message_response().model_dump()}}, None, id="logged"),
+        pytest.param({"standard_logging_object": {"response": _delta_choices()}}, None, id="logged_delta"),
+    ],
+)
+def test_redaction_hides_reasoning_item_summaries(details: dict[str, object], result: object) -> None:
+    assert SECRET in str(details) + str(result)
+
+    redacted: Final = perform_redaction(details, result)
+
+    assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
+
+
+def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted() -> None:
+    logprobs: Final = {"tokens": [SECRET], "token_logprobs": [-0.1], "text_offset": [0], "top_logprobs": [{SECRET: -0.1}]}
+    response: Final = TextCompletionResponse(
+        choices=[{"index": 0, "text": SECRET, "logprobs": logprobs, "finish_reason": "stop"}]
+    )
+
+    redacted: Final = redacted_response_obj_for_custom_logger(response, CustomLogger(message_logging=False))
+
+    assert isinstance(redacted, TextCompletionResponse)
+    assert redacted.choices[0].text == "redacted-by-litellm"
+    assert SECRET not in redacted.model_dump_json()
+    assert response.choices[0].text == SECRET, "the caller's own response is not redacted"
+
+
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
     hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
     original_hidden_params: Final = copy.deepcopy(hidden_params)
@@ -560,6 +611,83 @@ class TestPerformRedaction:
             {"text": "redacted-by-litellm", "finish_reason": "stop", "index": 0},
             {"text": "redacted-by-litellm", "finish_reason": "length", "index": 1},
         ]
+
+    def test_redacts_token_ids_that_decode_to_the_completion(self):
+        details = {
+            "stream": True,
+            "complete_streaming_response": litellm.ModelResponse(
+                choices=[
+                    litellm.Choices(message=litellm.Message(content="secret", role="assistant"), token_ids=[20, 11])
+                ]
+            ),
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "token_ids": [20, 11],
+                            "message": {"content": "secret", "provider_specific_fields": {"token_ids": [20, 11]}},
+                        },
+                        {"text": " Paris.", "token_ids": [20, 11], "index": 1},
+                    ]
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        logged_choices = details["standard_logging_object"]["response"]["choices"]
+        assert [choice["token_ids"] for choice in logged_choices] == [None, None]
+        assert logged_choices[0]["message"]["provider_specific_fields"]["token_ids"] is None
+        assert details["complete_streaming_response"].choices[0].get("token_ids") is None
+
+    def test_redacts_text_completion_stream_text_and_the_token_ids_that_decode_to_it(self):
+        details = {
+            "stream": True,
+            "async_complete_streaming_response": litellm.TextCompletionResponse(
+                choices=[
+                    litellm.utils.TextChoices(
+                        index=0, text=" Paris.", reasoning_content="thinking", token_ids=[20, 11], finish_reason="stop"
+                    )
+                ]
+            ),
+        }
+
+        perform_redaction(details, None)
+
+        logged_choice = details["async_complete_streaming_response"].choices[0]
+        assert (logged_choice.text, logged_choice.reasoning_content) == ("redacted-by-litellm", "redacted-by-litellm")
+        assert logged_choice.get("token_ids") is None
+        assert logged_choice.finish_reason == "stop"
+
+    def test_redacts_token_ids_a_cache_hit_keeps_on_the_choice_provider_specific_fields(self):
+        result = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret", role="assistant"),
+                    provider_specific_fields={"token_ids": [20, 11], "stop_reason": "END"},
+                )
+            ]
+        )
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "message": {"content": "secret"},
+                            "provider_specific_fields": {"token_ids": [20, 11], "stop_reason": "END"},
+                        }
+                    ]
+                }
+            }
+        }
+
+        redacted = perform_redaction(details, result)
+
+        logged_fields = details["standard_logging_object"]["response"]["choices"][0]["provider_specific_fields"]
+        assert logged_fields == {"token_ids": None, "stop_reason": "END"}
+        assert redacted.choices[0].provider_specific_fields["token_ids"] is None
+        assert redacted.choices[0].provider_specific_fields["stop_reason"] == "END"
+        assert result.choices[0].provider_specific_fields["token_ids"] == [20, 11]
 
     def test_redacts_object_choices_inside_model_response_dict(self):
         result = {
