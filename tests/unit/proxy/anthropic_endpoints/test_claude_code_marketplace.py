@@ -4,15 +4,20 @@ Unit tests for claude_code_marketplace.py source validation.
 Covers the git-subdir and archive source types added alongside the existing github and url types.
 """
 
+import hashlib
+import io
 import json
-from collections.abc import Mapping
+import zipfile
+from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
-from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from typing import Final, TypeAlias
+from unittest.mock import AsyncMock, MagicMock, call
 
 import httpx
 import pytest
 from fastapi import HTTPException
+from prisma import Base64, models as prisma_models
+from prisma.errors import UniqueViolationError
 from pydantic import ValidationError
 
 import litellm
@@ -29,7 +34,9 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
     register_plugin,
     update_plugin,
 )
+from litellm.proxy.deps.repositories import get_plugin_upload_repository
 from litellm.proxy.proxy_server import LitellmUserRoles, hash_token
+from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.types.proxy.claude_code_endpoints import (
     MarketplaceResponse,
     RegisterPluginRequest,
@@ -83,6 +90,7 @@ def _make_mock_prisma():
     mock_table.create = AsyncMock(side_effect=_create)
     mock_table.update = AsyncMock(side_effect=_update)
     mock_client.db.litellm_claudecodeplugintable = mock_table
+    mock_client.writer_db = mock_client.db
     return mock_client
 
 
@@ -194,6 +202,25 @@ async def test_update_plugin_replaces_existing_source():
     stored = await _read_stored_manifest(name)
     assert stored["source"] == new_source
     assert stored["version"] == "2.0.0"
+
+
+@pytest.mark.asyncio
+async def test_metadata_edits_preserve_uploaded_source_and_reject_a_changed_http_destination() -> None:
+    table: Final = litellm.proxy.proxy_server.prisma_client.writer_db.litellm_claudecodeplugintable
+    await table.create(data={"name": _UPLOAD_NAME, "manifest_json": json.dumps({"source": _UPLOAD_SOURCE})})
+    request: Final = UpdatePluginRequest(source=_UPLOAD_SOURCE, description="Updated description")
+    response: Final = await update_plugin(plugin_name=_UPLOAD_NAME, request=request, user_api_key_dict=_USER)
+    expected: Final = {"name": _UPLOAD_NAME, "source": _UPLOAD_SOURCE, "description": "Updated description"}
+    assert response.plugin.description == "Updated description"
+    assert await _read_stored_manifest(_UPLOAD_NAME) == expected
+    with pytest.raises(HTTPException) as error:
+        await update_plugin(
+            plugin_name=_UPLOAD_NAME, user_api_key_dict=_USER,
+            request=UpdatePluginRequest(source={**_UPLOAD_SOURCE, "url": "http://other.example/skill.zip"}),
+        )
+    assert error.value.status_code == 400
+    table.update.assert_awaited_once()
+    assert await _read_stored_manifest(_UPLOAD_NAME) == expected
 
 
 @pytest.mark.asyncio
@@ -1171,3 +1198,164 @@ async def test_marketplace_without_a_database_answers_db_not_connected_for_a_que
 
     assert response.status_code == 500
     assert CommonProxyErrors.db_not_connected_error.value in response.text
+
+
+_UploadClient: TypeAlias = tuple[httpx.AsyncClient, MagicMock, MagicMock]
+_UPLOAD_NAME: Final = "local-skill"
+_UPLOAD_DIGEST: Final = hashlib.sha256(b"stored archive").hexdigest()
+_UPLOAD_PATH: Final = f"/claude-code/plugins/{_UPLOAD_NAME}/archive/{_UPLOAD_DIGEST}.zip"
+_UPLOAD_SOURCE: Final = {"source": "archive", "url": f"http://test{_UPLOAD_PATH}", "sha256": _UPLOAD_DIGEST}
+
+
+@pytest.fixture
+async def upload_storage(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_UploadClient]:
+    prisma: Final = litellm.proxy.proxy_server.prisma_client
+    prisma.writer_db = MagicMock()
+    plugins: Final = prisma.writer_db.litellm_claudecodeplugintable
+    archives: Final = prisma.writer_db.litellm_claudecodepluginupload
+    plugins.create = AsyncMock(return_value=prisma_models.LiteLLM_ClaudeCodePluginTable(
+        id="uploaded-id", name=_UPLOAD_NAME, enabled=True,
+    ))
+    plugins.find_unique = AsyncMock(return_value=prisma_models.LiteLLM_ClaudeCodePluginTable(
+        id="uploaded-id", name=_UPLOAD_NAME, enabled=True, manifest_json=json.dumps({"source": _UPLOAD_SOURCE}),
+    ))
+    archives.find_first = AsyncMock(return_value=prisma_models.LiteLLM_ClaudeCodePluginUpload(
+        plugin_name=_UPLOAD_NAME, content=Base64.encode(b"stored archive"),
+    ))
+    monkeypatch.setattr(litellm.proxy.proxy_server.app, "dependency_overrides", {
+        get_plugin_upload_repository: lambda: PluginUploadRepository(prisma),
+    })
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setenv("PROXY_BASE_URL", "http://test")
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    for key, skills in ((_LIMITED_KEY, [_UPLOAD_NAME]), ("sk-plain", [])):
+        litellm.proxy.proxy_server.user_api_key_cache.set_cache(
+            key=hash_token(key), value=_granted_user(skills).model_copy(update={"token": hash_token(key)}),
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=litellm.proxy.proxy_server.app), base_url="http://test",
+    ) as client:
+        yield client, plugins, archives
+
+
+async def _post_skill_upload(
+    client: httpx.AsyncClient, content: bytes, metadata: str, key: str = MASTER_KEY,
+) -> httpx.Response:
+    return await client.post(
+        "/claude-code/plugins/upload", headers={"Authorization": f"Bearer {key}"},
+        data={"metadata": metadata}, files={"file": ("local.zip", content, "application/zip")},
+    )
+
+
+@pytest.mark.asyncio
+async def test_skill_upload_creates_metadata_and_bytes_atomically_and_rejects_duplicates(
+    upload_storage: _UploadClient,
+) -> None:
+    client, plugins, _ = upload_storage
+    buffer: Final = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("SKILL.md", "Read the personal instructions")
+    metadata: Final = {"name": _UPLOAD_NAME, "description": "My notes", "namespace": "personal", "version": "2.0.0"}
+    response: Final = await _post_skill_upload(client, buffer.getvalue(), json.dumps(metadata))
+    assert response.status_code == 200, response.text
+    plugins.create.assert_awaited_once()
+    stored: Final = plugins.create.await_args.kwargs["data"]
+    content: Final = stored["uploaded_archive"]["create"]["content"].decode()
+    digest: Final = hashlib.sha256(content).hexdigest()
+    source: Final = {
+        "source": "archive",
+        "url": f"http://test/claude-code/plugins/{_UPLOAD_NAME}/archive/{digest}.zip",
+        "sha256": digest,
+    }
+    assert json.loads(stored["manifest_json"]) == {**metadata, "source": source}
+    assert stored == {
+        "name": _UPLOAD_NAME, "description": "My notes", "version": "2.0.0",
+        "manifest_json": stored["manifest_json"], "created_by": litellm.proxy.proxy_server.litellm_proxy_admin_name,
+        "uploaded_archive": {"create": {"content": Base64.encode(content)}},
+    }
+    assert response.json() == {"status": "success", "action": "created", "plugin": {
+        "id": "uploaded-id", "name": _UPLOAD_NAME, "version": "2.0.0", "description": "My notes",
+        "source": source, "installation_preference": None, "enabled": True,
+    }}
+    plugins.create.side_effect = UniqueViolationError({"message": "duplicate", "error_code": "P2002"})
+    duplicate: Final = await _post_skill_upload(client, buffer.getvalue(), json.dumps(metadata))
+    assert duplicate.status_code == 409, duplicate.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content, metadata, key, status", [
+    (b"invalid", '{"name":"local-skill"}', MASTER_KEY, 400),
+    (b"x" * (10 * 1024 * 1024 + 1), '{"name":"local-skill"}', MASTER_KEY, 413),
+    (b"ignored", "not-json", MASTER_KEY, 400),
+    (b"ignored", '{"name":"../invalid"}', MASTER_KEY, 422),
+    (b"ignored", '{"name":"local-skill"}', _LIMITED_KEY, 403),
+], ids=["invalid-zip", "file-over-cap", "invalid-metadata", "invalid-name", "non-admin"])
+async def test_skill_upload_rejects_invalid_or_unauthorized_input_without_writing(
+    upload_storage: _UploadClient, content: bytes, metadata: str, key: str, status: int,
+) -> None:
+    client, plugins, _ = upload_storage
+    response: Final = await _post_skill_upload(client, content, metadata, key)
+    assert response.status_code == status, response.text
+    plugins.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled, key, source, blob, status, reads", [
+    (True, None, _UPLOAD_SOURCE, True, 200, 1),
+    (False, None, _UPLOAD_SOURCE, True, 404, 0),
+    (False, "sk-plain", _UPLOAD_SOURCE, True, 404, 0),
+    (False, _LIMITED_KEY, _UPLOAD_SOURCE, True, 200, 1),
+    (True, None, None, True, 404, 0),
+    (True, None, {**_UPLOAD_SOURCE, "sha256": "0" * 64}, True, 404, 0),
+    (True, None, {**_UPLOAD_SOURCE, "url": "https://external.example/skill.zip"}, True, 404, 0),
+    (True, None, _UPLOAD_SOURCE, False, 404, 1),
+])
+async def test_archive_reads_only_authorized_current_bytes(
+    upload_storage: _UploadClient, enabled: bool, key: str | None,
+    source: Mapping[str, str] | None, blob: bool, status: int, reads: int,
+) -> None:
+    client, plugins, archives = upload_storage
+    manifest: Final = json.dumps({"source": source})
+    plugins.find_unique.return_value = None if source is None else prisma_models.LiteLLM_ClaudeCodePluginTable(
+        id="uploaded-id", name=_UPLOAD_NAME, enabled=enabled, manifest_json=manifest,
+    )
+    if not blob:
+        archives.find_first.return_value = None
+    response: Final = await client.get(_UPLOAD_PATH, headers={"Authorization": f"Bearer {key}"} if key else {})
+    assert response.status_code == status, response.text
+    assert (response.content == b"stored archive") is (status == 200)
+    plugins.find_unique.assert_awaited_once_with(where={"name": _UPLOAD_NAME})
+    assert archives.find_first.await_args_list == ([call(where={
+        "plugin_name": _UPLOAD_NAME, "plugin": {"is": {"manifest_json": manifest, "enabled": enabled}},
+    })] if reads else [])
+    litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("required, header, credential, query, status", [
+    (True, "Authorization", _LIMITED_KEY, None, 200),
+    (False, "x-skill-key", _LIMITED_KEY, MASTER_KEY, 200),
+    (True, "x-skill-key", _LIMITED_KEY, MASTER_KEY, 200),
+    (False, "x-skill-key", "", MASTER_KEY, 401),
+    (False, None, None, MASTER_KEY, 404),
+    (False, None, None, "invalid-query-key", 404),
+    (True, None, None, MASTER_KEY, 401),
+    (True, None, None, None, 401),
+])
+async def test_archive_requires_header_credentials_for_private_content(
+    upload_storage: _UploadClient, monkeypatch: pytest.MonkeyPatch, required: bool,
+    header: str | None, credential: str | None, query: str | None, status: int,
+) -> None:
+    client, plugins, archives = upload_storage
+    plugins.find_unique.return_value.enabled = False
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {
+        "litellm_key_header_name": "X-Skill-Key", "claude_code_marketplace_auth_required": required,
+    })
+    response: Final = await client.get(
+        _UPLOAD_PATH, headers={header: f"Bearer {credential}" if credential else ""} if header else {},
+        params={"key": query} if query else {},
+    )
+    assert response.status_code == status, response.text
+    assert (response.content == b"stored archive") is (status == 200)
+    assert archives.find_first.await_count == int(status == 200)

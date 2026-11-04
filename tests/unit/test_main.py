@@ -11583,3 +11583,28 @@ def test_azure_key_from_azure_openai_api_key_env_sends_the_bearer_header(
 
     sent: Final = route.calls.last.request.headers
     assert (sent.get("api-key"), sent.get("authorization")) == ("azure-env-key", "Bearer azure-env-key")
+
+
+def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller-supplied OpenAI client sends the request to its own base_url, so billing must use that
+    host and not an env-configured FedRAMP or regional base."""
+    import openai
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gov.api.openai.com/v1")
+    captured = {}
+    real_init = litellm.Logging.__init__
+
+    def init_spy(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        captured["logging_obj"] = self
+
+    with patch.object(litellm.Logging, "__init__", init_spy):
+        litellm.completion(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": "hi"}],
+            client=openai.OpenAI(api_key="test-key", base_url="https://api.openai.com/v1"),
+            mock_response="ok",
+        )
+
+    assert captured["logging_obj"].litellm_params.get("data_residency") is None
