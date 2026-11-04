@@ -82681,6 +82681,11 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.02,
+            "search_context_size_medium": 0.02,
+            "search_context_size_high": 0.02
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/deepseek-v4-pro"
     },
@@ -82695,6 +82700,11 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/deepseek-v4-pro"
@@ -82723,6 +82733,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007,
+            "search_context_size_high": 0.007
+        },
         "supports_prompt_caching": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
@@ -82879,6 +82894,11 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.013,
+            "search_context_size_medium": 0.013,
+            "search_context_size_high": 0.013
+        },
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/glm-5-2"
@@ -82893,6 +82913,11 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.013,
+            "search_context_size_medium": 0.013,
+            "search_context_size_high": 0.013
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/glm-5-2"
     },
@@ -82951,6 +82976,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.015,
+            "search_context_size_medium": 0.015,
+            "search_context_size_high": 0.015
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/kimi-k2-7-code"
     },
@@ -82965,6 +82995,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.015,
+            "search_context_size_medium": 0.015,
+            "search_context_size_high": 0.015
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/kimi-k2-7-code-highspeed"
     },
@@ -82980,6 +83015,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.013,
+            "search_context_size_medium": 0.013,
+            "search_context_size_high": 0.013
+        },
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/kimi-k2-7-code"
@@ -82995,6 +83035,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.015,
+            "search_context_size_medium": 0.015,
+            "search_context_size_high": 0.015
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/kimi-k3"
     },
@@ -83009,6 +83054,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.015,
+            "search_context_size_medium": 0.015,
+            "search_context_size_high": 0.015
+        },
         "supports_response_schema": true,
         "supports_audio_input": true,
         "source": "https://empiriolabs.ai/models/mimo-v2-6-flash"
@@ -83024,6 +83074,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.015,
+            "search_context_size_medium": 0.015,
+            "search_context_size_high": 0.015
+        },
         "supports_response_schema": true,
         "supports_audio_input": true,
         "source": "https://empiriolabs.ai/models/mimo-v2-6-pro"
@@ -83085,6 +83140,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_prompt_caching": true,
         "supports_function_calling": true,
         "source": "https://empiriolabs.ai/models/minimax-m3"
@@ -83101,6 +83161,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_prompt_caching": true,
         "supports_function_calling": true,
         "source": "https://empiriolabs.ai/models/minimax-m3-1-flash"
@@ -83120,6 +83185,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_prompt_caching": true,
         "supports_function_calling": true,
         "source": "https://empiriolabs.ai/models/minimax-m3"
@@ -83134,6 +83204,11 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.084,
+            "search_context_size_medium": 0.084,
+            "search_context_size_high": 0.14
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/mistral-small-4"
     },
@@ -83265,6 +83340,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.012,
+            "search_context_size_medium": 0.012,
+            "search_context_size_high": 0.012
+        },
         "source": "https://empiriolabs.ai/models/perplexity-advanced-deep-research"
     },
     "empiriolabs/perplexity-deep-research": {
@@ -83436,6 +83516,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.015,
+            "search_context_size_medium": 0.015,
+            "search_context_size_high": 0.015
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-5-flash"
     },
@@ -83450,6 +83535,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-5-flash"
     },
@@ -83493,6 +83583,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.015,
+            "search_context_size_medium": 0.015,
+            "search_context_size_high": 0.015
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-5-plus"
     },
@@ -83511,6 +83606,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-5-plus"
     },
@@ -83555,6 +83655,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.02,
+            "search_context_size_medium": 0.02,
+            "search_context_size_high": 0.02
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-6-flash"
     },
@@ -83571,6 +83676,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-6-flash"
     },
@@ -83587,6 +83697,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.026,
+            "search_context_size_medium": 0.026,
+            "search_context_size_high": 0.026
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-6-plus"
     },
@@ -83603,6 +83718,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-6-plus"
     },
@@ -83624,6 +83744,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.03,
+            "search_context_size_medium": 0.03,
+            "search_context_size_high": 0.03
+        },
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-7-flash"
@@ -83646,6 +83771,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-7-flash"
@@ -83660,6 +83790,11 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.02,
+            "search_context_size_medium": 0.02,
+            "search_context_size_high": 0.02
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-7-max"
     },
@@ -83673,6 +83808,11 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-7-max"
     },
@@ -83689,6 +83829,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.03,
+            "search_context_size_medium": 0.03,
+            "search_context_size_high": 0.03
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-7-plus"
     },
@@ -83707,6 +83852,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-7-plus"
@@ -83738,6 +83888,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.02,
+            "search_context_size_medium": 0.02,
+            "search_context_size_high": 0.02
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-8-flash"
     },
@@ -83752,6 +83907,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.02,
+            "search_context_size_medium": 0.02,
+            "search_context_size_high": 0.02
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-8-max"
     },
@@ -83766,6 +83926,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.02,
+            "search_context_size_medium": 0.02,
+            "search_context_size_high": 0.02
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-8-max-0902"
     },
@@ -83780,6 +83945,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/qwen3-8-max"
     },
@@ -83794,6 +83964,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.02,
+            "search_context_size_medium": 0.02,
+            "search_context_size_high": 0.02
+        },
         "supports_response_schema": true,
         "supports_audio_input": true,
         "source": "https://empiriolabs.ai/models/qwen3-8-omni-flash"
@@ -83889,6 +84064,11 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.013,
+            "search_context_size_medium": 0.013,
+            "search_context_size_high": 0.013
+        },
         "supports_prompt_caching": true,
         "supports_function_calling": true,
         "source": "https://empiriolabs.ai/models/step-3-5-flash"
@@ -83904,6 +84084,11 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.013,
+            "search_context_size_medium": 0.013,
+            "search_context_size_high": 0.013
+        },
         "supports_prompt_caching": true,
         "supports_function_calling": true,
         "source": "https://empiriolabs.ai/models/step-3-5-flash-2603"
@@ -83920,6 +84105,11 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.013,
+            "search_context_size_medium": 0.013,
+            "search_context_size_high": 0.013
+        },
         "supports_prompt_caching": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
@@ -83951,6 +84141,11 @@
         "cache_read_input_token_cost": 3e-07,
         "supports_system_messages": true,
         "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.013,
+            "search_context_size_medium": 0.013,
+            "search_context_size_high": 0.013
+        },
         "supports_prompt_caching": true,
         "supports_function_calling": true,
         "supports_response_schema": true,

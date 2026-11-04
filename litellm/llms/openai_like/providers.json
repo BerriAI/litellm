@@ -178,6 +178,9 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
+    "special_handling": {
+      "web_search_requests_from_tool_usage": true
+    },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   },
   "meta": {
