@@ -8,7 +8,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
-use litellm_model_catalog_refresh::Origin;
+use litellm_model_catalog::Origin;
 use serde::Serialize;
 
 use crate::{Error, Installed, ModelCatalog};

@@ -1,6 +1,6 @@
 # Gateway model catalog
 
-The native gateway's own cost map, loaded and refreshed with the same Rust code the Python proxy uses through python-bridge. Fetching, retry, `Retry-After`, status classification and provenance come from `model-catalog-refresh`, parsing and the size check from `model-catalog`. Nothing here reimplements them
+The native gateway's own cost map, loaded and refreshed with the same Rust code the Python proxy uses through python-bridge. Fetching, retry, `Retry-After` and status classification come from `model-catalog-refresh`, while parsing, provenance and the size check come from `model-catalog`. Nothing here reimplements them
 
 - One `ArcSwap<Installed>` holds the catalog and its provenance together, so a reader always sees one install. Swap a whole `Installed`, never one half
 - Boot parses `BUNDLED_REGISTRY` and never waits on the network. `spawn_revalidate` then fetches the configured source once in the background and replaces the boot map only if nothing else was installed meanwhile

@@ -3,10 +3,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use arc_swap::ArcSwap;
-use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog, IntegrityLimits};
+use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog, IntegrityLimits, Origin, Provenance};
 use litellm_model_catalog_refresh::{
-    FetchRequest, Origin, Pause, Provenance, Refreshed, Retrying, SourceClients, SourceFetch,
-    refresh,
+    Attempt, FetchRequest, Pause, Retrying, SourceClients, SourceFetch, refresh,
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -126,23 +125,22 @@ impl ModelCatalog {
             timeout: TIMEOUT,
         };
         let mut pause = TokioPause;
-        let Ok(refreshed) = tokio::select! {
+        let Ok(attempt) = tokio::select! {
             () = self.shutdown.cancelled() => return Err(Unavailable::ShuttingDown),
-            refreshed = refresh(fetch, &request, MAX_ATTEMPTS, &mut pause) => refreshed,
+            attempt = refresh(fetch, &request, MAX_ATTEMPTS, &mut pause) => attempt,
         };
-        let (body, revision, etag) = match refreshed {
-            Refreshed::Adopted {
-                body,
-                revision,
-                etag,
-            } => (body, revision, etag),
-            Refreshed::NotModified => {
+        let (body, etag) = match attempt {
+            Attempt::Fetched { body, etag } => (body, etag),
+            Attempt::NotModified => {
                 return Err(Unavailable::NotModified {
                     url: remote.url.clone(),
                 });
             }
-            Refreshed::Failed { reason } => return Err(Unavailable::Fetch { reason }),
+            Attempt::Retryable { reason, .. } | Attempt::Failed { reason } => {
+                return Err(Unavailable::Fetch { reason });
+            }
         };
+        let revision = litellm_model_catalog::revision(&body);
         let catalog = validated(&body, &remote.url, self.bundled_models, self.limits)?;
         Ok(Installed {
             catalog: Arc::new(catalog),
