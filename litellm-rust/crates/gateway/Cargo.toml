@@ -13,6 +13,7 @@ http-body-util = "0.1"
 litellm-inference.workspace = true
 litellm-gateway-inference.workspace = true
 litellm-gateway-mcp.workspace = true
+litellm-gateway-model-catalog.workspace = true
 tokio-util = "0.7"
 thiserror.workspace = true
 futures-util.workspace = true
@@ -24,6 +25,7 @@ litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
+litellm-model-catalog.workspace = true
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true
 serde_json.workspace = true
@@ -34,6 +36,7 @@ uuid.workspace = true
 tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 litellm-redis-testing.workspace = true
 base64.workspace = true
 rstest.workspace = true

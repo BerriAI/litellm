@@ -28,6 +28,7 @@ litellm-gateway = { path = "crates/gateway" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
 litellm-gateway-management = { path = "crates/gateway-management" }
+litellm-gateway-model-catalog = { path = "crates/gateway-model-catalog" }
 litellm-gateway-ui = { path = "crates/gateway-ui" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
@@ -77,6 +78,7 @@ litellm-cost = { path = "crates/cost" }
 litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-model-catalog-refresh = { path = "crates/model-catalog-refresh" }
 
+arc-swap = "1.9.2"
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }

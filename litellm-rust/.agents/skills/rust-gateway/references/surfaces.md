@@ -8,6 +8,7 @@ Each surface mirrors what the Python proxy returns there, so the shapes differ o
 | OpenAI-shaped routes | `{"error": {"message", "type", "param", "code"}}` | `Error::openai_response()` in the same file |
 | `/v1/responses` stream | the Responses `error` event, `{"type": "error", "code", "message", "param"}` | `Error::responses_sse_frame()` in the same file |
 | MCP | `{"detail": message}` | `crates/gateway-mcp/src/error.rs` |
+| model cost map | `{"detail": message}` | `crates/gateway-model-catalog/src/error.rs` |
 | UI | `{"error": {"message"}}`, plus `Retry-After` on 429 | `crates/gateway-ui/src/error.rs` |
 | auth rejections | plain text, the top-level message only | `crates/gateway-auth/src/error.rs` |
 

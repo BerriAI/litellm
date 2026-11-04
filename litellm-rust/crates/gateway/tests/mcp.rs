@@ -1,3 +1,5 @@
+mod support;
+
 use std::{sync::Arc, time::Duration};
 
 use axum::{
@@ -19,6 +21,7 @@ use litellm_gateway_mcp::{
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
+use support::bundled_catalog;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
@@ -165,7 +168,13 @@ mcp_servers:
             ..Default::default()
         },
     );
-    let app = litellm_gateway::router(inference, &config, None, Some(mcp_router));
+    let app = litellm_gateway::router(
+        inference,
+        bundled_catalog(),
+        &config,
+        None,
+        Some(mcp_router),
+    );
     Served {
         app,
         mcp,
