@@ -13919,7 +13919,7 @@ async def audio_transcriptions(
             api_base=api_base,
             version=version,
             response_cost=response_cost,
-            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            model_region=user_api_key_dict.allowed_model_region,
             call_id=response_call_id,
             request_data=data,
             hidden_params=hidden_params,
@@ -17009,9 +17009,6 @@ async def _apply_search_filter_to_models(
         team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
         if search_lower in team_public_model_name.lower():
             return True
-        # Also match the underlying LiteLLM model name (e.g.
-        # "openrouter/deepseek/deepseek-chat"), so users can find
-        # deployments by typing the provider or the upstream model id.
         litellm_params: Final[Mapping[str, object]] = m.get("litellm_params") or MappingProxyType({})
         litellm_model: Final = litellm_params.get("model")
         return isinstance(litellm_model, str) and search_lower in litellm_model.lower()
