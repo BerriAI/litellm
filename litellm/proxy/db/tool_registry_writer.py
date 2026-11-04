@@ -134,8 +134,19 @@ async def flush_tool_discovery_queue(prisma_client: "PrismaClient", tool_discove
         return
     try:
         await batch_upsert_tools(prisma_client=prisma_client, items=items)
-    except Exception as e:  # noqa: BLE001  # a lost tool row only delays its discovery, the scheduler job must not fail
-        verbose_proxy_logger.debug("flush_tool_discovery_queue error (non-blocking): %s", e)
+    except Exception as e:  # noqa: BLE001  # the rows go back to the queue or are dropped, the scheduler job must not fail
+        if db_write_failure_is_requeue_safe(e):
+            tool_discovery_queue.requeue(items)
+            verbose_proxy_logger.warning(
+                "Tool discovery - %d tool rows went back to the queue for the next tick. Error: %s", len(items), str(e)
+            )
+            return
+        verbose_proxy_logger.error(
+            "Tool discovery - dropped %d tool rows: the failed statement may have applied or the database "
+            "refused the data, so re-sending it is not safe. Error: %s",
+            len(items),
+            str(e),
+        )
 
 
 async def commit_tool_discoveries(
