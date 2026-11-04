@@ -341,6 +341,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_AccountingDelivery",
         "LiteLLM_AccountingEvent",
         "LiteLLM_ClaudeCodePluginTable",
+        "LiteLLM_ClaudeCodePluginUpload",
         "LiteLLM_MemoryTable",
         "LiteLLM_AdaptiveRouterState",
         "LiteLLM_AdaptiveRouterSession",
@@ -361,6 +362,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_LensReview",
         "LiteLLM_LensIngestionKey",
         "LiteLLM_LensWorker",
+        "LiteLLM_SubscriptionAccountTable",
         "LiteLLM_LensSignalConfig",
         "LiteLLM_LensTraceSignal",
     )

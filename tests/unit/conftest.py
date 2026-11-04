@@ -216,6 +216,7 @@ def _reset_aws_auth_caches() -> None:
 def _flush_client_caches() -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
+    image_handling_module.pdf_probe_verdicts.flush_cache()
     _reset_aws_auth_caches()
 
 
@@ -376,6 +377,20 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def declare_mid_conversation_system(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, bool], None]:
+    def declare(model_cost_key: str, supported: bool) -> None:
+        entry: Final = {
+            "litellm_provider": model_cost_key.split("/", 1)[0],
+            "mode": "chat",
+            "supports_mid_conversation_system": supported,
+        }
+        monkeypatch.setitem(litellm.model_cost, model_cost_key, entry)
+        litellm.get_model_info.cache_clear()
+
+    return declare
 
 
 NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None

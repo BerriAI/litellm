@@ -15,6 +15,11 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.tool_fields import (
+    ROUTES_WITHOUT_MCP_SERVERS,
+    drops_mcp_servers,
+    tools_without_mcp_servers,
+)
 from litellm.llms.anthropic.messages.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -118,9 +123,10 @@ def _extract_proxy_litellm_metadata(
 
 def _requested_router(kwargs: Mapping[str, object]) -> "Router | None":
     from litellm.router import Router
+    from litellm.router_python_core import PythonCore
 
     requested: Final = kwargs.get("litellm_router")
-    return requested if isinstance(requested, Router) else None
+    return requested if isinstance(requested, (Router, PythonCore)) else None  # pyright: ignore[reportReturnType]  # the router passes its core, which carries Router's members
 
 
 def request_safeguards_evaluator(
@@ -160,6 +166,7 @@ async def prepare_context_managed_request(
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.messages.context_management.editors.compact import (
         apply_client_compaction_block_history,
+        slice_around_compaction_block,
     )
 
     # Skip the client-history pre-processing when a ``compact_20260112``
@@ -175,7 +182,7 @@ async def prepare_context_managed_request(
 
     if polyfill_will_run:
         history_result: PolyfillResult | None = None
-        working_messages: _AnthropicMessages = messages
+        working_messages: _AnthropicMessages = list(slice_around_compaction_block(messages)[0])
         working_system: _AnthropicSystem = system
     else:
         history_result = apply_client_compaction_block_history(
@@ -608,6 +615,23 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             Logging as LiteLLMLoggingObject,
         )
 
+        provider_kwargs: Final = extra_kwargs or {}
+        custom_llm_provider: Final = provider_kwargs.get("custom_llm_provider")
+        target_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        drop_params: Final = drops_unsupported_params(provider_kwargs.get("drop_params"))
+        strips_mcp_servers: Final = target_provider in ROUTES_WITHOUT_MCP_SERVERS
+        request_tools: Final = (
+            tools_without_mcp_servers(
+                provider_kwargs.get("mcp_servers"),
+                tools or (),
+                model=model,
+                route=target_provider,
+                drop_params=drops_mcp_servers(provider_kwargs),
+            )
+            if strips_mcp_servers
+            else tools
+        )
+
         request_data: Final[dict[str, object]] = {
             "model": model,
             "messages": messages,
@@ -624,10 +648,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data["temperature"] = temperature
         if thinking:
             request_data["thinking"] = thinking
-        if tool_choice:
+        if tool_choice and (request_tools or not tools):
             request_data["tool_choice"] = tool_choice
-        if tools:
-            request_data["tools"] = tools
+        if request_tools:
+            request_data["tools"] = request_tools
         if top_k is not None:
             request_data["top_k"] = top_k
         if top_p is not None:
@@ -645,14 +669,15 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
-        custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
+        api_base: Final = extra_kwargs.get("api_base")
         (
             openai_request,
             tool_name_mapping,
         ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
             request_data,
-            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-            drop_params=drops_unsupported_params(extra_kwargs.get("drop_params")),
+            custom_llm_provider=target_provider,
+            api_base=api_base if isinstance(api_base, str) else None,
+            drop_params=drop_params,
         )
 
         if openai_request is None:
@@ -680,7 +705,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # Maintainability: when adding a new Anthropic-only request param to
         # ``AnthropicMessagesRequestOptionalParams``, also extend
         # ``ANTHROPIC_ONLY_REQUEST_KEYS`` here so it doesn't silently leak.
-        excluded_keys: Final = ANTHROPIC_ONLY_REQUEST_KEYS | CONVERTED_STREAM_KEYS | {"anthropic_messages"}
+        excluded_keys: Final = (
+            ANTHROPIC_ONLY_REQUEST_KEYS
+            | CONVERTED_STREAM_KEYS
+            | ({"anthropic_messages", "mcp_servers"} if strips_mcp_servers else {"anthropic_messages"})
+        )
         # NOTE: extra_kwargs was already coerced from None to {} at the top of
         # this method (line ~220). It is guaranteed to be a dict here.
         for key, value in extra_kwargs.items():

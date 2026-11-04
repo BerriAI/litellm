@@ -951,3 +951,48 @@ def test_is_lock_timeout_error_recognises_a_statement_cancelled_under_lock_timeo
 )
 def test_is_lock_timeout_error_excludes_other_failures(error: Exception) -> None:
     assert PrismaDBExceptionHandler.is_lock_timeout_error(error) is False
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_lock_timeout_error(message="canceling statement due to statement timeout", code="57014"), True),
+        (_lock_timeout_error(message="canceling statement due to statement timeout", code=None), True),
+        (_lock_timeout_error(), False),
+        (_capacity_error("sorry, too many clients already"), False),
+        (RuntimeError("canceling statement due to statement timeout"), False),
+    ],
+    ids=["meta_57014", "message_only", "lock_timeout_55P03", "capacity_53300", "not_prisma"],
+)
+def test_is_statement_timeout_error(error: Exception, expected: bool) -> None:
+    assert PrismaDBExceptionHandler.is_statement_timeout_error(error) is expected
+
+
+@pytest.mark.parametrize(
+    ("body", "retryable"),
+    [
+        ('{"error_code":"P1017","message":"Server has closed the connection."}', True),
+        ('{"error_code":"P1000","message":"Authentication failed."}', False),
+        ('{"error_code":"P2021","message":"Table does not exist."}', False),
+        ('{"error_code":"P9999","message":"Unknown engine failure."}', False),
+        ("invalid engine response", False),
+    ],
+)
+def test_engine_connection_closure_is_recoverable_without_allowing_unverified_auth(
+    body: str,
+    retryable: bool,
+) -> None:
+    from prisma.http import Response
+
+    error: Final = EngineRequestError(Response(httpx.Response(500)), body)
+    assert PrismaDBExceptionHandler.is_database_transport_error(error) is retryable
+    assert PrismaDBExceptionHandler.is_permanent_database_fault(error) is not retryable
+    assert PrismaDBExceptionHandler.is_database_connection_error(error) is False
+
+
+def test_connection_closure_code_survives_prisma_data_error_wrapping() -> None:
+    error: Final = DataError(
+        data={"user_facing_error": {"error_code": "P1017", "message": "Server has closed the connection."}}
+    )
+    assert PrismaDBExceptionHandler.is_database_transport_error(error) is True
+    assert PrismaDBExceptionHandler.is_permanent_database_fault(error) is False

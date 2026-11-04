@@ -65,6 +65,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
 )
 from litellm.types.guardrails import (
     BedrockChecksConfigModel,
+    BedrockGuardrailOutputScope,
     BedrockGuardrailStreamingParams,
     GuardrailEventHooks,
     LitellmParams,
@@ -287,7 +288,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         streaming_sampling_rate: int | None = None,
         streaming_end_of_stream_only: bool | None = None,
         streaming_buffer_release_on_scan: bool | None = None,
+        streaming_scan_in_background: bool | None = None,
         async_handler: AsyncHTTPHandler | None = None,
+        outputScope: BedrockGuardrailOutputScope | None = None,
         **kwargs,
     ):
         self.async_handler = async_handler or get_async_httpx_client(
@@ -301,12 +304,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         "streaming_sampling_rate": streaming_sampling_rate,
                         "streaming_end_of_stream_only": streaming_end_of_stream_only,
                         "streaming_buffer_release_on_scan": streaming_buffer_release_on_scan,
+                        "streaming_scan_in_background": streaming_scan_in_background,
                     }
                 )
             )
         )
         self.guardrailIdentifier = guardrailIdentifier
         self.guardrailVersion = guardrailVersion
+        self.outputScope = outputScope
         self.guardrail_provider = "bedrock"
         self.chunk_budget_chars = chunk_budget_chars
         self.contextual_grounding_from_messages = contextual_grounding_from_messages
@@ -366,6 +371,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.streaming_sampling_rate = streaming_params.streaming_sampling_rate
         self.streaming_end_of_stream_only = streaming_params.streaming_end_of_stream_only
         self.streaming_buffer_release_on_scan = streaming_params.streaming_buffer_release_on_scan
+        self.streaming_scan_in_background = streaming_params.streaming_scan_in_background
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         super().update_in_memory_litellm_params(litellm_params)
@@ -1277,10 +1283,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         AWS billed them to ``completed_chunk_usages``, and the attempt log sums those
         with the blocking call's own usage.
         """
-        bedrock_request_data: Final = {
-            **base_request_data,
-            "content": content,
-        }
+        bedrock_request_data: Final = dict(base_request_data)
+        bedrock_request_data["content"] = content
+        if self.outputScope is not None and "outputScope" not in bedrock_request_data:
+            bedrock_request_data["outputScope"] = self.outputScope.value
         prepared_request: Final = await run_aws_signing(
             self._prepare_request,
             credentials=credentials,

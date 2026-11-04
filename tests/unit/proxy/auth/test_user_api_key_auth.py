@@ -932,6 +932,43 @@ async def test_user_api_key_auth_live_websocket_ignores_query_model():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_name", "path"),
+    [("user_api_key_auth_websocket", "/v1/responses"), ("user_api_key_auth_realtime_websocket", "/v1/realtime")],
+)
+async def test_websocket_without_a_model_is_refused_for_a_role_limited_to_other_models(
+    auth_name: str, path: str
+) -> None:
+    from litellm.proxy._types import RoleBasedPermissions, UserAPIKeyAuth
+    from litellm.proxy.auth import user_api_key_auth as auth_module
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+
+    async def role_limited_auth(request, api_key: str) -> UserAPIKeyAuth:
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings={
+                "role_permissions": [RoleBasedPermissions(role=LitellmUserRoles.INTERNAL_USER, models=["chat"])]
+            },
+            model=json.loads(await request.body())["model"],
+        )
+        return UserAPIKeyAuth(api_key=api_key)
+
+    websocket: Final = MagicMock(spec=WebSocket)
+    websocket.query_params = {}
+    websocket.headers = {"authorization": "Bearer some_api_key"}
+    websocket.scope = {"type": "websocket", "path": path, "headers": [(b"authorization", b"Bearer some_api_key")]}
+    websocket.url = URL(url=path)
+    websocket.close = AsyncMock()
+
+    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", side_effect=role_limited_auth):
+        with pytest.raises(HTTPException) as raised:
+            await getattr(auth_module, auth_name)(websocket)
+
+    assert raised.value.status_code == 403
+    websocket.close.assert_awaited_once_with(code=status.WS_1008_POLICY_VIOLATION)
+
+
+@pytest.mark.asyncio
 async def test_accepted_websocket_reauthorizes_the_frame_model_without_closing():
     from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_accepted_websocket_for_model
@@ -1308,6 +1345,33 @@ async def test_auth_rejects_wrong_or_empty_present_custom_header(
         await user_api_key_auth(request=request, api_key="Bearer sk-lit9211-master")
 
     assert exc_info.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [None, ""], ids=["no_key", "no_bearer_prefix"])
+async def test_auth_rejection_without_a_usable_key_has_a_json_null_param(
+    api_key: str | None, monkeypatch: pytest.MonkeyPatch
+):
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    request = Request(
+        scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []},
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"", "more_body": False}),
+    )
+    request._url = URL(url="/chat/completions")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key=api_key)
+
+    body = json.loads(json.dumps({"error": exc_info.value.to_dict()}))
+    assert body["error"]["code"] == "401"
+    assert body["error"]["type"] == ProxyErrorTypes.auth_error.value
+    assert body["error"]["param"] is None
 
 
 @pytest.mark.asyncio

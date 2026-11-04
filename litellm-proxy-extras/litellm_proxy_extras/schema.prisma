@@ -1615,8 +1615,17 @@ model LiteLLM_ClaudeCodePluginTable {
   updated_at    DateTime? @default(now()) @updatedAt
   created_by    String?
 
+  uploaded_archive LiteLLM_ClaudeCodePluginUpload?
+
   @@map("LiteLLM_ClaudeCodePluginTable")
 }
+
+model LiteLLM_ClaudeCodePluginUpload {
+  plugin_name String @id
+  content     Bytes
+  plugin      LiteLLM_ClaudeCodePluginTable @relation(fields: [plugin_name], references: [name], onDelete: Cascade, onUpdate: Cascade)
+}
+
 
 // User/team-scoped memory store with a GLOBAL unique key.
 // `value` is a string (typically markdown/text meant for LLM context);
@@ -2130,4 +2139,20 @@ model LiteLLM_AccountingDelivery {
 
   @@id([event_id, target, version])
   @@index([target, state, next_attempt_at])
+}
+
+model LiteLLM_SubscriptionAccountTable {
+  subscription_account_id String @id @default(uuid())
+  custom_llm_provider String
+  account_id String
+  label String?
+  monthly_fee Float
+  currency String
+  billing_period_start String
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+
+  @@unique([custom_llm_provider, account_id], map: "LiteLLM_SubscriptionAccountTable_provider_account_key")
 }

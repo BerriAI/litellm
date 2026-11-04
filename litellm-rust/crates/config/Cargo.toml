@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-litellm-auth-types.workspace = true
+litellm-secret-value.workspace = true
 litellm-router-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true

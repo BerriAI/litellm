@@ -4,6 +4,16 @@ import type { DailyActivityAggregatedResponse, DailyActivityMetadata, KeySpendAc
 import { toDailyData } from "./dailyActivityApi";
 import type { ModelActivityData } from "./types";
 
+export const reportingKeyId = (key: string): string => {
+  if (!key) return "unattributed";
+  return key === "unattributed" || key.startsWith("raw:") ? `raw:${key}` : key;
+};
+
+export const storedKeyId = (bucket: string): string => {
+  if (bucket === "unattributed") return "";
+  return bucket.startsWith("raw:") ? bucket.slice(4) : bucket;
+};
+
 export const overallUsageMetrics = (
   results: ReturnType<typeof toDailyData>,
   metadata: DailyActivityMetadata,
