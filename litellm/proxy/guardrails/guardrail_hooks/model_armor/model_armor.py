@@ -434,12 +434,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         Accepting it would treat an unfinished scan as a clean one. It is raised like any other API
         failure, so every hook applies fail_on_error. A scan that already matched a filter is still
-        returned, so the caller blocks instead of failing open on content that was flagged.
+        returned, so the caller blocks instead of failing open on content that was flagged. Only a
+        match that blocks even when masking is enabled counts: a de-identification match is masked
+        rather than blocked, so it must not hide the filters that did not run.
         """
         result: Final = armor_response.get("sanitizationResult", {}).get("invocationResult")
         if result not in _INCOMPLETE_INVOCATION_RESULTS:
             return
-        if self._should_block_content(armor_response):
+        if self._should_block_content(armor_response, allow_sanitization=True):
             return
         verbose_proxy_logger.error("Model Armor scan did not complete - invocationResult: %s", result)
         raise ModelArmorAPIError(f"Model Armor scan incomplete (invocationResult={result})")

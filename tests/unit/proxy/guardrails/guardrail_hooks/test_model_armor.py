@@ -769,6 +769,31 @@ async def test_model_armor_partial_scan_with_match_still_blocks_when_fail_open()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mask_request_content", [True, False])
+async def test_model_armor_partial_scan_with_only_a_deidentify_match_is_an_error(mask_request_content: bool):
+    """A de-identification match is masked, not blocked, so it must not hide the filters that did not run."""
+    guardrail = _armor_guardrail(mask_request_content=mask_request_content)
+    response = _armor_http_response(
+        {
+            "invocationResult": "PARTIAL",
+            "filterResults": {
+                "sdp": {
+                    "sdpFilterResult": {
+                        "deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": "call me at [REDACTED]"}}
+                    }
+                }
+            },
+        }
+    )
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=response)):
+        with pytest.raises(ModelArmorAPIError) as exc_info:
+            await guardrail.make_model_armor_request(content="call me at 555-0100", source="user_prompt")
+
+    assert exc_info.value.detail == "Model Armor scan incomplete (invocationResult=PARTIAL)"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("sanitize", [True, False])
 async def test_model_armor_error_output_sanitization(sanitize: bool):
     marker = "SYNTHETIC_MODEL_ARMOR_MARKER"
