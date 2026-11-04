@@ -1626,11 +1626,17 @@ def test_azure_reasoning_content_filter_does_not_change_openai_replay(as_model: 
 @pytest.mark.usefixtures(httpx_transport.__name__)
 @pytest.mark.parametrize("async_call", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("stream", [False, True])
-async def test_azure_responses_does_not_send_reasoning_content_at_input_51(
-    respx_mock: respx.MockRouter, stream: bool, async_call: bool
+@pytest.mark.parametrize(("reasoning_index", "include_id"), [(51, True), (10, False)], ids=["with-id", "without-id"])
+async def test_azure_responses_does_not_send_reasoning_content_in_replayed_history(
+    respx_mock: respx.MockRouter, stream: bool, async_call: bool, reasoning_index: int, include_id: bool
 ) -> None:
-    prefix: Final = [{"role": "user", "content": f"Earlier context {index}."} for index in range(51)]
-    replayable_reasoning: Final = {"id": "rs_saved_reasoning", "type": "reasoning", "summary": []}
+    prefix: Final = [{"role": "user", "content": f"Earlier context {index}."} for index in range(reasoning_index)]
+    replayable_reasoning: Final = {
+        "type": "reasoning",
+        "summary": [],
+        "encrypted_content": "opaque-saved-reasoning",
+        **({"id": "rs_saved_reasoning"} if include_id else {}),
+    }
     saved_reasoning: Final = {
         **replayable_reasoning,
         "content": [{"type": "reasoning_text", "text": "Inspect the file before editing."}],
@@ -1641,23 +1647,35 @@ async def test_azure_responses_does_not_send_reasoning_content_at_input_51(
         "content": [{"type": "output_text", "text": "Ready to continue.", "annotations": []}],
     }
     prompt: Final = {"role": "user", "content": "Continue."}
-    history: Final = [*prefix, saved_reasoning, answer, prompt]
+    replayable_followup: Final = {
+        "type": "reasoning",
+        "summary": [],
+        "encrypted_content": "opaque-followup-reasoning",
+        **({"id": "rs_followup_reasoning"} if include_id else {}),
+    }
+    saved_followup: Final = {
+        **replayable_followup,
+        "content": [{"type": "reasoning_text", "text": "Check the next file."}],
+    }
+    history: Final = [*prefix, saved_reasoning, answer, saved_followup, prompt]
+    original: Final = deepcopy(history)
 
     def respond(request: httpx.Request) -> httpx.Response:
         body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
         items: Final = body["input"]
         assert isinstance(items, list)
-        reasoning: Final = items[51]
+        reasoning: Final = items[reasoning_index]
         assert isinstance(reasoning, dict)
         if reasoning.get("content"):
             return httpx.Response(
                 400,
                 json={
                     "error": {
-                        "message": "Invalid 'input[51].content': array too long. Expected an array with maximum length 0, "
+                        "message": f"Invalid 'input[{reasoning_index}].content': array too long. "
+                        "Expected an array with maximum length 0, "
                         "but got an array with length 1 instead.",
                         "type": "invalid_request_error",
-                        "param": "input[51].content",
+                        "param": f"input[{reasoning_index}].content",
                         "code": "array_above_max_length",
                     }
                 },
@@ -1675,6 +1693,8 @@ async def test_azure_responses_does_not_send_reasoning_content_at_input_51(
         "api_base": _AZURE_RESOURCE,
         "api_key": "azure-test-key",
         "stream": stream,
+        "store": False,
+        "include": ["reasoning.encrypted_content"],
     }
     response: Final = await litellm.aresponses(**request_params) if async_call else litellm.responses(**request_params)
     deltas: Final = (
@@ -1694,5 +1714,7 @@ async def test_azure_responses_does_not_send_reasoning_content_at_input_51(
         *prefix,
         replayable_reasoning,
         answer,
+        replayable_followup,
         prompt,
     ]
+    assert history == original
