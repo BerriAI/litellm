@@ -3261,12 +3261,10 @@ def parse_tool_call_arguments(
         repaired: Final = _attempt_json_repair(arguments)
         if repaired is not None:
             verbose_logger.warning(
-                "Repaired truncated tool call arguments for tool '%s' (%s). Original (%d chars): %.200s%s",
+                "Repaired truncated tool call arguments for tool '%s' (%s). Original length: %d chars",
                 tool_name or "<unknown>",
                 context or "unknown context",
                 len(arguments),
-                arguments,
-                "..." if len(arguments) > 200 else "",
             )
             return repaired
 
