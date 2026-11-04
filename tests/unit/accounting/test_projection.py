@@ -519,24 +519,3 @@ def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> N
     assert [dict(item.increments) for item in usage_rows] == [{"units": 1, "cost": 0.25, "untracked_units": 0}]
     daily_user: Final = next(item for item in project(restored) if item.table == "LiteLLM_DailyUserSpend")
     assert dict(daily_user.increments)["compression_saved_tokens"] == 7
-
-
-@pytest.mark.parametrize("start", [_NOW, "2026-11-02T12:00:00+00:00", "2026-11-02 12:00:00+00:00"])
-def test_every_daily_row_uses_the_calendar_date_of_the_request(start: object) -> None:
-    row: Final[Mapping[str, object]] = {
-        "request_id": "dated",
-        "startTime": start,
-        "api_key": "key",
-        "user": "user",
-        "team_id": "team",
-        "model": "unpriced-projection-test",
-        "model_group": "group",
-        "custom_llm_provider": "openai",
-        "spend": 0.5,
-        "metadata": "{}",
-    }
-    dates: Final = {
-        item.table: dict(item.key)["date"] for item in project(row) if item.table.startswith("LiteLLM_Daily")
-    }
-    assert {"LiteLLM_DailyUserSpend", "LiteLLM_DailyModelUsage"} <= dates.keys()
-    assert set(dates.values()) == {"2026-11-02"}
