@@ -1,5 +1,7 @@
+import asyncio
 import os
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -602,7 +604,7 @@ async def test_async_increment_idempotent_script_error_falls_back_to_plain_incre
     monkeypatch, redis_no_ping
 ):
     """On Lua script failure (NOSCRIPT / scripting disabled), fall back to
-    plain async_increment — INV-4."""
+    plain async_increment and disable the script path for a cooldown — INV-4."""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache()
 
@@ -621,8 +623,8 @@ async def test_async_increment_idempotent_script_error_falls_back_to_plain_incre
     assert plain_increment.called, "must fall back to async_increment on script error"
     assert result == pytest.approx(0.01)
     assert (
-        redis_cache._dedup_increment_script_disabled
-    ), "script must be permanently disabled after failure to avoid re-registration loop"
+        redis_cache._dedup_increment_script_disabled_until > time.monotonic()
+    ), "script must be disabled for a cooldown after failure to avoid re-registration loop"
 
 
 @pytest.mark.asyncio
@@ -685,8 +687,17 @@ async def test_async_increment_idempotent_braced_key_falls_back_per_key(
     )
 
     assert plain_increment.called, "braced key must fall back to plain increment"
-    assert "spend:tag:foo}bar" in redis_cache._dedup_unsafe_keys
-    assert not redis_cache._dedup_increment_script_disabled
+    assert (
+        redis_cache._dedup_increment_script_disabled_until <= time.monotonic()
+    ), "braced key must not disable the script path for other keys"
+
+    # Static classification runs on every call (cheap string scan), so a
+    # repeat falls back again without any memo entry.
+    await redis_cache.async_increment_idempotent(
+        key="spend:tag:foo}bar", value=0.01, dedup_id="req-1b", refresh_ttl=True
+    )
+    assert plain_increment.call_count == 2
+    assert len(redis_cache._dedup_runtime_unsafe_keys) == 0
 
     # A well-formed counter key on the same instance keeps the script path.
     await redis_cache.async_increment_idempotent(
@@ -718,10 +729,10 @@ async def test_async_increment_idempotent_crossslot_error_disables_key_not_scrip
         key="spend:key:bad", value=0.01, dedup_id="req-1", refresh_ttl=True
     )
 
-    assert "spend:key:bad" in redis_cache._dedup_unsafe_keys
-    assert not redis_cache._dedup_increment_script_disabled, (
-        "CROSSSLOT must not permanently disable the script for all keys"
-    )
+    assert "spend:key:bad" in redis_cache._dedup_runtime_unsafe_keys
+    assert (
+        redis_cache._dedup_increment_script_disabled_until <= time.monotonic()
+    ), "CROSSSLOT must not disable the script for all keys"
 
     # A retry on the same key skips the script entirely (memoized per key).
     await redis_cache.async_increment_idempotent(
@@ -729,3 +740,143 @@ async def test_async_increment_idempotent_crossslot_error_disables_key_not_scrip
     )
     assert len(script_calls) == 1
     assert plain_increment.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_async_increment_idempotent_timeout_retries_same_eval_once(
+    redis_no_ping,
+):
+    """A timeout may mean the Lua script already applied server-side: the code
+    must retry the SAME eval (same dedup_id, dedup gate makes it safe) rather
+    than plain-incrementing, so the counter advances exactly once (greptile P1)."""
+    redis_cache = RedisCache(host="localhost")
+    fake_store = _FakeRedisSpendStore()
+
+    attempts: list = []
+
+    def _flaky_register(script: str):
+        inner = fake_store.async_register_script(script)
+
+        async def _run(keys, args):
+            attempts.append(keys[1])
+            if len(attempts) == 1:
+                # Applied server-side, response lost:
+                await inner(keys, args)
+                raise asyncio.TimeoutError()
+            return await inner(keys, args)
+
+        return _run
+
+    redis_cache.async_register_script = _flaky_register  # type: ignore[method-assign]
+
+    plain_increment = AsyncMock(return_value=999.0)
+    redis_cache.async_increment = plain_increment  # type: ignore[method-assign]
+
+    result = await redis_cache.async_increment_idempotent(
+        key="spend:key:abc", value=0.01, dedup_id="req-1", refresh_ttl=True
+    )
+
+    assert fake_store._counters.get("spend:key:abc") == pytest.approx(0.01)
+    assert result == pytest.approx(0.01)
+    assert not plain_increment.called, (
+        "timeout retry must reuse the idempotent eval, never plain increment"
+    )
+    assert len(attempts) == 2
+    assert attempts[0] == attempts[1], "retry must reuse the same dedup key"
+
+
+@pytest.mark.asyncio
+async def test_async_increment_idempotent_persistent_timeout_raises(
+    redis_no_ping,
+):
+    """When the idempotent eval keeps timing out, fail loudly instead of
+    silently double-charging via the plain path (greptile P1)."""
+    redis_cache = RedisCache(host="localhost")
+
+    async def _timeout_script(keys, args):
+        raise asyncio.TimeoutError()
+
+    redis_cache._dedup_increment_script = _timeout_script
+
+    plain_increment = AsyncMock(return_value=999.0)
+    redis_cache.async_increment = plain_increment  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await redis_cache.async_increment_idempotent(
+            key="spend:key:abc", value=0.01, dedup_id="req-1", refresh_ttl=True
+        )
+
+    assert not plain_increment.called, (
+        "ambiguous failure must never fall back to plain increment"
+    )
+    assert (
+        redis_cache._dedup_increment_script_disabled_until > time.monotonic()
+    ), "script path must cool down after repeated ambiguous failures"
+
+
+@pytest.mark.asyncio
+async def test_async_increment_idempotent_script_disable_recovers_after_cooldown(
+    redis_no_ping,
+):
+    """A transient script failure must not disable deduplication forever: after
+    the cooldown the script path is re-probed (greptile P1)."""
+    redis_cache = RedisCache(host="localhost")
+
+    async def _bad_script(keys, args):
+        raise RuntimeError("NOSCRIPT")
+
+    redis_cache._dedup_increment_script = _bad_script
+
+    plain_increment = AsyncMock(return_value=0.01)
+    redis_cache.async_increment = plain_increment  # type: ignore[method-assign]
+
+    await redis_cache.async_increment_idempotent(
+        key="spend:key:abc", value=0.01, dedup_id="req-1", refresh_ttl=True
+    )
+    assert plain_increment.call_count == 1
+
+    # Still inside the cooldown: script is skipped, plain path serves.
+    await redis_cache.async_increment_idempotent(
+        key="spend:key:abc", value=0.01, dedup_id="req-2", refresh_ttl=True
+    )
+    assert plain_increment.call_count == 2
+
+    # Cooldown expired and Redis recovered: the script path is used again.
+    redis_cache._dedup_increment_script_disabled_until = time.monotonic() - 1
+    fake_store = _FakeRedisSpendStore()
+    redis_cache._dedup_increment_script = fake_store.async_register_script("lua")
+
+    await redis_cache.async_increment_idempotent(
+        key="spend:key:abc", value=0.02, dedup_id="req-3", refresh_ttl=True
+    )
+    assert plain_increment.call_count == 2, "recovered script path must be used"
+    assert fake_store._counters.get("spend:key:abc") == pytest.approx(0.02)
+
+
+def test_dedup_runtime_unsafe_memo_is_bounded(redis_no_ping):
+    """The runtime CROSSSLOT memo must not grow without bound on
+    attacker-controlled keys — oldest entries are evicted past the cap
+    (greptile P2 / veria-ai finding)."""
+    redis_cache = RedisCache(host="localhost")
+    cap = RedisCache._DEDUP_RUNTIME_UNSAFE_MAX_KEYS
+    for i in range(cap + 50):
+        redis_cache._remember_runtime_unsafe_key(f"spend:key:{i}")
+
+    assert len(redis_cache._dedup_runtime_unsafe_keys) == cap
+    assert "spend:key:0" not in redis_cache._dedup_runtime_unsafe_keys
+    assert f"spend:key:{cap + 49}" in redis_cache._dedup_runtime_unsafe_keys
+
+
+def test_is_ambiguous_redis_error_classification():
+    """Ambiguous = the script may already have applied: timeouts and
+    connection drops. Definitive server rejections (NOSCRIPT/ResponseError)
+    are safe to downgrade to the plain path."""
+    import redis.exceptions as redis_exceptions
+
+    assert RedisCache._is_ambiguous_redis_error(asyncio.TimeoutError())
+    assert RedisCache._is_ambiguous_redis_error(redis_exceptions.TimeoutError())
+    assert RedisCache._is_ambiguous_redis_error(redis_exceptions.ConnectionError())
+    assert not RedisCache._is_ambiguous_redis_error(RuntimeError("NOSCRIPT"))
+    assert not RedisCache._is_ambiguous_redis_error(
+        redis_exceptions.ResponseError("NOSCRIPT")
+    )

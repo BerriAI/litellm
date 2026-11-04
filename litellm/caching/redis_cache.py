@@ -15,6 +15,7 @@ import hashlib
 import inspect
 import json
 import time
+from collections import OrderedDict
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
@@ -259,11 +260,17 @@ class RedisCache(BaseCache):
             enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
         )
         self._dedup_increment_script: Optional[Any] = None
-        self._dedup_increment_script_disabled: bool = False
-        # Keys for which the dedup gate cannot be co-located (user-controlled
-        # key components containing braces). Only these keys fall back to
-        # plain increments; all other counters keep the idempotent path.
-        self._dedup_unsafe_keys: set = set()
+        # Monotonic timestamp until which the idempotent script path stays
+        # disabled after a failure. Time-bounded (not permanent) so a
+        # transient Redis error stops degrading spend accuracy once Redis
+        # recovers.
+        self._dedup_increment_script_disabled_until: float = 0.0
+        # Bounded FIFO memo of keys that failed at runtime with CROSSSLOT
+        # (defensive: static classification via _redis_slot_tag already
+        # excludes unembeddable keys on every call). Only these keys fall
+        # back to plain increments; all other counters keep the idempotent
+        # path.
+        self._dedup_runtime_unsafe_keys: OrderedDict = OrderedDict()
 
         self._setup_health_pings()
 
@@ -946,6 +953,14 @@ class RedisCache(BaseCache):
             result = result.decode()
         return float(result)
 
+    # How long the idempotent script path stays disabled after a failure
+    # before it is re-probed. Bounds exposure to double-apply during an
+    # outage without permanently giving up deduplication.
+    _DEDUP_DISABLE_COOLDOWN_SECONDS = 60.0
+    # Cap for the runtime CROSSSLOT memo: keys derive from user-controlled
+    # tags, so the memo must not grow without bound on hostile input.
+    _DEDUP_RUNTIME_UNSAFE_MAX_KEYS = 1024
+
     _SPEND_DEDUP_INCREMENT_SCRIPT = """
 if redis.call('SET', KEYS[2], '1', 'NX', 'EX', tonumber(ARGV[2])) then
     local v = redis.call('INCRBYFLOAT', KEYS[1], tonumber(ARGV[1]))
@@ -976,14 +991,22 @@ end
         plain async_increment when scripting is unavailable. The dedup_id should
         be a server-generated UUID (uuid4) to avoid client-supplied values
         suppressing spend tracking.
+
+        Failure semantics: an ambiguous error (timeout / connection drop, where
+        the script may already have applied) retries the SAME eval once — the
+        dedup gate makes that safe — instead of plain-incrementing, which would
+        double-charge. A definitive rejection (e.g. NOSCRIPT) disables the
+        script path for a cooldown and falls back to plain increment.
         """
-        if self._dedup_increment_script_disabled:
+        if (
+            time.monotonic() < self._dedup_increment_script_disabled_until
+        ):
             return await self.async_increment(
                 key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
             )
 
         key = self.check_and_fix_namespace(key=key)
-        if key in self._dedup_unsafe_keys:
+        if key in self._dedup_runtime_unsafe_keys:
             return await self.async_increment(
                 key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
             )
@@ -993,7 +1016,7 @@ end
             # "}" which a wrapped "{...}" dedup key cannot reproduce. Fall
             # back for this key only; every other counter keeps the
             # idempotent path instead of one odd key disabling it globally.
-            self._dedup_unsafe_keys.add(key)
+            # No memo: classification is a cheap string scan on every call.
             return await self.async_increment(
                 key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
             )
@@ -1009,7 +1032,7 @@ end
                 key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
             )
 
-        try:
+        async def _run_script() -> float:
             if self._dedup_increment_script is None:
                 self._dedup_increment_script = script_register(
                     self._SPEND_DEDUP_INCREMENT_SCRIPT
@@ -1023,25 +1046,67 @@ end
             if inspect.isawaitable(raw):
                 raw = await raw
 
-            result = float(raw)
-            return result
+            return float(raw)
+
+        try:
+            return await _run_script()
         except Exception as exc:
             if "CROSSSLOT" in str(exc):
                 # The two keys landed on different slots despite the tag
                 # derivation (e.g. a key whose hash input embeds braces):
                 # this is a property of the key, not of the script, so
                 # degrade this key only and leave the script enabled.
-                self._dedup_unsafe_keys.add(key)
+                self._remember_runtime_unsafe_key(key)
                 return await self.async_increment(
                     key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
                 )
-            self._dedup_increment_script_disabled = True
+            if self._is_ambiguous_redis_error(exc):
+                # The script may already have applied: retry the same eval
+                # (same dedup_id, dedup gate makes it a no-op if so) rather
+                # than plain-incrementing, which would double-charge.
+                try:
+                    return await _run_script()
+                except Exception:
+                    self._dedup_increment_script_disabled_until = (
+                        time.monotonic() + self._DEDUP_DISABLE_COOLDOWN_SECONDS
+                    )
+                    raise
+            self._dedup_increment_script_disabled_until = (
+                time.monotonic() + self._DEDUP_DISABLE_COOLDOWN_SECONDS
+            )
             verbose_logger.warning(
                 "LiteLLM Redis: idempotent increment Lua script failed, falling back to plain increment",
             )
             return await self.async_increment(
                 key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl
             )
+
+    @staticmethod
+    def _is_ambiguous_redis_error(exc: BaseException) -> bool:
+        """
+        True when the Lua eval may already have applied server-side: timeouts
+        and connection drops. Definitive server rejections (e.g. NOSCRIPT)
+        return False — those are safe to downgrade to the plain path.
+        """
+        if isinstance(exc, TimeoutError):
+            # Builtin TimeoutError; identical to asyncio.TimeoutError on 3.11+.
+            return True
+        cls = type(exc)
+        # Match redis-py's errors without importing redis (optional dep).
+        return cls.__module__ == "redis.exceptions" and cls.__name__ in (
+            "TimeoutError",
+            "ConnectionError",
+        )
+
+    def _remember_runtime_unsafe_key(self, key: str) -> None:
+        """Memoize a runtime CROSSSLOT key in a bounded FIFO so one hostile or
+        pathological key cannot grow memory without limit."""
+        self._dedup_runtime_unsafe_keys[key] = None
+        while (
+            len(self._dedup_runtime_unsafe_keys)
+            > self._DEDUP_RUNTIME_UNSAFE_MAX_KEYS
+        ):
+            self._dedup_runtime_unsafe_keys.popitem(last=False)
 
     @staticmethod
     def _redis_slot_tag(key: str) -> Optional[str]:
