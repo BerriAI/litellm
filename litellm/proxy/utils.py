@@ -122,6 +122,7 @@ try:
 except ImportError:
     raise ImportError("backoff is not installed. Please install it via 'pip install backoff'")
 
+import openai
 from fastapi import HTTPException, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -638,6 +639,11 @@ class _StreamIteratorHook(Protocol[_T]):
     def __call__(self, *, response: AsyncIterator[_T]) -> AsyncIterator[_T]: ...
 
 
+# Provider 4xx that point at the deployment rather than the caller's request:
+# a broken provider key (401/403) or the provider throttling us (429).
+_PROVIDER_4XX_STATUS_CODES_TO_ALERT: Final = frozenset({401, 403, 429})
+
+
 def _is_client_error_exception(exc: Exception) -> bool:
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
@@ -645,6 +651,8 @@ def _is_client_error_exception(exc: Exception) -> bool:
         return not (exc.code.isdigit() and int(exc.code) >= 500)
     if isinstance(exc, litellm.BudgetExceededError):
         return exc.status_code < 500
+    if isinstance(exc, openai.APIStatusError):
+        return 400 <= exc.status_code < 500 and exc.status_code not in _PROVIDER_4XX_STATUS_CODES_TO_ALERT
     return False
 
 

@@ -4407,6 +4407,39 @@ def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
     assert _is_client_error_exception(ValueError("x")) is False
 
 
+@pytest.mark.parametrize(
+    ("exc_type", "is_client_error"),
+    [
+        ("BadRequestError", True),
+        ("NotFoundError", True),
+        ("UnprocessableEntityError", True),
+        ("AuthenticationError", False),
+        ("PermissionDeniedError", False),
+        ("RateLimitError", False),
+        ("InternalServerError", False),
+        ("ServiceUnavailableError", False),
+    ],
+)
+def test_is_client_error_exception_provider_status_errors(exc_type: str, is_client_error: bool) -> None:
+    import litellm
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc_cls: Final = getattr(litellm, exc_type)
+    kwargs: Final[dict[str, object]] = {"message": "x", "model": "m", "llm_provider": "openai"}
+    if exc_type in ("PermissionDeniedError", "UnprocessableEntityError"):
+        status_code: Final = 403 if exc_type == "PermissionDeniedError" else 422
+        kwargs["response"] = httpx.Response(status_code, request=httpx.Request("POST", "https://example.com"))
+    assert _is_client_error_exception(exc_cls(**kwargs)) is is_client_error
+
+
+def test_is_client_error_exception_provider_timeout_is_not_client_error() -> None:
+    import litellm
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc: Final = litellm.Timeout(message="x", model="m", llm_provider="openai")
+    assert _is_client_error_exception(exc) is False
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tokens", [None, 0, 3])
 async def test_failure_capture_preserves_prepared_usage_observation(tokens: int | None) -> None:
