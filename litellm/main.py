@@ -121,7 +121,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     model_group_from_metadata,
-    reasoning_effort_needs_allowing,
     resolve_chat_reasoning,
 )
 from litellm.litellm_core_utils.request_timeout_resolver import (
@@ -1318,15 +1317,15 @@ def mock_completion(
         raise Exception(f"Mock completion response failed - {e}")
 
 
+from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
+    _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
+)
 from litellm.responses.bridge_check import (
-    RESPONSES_WEB_SEARCH_PROVIDERS,
+    bridge_allowed_params,
     bridge_check_request_params,
     bridge_reasoning_effort,
     keep_registered_mode,
     str_keyed_mapping,
-)
-from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
-    _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
@@ -6078,22 +6077,16 @@ def completion(
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
-        bridge_allowed_params: Final[tuple[str, ...]] = (
-            ("reasoning_effort", "web_search_options")
-            if bridges_to_responses_api and custom_llm_provider in RESPONSES_WEB_SEARCH_PROVIDERS
-            else ("reasoning_effort",)
-            if bridges_to_responses_api
-            or reasoning_effort_needs_allowing(
-                chat_reasoning.effort,
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                base_model=base_model if isinstance(base_model, str) else None,
-            )
-            else ()
+        bridge_params: Final = bridge_allowed_params(
+            bridges_to_responses_api=bridges_to_responses_api,
+            chat_reasoning_effort=chat_reasoning.effort,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model if isinstance(base_model, str) else None,
         )
         allowed_openai_params: Final[list[str] | None] = (
-            [*(kwargs.get("allowed_openai_params") or []), *bridge_allowed_params]
-            if bridge_allowed_params
+            [*(kwargs.get("allowed_openai_params") or []), *bridge_params]
+            if bridge_params
             else kwargs.get("allowed_openai_params")
         )
         optional_param_args: Final = {

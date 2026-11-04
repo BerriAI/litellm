@@ -1902,7 +1902,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             tools = []
             responses_api_request["tools"] = tools
 
-        typed_options: Final = (
+        typed_options: Final[Mapping[str, object]] = (
             cast(Mapping[str, object], web_search_options)  # cast-ok: caller-supplied dict
             if isinstance(web_search_options, dict)
             else {}

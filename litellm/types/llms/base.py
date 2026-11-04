@@ -88,8 +88,8 @@ class CachedTokensDetails(LiteLLMBaseModel):
 
 
 class OutputTextTopLogprob(TypedDict):
-    token: ReadOnly[str]
-    logprob: ReadOnly[float]
+    token: NotRequired[ReadOnly[str | None]]
+    logprob: NotRequired[ReadOnly[float | None]]
     bytes: NotRequired[ReadOnly[Sequence[int] | None]]
 
 
@@ -97,7 +97,7 @@ class OutputTextLogprob(TypedDict):
     token: ReadOnly[str]
     logprob: ReadOnly[float]
     bytes: NotRequired[ReadOnly[Sequence[int] | None]]
-    top_logprobs: ReadOnly[Sequence[OutputTextTopLogprob]]
+    top_logprobs: NotRequired[ReadOnly[Sequence[OutputTextTopLogprob] | None]]
 
 
 class CarriesOutputTextLogprobs(BaseLiteLLMOpenAIResponseObject):  # frozen-ok: guardrails rewrite these in place

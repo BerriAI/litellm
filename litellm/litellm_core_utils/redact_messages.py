@@ -308,6 +308,7 @@ def _redact_responses_api_output(output_items):
         for content_part in stream_item_items(output_item, "content"):
             _redact_field_when_present(content_part, "text")
             _redact_field_when_present(content_part, "refusal")
+            _drop_field_when_present(content_part, "logprobs")
 
         if output_type == "reasoning":
             for summary_item in stream_item_items(output_item, "summary"):
@@ -324,10 +325,16 @@ def _redact_responses_api_output(output_items):
 _RESPONSE_ITEMS: Final = TypeAdapter(tuple[object, ...])
 
 
-def _redacted_responses_api_output_part(part: object, fields: tuple[str, ...], redacted_str: str) -> object:
+def _redacted_responses_api_output_part(
+    part: object, fields: tuple[str, ...], redacted_str: str, *, dropped: tuple[str, ...] = ()
+) -> object:
     if (part_mapping := _as_mapping(part)) is None:
         return part
-    return {key: redacted_str if key in fields and value is not None else value for key, value in part_mapping.items()}
+    return {
+        key: redacted_str if key in fields and value is not None else value
+        for key, value in part_mapping.items()
+        if key not in dropped
+    }
 
 
 def _redacted_responses_api_output_item(item: object, redacted_str: str) -> object:
@@ -341,7 +348,7 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
         **(
             {
                 "content": [
-                    _redacted_responses_api_output_part(part, ("text", "refusal"), redacted_str)
+                    _redacted_responses_api_output_part(part, ("text", "refusal"), redacted_str, dropped=("logprobs",))
                     for part in _RESPONSE_ITEMS.validate_python(content)
                 ]
             }
@@ -607,15 +614,20 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
         elif isinstance(_result, dict) and "output" in _result:
             return _redacted_responses_api_response(_result, redact_instructions=redact_streaming_responses)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
-            if hasattr(_result, "output"):
-                _redact_responses_api_output(_result.output)
+            output: Final = _RESPONSE_ITEMS.validate_python(_result.output)
+            _redact_responses_api_output(output)
             # Redact reasoning field in ResponsesAPIResponse
             if hasattr(_result, "reasoning") and _result.reasoning is not None:
                 _result.reasoning = None
             return _result.model_copy(
-                update={"instructions": REDACTED_BY_LITELLM}
-                if redact_streaming_responses and _result.instructions is not None
-                else {}
+                update={
+                    "output": _redact_responses_api_output_dict(output, REDACTED_BY_LITELLM),
+                    **(
+                        {"instructions": REDACTED_BY_LITELLM}
+                        if redact_streaming_responses and _result.instructions is not None
+                        else {}
+                    ),
+                }
             )
         elif isinstance(_result, litellm.EmbeddingResponse):
             if hasattr(_result, "data") and _result.data is not None:

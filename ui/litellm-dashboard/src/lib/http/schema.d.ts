@@ -40910,7 +40910,7 @@ export interface components {
             /** Token */
             token: string;
             /** Top Logprobs */
-            top_logprobs: components["schemas"]["OutputTextTopLogprob"][];
+            top_logprobs?: components["schemas"]["OutputTextTopLogprob"][] | null;
         } & {
             [key: string]: unknown;
         };
@@ -40919,9 +40919,9 @@ export interface components {
             /** Bytes */
             bytes?: number[] | null;
             /** Logprob */
-            logprob: number;
+            logprob?: number | null;
             /** Token */
-            token: string;
+            token?: string | null;
         } & {
             [key: string]: unknown;
         };

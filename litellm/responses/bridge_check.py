@@ -7,6 +7,10 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    DeploymentReasoningEffort,
+    reasoning_effort_needs_allowing,
+)
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
@@ -124,6 +128,23 @@ def bridge_check_request_params(request_params: Mapping[str, object]) -> Mapping
     kept_extra_body: Final = {key: value for key, value in extra_body.items() if key not in dropped}
     nested_paths: Final = tuple(path for path in dropped if is_nested_path(path))
     return {**kept, **reduce(delete_nested_value, nested_paths, {"extra_body": kept_extra_body})}
+
+
+def bridge_allowed_params(
+    *,
+    bridges_to_responses_api: bool,
+    chat_reasoning_effort: DeploymentReasoningEffort,
+    model: str,
+    custom_llm_provider: str,
+    base_model: str | None,
+) -> tuple[str, ...]:
+    if bridges_to_responses_api and custom_llm_provider in RESPONSES_WEB_SEARCH_PROVIDERS:
+        return ("reasoning_effort", "web_search_options")
+    if bridges_to_responses_api or reasoning_effort_needs_allowing(
+        chat_reasoning_effort, model=model, custom_llm_provider=custom_llm_provider, base_model=base_model
+    ):
+        return ("reasoning_effort",)
+    return ()
 
 
 def bridge_reasoning_effort(

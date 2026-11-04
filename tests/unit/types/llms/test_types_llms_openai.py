@@ -17,6 +17,7 @@ from litellm.types.llms.openai import (
     OpenAIModerationResponse,
     OpenAIVideoObject,
     OutputTextDeltaEvent,
+    OutputTextDoneEvent,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -113,6 +114,35 @@ def test_content_part_done_preserves_typed_text_with_optional_logprobs(
     assert isinstance(event.part, ContentPartDonePartOutputText)
     assert event.part.text == "hello"
     assert event.part.logprobs == logprobs
+
+
+@pytest.mark.parametrize(
+    "logprob",
+    (
+        {"token": "hi", "logprob": -0.1},
+        {"token": "hi", "logprob": -0.1, "top_logprobs": None},
+        {"token": "hi", "logprob": -0.1, "top_logprobs": [{"token": None, "logprob": None}]},
+    ),
+    ids=("no_top_logprobs", "null_top_logprobs", "null_top_entry"),
+)
+@pytest.mark.parametrize(
+    ("event_type", "text_fields"),
+    (
+        (OutputTextDeltaEvent, {"type": "response.output_text.delta", "delta": "hi"}),
+        (OutputTextDoneEvent, {"type": "response.output_text.done", "text": "hi"}),
+    ),
+    ids=("delta", "done"),
+)
+def test_text_events_accept_every_logprob_shape_the_openai_sdk_allows(
+    event_type: type[OutputTextDeltaEvent] | type[OutputTextDoneEvent],
+    text_fields: Mapping[str, str],
+    logprob: Mapping[str, object],
+) -> None:
+    event: Final = event_type.model_validate(
+        {**text_fields, "item_id": "msg_1", "output_index": 0, "content_index": 0, "logprobs": [logprob]}
+    )
+
+    assert event.model_dump()["logprobs"] == [logprob]
 
 
 class TestResponsesAPIResponseOutputText:

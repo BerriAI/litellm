@@ -26669,17 +26669,23 @@
               "type": "string"
             },
             "top_logprobs": {
-              "items": {
-                "$ref": "#/components/schemas/OutputTextTopLogprob"
-              },
-              "title": "Top Logprobs",
-              "type": "array"
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/OutputTextTopLogprob"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Top Logprobs"
             }
           },
           "required": [
             "token",
-            "logprob",
-            "top_logprobs"
+            "logprob"
           ],
           "title": "OutputTextLogprob",
           "type": "object"
@@ -26702,18 +26708,28 @@
               "title": "Bytes"
             },
             "logprob": {
-              "title": "Logprob",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Logprob"
             },
             "token": {
-              "title": "Token",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
             }
           },
-          "required": [
-            "token",
-            "logprob"
-          ],
           "title": "OutputTextTopLogprob",
           "type": "object"
         },

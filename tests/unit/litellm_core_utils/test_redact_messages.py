@@ -244,6 +244,35 @@ def test_redaction_hides_a_compaction_summary_in_responses_api_output(shape: str
     assert SECRET in str(result)
 
 
+@pytest.mark.parametrize("token_bytes", [list(SECRET.encode()), None], ids=["utf8_bytes", "null_bytes"])
+@pytest.mark.parametrize("shape", ["object", "dict"])
+def test_redaction_hides_the_answer_tokens_in_responses_api_logprobs(shape: str, token_bytes: list[int] | None) -> None:
+    top: Final = {"token": SECRET, "bytes": token_bytes, "logprob": -0.2}
+    logprob: Final = {"token": SECRET, "bytes": token_bytes, "logprob": -0.1, "top_logprobs": [top]}
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="gpt-5.6-sol",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": SECRET, "annotations": [], "logprobs": [logprob]}],
+            }
+        ],
+    )
+    result: Final = response if shape == "object" else response.model_dump()
+
+    redacted: Final = perform_redaction({}, result)
+
+    assert SECRET not in str(redacted), redacted
+    assert SECRET in str(result)
+
+
 @pytest.mark.parametrize("surface", ("typed", "dict", "standard", "callback", "helper"))
 def test_responses_redaction_removes_instructions_without_changing_the_response(surface: str) -> None:
     response: Final = litellm.ResponsesAPIResponse.model_validate(
