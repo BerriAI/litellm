@@ -250,7 +250,7 @@ async fn handshake_headers_cross_unchanged_both_ways() {
         &gateway,
         handshake(
             target,
-            "sec-websocket-protocol: realtime, openai-insecure-api-key.sk-1234, openai-beta.realtime-v1\r\nsec-websocket-protocol: second-line\r\nsec-websocket-extensions: permessage-deflate; client_max_window_bits\r\ncookie: token=abc\r\n",
+            "sec-websocket-protocol: realtime, openai-insecure-api-key.sk-websocket-test, openai-beta.realtime-v1\r\nsec-websocket-protocol: second-line\r\nsec-websocket-extensions: permessage-deflate; client_max_window_bits\r\ncookie: token=abc\r\n",
         ),
     )
     .await;
@@ -260,7 +260,7 @@ async fn handshake_headers_cross_unchanged_both_ways() {
     assert_eq!(
         values(&handshake, "sec-websocket-protocol"),
         [
-            "realtime, openai-insecure-api-key.sk-1234, openai-beta.realtime-v1",
+            "realtime, openai-insecure-api-key.sk-websocket-test, openai-beta.realtime-v1",
             "second-line"
         ]
     );
