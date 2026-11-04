@@ -435,6 +435,8 @@ class HiddenlayerGuardrail(CustomGuardrail):
 class HiddenlayerGuardrailV2(CustomGuardrail):
     """Custom guardrail wrapper for HiddenLayer's safety checks."""
 
+    natively_scans_tool_definitions = True
+
     def __init__(
         self,
         api_id: str | None = None,

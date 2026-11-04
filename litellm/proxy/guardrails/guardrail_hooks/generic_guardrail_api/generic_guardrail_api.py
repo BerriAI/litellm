@@ -264,6 +264,8 @@ class GenericGuardrailAPI(CustomGuardrail):
     }
     """
 
+    natively_scans_tool_definitions = True
+
     def __init__(
         self,
         headers: dict[str, str] | None = None,

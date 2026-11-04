@@ -97,6 +97,8 @@ def _as_object(value: object) -> Mapping[str, object] | None:
 class AiriaGuardrail(CustomGuardrail):
     """Evaluates prompts and responses against your Airia guardrail policy."""
 
+    natively_scans_tool_definitions = True
+
     def __init__(
         self,
         api_base: str | None = None,

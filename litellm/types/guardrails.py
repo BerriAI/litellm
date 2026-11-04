@@ -1093,6 +1093,16 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    scan_tool_definitions_in_guardrail: bool | None = Field(
+        default=None,
+        description=(
+            "When True, pre_call unified guardrails also scan the description strings inside the request's "
+            "tools[] definitions, and can block the request or mask those descriptions. Skipped for guardrails "
+            "that already send tools[] to their vendor. When None, use the global "
+            "litellm.scan_tool_definitions_in_guardrail setting."
+        ),
+    )
+
     scan_only_tool_results: bool | None = Field(
         default=None,
         description=(
