@@ -17,6 +17,7 @@ import {
   createDeploymentHealthHandle,
   DeploymentHealthBanner,
   DeploymentHealthIcon,
+  DeploymentHealthLink,
 } from "@/components/DeploymentHealth/DeploymentHealth";
 import { DeploymentHealthPanel } from "@/components/DeploymentHealth/DeploymentHealthPanel";
 import { UserBanner } from "@/components/UserBanner";
@@ -151,6 +152,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           accessToken={accessToken}
           isPublicPage={false}
           deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+          deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
         />
         <DeploymentHealthBanner handle={deploymentHealthHandle} />
         <DeploymentHealthPanel handle={deploymentHealthHandle} />
@@ -166,28 +168,28 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   // sidebar owns its own scroll and the content column scrolls independently,
   // so the page can't be dragged past the end of the nav.
   return (
-    <div className="flex h-screen overflow-hidden bg-background max-md:h-dvh">
-      <div className="hidden h-full md:flex">
-        <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
-      </div>
-      <Sheet
-        handle={mobileNavigationHandle}
-        open={mobileNavigationOpen}
-        onOpenChange={(open) => setMobileNavigationKey(open ? navigationKey : null)}
-      >
-        <SheetContent
-          side="left"
-          showCloseButton={false}
-          className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
-          onClickCapture={(event) => {
-            if (event.target instanceof Element && event.target.closest("a[href]")) setMobileNavigationKey(null);
-          }}
+    <LiteAdminFrame>
+      <div className="flex h-screen overflow-hidden bg-background max-md:h-dvh">
+        <div className="hidden h-full md:flex">
+          <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
+        </div>
+        <Sheet
+          handle={mobileNavigationHandle}
+          open={mobileNavigationOpen}
+          onOpenChange={(open) => setMobileNavigationKey(open ? navigationKey : null)}
         >
-          <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
-        </SheetContent>
-      </Sheet>
-      <LiteAdminFrame>
+          <SheetContent
+            side="left"
+            showCloseButton={false}
+            className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
+            onClickCapture={(event) => {
+              if (event.target instanceof Element && event.target.closest("a[href]")) setMobileNavigationKey(null);
+            }}
+          >
+            <SheetTitle className="sr-only">Navigation</SheetTitle>
+            <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
+          </SheetContent>
+        </Sheet>
         <CommandPaletteProvider>
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
             <DashboardHeader
@@ -203,18 +205,25 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
                 </SheetTrigger>
               }
               deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+              deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
             />
             <DeploymentHealthBanner handle={deploymentHealthHandle} />
             <DeploymentHealthPanel handle={deploymentHealthHandle} />
             <UserBanner accessToken={accessToken} />
-            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+            <main
+              className={
+                routeSegment === "aria"
+                  ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+                  : "min-h-0 min-w-0 flex-1 overflow-y-auto"
+              }
+            >
               <TelemetryEnvBanner />
               {children}
             </main>
           </div>
         </CommandPaletteProvider>
-      </LiteAdminFrame>
-    </div>
+      </div>
+    </LiteAdminFrame>
   );
 }
 

@@ -5,7 +5,6 @@ Pins covered:
 - ``async_assistants_data_generator``
 - ``_get_client_requested_model_for_streaming``
 - ``_restamp_streaming_chunk_model``
-- ``_fast_serialize_simple_model_response_stream``
 - ``_serialize_streaming_chunk``
 - ``_apply_streaming_chunk_hooks``
 - ``_format_streaming_sse_chunk``
@@ -16,8 +15,11 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
-from collections.abc import AsyncIterator, Callable
+import logging
+from collections.abc import AsyncIterator, Callable, Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -36,7 +38,6 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import create_response
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
-    _fast_serialize_simple_model_response_stream,
     _format_fallback_metadata_sse_event,
     _format_streaming_sse_chunk,
     _get_client_requested_model_for_streaming,
@@ -55,7 +56,16 @@ from litellm.types.llms.openai import (
     ResponseFailedEvent,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Delta,
+    Function,
+    ModelResponseStream,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
+    Usage,
+)
 from tests._support.clock_loops import AutojumpClockLoop
 
 from .conftest import normalize, route_entry_points_to_stubs
@@ -79,6 +89,10 @@ def _simple_chunk(model: str = "gpt-4", content: str = "hi") -> ModelResponseStr
         model=model,
         object="chat.completion.chunk",
     )
+
+
+def _sse_text(frame: str | bytes) -> str:
+    return frame.decode() if isinstance(frame, bytes) else frame
 
 
 async def _async_iter(items):
@@ -521,47 +535,12 @@ def test_format_fallback_metadata_sse_event():
 
 
 # ---------------------------------------------------------------------------
-# _fast_serialize_simple_model_response_stream
-# ---------------------------------------------------------------------------
-
-
-def test_fast_serialize_simple_model_response_stream_returns_bytes_payload():
-    chunk = _simple_chunk()
-    result = _fast_serialize_simple_model_response_stream(chunk)
-    assert isinstance(result, bytes)
-    payload = json.loads(result)
-    assert normalize(payload) == {
-        "id": "<VOLATILE>",
-        "object": "chat.completion.chunk",
-        "created": "<VOLATILE>",
-        "model": "gpt-4",
-        "choices": [
-            {
-                "index": 0,
-                "delta": {"role": "assistant", "content": "hi"},
-            }
-        ],
-    }
-
-
-def test_fast_serialize_simple_model_response_stream_with_usage_returns_none_invalid():
-    """Fast path bails (returns None) when ``usage`` is populated — the slow
-    path is required to preserve usage fields. Returning None here is the
-    "I cannot handle this" sentinel, not a hard error."""
-    chunk = _simple_chunk()
-    chunk.usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
-    assert _fast_serialize_simple_model_response_stream(chunk) is None
-
-
-# ---------------------------------------------------------------------------
 # _serialize_streaming_chunk
 # ---------------------------------------------------------------------------
 
 
-def test_serialize_streaming_chunk_simple_uses_fast_path_bytes():
-    result = _serialize_streaming_chunk(_simple_chunk())
-    assert isinstance(result, bytes)
-    payload = json.loads(result)
+def test_serialize_streaming_chunk_simple_payload():
+    payload = json.loads(_serialize_streaming_chunk(_simple_chunk()))
     assert normalize(payload) == {
         "id": "<VOLATILE>",
         "object": "chat.completion.chunk",
@@ -574,6 +553,102 @@ def test_serialize_streaming_chunk_simple_uses_fast_path_bytes():
             }
         ],
     }
+
+
+@pytest.mark.parametrize(
+    ("choice_extras", "serialized_extras"),
+    [
+        ({"stop_reason": ",5", "token_ids": [20]}, {"stop_reason": ",5", "token_ids": [20]}),
+        ({"finish_reason": "stop", "stop_reason": None}, {"finish_reason": "stop", "stop_reason": None}),
+    ],
+    ids=["vllm-fields", "natural-stop"],
+)
+def test_serialize_streaming_chunk_keeps_the_vllm_choice_fields(
+    choice_extras: dict[str, object], serialized_extras: dict[str, object]
+):
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-test",
+        choices=[StreamingChoices(index=0, delta=Delta(content="1,2,3,4", role="assistant"), **choice_extras)],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    assert json.loads(_serialize_streaming_chunk(chunk))["choices"] == [
+        {"index": 0, "delta": {"role": "assistant", "content": "1,2,3,4"}, **serialized_extras}
+    ]
+
+
+def _text_completion_chunk(choice_extras: Mapping[str, object]) -> TextCompletionResponse:
+    return TextCompletionResponse(
+        id="cmpl-1",
+        choices=[TextChoices(finish_reason="length", index=0, text="", **choice_extras)],
+        created=1,
+        model="Qwen/Qwen3-0.6B",
+    )
+
+
+def _chat_chunk_with_fingerprint(choice_extras: Mapping[str, object]) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-1",
+        choices=[StreamingChoices(finish_reason="length", index=0, delta=Delta(content=None), **choice_extras)],
+        created=1,
+        model="Qwen/Qwen3-0.6B",
+        object="chat.completion.chunk",
+        system_fingerprint="fp_1",
+    )
+
+
+_VLLM_SHAPED_CHUNKS: Final = pytest.mark.parametrize(
+    "build_chunk", [_text_completion_chunk, _chat_chunk_with_fingerprint], ids=["text-completion", "chat-fingerprint"]
+)
+
+
+@_VLLM_SHAPED_CHUNKS
+@pytest.mark.parametrize(
+    "vllm_choice_fields",
+    [{"stop_reason": None}, {"stop_reason": None, "token_ids": [21]}, {"stop_reason": None, "token_ids": None}],
+    ids=["null-stop-reason", "null-stop-reason-with-token-ids", "null-stop-reason-and-token-ids"],
+)
+def test_serialize_streaming_chunk_keeps_null_vllm_choice_fields(
+    build_chunk: Callable[[Mapping[str, object]], TextCompletionResponse | ModelResponseStream],
+    vllm_choice_fields: dict[str, object],
+) -> None:
+    chunk: Final = build_chunk(vllm_choice_fields)
+    plain_chunk: Final = json.loads(build_chunk({}).model_dump_json(exclude_none=True, exclude_unset=True))
+
+    assert json.loads(_serialize_streaming_chunk(chunk)) == {
+        **plain_chunk,
+        "choices": [{**plain_chunk["choices"][0], **vllm_choice_fields}],
+    }
+
+
+@_VLLM_SHAPED_CHUNKS
+@pytest.mark.parametrize("choice_extras", [{}, {"stop_reason": ",5", "token_ids": [20]}], ids=["no-vllm", "set-vllm"])
+def test_serialize_streaming_chunk_without_null_vllm_fields_matches_model_dump_json(
+    build_chunk: Callable[[Mapping[str, object]], TextCompletionResponse | ModelResponseStream],
+    choice_extras: dict[str, object],
+) -> None:
+    chunk: Final = build_chunk(choice_extras)
+
+    assert _serialize_streaming_chunk(chunk) == chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+
+
+def test_serialize_streaming_chunk_keeps_streaming_a_null_stop_reason_chunk_with_a_value_json_cannot_encode() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-vllm",
+        choices=[StreamingChoices(index=0, delta=Delta(content="a"), stop_reason=None, token_ids=[21])],
+        created=0,
+        model="Qwen/Qwen3-0.6B",
+        object="chat.completion.chunk",
+    )
+    setattr(chunk, "trace_chunk", hashlib.sha256(b"trace").digest())
+
+    payload: Final = json.loads(_serialize_streaming_chunk(chunk))
+
+    assert payload["choices"][0]["delta"] == {"content": "a"}
+    assert payload["choices"][0]["token_ids"] == [21]
+    assert "trace_chunk" not in payload
 
 
 def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():
@@ -700,10 +775,7 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
         out.append(line)
 
     assert out[-1] == "data: [DONE]\n\n"
-    # First chunk is bytes (fast path) wrapped via _format_streaming_sse_chunk.
-    first = out[0]
-    assert isinstance(first, bytes)
-    payload = json.loads(first.removeprefix(b"data: ").removesuffix(b"\n\n"))
+    payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
     assert normalize(payload) == {
         "id": "<VOLATILE>",
         "object": "chat.completion.chunk",
@@ -716,6 +788,205 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
             }
         ],
     }
+
+
+_AZURE_CONTENT_FILTER_RESULTS: Final = {
+    "hate": {"filtered": False, "severity": "safe"},
+    "protected_material_text": {"detected": False, "filtered": False},
+}
+
+
+def _azure_chunk(choice_fields: dict[str, object], chunk_fields: dict[str, object]) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-azure",
+        choices=[StreamingChoices(index=0, delta=Delta(content="Red"), **choice_fields)],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        **chunk_fields,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("chunk", "read_field", "sent"),
+    [
+        pytest.param(
+            _azure_chunk({"content_filter_results": _AZURE_CONTENT_FILTER_RESULTS}, {}),
+            lambda payload: payload["choices"][0]["content_filter_results"],
+            _AZURE_CONTENT_FILTER_RESULTS,
+            id="choice-content-filter-results",
+        ),
+        pytest.param(
+            _azure_chunk({}, {"obfuscation": "Ab3"}),
+            lambda payload: payload["obfuscation"],
+            "Ab3",
+            id="chunk-obfuscation",
+        ),
+        pytest.param(
+            ModelResponseStream(
+                id="chatcmpl-or",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(content="Red", reasoning_details=[{"type": "reasoning.text", "text": "colors"}]),
+                    )
+                ],
+                created=0,
+                model="gpt-4",
+                object="chat.completion.chunk",
+            ),
+            lambda payload: payload["choices"][0]["delta"]["reasoning_details"],
+            [{"type": "reasoning.text", "text": "colors"}],
+            id="delta-reasoning-details",
+        ),
+        pytest.param(
+            ModelResponseStream(
+                id="chatcmpl-resp",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(content="Red", reasoning_items=[{"type": "reasoning", "id": "rs_1", "summary": []}]),
+                    )
+                ],
+                created=0,
+                model="gpt-4",
+                object="chat.completion.chunk",
+            ),
+            lambda payload: payload["choices"][0]["delta"]["reasoning_items"],
+            [{"type": "reasoning", "id": "rs_1", "summary": []}],
+            id="delta-reasoning-items",
+        ),
+    ],
+)
+async def test_async_data_generator_sse_frame_keeps_provider_fields_on_a_text_chunk(
+    monkeypatch, chunk: ModelResponseStream, read_field: Callable[[dict[str, object]], object], sent: object
+):
+    _patch_logging_flags(monkeypatch)
+
+    out = [
+        line
+        async for line in async_data_generator(
+            response=_async_iter([chunk]),
+            user_api_key_dict=_user_auth(),
+            request_data={"model": "gpt-4"},
+        )
+    ]
+
+    assert read_field(json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))) == sent
+
+
+def _circular_dict() -> dict[str, object]:
+    looped: Final[dict[str, object]] = {"keep": 1}  # mutable-ok: a circular dict has to be inserted into itself
+    looped["self"] = looped
+    return looped
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unencodable",
+    [
+        pytest.param(object(), id="unknown-type"),
+        pytest.param(hashlib.sha256(b"trace").digest(), id="invalid-utf8-bytes"),
+    ],
+)
+async def test_async_data_generator_streams_a_text_chunk_a_hook_tagged_with_a_value_json_cannot_encode(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, unencodable: object
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    chunk: Final = _azure_chunk({"content_filter_results": _AZURE_CONTENT_FILTER_RESULTS}, {"obfuscation": "Ab3"})
+    setattr(chunk, "trace_chunk", unencodable)
+    setattr(chunk.choices[0], "trace_choice", unencodable)
+    setattr(chunk.choices[0].delta, "trace_delta", unencodable)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        out: Final = [
+            line
+            async for line in async_data_generator(
+                response=_async_iter([chunk]),
+                user_api_key_dict=_user_auth(),
+                request_data={"model": "gpt-4"},
+            )
+        ]
+
+    payload: Final = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
+    assert payload["obfuscation"] == "Ab3"
+    assert payload["choices"][0]["content_filter_results"] == _AZURE_CONTENT_FILTER_RESULTS
+    assert payload["choices"][0]["delta"] == {"content": "Red"}
+    assert "trace_chunk" not in payload
+    assert "trace_choice" not in payload["choices"][0]
+    assert all(name in caplog.text for name in ("trace_chunk", "trace_choice", "trace_delta"))
+
+
+def test_serialize_streaming_chunk_keeps_lone_surrogates_a_provider_split_across_frames(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tool_call: Final = ChatCompletionDeltaToolCall(
+        id="call_1", index=0, type="function", function=Function(name="get_weather", arguments='{"city": "Par\udc00is"}')
+    )
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-split",
+        choices=[StreamingChoices(index=0, delta=Delta(content="Hi \ud83d", tool_calls=[tool_call]))],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        delta: Final = json.loads(_serialize_streaming_chunk(chunk))["choices"][0]["delta"]
+
+    assert caplog.text == ""
+    assert delta["content"] == "Hi \ud83d"
+    assert delta["tool_calls"][0]["id"] == "call_1"
+    assert delta["tool_calls"][0]["function"] == {"name": "get_weather", "arguments": '{"city": "Par\udc00is"}'}
+
+
+def test_serialize_streaming_chunk_drops_only_the_nested_value_json_cannot_encode() -> None:
+    digest: Final = hashlib.sha256(b"trace").digest()
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-nested",
+        choices=[
+            StreamingChoices(index=0, delta=Delta(content="a")),
+            StreamingChoices(
+                index=1, delta=Delta(content="b", provider_specific_fields={"citations": ["ok"], "raw": digest})
+            ),
+        ],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+    setattr(chunk.usage, "raw", digest)
+    setattr(chunk, "trace_chunk", _circular_dict())
+
+    payload: Final = json.loads(_serialize_streaming_chunk(chunk))
+
+    assert payload["choices"][0]["delta"] == {"content": "a"}
+    assert payload["choices"][1]["delta"] == {"content": "b", "provider_specific_fields": {"citations": ["ok"]}}
+    assert payload["usage"] == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+    assert payload["trace_chunk"] == {"keep": 1}
+
+
+def test_serialize_streaming_chunk_keeps_streaming_when_unencodable_values_sit_under_non_string_keys() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-keys",
+        choices=[StreamingChoices(index=0, delta=Delta(content="still streaming"))],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+    setattr(chunk, "by_index", {0: "kept", 1: object()})
+    setattr(chunk, "mixed_keys", {"name": "x", 2: object()})
+    setattr(chunk, "bytes_keys", {b"raw": object()})
+    setattr(chunk, "read_only_view", MappingProxyType({"name": object()}))
+
+    payload: Final = json.loads(_serialize_streaming_chunk(chunk))
+
+    assert payload["choices"][0]["delta"] == {"content": "still streaming"}
+    assert payload["by_index"] == {"0": "kept"}
+    assert "mixed_keys" not in payload
+    assert "bytes_keys" not in payload
+    assert "read_only_view" not in payload
 
 
 @pytest.mark.asyncio
@@ -739,9 +1010,7 @@ async def test_async_data_generator_uses_response_fallback_metadata(monkeypatch)
     ):
         out.append(line)
 
-    first = out[0]
-    assert isinstance(first, bytes)
-    payload = json.loads(first.removeprefix(b"data: ").removesuffix(b"\n\n"))
+    payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
     assert payload["model"] == "fallback-model"
 
 
@@ -764,9 +1033,7 @@ async def test_async_data_generator_uses_chunk_fallback_metadata(monkeypatch):
     ):
         out.append(line)
 
-    first = out[0]
-    assert isinstance(first, bytes)
-    payload = json.loads(first.removeprefix(b"data: ").removesuffix(b"\n\n"))
+    payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
     assert payload["model"] == "fallback-model"
 
 
@@ -793,8 +1060,8 @@ async def test_async_data_generator_switches_model_mid_stream_on_fallback(monkey
     ):
         out.append(line)
 
-    first_payload = json.loads(out[0].removeprefix(b"data: ").removesuffix(b"\n\n"))
-    second_payload = json.loads(out[1].removeprefix(b"data: ").removesuffix(b"\n\n"))
+    first_payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
+    second_payload = json.loads(_sse_text(out[1]).removeprefix("data: ").removesuffix("\n\n"))
     assert first_payload["model"] == "primary-model"
     assert second_payload["model"] == "fallback-model"
 
@@ -830,8 +1097,7 @@ async def test_async_data_generator_emits_fallback_error_metadata_event(monkeypa
     ):
         out.append(line)
 
-    assert isinstance(out[0], bytes)
-    chunk_payload = json.loads(out[0].removeprefix(b"data: ").removesuffix(b"\n\n"))
+    chunk_payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
     assert chunk_payload["model"] == "fallback-model"
     assert isinstance(out[1], str)
     assert out[1].startswith("data: ")
@@ -879,8 +1145,7 @@ async def test_async_data_generator_skips_fallback_error_event_without_opt_in(
     ):
         out.append(line)
 
-    assert isinstance(out[0], bytes)
-    payload = json.loads(out[0].removeprefix(b"data: ").removesuffix(b"\n\n"))
+    payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
     assert payload["model"] == "fallback-model"
 
 
@@ -2434,14 +2699,11 @@ async def test_queue_request_stream_is_untouched_while_keepalives_are_unconfigur
     assert chunks[-1] == b"data: [DONE]\n\n"
 
 
-def test_fast_serialize_simple_model_response_stream_keeps_served_service_tier():
+def test_serialize_streaming_chunk_keeps_served_service_tier():
     chunk = _simple_chunk()
     chunk.service_tier = "priority"
 
-    result = _fast_serialize_simple_model_response_stream(chunk)
-
-    assert result is not None
-    assert json.loads(result)["service_tier"] == "priority"
+    assert json.loads(_serialize_streaming_chunk(chunk))["service_tier"] == "priority"
 
 
 @pytest.mark.asyncio

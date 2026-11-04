@@ -60,6 +60,7 @@ from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependencyRole,
     classify_strategy_router_model,
@@ -614,7 +615,7 @@ async def preview_auto_router_routing(
     try:
         complexity_strategy: Final = ComplexityRouter(
             model_name=resolved.router_name,
-            litellm_router_instance=llm_router,
+            ctx=RoutingContext(llm_router),
             complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
             default_model=resolved.complexity_router_config.resolve_default_model(resolved.default_model),
             derive_savings_baseline=False,

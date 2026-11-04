@@ -25,7 +25,11 @@ from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.model_param_helper import ModelParamHelper, peek_reasoning_summary_aliases
+from litellm.litellm_core_utils.model_param_helper import (
+    ModelParamHelper,
+    embeds_thought_signature_in_tool_call_id,
+    peek_reasoning_summary_aliases,
+)
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 
@@ -41,11 +45,25 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
-_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
+_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token", "return_token_ids"})
 _DECODED_LITERAL: Final = TypeAdapter(object)
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
     list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+
+
+def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
+    raw_extra_body: Final = kwargs.get("extra_body")
+    if not isinstance(raw_extra_body, dict):
+        return ""
+    extra_body: Final = cast(  # cast-ok: isinstance leaves the key and value types unknown
+        Mapping[str, object], raw_extra_body
+    )
+    return "".join(
+        f"extra_body.{param}: {extra_body[param]}"
+        for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
+        if extra_body.get(param)
+    )
 
 
 @contextmanager
@@ -421,7 +439,15 @@ class Cache:
         reasoning_summary_material: Final = (
             "" if reasoning_summary is None else f"reasoning_summary: {reasoning_summary}"
         )
-        hashed_cache_key = Cache._get_hashed_cache_key(cache_key + reasoning_summary_material)
+        tool_call_id_shape_material: Final = (
+            "" if embeds_thought_signature_in_tool_call_id(kwargs) else "thought_signature_in_tool_call_id: False"
+        )
+        hashed_cache_key = Cache._get_hashed_cache_key(
+            cache_key
+            + _keyed_provider_params_in_extra_body(kwargs)
+            + reasoning_summary_material
+            + tool_call_id_shape_material
+        )
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         verbose_logger.debug(
             "\nCreated cache key: %s (source material length: %d)",

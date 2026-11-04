@@ -7,9 +7,8 @@ _apply_process_defaults()
 ### INIT VARIABLES #########################
 import threading
 import os
-import datetime
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import (
     Any,
     Callable,
@@ -550,6 +549,7 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
+from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -688,6 +688,7 @@ darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
+wally_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
@@ -754,16 +755,6 @@ def is_openai_finetune_model(key: str) -> bool:
         bool: True if the key matches the OpenAI finetune pattern, False otherwise.
     """
     return key.startswith("ft:") and not key.count(":") > 1
-
-
-def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
-    deprecation_date: Final = value.get("deprecation_date")
-    if not isinstance(deprecation_date, str):
-        return False
-    try:
-        return datetime.date.fromisoformat(deprecation_date) <= datetime.date.today()
-    except ValueError:
-        return False
 
 
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
@@ -873,12 +864,12 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
         elif value.get("litellm_provider") == "together_ai":
-            if _is_past_deprecation_date(value):
+            if is_hidden_as_retired(value):
                 together_ai_models.discard(key)
             elif not key.startswith("together-ai-"):
                 together_ai_models.add(key)
         elif value.get("litellm_provider") == "baseten":
-            if _is_past_deprecation_date(value):
+            if is_hidden_as_retired(value):
                 baseten_models.discard(key)
             else:
                 baseten_models.add(key)
@@ -994,6 +985,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             kyma_models.add(key)
         elif value.get("litellm_provider") == "streamlake":
             streamlake_models.add(key)
+        elif value.get("litellm_provider") == "wally":
+            wally_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1051,7 +1044,10 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
         elif value.get("litellm_provider") == "aiand":
-            aiand_models.add(key)
+            if is_hidden_as_retired(value):
+                aiand_models.discard(key)
+            else:
+                aiand_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1078,7 +1074,6 @@ _populate_provider_model_sets(model_cost)
 # Azure returns gpt-35-turbo in their responses, we need to map this to azure/gpt-3.5-turbo for token counting
 azure_llms = {
     "gpt-35-turbo": "azure/gpt-35-turbo",
-    "gpt-35-turbo-16k": "azure/gpt-35-turbo-16k",
     "gpt-35-turbo-instruct": "azure/gpt-35-turbo-instruct",
     "azure/gpt-41": "gpt-4.1",
     "azure/gpt-41-mini": "gpt-4.1-mini",
@@ -1173,6 +1168,7 @@ model_list = list(
     | openinfer_models
     | kyma_models
     | streamlake_models
+    | wally_models
     | zerogpu_models
     | v0_models
     | morph_models
@@ -1306,6 +1302,7 @@ def _build_models_by_provider() -> dict:
         "openinfer": openinfer_models,
         "kyma": kyma_models,
         "streamlake": streamlake_models,
+        "wally": wally_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "morph": morph_models,
@@ -1569,7 +1566,9 @@ from .realtime_api.main import (
     _arealtime,
     acreate_realtime_client_secret,
     acreate_realtime_transcription_session,
+    acreate_realtime_translation_client_secret as acreate_realtime_translation_client_secret,
     arealtime_calls,
+    arealtime_translation_calls as arealtime_translation_calls,
 )
 from .responses.main import _aresponses_websocket
 
@@ -1654,6 +1653,7 @@ def set_global_gitlab_config(config: Mapping[str, object]) -> None:
 # Lazy loading system for heavy modules to reduce initial import time and memory usage
 
 if TYPE_CHECKING:
+    from . import guardrails as guardrails
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.types.utils import PriorityReservationSettings
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -1760,6 +1760,9 @@ if TYPE_CHECKING:
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
     )
+    from .llms.parallel_ai.decisions.transformation import (
+        ParallelAIDecisionsConfig as ParallelAIDecisionsConfig,
+    )
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
     )
@@ -1814,6 +1817,9 @@ if TYPE_CHECKING:
     from .llms.vertex_ai.rerank.transformation import (
         VertexAIRerankConfig as VertexAIRerankConfig,
     )
+    from .llms.together_ai.chat.transformation import (
+        TogetherAIChatConfig as TogetherAIChatConfig,
+    )
     from .llms.fireworks_ai.rerank.transformation import (
         FireworksAIRerankConfig as FireworksAIRerankConfig,
     )
@@ -1859,9 +1865,6 @@ if TYPE_CHECKING:
         BedrockMantleAnthropicMessagesConfig as BedrockMantleAnthropicMessagesConfig,
     )
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
-    from .llms.together_ai.chat.transformation import (
-        TogetherAIChatConfig as TogetherAIChatConfig,
-    )
     from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig as VertexGeminiConfig,
@@ -2020,6 +2023,9 @@ if TYPE_CHECKING:
     from .llms.xai.responses.transformation import (
         XAIResponsesAPIConfig as XAIResponsesAPIConfig,
     )
+    from .llms.vertex_ai.interactions.transformation import (
+        VertexAIInteractionsConfig as VertexAIInteractionsConfig,
+    )
     from .llms.litellm_proxy.responses.transformation import (
         LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig,
     )
@@ -2046,9 +2052,6 @@ if TYPE_CHECKING:
     )
     from .llms.gemini.interactions.transformation import (
         GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig,
-    )
-    from .llms.vertex_ai.interactions.transformation import (
-        VertexAIInteractionsConfig as VertexAIInteractionsConfig,
     )
     from .llms.openai.chat.o_series_transformation import (
         OpenAIOSeriesConfig as OpenAIOSeriesConfig,
@@ -2380,6 +2383,7 @@ if TYPE_CHECKING:
     supports_web_search: Callable[..., bool]
     supports_tool_search: Callable[..., bool]
     supports_url_context: Callable[..., bool]
+    supports_continuation: Callable[..., bool]
     supports_response_schema: Callable[..., bool]
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]
@@ -2506,10 +2510,10 @@ def __getattr__(name: str) -> Any:
         handler_func: Final = registry[name]
         return handler_func(name)
 
-    if name == "proxy":
+    if name in ("proxy", "guardrails"):
         import importlib
 
-        return importlib.import_module("litellm.proxy")
+        return importlib.import_module(f"litellm.{name}")
 
     if name == "harness" or name in _AGENT_EXPORTS:
         import importlib

@@ -26,15 +26,24 @@ from litellm.litellm_core_utils.core_helpers import (
     normalize_drop_params,
     preserve_upstream_non_openai_attributes,
     process_response_headers,
+    provider_reported_usage_cost,
     qualify_agentic_followup_model,
     qualify_provider_stripped_model,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    response_cost_in_hidden_params,
     set_provider_response_headers_in_hidden_params,
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import Delta, ImageResponse, ModelResponseStream, StreamingChoices, TranscriptionResponse
+from litellm.types.utils import (
+    Delta,
+    ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    TranscriptionResponse,
+)
 
 
 def test_parent_otel_span_reads_dict_like_metadata_by_index():
@@ -256,6 +265,7 @@ class TestMapFinishReasonAnthropic:
             ("max_tokens", "length"),
             ("tool_use", "tool_calls"),
             ("compaction", "length"),
+            ("pause_turn", "length"),
             ("model_context_window_exceeded", "length"),
             ("content_filtered", "content_filter"),
         ],
@@ -308,6 +318,12 @@ class TestMapFinishReasonCohere:
 
     def test_error(self):
         assert map_finish_reason("ERROR") == "stop"
+
+    def test_tool_call(self):
+        assert map_finish_reason("TOOL_CALL") == "tool_calls"
+
+    def test_stop_sequence(self):
+        assert map_finish_reason("STOP_SEQUENCE") == "stop"
 
 
 class TestMapFinishReasonHuggingFace:
@@ -788,6 +804,23 @@ class TestReceiveStampSurvivesASecondMetadataBucket:
         }
 
         assert get_litellm_metadata_from_kwargs(kwargs)["litellm_received_at"] is own
+
+
+@pytest.mark.parametrize("reported", [float("nan"), float("inf"), {"total_cost": float("nan")}])
+def test_a_non_finite_provider_reported_cost_counts_as_unreported(reported: object) -> None:
+    assert provider_reported_usage_cost({"cost": reported}, "openrouter") is None
+    assert provider_reported_usage_cost({"cost": {"total_cost": 0.25}}, "openrouter") == 0.25
+
+
+@pytest.mark.parametrize("header_cost", [float("nan"), float("inf")])
+def test_a_non_finite_response_cost_header_counts_as_unreported(header_cost: float) -> None:
+    response: Final = ModelResponse()
+    response._hidden_params = {"additional_headers": {RESPONSE_COST_HEADER: header_cost}}
+    finite: Final = ModelResponse()
+    finite._hidden_params = {"additional_headers": {RESPONSE_COST_HEADER: 0.25}}
+
+    assert response_cost_in_hidden_params(response) is None
+    assert response_cost_in_hidden_params(finite) == 0.25
 
 
 def test_billed_usage_cost_bills_any_chat_upstream_without_its_own_reader() -> None:

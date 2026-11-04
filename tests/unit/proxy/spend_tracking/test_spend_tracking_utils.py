@@ -2396,6 +2396,65 @@ def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
 
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_carries_upstream_provider_from_hidden_params_regression() -> None:
+    standard_logging_payload: Final = _make_standard_logging_payload_with_usage_object(usage_object={})
+    payload_with_provider: Final = {
+        **dict(standard_logging_payload),
+        "hidden_params": {
+            **dict(standard_logging_payload["hidden_params"]),
+            "upstream_provider": "serving-site-a",
+        },
+    }
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-5.6",
+            "call_type": "responses",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": payload_with_provider,
+        },
+        response_obj={
+            "id": "resp-test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 10,
+                "total_tokens": 1010,
+            },
+        },
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime.datetime(2025, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"]).get("upstream_provider") == "serving-site-a"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_omits_upstream_provider_when_hidden_param_absent_guard() -> None:
+    standard_logging_payload: Final = _make_standard_logging_payload_with_usage_object(usage_object={})
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-5.6",
+            "call_type": "responses",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": standard_logging_payload,
+        },
+        response_obj={
+            "id": "resp-test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 10,
+                "total_tokens": 1010,
+            },
+        },
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime.datetime(2025, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert "upstream_provider" not in json.loads(payload["metadata"])
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_strips_null_bytes_from_request_tags():
     """Regression for PostgreSQL 22P05: NUL bytes must be stripped from request_tags."""
     kwargs = {
@@ -4359,6 +4418,81 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["total_tokens"] == 31
 
 
+def _fallback_after_a_failed_follow_up(
+    cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})
+):
+    from litellm.litellm_core_utils.hidden_params import set_hidden_param
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import ModelResponse, Usage
+
+    now: Final = datetime.datetime.now(timezone.utc)
+    logger: Final = Logging(
+        model="fallback-model",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=now,
+        litellm_call_id="caller",
+        function_id="function",
+    )
+    logger.update_environment_variables(
+        model="fallback-model",
+        custom_llm_provider="openai",
+        litellm_params={"metadata": {"user_api_key": "sk-test"}},
+        optional_params=dict(request_params),
+    )
+    fallback: Final = ModelResponse(id="fallback", usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4))
+    set_hidden_param(fallback, "response_cost", 0.1)
+    logger.record_served_rounds_for_failure(((Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.4),))
+    logger.carry_failed_attempt_usage()
+    logger.model_call_details["cache_hit"] = cache_hit
+    prepared: Final = logger.prepare_response_cost(fallback, now)
+    assert prepared is not None
+    return logger, fallback, prepared, now
+
+
+@pytest.mark.parametrize(("cache_hit", "own_cost"), [(False, 0.1), (True, 0.0)], ids=["fresh", "cached"])
+def test_success_row_bills_a_failed_follow_ups_cost_and_tokens(cache_hit: bool, own_cost: float):
+    logger, fallback, _, now = _fallback_after_a_failed_follow_up(cache_hit)
+
+    payload: Final = get_logging_payload(
+        kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
+    )
+
+    assert payload["spend"] == pytest.approx(own_cost + 0.4)
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (3 + 5, 1 + 2, 4 + 7)
+
+
+@pytest.mark.parametrize(("cache_hit", "own_cost"), [(False, 0.1), (True, 0.0)], ids=["fresh", "cached"])
+def test_request_params_cannot_change_what_a_failed_follow_up_bills(cache_hit: bool, own_cost: float):
+    forged_attempt: Final = [{"prompt_tokens": 1000, "completion_tokens": 1000, "total_tokens": 2000}, -100.0]
+    logger, fallback, _, now = _fallback_after_a_failed_follow_up(
+        cache_hit,
+        {
+            "stash_billed_by_continuation": True,
+            "failed_attempts_owed_on_success": [forged_attempt],
+            "failed_attempts_billed_on_success": [forged_attempt],
+        },
+    )
+
+    payload: Final = get_logging_payload(
+        kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
+    )
+
+    assert payload["spend"] == pytest.approx(own_cost + 0.4)
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (8, 3, 11)
+
+
+def test_cached_fallback_cost_breakdown_adds_up_to_the_billed_failed_follow_up():
+    _, _, prepared, _ = _fallback_after_a_failed_follow_up(cache_hit=True)
+
+    breakdown: Final = prepared.payload["cost_breakdown"]
+
+    assert breakdown is not None
+    assert breakdown["total_cost"] == pytest.approx(prepared.payload["response_cost"]) == pytest.approx(0.4)
+    assert breakdown["additional_costs"]["failed_attempts_cost"] == pytest.approx(0.4)
+
+
 def test_get_logging_payload_failure_without_recovered_usage_is_zero():
     """A failure with no recovered usage keeps zero token counts, so the
     combined-usage override never invents tokens for ordinary failures.
@@ -5089,6 +5223,23 @@ def test_a_background_response_billing_event_writes_a_row_apart_from_the_read_th
     )
 
     assert request_ids == ("resp_shared", "resp_shared_background_cost")
+
+
+@pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
+def test_a_read_or_cancel_row_carries_the_id_its_callbacks_logged(call_type: str):
+    row: Final = get_logging_payload(
+        kwargs={
+            "call_type": call_type,
+            "model": "gpt-5.6",
+            "litellm_call_id": "call-read",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj={"id": "resp_logged_by_callbacks", "object": "response", "status": "completed"},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert row["request_id"] == "resp_logged_by_callbacks"
 
 
 @pytest.mark.parametrize("forged_marker", [True, BackgroundResponseSettlement.SETTLES.value])
@@ -6911,7 +7062,10 @@ def test_spend_logs_payload(model_id: str | None):
     )
 
     assert len(payload["request_id"]) > 0
-    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {"is_silent_experiment"}
+    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {
+        "is_silent_experiment",
+        "upstream_provider",
+    }
 
     assert "metadata" in payload
     assert isinstance(payload["metadata"], str)
@@ -7407,6 +7561,46 @@ def test_failure_error_information_masks_ip_addresses_in_long_text_and_at_its_tr
     assert sanitized["error_code"] == "500"
 
 
+def test_spend_row_sanitizes_the_session_failure_a_realtime_success_row_carries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", False)
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "200")
+    provider_error: Final = 'stream ended {"messages": [{"role": "user", "content": "private-prompt"}]} ' + "x" * 2000
+    now: Final = datetime.datetime.now(timezone.utc)
+
+    row: Final = get_logging_payload(
+        kwargs={
+            "model": "bedrock/amazon.nova-sonic-v1:0",
+            "call_type": "_arealtime",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "hashed-key",
+                    "status": "failure",
+                    "error_information": {
+                        "error_code": "503",
+                        "error_class": "BedrockError",
+                        "error_message": provider_error,
+                        "llm_provider": "bedrock",
+                    },
+                }
+            },
+        },
+        response_obj=None,
+        start_time=now,
+        end_time=now,
+    )
+
+    stored: Final = json.loads(row["metadata"])["error_information"]
+    assert row["status"] == "failure"
+    assert "private-prompt" not in stored["error_message"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["error_message"]
+    assert len(stored["error_message"]) < len(provider_error)
+    assert stored["error_class"] == "BedrockError"
+
+
 @pytest.mark.parametrize(
     "address", ["203.0.113.9", "2001:db8::9", "1:2:3:4:5:6:7:8", "1:2:3:4:5:6:7::", "::1:2:3:4:5:6:7", "fe80::1"]
 )
@@ -7481,3 +7675,47 @@ def test_get_logging_payload_stores_end_user_only_while_end_user_cost_tracking_i
         end_time=datetime.datetime.now(timezone.utc),
     )
     assert payload["end_user"] == expected_end_user
+
+
+@pytest.mark.parametrize("tool_metadata", [{"name": "tool"}, {"name": "tool", "arguments": "invalid"}])
+def test_optional_mcp_metadata_does_not_change_legacy_spend_payload(tool_metadata: Mapping[str, object]) -> None:
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    kwargs: Final = {
+        "call_type": "call_mcp_tool",
+        "litellm_call_id": "tool-call",
+        "litellm_params": {},
+        "litellm_trace_id": "fixed-trace",
+        "response_cost": 0.5,
+    }
+    response: Final = {"id": "tool-call"}
+    expected: Final = spend_tracking_utils.get_logging_payload(kwargs, response, now, now)
+    actual: Final = spend_tracking_utils.get_logging_payload(
+        {**kwargs, "mcp_tool_call_metadata": tool_metadata}, response, now, now
+    )
+    assert actual == expected
+
+
+@pytest.mark.parametrize("capture_enabled", [False, True])
+@pytest.mark.parametrize("completion_start", [None, "absent", "reported"])
+def test_spend_payload_preserves_unknown_completion_start(capture_enabled: bool, completion_start: str | None) -> None:
+    start: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end: Final = start + datetime.timedelta(seconds=2)
+    reported: Final = start + datetime.timedelta(seconds=1)
+    observations: Final[list[object]] = []
+    kwargs: Final = {
+        "call_type": "acompletion",
+        "litellm_call_id": "timestamp-call",
+        "litellm_params": {},
+        **({} if completion_start == "absent" else {"completion_start_time": reported if completion_start else None}),
+    }
+    payload: Final = spend_tracking_utils.get_logging_payload(
+        kwargs,
+        {"id": "timestamp-response"},
+        start,
+        end,
+        capture_usage=(lambda row, usage: observations.append(row)) if capture_enabled else None,
+    )
+    assert payload["completionStartTime"] == (
+        end if completion_start == "absent" else reported if completion_start else None
+    )
+    assert observations == ([payload] if capture_enabled else [])

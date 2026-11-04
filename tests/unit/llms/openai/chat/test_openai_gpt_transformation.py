@@ -1659,6 +1659,125 @@ class TestOpenAIPromptCacheBreakpointChatPath:
         ]
 
 
+_CLIENT_BREAKPOINTS_AND_THEIR_CHAT_WIRE_FORM: Final = (
+    ({"mode": "explicit", "ttl": "1h"}, {"mode": "explicit"}),
+    ({"mode": "explicit", "ttl": "30m"}, {"mode": "explicit"}),
+    ({"mode": "explicit"}, {"mode": "explicit"}),
+    ({"mode": "implicit"}, None),
+    ({}, None),
+    ("explicit", None),
+)
+_CLIENT_BREAKPOINT_IDS: Final = ("ttl-1h", "ttl-30m", "explicit", "implicit", "empty", "string")
+
+
+class TestChatCompletionsClientBreakpointUnderDropParams:
+    """
+    Live OpenAI Chat Completions (gpt-6.1-sol, gpt-6.1-terra, gpt-6-sol, gpt-5.6, 2026-10-28) answers 400 on a
+    content part's prompt_cache_breakpoint carrying any ttl or a mode other than "explicit".
+    """
+
+    @staticmethod
+    def _request(marker: object, drop_params: bool) -> dict[str, object]:
+        return OpenAIGPTConfig().transform_request(
+            model="gpt-5.6",
+            messages=[
+                {"role": "system", "content": "Answer briefly"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this", "prompt_cache_breakpoint": marker},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                        {"type": "text", "text": "and nothing else"},
+                    ],
+                },
+            ],
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params},
+            headers={},
+        )
+
+    @pytest.mark.parametrize(
+        ("marker", "wire_marker"), _CLIENT_BREAKPOINTS_AND_THEIR_CHAT_WIRE_FORM, ids=_CLIENT_BREAKPOINT_IDS
+    )
+    def test_drop_params_cuts_the_breakpoint_down_to_what_chat_completions_accepts(
+        self, marker: object, wire_marker: dict[str, str] | None
+    ):
+        text_part: Final = {"type": "text", "text": "Describe this"}
+
+        assert self._request(marker, drop_params=True)["messages"] == [
+            {"role": "system", "content": "Answer briefly"},
+            {
+                "role": "user",
+                "content": [
+                    text_part if wire_marker is None else {**text_part, "prompt_cache_breakpoint": wire_marker},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                    {"type": "text", "text": "and nothing else"},
+                ],
+            },
+        ]
+
+    @pytest.mark.parametrize(
+        "marker", [marker for marker, _ in _CLIENT_BREAKPOINTS_AND_THEIR_CHAT_WIRE_FORM], ids=_CLIENT_BREAKPOINT_IDS
+    )
+    def test_without_drop_params_the_client_breakpoint_reaches_openai_unchanged(self, marker: object):
+        assert self._request(marker, drop_params=False)["messages"][1]["content"][0] == {
+            "type": "text",
+            "text": "Describe this",
+            "prompt_cache_breakpoint": marker,
+        }
+
+    def test_cache_control_still_marks_a_part_whose_client_breakpoint_was_dropped(self):
+        request: Final = OpenAIGPTConfig().transform_request(
+            model="gpt-5.6",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Describe this",
+                            "cache_control": {"type": "ephemeral"},
+                            "prompt_cache_breakpoint": {"mode": "implicit"},
+                        }
+                    ],
+                }
+            ],
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai", "drop_params": True},
+            headers={},
+        )
+
+        assert request["messages"] == [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Describe this", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            }
+        ]
+
+
+    @pytest.mark.parametrize("stray_part", ["Answer briefly", None], ids=["string", "null"])
+    def test_drop_params_leaves_a_part_that_is_not_an_object_for_openai_to_reject(self, stray_part: object):
+        assert OpenAIGPTConfig().transform_request(
+            model="gpt-5.6",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        stray_part,
+                        {"type": "text", "text": "and nothing else", "prompt_cache_breakpoint": {"mode": "implicit"}},
+                    ],
+                },
+                {"role": "user", "content": "Describe this"},
+            ],
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai", "drop_params": True},
+            headers={},
+        )["messages"] == [
+            {"role": "system", "content": [stray_part, {"type": "text", "text": "and nothing else"}]},
+            {"role": "user", "content": "Describe this"},
+        ]
+
+
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
 
@@ -1824,6 +1943,94 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         assert request["tools"][0] is tool
 
 
+class TestCacheControlStrippingDoesNotMutateCallerInput:
+    """
+    Stripping cache_control for a provider that cannot use it must not reach back
+    into the caller's own message and tool objects.
+
+    filter_value_from_dict deletes the key in place and recurses into nested dicts
+    and lists, and remove_cache_control_flag_from_messages_and_tools assigned the
+    result back into the caller's list, so one call to any OpenAI-compatible
+    provider permanently stripped cache_control from a list the caller still holds.
+    Reusing that list on Anthropic or Bedrock afterwards then silently lost prompt
+    caching, with no error and full-price billing.
+    """
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    @pytest.fixture(autouse=True)
+    def _clean_openai_base_env(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None, raising=False)
+
+    @staticmethod
+    def _messages():
+        return [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "a long cached system prompt",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": "Hello",
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+
+    @staticmethod
+    def _tools():
+        return [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {"type": "object"}},
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    def _transform(self, messages, tools):
+        return self.config.transform_request(
+            model="gpt-4o",
+            messages=messages,
+            optional_params={"tools": tools},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+
+    def test_caller_messages_and_tools_keep_cache_control(self):
+        messages, tools = self._messages(), self._tools()
+        messages_before, tools_before = copy.deepcopy(messages), copy.deepcopy(tools)
+
+        request = self._transform(messages, tools)
+
+        assert "cache_control" not in json.dumps(request)
+        assert messages == messages_before
+        assert tools == tools_before
+
+    def test_a_later_anthropic_call_still_sees_cache_control(self):
+        """The user-visible consequence: the same message list reused on a provider
+        that does support caching must still carry the cache breakpoints."""
+        messages = self._messages()
+
+        self._transform(messages, self._tools())
+
+        anthropic_body = litellm.AnthropicConfig().transform_request(
+            model="claude-3-5-sonnet-20240620",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert "cache_control" in json.dumps(anthropic_body)
+
+
 def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
     return [
         {"role": "system", "content": "You are terse."},
@@ -1916,3 +2123,95 @@ def test_completion_leaves_the_callers_closing_developer_message_unchanged_on_a_
     )
     assert json.loads(chat.calls.last.request.content)["messages"][-1]["role"] == "user"
     assert messages == sent
+
+
+def _user_turn_with_litellm_only_media_fields() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe these"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png", "format": "image/png"}},
+                {"type": "image_url", "image_url": "https://example.com/dog.png"},
+                {
+                    "type": "file",
+                    "file": {"file_data": "data:application/pdf;base64,JVBERi0=", "format": "application/pdf"},
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_openai_request_rewrites_media_parts_without_touching_the_callers_message(
+    is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None, raising=False)
+    config: Final = OpenAIGPTConfig()
+    messages: Final = _user_turn_with_litellm_only_media_fields()
+    messages_before: Final = copy.deepcopy(messages)
+    request_kwargs: Final = {
+        "model": "gpt-5.5",
+        "messages": messages,
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "openai", "api_base": None},
+        "headers": {},
+    }
+
+    body: Final = (
+        await config.async_transform_request(**request_kwargs)
+        if is_async
+        else config.transform_request(**request_kwargs)
+    )
+
+    assert body["messages"][0]["content"] == [
+        {"type": "text", "text": "Describe these"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+        {"type": "image_url", "image_url": {"url": "https://example.com/dog.png"}},
+        {"type": "file", "file": {"file_data": "data:application/pdf;base64,JVBERi0=", "filename": "my_file.pdf"}},
+    ]
+    assert messages == messages_before
+
+
+_OPENAI_DEPLOYMENT_FLAGS: Final = {"opted-in": {"supports_prompt_cache_breakpoint": True}}
+
+
+@pytest.mark.parametrize("registration_order", [("opted-in", "flagless"), ("flagless", "opted-in")])
+async def test_chat_sends_a_breakpoint_by_the_deployments_own_flag_not_a_siblings_on_the_same_model(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, registration_order: tuple[str, str]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    catalog_row_without_a_flag: Final = {"litellm_provider": "openai", "mode": "chat"}
+    monkeypatch.setitem(litellm.model_cost, "qa-openai-shared", catalog_row_without_a_flag)
+    chat: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "openai/qa-openai-shared",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "openai-test-key",
+                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                },
+                "model_info": {"id": f"{name}-id", **_OPENAI_DEPLOYMENT_FLAGS.get(name, {})},
+            }
+            for name in registration_order
+        ],
+        num_retries=0,
+    )
+
+    async def sends_a_breakpoint(name: str) -> bool:
+        await router.acompletion(
+            model=name, messages=[{"role": "system", "content": "stable"}, {"role": "user", "content": "hi"}]
+        )
+        return b"prompt_cache_breakpoint" in chat.calls.last.request.content
+
+    assert {name: await sends_a_breakpoint(name) for name in registration_order} == {
+        "opted-in": True,
+        "flagless": False,
+    }

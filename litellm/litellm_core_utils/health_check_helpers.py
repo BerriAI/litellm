@@ -119,7 +119,7 @@ def _is_route_segment(custom_llm_provider: str, segment: str, model_after_segmen
 
 def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tuple[str, ...]:
     from litellm.litellm_core_utils.llm_request_utils import rank_chat_models_from_llm_provider
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 
     provider_prefix: Final = f"{custom_llm_provider}/"
     segments: Final = wildcard.removeprefix(provider_prefix).split("/")

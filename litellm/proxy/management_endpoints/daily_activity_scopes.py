@@ -216,7 +216,11 @@ def _user_query(
     start_date: str | None = Query(default=None, description="Start date in YYYY-MM-DD format"),
     end_date: str | None = Query(default=None, description="End date in YYYY-MM-DD format"),
     model: str | None = Query(default=None, description="Filter by specific model"),
-    api_key: str | None = Query(default=None, description="Filter by specific API key"),
+    api_key: str | None = Query(
+        default=None,
+        description="Filter by reporting API key ID. Missing keys are reported as unattributed. "
+        "For a literal key unattributed or a key starting with raw:, add an extra raw: prefix",
+    ),
     user_id: str | None = Query(
         default=None,
         description="Filter by specific user ID. Admins can filter by any user or omit for global view. "

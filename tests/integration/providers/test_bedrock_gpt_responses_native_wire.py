@@ -62,12 +62,12 @@ def _body(request: Request) -> dict[str, JsonValue]:
 # ciphertext the caller received, because the spend row id is read from response_obj["id"] before the
 # ResponsesIDSecurity hook rewrites it in place; the row is looked up under both ids until that ordering is fixed on
 # main
-def _spend_row(client_id: str, issued_id: str) -> dict[str, JsonValue]:
+def _spend_row(*request_ids: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
         lambda: read_rows(
             'SELECT model_group, status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" '
             "WHERE request_id = ANY(%s)",
-            ([client_id, issued_id],),  # pyright: ignore[reportArgumentType]  # psycopg adapts the list to a text array
+            (list(request_ids),),  # pyright: ignore[reportArgumentType]  # psycopg adapts the list to a text array
         ),
         lambda found: len(found) == 1,
         seconds=70,
@@ -120,4 +120,4 @@ async def test_async_openai_sdk_responses_stream_is_served_by_the_native_respons
         assert issued.upstream == f"resp_upstream_{marker}", completed.response.id
         request: Final = _native_request(wire)
         assert _body(request) == {"model": GPT, "input": _prompt(marker), "stream": True}, request.body
-        assert _spend_row(completed.response.id, issued.issued) == _success_row(model)
+        assert _spend_row(completed.response.id) == _success_row(model)

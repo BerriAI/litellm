@@ -18,6 +18,7 @@ from pydantic import TypeAdapter
 from typing_extensions import Never, ReadOnly
 
 import litellm
+from litellm._internal_context import billed_separately
 from litellm._logging import verbose_logger
 from litellm.anthropic_interface import messages as anthropic_messages
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
@@ -1725,19 +1726,20 @@ class WebSearchInterceptionLogger(CustomLogger):
             search_kwargs: Final = MappingProxyType(
                 {**configured_search_kwargs, **parent_correlation.as_search_kwargs()}
             )
-            result: Final = (
-                await litellm.asearch(
-                    query=query_arg, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
+            with billed_separately():
+                result: Final = (
+                    await litellm.asearch(
+                        query=query_arg, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
+                    )
+                    if search_metadata is None
+                    else await litellm.asearch(
+                        query=query_arg,
+                        search_provider=search_provider,
+                        litellm_metadata=search_metadata,
+                        **_NO_ASEARCH_NAMED,
+                        **search_kwargs,
+                    )
                 )
-                if search_metadata is None
-                else await litellm.asearch(
-                    query=query_arg,
-                    search_provider=search_provider,
-                    litellm_metadata=search_metadata,
-                    **_NO_ASEARCH_NAMED,
-                    **search_kwargs,
-                )
-            )
 
             # Format using transformation function
             search_result_text: Final = WebSearchTransformation.format_search_response(result)

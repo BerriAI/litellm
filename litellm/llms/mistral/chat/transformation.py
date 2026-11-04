@@ -25,14 +25,15 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_internal_message_fields,
     strip_none_values_from_message,
 )
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    declared_reasoning_efforts_for_model,
+    nearest_declared_reasoning_effort,
+)
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
-)
-from litellm.router_utils.reasoning_effort_capability import (
-    declared_reasoning_efforts_for_model,
-    nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import (
@@ -74,6 +75,12 @@ _MISTRAL_REQUEST_ROUTING: Final = TypeAdapter(MistralRequestRouting)
 _MISTRAL_CACHE_KEY_PARAMS: Final = TypeAdapter(MistralCacheKeyParams)
 _MISTRAL_REASONING_EFFORT_PARAMS: Final = TypeAdapter(MistralReasoningEffortParams)
 _MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
+_REASONING_PROMPT_REASON: Final = "litellm sends Magistral a reasoning system prompt instead of the requested level."
+_NON_LEVEL_EFFORT_REASON: Final = (
+    "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
+)
+_DOCUMENTED_MAGISTRAL_EFFORTS: Final = frozenset({"low", "medium", "high"})
+_REASONING_ON_THINKING_TYPES: Final = frozenset({"enabled", "adaptive"})
 
 
 def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, object]:
@@ -81,6 +88,16 @@ def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, obje
     if requested is None:
         return reasoning_effort, None
     return requested.get("effort"), requested.get("summary")
+
+
+def _warn_unless_reasoning_prompt_honors(param: str, value: object, model: str) -> None:
+    if param == "reasoning_effort" and isinstance(value, str) and value in _DOCUMENTED_MAGISTRAL_EFFORTS:
+        return
+    thinking: Final = as_str_mapping(value)
+    thinking_type: Final = thinking.get("type") if thinking is not None else None
+    if param == "thinking" and isinstance(thinking_type, str) and thinking_type in _REASONING_ON_THINKING_TYPES:
+        return
+    warn_dropped_reasoning(param, value, model, _REASONING_PROMPT_REASON, drop_params_gated=False)
 
 
 def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a decoded JSON array is a list
@@ -253,6 +270,7 @@ class MistralConfig(OpenAIGPTConfig):
             if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
+                _warn_unless_reasoning_prompt_honors(param, OPAQUE_VALUE.validate_python(value), model)
             if param in ("parallel_tool_calls", "prompt_cache_key"):
                 optional_params[param] = value
         return optional_params
@@ -260,13 +278,18 @@ class MistralConfig(OpenAIGPTConfig):
     def _reasoning_level_to_send(
         self, model: str, requested: MistralReasoningEffortParams, drop_params: bool
     ) -> str | None:
-        level, summary = _reasoning_level_and_summary(requested.get("reasoning_effort"))
+        requested_effort: Final = requested.get("reasoning_effort")
+        level, summary = _reasoning_level_and_summary(requested_effort)
         sendable: Final = (
             _accepted_reasoning_effort(model, level, self.custom_llm_provider) if isinstance(level, str) else None
         )
         if sendable is not None and summary is None:
             return sendable
         if drop_params or litellm.drop_params is True:
+            if sendable is None and level is not None:
+                warn_dropped_reasoning(
+                    "reasoning_effort", requested_effort, model, _NON_LEVEL_EFFORT_REASON, drop_params_gated=True
+                )
             return sendable
         raise UnsupportedParamsError(
             message=(
@@ -732,7 +755,8 @@ class MistralConfig(OpenAIGPTConfig):
         if _name is not None:
             # Remove name if not a tool message
             if message["role"] != "tool" or isinstance(_name, str) and len(_name.strip()) == 0:
-                message.pop("name", None)
+                message_without_name: Final = {k: v for k, v in message.items() if k != "name"}
+                return cast(AllMessageValues, message_without_name)  # cast-ok: the same message minus name
 
         return message
 

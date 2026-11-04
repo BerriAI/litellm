@@ -2,14 +2,16 @@
 #   identifies lowest tpm deployment
 import traceback
 from datetime import datetime
+from functools import partial
 from typing import Final
 
-from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
+from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
 from litellm.types.utils import LiteLLMPydanticObjectBase
 from litellm.utils import print_verbose
 
@@ -174,7 +176,9 @@ class LowestTPMLoggingHandler(CustomLogger):
 
         verbose_router_logger.debug("tpm_key=%s, tpm_dict: %s, rpm_dict: %s", tpm_key, tpm_dict, rpm_dict)
         try:
-            input_tokens = token_counter(messages=messages, text=input)
+            input_tokens = embedding_aware_token_count(
+                messages, input, partial(deployment_backend_models, healthy_deployments)
+            )
         except Exception:
             input_tokens = 0
         verbose_router_logger.debug("input_tokens=%s", input_tokens)

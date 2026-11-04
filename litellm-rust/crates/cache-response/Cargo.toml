@@ -16,9 +16,6 @@ sha2.workspace = true
 litellm-cache-gcs.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-cache-memory.workspace = true
-litellm-cache-redis.workspace = true
-redis.workspace = true
-redis-test.workspace = true
 rstest.workspace = true
 tokio.workspace = true
 wiremock.workspace = true

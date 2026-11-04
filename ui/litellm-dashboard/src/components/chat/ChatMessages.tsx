@@ -72,6 +72,9 @@ function MarkdownCodeRenderer({
 
 const markdownComponents: Components = {
   code: MarkdownCodeRenderer,
+  a: ({ node, ...props }) => (
+    <a className="text-primary underline underline-offset-2" target="_blank" rel="noopener noreferrer" {...props} />
+  ),
   pre: ({ node, ...props }) => <pre className="max-w-full overflow-x-auto" {...props} />,
   h1: ({ node, ...props }) => <h1 className="mt-6 mb-2 text-xl font-semibold tracking-tight first:mt-0" {...props} />,
   h2: ({ node, ...props }) => <h2 className="mt-6 mb-2 text-lg font-semibold tracking-tight first:mt-0" {...props} />,
@@ -311,6 +314,11 @@ function AssistantBubble({
     }
     return (
       <div className="flex flex-col items-start">
+        {message.research && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Deep research{message.webSearchCount ? ` · ${message.webSearchCount} web searches` : "…"}
+          </p>
+        )}
         <div className="flex items-center gap-1 px-1 py-2.5">
           <TypingDots />
         </div>
@@ -342,6 +350,29 @@ function AssistantBubble({
         >
           {mainContent}
         </ReactMarkdown>
+        {message.citations && message.citations.length > 0 && (
+          <div aria-label="Sources" className="mt-4 border-t pt-3 text-sm">
+            <p className="font-medium">Sources</p>
+            <ol className="mt-2 list-decimal space-y-1 pl-5">
+              {message.citations
+                .filter((citation) => /^https?:\/\//i.test(citation.url))
+                .map((citation) => (
+                  <li key={citation.url}>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      nativeButton={false}
+                      role="link"
+                      className="h-auto whitespace-normal p-0 text-left"
+                      render={<a href={citation.url} target="_blank" rel="noopener noreferrer" />}
+                    >
+                      {citation.title}
+                    </Button>
+                  </li>
+                ))}
+            </ol>
+          </div>
+        )}
         {stoppedSuffix && <span className="text-muted-foreground italic"> [stopped]</span>}
       </BubbleContent>
 
