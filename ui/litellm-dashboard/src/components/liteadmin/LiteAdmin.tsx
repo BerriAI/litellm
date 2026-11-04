@@ -13,6 +13,9 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import Link from "next/link";
+import { uiHref } from "@/utils/uiHref";
+import { sidebarMenuButtonVariants } from "@/components/shared/Sidebar";
 import { History, RotateCcw, X } from "lucide-react";
 import { z } from "zod";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -52,6 +55,8 @@ type LiteAdminState = {
   setHomeContainer: (container: HTMLDivElement | null) => void;
   usageContainer: HTMLDivElement | null;
   setUsageContainer: (container: HTMLDivElement | null) => void;
+  pageContainer: HTMLDivElement | null;
+  setPageContainer: (container: HTMLDivElement | null) => void;
 };
 
 function getComposerContainer(state: LiteAdminState | null, open: boolean): HTMLDivElement | null {
@@ -87,6 +92,14 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [started, setStarted] = useState(false);
   const [homeContainer, setHomeContainer] = useState<HTMLDivElement | null>(null);
+  const [pageContainer, updatePageContainer] = useState<HTMLDivElement | null>(null);
+  const setPageContainer = useCallback((container: HTMLDivElement | null) => {
+    updatePageContainer(container);
+    if (container) {
+      setStarted(true);
+      setOpen(false);
+    }
+  }, []);
   const [usageContainer, updateUsageContainer] = useState<HTMLDivElement | null>(null);
   const setUsageContainer = useCallback((container: HTMLDivElement | null) => {
     updateUsageContainer(container);
@@ -96,14 +109,14 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
   if (openedSession !== sessionKey) {
     setOpenedSession(sessionKey);
     setOpen(false);
-    setStarted(Boolean(usageContainer));
+    setStarted(Boolean(usageContainer || pageContainer));
   }
   const toggle = () => {
     setStarted(true);
     setOpen((current) => !current);
   };
   const show = () => {
-    if (open) return;
+    if (open || pageContainer) return;
     setStarted(true);
     setOpen(true);
   };
@@ -115,11 +128,15 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
       const extraModifier = event.shiftKey || event.altKey;
       if (event.key.toLowerCase() !== "j" || !modifier || extraModifier) return;
       event.preventDefault();
+      if (pageContainer) {
+        pageContainer.querySelector<HTMLTextAreaElement>("textarea:enabled")?.focus();
+        return;
+      }
       toggle();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [sessionKey]);
+  }, [sessionKey, pageContainer]);
   return (
     <LiteAdminContext.Provider
       value={
@@ -134,16 +151,50 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
               setHomeContainer,
               usageContainer,
               setUsageContainer,
+              pageContainer,
+              setPageContainer,
             }
           : null
       }
     >
       {children}
       {configured && showPanel && (
-        <AriaPopup key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
+        <AriaPopup
+          key={configured.key}
+          session={configured.session}
+          open={open || Boolean(pageContainer)}
+          close={() => setOpen(false)}
+        />
       )}
     </LiteAdminContext.Provider>
   );
+}
+
+export function AriaSidebarLink({ active }: { active: boolean }) {
+  const state = useContext(LiteAdminContext);
+  if (!state) return null;
+  return (
+    <Link
+      href={uiHref("aria")}
+      aria-current={active ? "page" : undefined}
+      title={ARIA_AGENT_LABEL}
+      className={cn(
+        sidebarMenuButtonVariants({ isActive: active }),
+        "group-data-[collapsed=true]/sidebar:justify-center",
+      )}
+    >
+      <AriaAvatar size={18} />
+      <span className="flex-1 group-data-[collapsed=true]/sidebar:hidden">{ARIA_AGENT_LABEL}</span>
+      <Kbd className="bg-transparent text-[10px] group-data-[collapsed=true]/sidebar:hidden">⌘J</Kbd>
+    </Link>
+  );
+}
+
+export function LiteAdminPage() {
+  const setPageContainer = useContext(LiteAdminContext)?.setPageContainer;
+  if (!setPageContainer)
+    return <p className="p-6 text-sm text-muted-foreground">Aria is not available for this session.</p>;
+  return <div ref={setPageContainer} className="flex min-h-0 flex-1 flex-col" />;
 }
 
 export function LiteAdminHome() {
@@ -155,7 +206,7 @@ export function LiteAdminHome() {
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <AriaAvatar size={32} />
+            <AriaAvatar size={20} />
             {ARIA_AGENT_LABEL}
           </h2>
           <p className="border-l pl-3 text-sm text-muted-foreground">Your gateway, a little easier.</p>
@@ -325,6 +376,18 @@ function Panel({
   const state = useContext(LiteAdminContext);
   const homeContainer = getComposerContainer(state, open);
   const ref = useRef<HTMLDivElement>(null);
+  if (state?.pageContainer) {
+    return createPortal(
+      <section
+        aria-label={ARIA_AGENT_LABEL}
+        className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col px-2 sm:px-4"
+      >
+        {children}
+        {composer}
+      </section>,
+      state.pageContainer,
+    );
+  }
   return (
     <Dialog
       open={open}
@@ -447,16 +510,18 @@ function LiteAdminChat({ session, open, close }: { session: LiteAdminSession; op
   return (
     <Panel open={open} close={close} initialFocus={reviewRef} composer={composer}>
       <PanelHeader>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={chat.phase === "applying" || (chat.entries.length === 0 && !input)}
-          onClick={startOver}
-          className="text-muted-foreground"
-        >
-          <RotateCcw className="size-3.5" />
-          Start over
-        </Button>
+        {(chat.entries.length > 0 || input.length > 0) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={chat.phase === "applying"}
+            onClick={startOver}
+            className="text-muted-foreground"
+          >
+            <RotateCcw className="size-3.5" />
+            Start over
+          </Button>
+        )}
       </PanelHeader>
       <LiteAdminConversation
         entries={chat.entries}
@@ -489,7 +554,7 @@ function LiteAdminComposer({
   tooLong: boolean;
 }) {
   return (
-    <div className={cn("space-y-3", !home && "border-t p-3")}>
+    <div className={cn("space-y-3", !home && "px-4 pt-2 pb-5 sm:px-6")}>
       <ModelStatus models={models} />
       {tooLong && <FieldError>Keep your message within {MAX_INPUT_LENGTH.toLocaleString()} characters.</FieldError>}
       {home ? (
@@ -504,7 +569,7 @@ function LiteAdminComposer({
         <ChatComposer
           {...props}
           placeholder="Ask Aria…"
-          className="[&_[data-slot=input-group]]:min-h-0 [&_textarea]:min-h-12"
+          className="[&_[data-slot=input-group]]:min-h-0 [&_[data-slot=input-group]]:rounded-xl [&_[data-slot=input-group]]:shadow-none [&_[data-slot=input-group]]:ring-0 dark:[&_[data-slot=input-group]]:bg-background [&_textarea]:min-h-12"
           tools={
             <ModelPicker models={models} value={model} onChange={onModelChange} disabled={props.isLoading} compact />
           }
@@ -560,11 +625,13 @@ function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
 function PanelHeader({ children }: { children?: ReactNode }) {
   const state = useContext(LiteAdminContext);
   const term = useTerminology();
+  if (state?.pageContainer)
+    return <div className="flex h-12 shrink-0 items-center justify-end px-4 sm:px-6">{children}</div>;
   return (
     <div className="flex items-start justify-between gap-3 border-b p-4">
       <div className="flex flex-col gap-1 text-sm">
         <DialogTitle className="flex items-center gap-2 font-semibold">
-          <AriaAvatar size={32} />
+          <AriaAvatar size={20} />
           {ARIA_AGENT_LABEL}
         </DialogTitle>
         <DialogDescription>

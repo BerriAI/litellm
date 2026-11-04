@@ -12,7 +12,8 @@ import {
 } from "@/app/(dashboard)/hooks/useAnnouncementRead";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DashboardResources } from "@/components/Navbar/DashboardResources";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cva.config";
 import { isNewerVersion } from "@/utils/versionUtils";
@@ -68,10 +69,10 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
   return (
     <article aria-label={announcement.title} className="flex flex-col gap-2">
       <p className="text-sm font-medium">{announcement.title}</p>
-      <p className="text-sm leading-snug text-muted-foreground">{announcement.description}</p>
+      <p className="text-xs leading-relaxed text-muted-foreground">{announcement.description}</p>
       <div className="flex flex-wrap items-center gap-2">
         <a
-          className={cn(buttonVariants({ size: "sm" }))}
+          className={cn(buttonVariants({ variant: "link", size: "sm" }), "h-auto p-0 text-foreground")}
           href={announcement.href}
           target="_blank"
           rel="noopener noreferrer"
@@ -101,7 +102,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({ cu
   return (
     <Popover>
       <PopoverTrigger
-        className="flex! h-9! w-9! items-center justify-center rounded-md! text-muted-foreground transition-colors hover:bg-accent! hover:text-foreground!"
+        render={<Button variant="ghost" size="icon" className="text-muted-foreground" />}
         aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications"}
       >
         <span className="relative inline-flex">
@@ -109,13 +110,23 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({ cu
           {unreadCount > 0 ? <Badge className="absolute -top-0.5 -right-1 size-1.5 p-0" aria-hidden /> : null}
         </span>
       </PopoverTrigger>
-      <PopoverContent align="end" aria-label="Notifications">
-        {announcements.map((announcement, index) => (
-          <Fragment key={announcement.readKey}>
-            {index > 0 ? <Separator /> : null}
-            <AnnouncementItem announcement={announcement} />
-          </Fragment>
-        ))}
+      <PopoverContent
+        align="end"
+        aria-label="Notifications"
+        className="w-96 max-w-[calc(100vw-1rem)] gap-0 overflow-hidden p-0"
+      >
+        <PopoverTitle className="border-b border-border px-4 py-3 text-sm">What&apos;s new</PopoverTitle>
+        <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
+          <div className="space-y-4 p-4">
+            {announcements.map((announcement, index) => (
+              <Fragment key={announcement.readKey}>
+                {index > 0 ? <Separator /> : null}
+                <AnnouncementItem announcement={announcement} />
+              </Fragment>
+            ))}
+          </div>
+          <DashboardResources />
+        </div>
       </PopoverContent>
     </Popover>
   );

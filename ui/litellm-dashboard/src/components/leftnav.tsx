@@ -67,6 +67,8 @@ import {
   Workflow,
 } from "lucide-react";
 import Link from "next/link";
+import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
+import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cva.config";
@@ -518,6 +520,7 @@ export const labelText = (item: MenuItem): string => (typeof item.label === "str
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
   const route = routeForPathname(pathname);
+  if (route === "aria") return { section: null, title: "Aria Agent" };
   for (const group of menuGroups) {
     for (const item of group.items) {
       const section = sectionText(group.groupLabel);
@@ -552,7 +555,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const baseUrl = getProxyBaseUrl();
   const version = healthData?.litellm_version;
   const currentRoute = routeForPathname(usePathname());
-  const selectedKey = findMenuItemKey(currentRoute);
+  const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
     const parent = findParentKey(currentRoute);
@@ -730,6 +733,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
         </div>
       </SidebarHeader>
 
+      <div className="space-y-1 px-3 pt-3 pb-1">
+        <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-chevron]]:hidden" />
+        <AriaSidebarLink active={currentRoute === "aria"} />
+      </div>
       <ScrollArea className="min-h-0 flex-1">
         <nav className="flex flex-col gap-0.5 px-3 pb-3">
           {visibleGroups.map((group, gi) => (

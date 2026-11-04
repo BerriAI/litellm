@@ -11,7 +11,14 @@ import userEvent from "@testing-library/user-event";
 import { Fragment, useEffect, type ComponentType } from "react";
 import SidebarAccountMenu from "@/components/SidebarAccountMenu/SidebarAccountMenu";
 import UserDropdown from "@/components/Navbar/UserDropdown/UserDropdown";
-import LiteAdmin, { AriaUsageComposer, AriaUsageTrigger, LiteAdminFrame, LiteAdminHome } from "./LiteAdmin";
+import LiteAdmin, {
+  AriaUsageComposer,
+  AriaUsageTrigger,
+  LiteAdminFrame,
+  LiteAdminHome,
+  LiteAdminPage,
+  AriaSidebarLink,
+} from "./LiteAdmin";
 import { MAX_INPUT_LENGTH } from "./agent";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 
@@ -108,11 +115,11 @@ function renderWidget(
   Menu?: ComponentType<{ onLogout: () => void }>,
   showHome = false,
   showUsage = false,
-  withTerminology = false,
+  { withTerminology = false, showPage = false }: { withTerminology?: boolean; showPage?: boolean } = {},
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const Terminology = withTerminology ? TerminologyProvider : Fragment;
-  const tree = (home = showHome, usage = showUsage) => (
+  const tree = (home = showHome, usage = showUsage, page = showPage) => (
     <QueryClientProvider client={client}>
       <Toaster />
       <Terminology>
@@ -123,6 +130,8 @@ function renderWidget(
             <Page />
             {home && <LiteAdminHome />}
             <LiteAdmin />
+            <AriaSidebarLink active={page} />
+            {page && <LiteAdminPage />}
             {usage && (
               <>
                 <AriaUsageComposer />
@@ -135,7 +144,11 @@ function renderWidget(
     </QueryClientProvider>
   );
   const view = render(tree());
-  return { ...view, refresh: (home = showHome, usage = showUsage) => view.rerender(tree(home, usage)), client };
+  return {
+    ...view,
+    refresh: (home = showHome, usage = showUsage, page = showPage) => view.rerender(tree(home, usage, page)),
+    client,
+  };
 }
 
 interface GatewayOptions {
@@ -251,6 +264,39 @@ afterEach(() => {
 });
 
 describe("Aria Agent in the gateway", () => {
+  it.each([true, false])(
+    "keeps the answer, draft and model between page and quick panel with premium=%s",
+    async (premium) => {
+      session("proxy_admin", "first-admin", { premium_user: premium });
+      gateway([answer("Your usage is within budget.")]);
+      const view = renderWidget(undefined, false, false, { showPage: true });
+      await selectModel();
+      const page = screen.getByRole("region", { name: "Aria Agent", exact: true });
+      expect(screen.getByRole("link", { name: /Aria Agent/ })).toHaveAttribute("aria-current", "page");
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(page).toBeVisible();
+      fireEvent.keyDown(document, { key: "j", metaKey: true });
+      expect(within(page).getByRole("textbox")).toHaveFocus();
+      send("Check my usage");
+      expect(await within(page).findByText("Your usage is within budget.")).toBeVisible();
+      fireEvent.change(within(page).getByRole("textbox"), { target: { value: "What changed?" } });
+      view.refresh(false, false, false);
+      expect(screen.queryByRole("dialog", { name: "Aria Agent" })).not.toBeInTheDocument();
+      fireEvent.keyDown(document, { key: "j", ctrlKey: true });
+      const panel = await screen.findByRole("dialog", { name: "Aria Agent" });
+      expect(within(panel).getByRole("textbox")).toHaveValue("What changed?");
+      expect(within(panel).getByText("Your usage is within budget.")).toBeVisible();
+      expect(within(panel).getByRole("combobox", { name: "Aria Agent model" })).toHaveValue("chat-model");
+      view.refresh(false, false, true);
+      expect(screen.getByRole("region", { name: "Aria Agent", exact: true })).toHaveTextContent(
+        "Your usage is within budget.",
+      );
+      expect(screen.getByRole("textbox")).toHaveValue("What changed?");
+      view.refresh(false, false, false);
+      expect(screen.queryByRole("dialog", { name: "Aria Agent" })).not.toBeInTheDocument();
+    },
+  );
+
   it.each(["proxy_admin", "internal_user"])(
     "should start a conversation from the exact suggested question without changing %s permissions",
     async (role) => {
@@ -365,7 +411,7 @@ describe("Aria Agent in the gateway", () => {
   ])("should describe usage help in the configured terminology when SI terminology is %s", async (useSi, shownTerm) => {
     session("internal_user");
     gateway([], { useSiTerminology: useSi });
-    renderWidget(undefined, false, true, true);
+    renderWidget(undefined, false, true, { withTerminology: true });
     const usage = await screen.findByRole("region", { name: "Ask Aria about usage" });
     expect(await within(usage).findByText(`Your ${shownTerm} usage assistant`)).toBeInTheDocument();
     act(() => fireEvent.click(screen.getByRole("button", { name: "Aria Agent" })));
@@ -701,7 +747,7 @@ describe("Aria Agent in the gateway", () => {
     expect(screen.queryByText("Old answer.")).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText("Ask Aria…")).toHaveValue("");
     expect(screen.getByRole("combobox", { name: "Aria Agent model" })).toHaveValue("other-chat-model");
-    expect(screen.getByRole("button", { name: "Start over" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Start over" })).not.toBeInTheDocument();
     act(() => send("Fresh question"));
     await screen.findByText("Fresh answer.");
     const completion = requests.filter((request) => request.url.endsWith("/chat/completions")).at(-1);
