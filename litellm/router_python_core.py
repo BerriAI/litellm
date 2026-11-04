@@ -306,6 +306,7 @@ from litellm.router_utils.cooldown_handlers import (
     get_cooldown_deployment_info,
     get_cooldown_deployments,
     is_background_response_poll_not_found,
+    is_caller_entra_credential_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     is_failure_outside_selected_deployment,
@@ -10309,8 +10310,9 @@ class PythonCore(DeprecatedRouterMembers):
                 return False
 
             exception_status: Final = getattr(exception, "status_code", "")
+            failure_call_details: Final = _CALL_KWARGS_ADAPTER.validate_python(kwargs)
 
-            if is_caller_timeout_408(kwargs, exception_status):
+            if is_caller_timeout_408(failure_call_details, exception_status):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "A timeout the caller set caused this 408, not the deployment's health."
@@ -10332,6 +10334,18 @@ class PythonCore(DeprecatedRouterMembers):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "Caller-scoped OAuth authentication failed, not the deployment."
+                )
+                return False
+            if is_caller_entra_credential_failure(
+                caller_failure_deployment,
+                self._active_default_litellm_params(),
+                failure_call_details,
+                exception_status,
+                exception,
+            ):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Entra ID rejected a credential the caller sent, not the deployment's own."
                 )
                 return False
 
