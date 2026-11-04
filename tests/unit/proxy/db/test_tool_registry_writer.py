@@ -567,3 +567,33 @@ async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably
     left_in_redis = [json.loads(entry) for entry in redis.lists.get(REDIS_TOOL_DISCOVERY_BUFFER_KEY, [])]
     expected = [[{"tool_name": "get_weather", "origin": "user_defined", "call_count": 1}]] if requeued else []
     assert left_in_redis == expected, f"requeued={requeued} but redis holds {left_in_redis}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "requeued"),
+    [
+        (_postgres_rejection("57P03"), True),
+        (_postgres_rejection("23502"), False),
+    ],
+    ids=["restarting_server_keeps_the_rows", "rejected_row_is_dropped"],
+)
+async def test_failed_write_without_redis_keeps_the_rows_in_the_queue_only_when_they_provably_did_not_apply(
+    failure: Exception, requeued: bool
+):
+    queue = ToolDiscoveryQueue()
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+    prisma_client = MagicMock()
+    prisma_client.db.execute_raw = AsyncMock(side_effect=failure)
+
+    await commit_tool_discoveries(
+        prisma_client=prisma_client,
+        tool_discovery_queue=queue,
+        redis_update_buffer=RedisUpdateBuffer(redis_cache=_InMemoryRedis()),
+        pod_lock_manager=PodLockManager(redis_cache=_InMemoryRedis()),
+        use_redis_buffer=False,
+    )
+    queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
+
+    expected = [{"tool_name": "get_weather", "origin": "user_defined", "call_count": 2 if requeued else 1}]
+    assert queue.flush() == expected
