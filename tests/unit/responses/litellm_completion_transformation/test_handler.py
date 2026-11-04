@@ -226,6 +226,25 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
 
 
 @pytest.mark.asyncio
+async def test_bridged_turn_with_a_client_field_named_previous_response_client_ids_reaches_the_provider():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    response: Final = await litellm.aresponses(
+        model="azure_ai/claude-sonnet-4-6",
+        api_base="https://fake-foundry-resource.services.ai.azure.com",
+        api_key="fake-api-key",
+        input="Double it",
+        client=client,
+        previous_response_client_ids=["resp_from_the_client_body"],
+    )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert isinstance(response, ResponsesAPIResponse)
+
+
+@pytest.mark.asyncio
 async def test_bridged_turn_after_a_client_tool_search_reports_auto_for_an_allowed_tools_choice_it_dropped():
     provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
     client: Final = AsyncHTTPHandler()

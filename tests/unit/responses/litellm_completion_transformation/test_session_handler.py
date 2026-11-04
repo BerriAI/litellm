@@ -1,12 +1,16 @@
 import json
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
@@ -16,7 +20,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     _normalize_redacted_tool_call_arguments,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.utils import Message
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, Message
 
 
 @pytest.mark.asyncio
@@ -814,3 +818,117 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     tool_message: Final = result["messages"][2]
     assert json.loads(assistant_message["tool_calls"][0]["function"]["arguments"]) == function_arguments
     assert json.loads(tool_message["content"]) == function_output
+
+
+class _StoredSpendLogs:
+    def __init__(self, rows: tuple[dict[str, object], ...]) -> None:
+        self.rows = rows
+
+    async def query_raw(self, query: str, request_id: str) -> list[dict[str, object]]:
+        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] == request_id}
+        return [row for row in self.rows if row["session_id"] in sessions]
+
+
+GEMINI_URL_PATTERN: Final = r"https://generativelanguage\.googleapis\.com/v1[a-z]*/models/gemini-3\.5-flash:.*"
+
+
+def _gemini_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
+            ],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
+        },
+    )
+
+
+def _gemini_response_id(request_id: str) -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="gemini", model_id=None, response_id=request_id
+    )
+
+
+def _turn_stored_redacted(request_id: str, prompt: str) -> dict[str, object]:
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs",
+        return_value=True,
+    ):
+        stored_request: Final = json.loads(
+            _get_proxy_server_request_for_spend_logs_payload(
+                metadata={},
+                litellm_params={"proxy_server_request": {"body": {"model": "gemini-bridge", "input": prompt}}},
+                kwargs={"standard_callback_dynamic_params": {"turn_off_message_logging": True}},
+            )
+        )
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "redacted-session",
+        "proxy_server_request": stored_request,
+        "response": _chat_completion_response(request_id, REDACTED_BY_LITELLM),
+    }
+
+
+def _turn_stored_in_full(request_id: str, turn_input: list[dict[str, str]], answer: str) -> dict[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "redacted-session",
+        "proxy_server_request": {"model": "gemini-bridge", "input": turn_input},
+        "response": _chat_completion_response(request_id, answer),
+    }
+
+
+_CODE_WORD_TURN: Final = [{"role": "user", "content": "My code word is PLUM-42. Reply with OK only."}]
+
+
+async def test_previous_response_refusal_names_the_response_id_the_client_sent(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    stored: Final = _StoredSpendLogs((_turn_stored_redacted("chatcmpl-turn-1", "My code word is PLUM-42."),))
+    client_held_id: Final = "resp_the_client_holds"
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        with pytest.raises(litellm.BadRequestError) as refusal:
+            await litellm.aresponses(
+                model="gemini/gemini-3.5-flash",
+                input="What is my code word?",
+                previous_response_id=_gemini_response_id("chatcmpl-turn-1"),
+                api_key="test-gemini-key",
+                **{ADDRESSED_RESPONSE_ID_FIELD: client_held_id},
+            )
+
+    assert client_held_id in refusal.value.message
+
+
+@pytest.mark.parametrize("redacted_turn", [0, 1], ids=["earlier_turn", "referenced_turn"])
+async def test_previous_response_refuses_to_replay_turns_stored_redacted(
+    redacted_turn: int, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request_ids: Final = ("chatcmpl-turn-1", "chatcmpl-turn-2")
+    stored: Final = _StoredSpendLogs(
+        tuple(
+            _turn_stored_redacted(request_id, "My code word is PLUM-42.")
+            if index == redacted_turn
+            else _turn_stored_in_full(request_id, _CODE_WORD_TURN, "OK")
+            for index, request_id in enumerate(request_ids)
+        )
+    )
+    previous_response_id: Final = _gemini_response_id(request_ids[1])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        with pytest.raises(litellm.BadRequestError) as refusal:
+            await litellm.aresponses(
+                model="gemini/gemini-3.5-flash",
+                input="What is my code word?",
+                previous_response_id=previous_response_id,
+                api_key="test-gemini-key",
+            )
+
+    assert not route.called
+    assert (refusal.value.param, refusal.value.code) == ("previous_response_id", "previous_response_not_found")
+    assert previous_response_id in refusal.value.message

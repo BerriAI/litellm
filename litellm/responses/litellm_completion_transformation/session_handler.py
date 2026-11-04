@@ -54,6 +54,12 @@ def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> s
     return instructions if isinstance(instructions, str) and instructions else None
 
 
+def _is_redacted_request(proxy_server_request: Mapping[str, object] | None) -> bool:
+    return proxy_server_request is not None and proxy_server_request.get("messages") == [
+        {"role": "user", "content": REDACTED_BY_LITELLM}
+    ]
+
+
 class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
@@ -117,6 +123,7 @@ class ResponsesSessionHandler:
                 ),
                 None,
             ),
+            replays_redacted_turns=any(map(_is_redacted_request, proxy_server_requests)),
         )
 
     @staticmethod

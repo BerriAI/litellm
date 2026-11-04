@@ -77,7 +77,7 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -536,6 +536,17 @@ def _bridge_kwargs(
         return _UntranslatableResponsesFields(untranslatable)
     dropped_keys: Final = _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED.union(untranslatable)
     return MappingProxyType({key: value for key, value in kwargs.items() if key not in dropped_keys})
+
+
+def previous_response_client_ids(previous_response_id: str | None, kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    if not previous_response_id:
+        return ()
+    addressed_id: Final = kwargs.get(ADDRESSED_RESPONSE_ID_FIELD)
+    return (
+        (previous_response_id, addressed_id)
+        if isinstance(addressed_id, str) and addressed_id
+        else (previous_response_id,)
+    )
 
 
 def _raise_untranslatable_responses_fields(
@@ -1605,6 +1616,7 @@ def responses(
             if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
                 _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
             return litellm_completion_transformation_handler.response_api_handler(
+                previous_response_client_ids(previous_response_id, bridge_kwargs),
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,

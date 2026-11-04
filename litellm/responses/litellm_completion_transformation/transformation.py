@@ -582,9 +582,29 @@ class ChatCompletionSession(TypedDict, total=False):
     messages: list[SessionMessage]
     litellm_session_id: str | None
     instructions: ReadOnly[str | None]
+    replays_redacted_turns: ReadOnly[bool]
 
 
 ########### End of Initialize Classes used for Responses API  ###########
+
+
+def _redacted_history_error(previous_response_id: str, model: str, provider: str | None) -> litellm.BadRequestError:
+    message: Final = (
+        f"Previous response with id '{previous_response_id}' cannot be replayed. LiteLLM stored the earlier turns "
+        "of this conversation redacted because message logging is turned off, so it no longer has their content. "
+        "Send the earlier turns in input instead of previous_response_id."
+    )
+    return litellm.BadRequestError(
+        message=message,
+        model=model,
+        llm_provider=provider,
+        body={
+            "message": message,
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": "previous_response_not_found",
+        },
+    )
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -1025,6 +1045,7 @@ class LiteLLMCompletionResponsesConfig:
         instructions: str | None,
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
+        previous_response_client_ids: tuple[str, ...] = (),
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1045,6 +1066,8 @@ class LiteLLMCompletionResponsesConfig:
             if previous_response_id
             else ChatCompletionSession(messages=[], litellm_session_id=None)
         )
+        if chat_completion_session.get("replays_redacted_turns"):
+            raise _redacted_history_error((previous_response_id, *previous_response_client_ids)[-1], model, provider)
         _messages: Final = litellm_completion_request.get("messages") or []
         stored_messages: Final = chat_completion_session.get("messages") or []
         replayed_messages: Final = (
