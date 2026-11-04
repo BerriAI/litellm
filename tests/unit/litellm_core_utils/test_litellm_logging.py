@@ -2946,6 +2946,44 @@ async def test_async_success_handler_runs_async_callbacks_in_the_post_response_p
     assert in_post_response_phase() is False, "the phase must not leak into the request task"
 
 
+@pytest.mark.parametrize("stream", [True, False], ids=["streaming", "non_streaming"])
+def test_reused_logging_obj_does_not_report_the_previous_attempts_first_token(logging_obj, stream: bool):
+    """A fallback reuses the request's logging object but runs in its own window.
+
+    When the first attempt already recorded a first-token time, the fallback must not
+    report it. Otherwise ``completion_start_time`` lands before the attempt's
+    ``start_time``, the callbacks see a negative TTFT, and latency-based routing caches
+    a negative sample that empties its buffer window.
+    """
+    logging_obj.stream = stream
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    first_attempt_start: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
+    logging_obj.update_completion_start_time(first_attempt_start + datetime.timedelta(seconds=1))
+    fallback_start: Final = first_attempt_start + datetime.timedelta(seconds=600)
+    fallback_end: Final = fallback_start + datetime.timedelta(seconds=5)
+
+    observed: dict[str, object] = {}
+
+    class Recorder(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            observed["completion_start_time"] = kwargs.get("completion_start_time")
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[Recorder()]):
+        logging_obj.success_handler(
+            result=_success_response(),
+            start_time=fallback_start,
+            end_time=fallback_end,
+        )
+
+    completion_start_time: Final = observed["completion_start_time"]
+    assert isinstance(completion_start_time, datetime.datetime)
+    assert completion_start_time >= fallback_start, (
+        "the fallback attempt reported a first-token time that predates its own start"
+    )
+
+
 def test_is_sync_litellm_request():
     assert LitellmLogging.is_sync_litellm_request({}) is True
     assert LitellmLogging.is_sync_litellm_request({"acompletion": True}) is False
@@ -11052,6 +11090,40 @@ def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost()
     assert logging_obj.response_cost_calculator(result=assembled) == 0.0042
 
 
+@pytest.mark.parametrize("continued_response_id", ["resp_continuedafteracutstream", None])
+@pytest.mark.parametrize("client_facing_response_id", ["resp_encryptedidtheclientsaw", None])
+def test_sync_success_handler_logs_a_stream_under_the_id_the_client_saw(
+    client_facing_response_id, continued_response_id
+):
+    class Recorder(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.logged = []
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.logged.append((response_obj.id, kwargs["standard_logging_object"]["id"]))
+
+    recorder: Final = Recorder()
+    logging_obj: Final = _responses_stream_logging_obj()
+    logging_obj.dynamic_success_callbacks = [recorder]
+    logging_obj.client_facing_response_id = client_facing_response_id
+    if continued_response_id is not None:
+        logging_obj.record_continued_partial(
+            Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2), 0.0, continued_response_id
+        )
+    now: Final = datetime.datetime.now()
+
+    logging_obj.success_handler(
+        result=_completed_responses_event(ResponseAPIUsage(input_tokens=3, output_tokens=2, total_tokens=5)),
+        start_time=now,
+        end_time=now,
+        cache_hit=False,
+    )
+
+    expected_id: Final = client_facing_response_id or continued_response_id or "resp-1"
+    assert recorder.logged == [(expected_id, expected_id)]
+
+
 def test_response_cost_calculator_prices_terminal_responses_event_from_its_response():
     logging_obj: Final = _responses_stream_logging_obj()
     inner_response: Final = ResponsesAPIResponse(
@@ -14229,6 +14301,71 @@ def test_native_messages_body_carries_the_reported_list_cost_into_the_priced_res
     assert isinstance(priced, ModelResponse)
     headers = priced._hidden_params.get("additional_headers") or {}
     assert headers.get("llm_provider-x-litellm-response-cost") == expected_header
+
+
+_NATIVE_PRICED_MESSAGE: Final = {
+    "id": "msg_native",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-4-5",
+    "content": [{"type": "text", "text": "answer"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1200, "output_tokens": 300},
+}
+
+
+def _native_anthropic_messages_logging_obj() -> LitellmLogging:
+    logging_obj: Final = _anthropic_messages_logging_obj()
+    logging_obj.stream = False
+    logging_obj.optional_params = {}
+    logging_obj.model = "claude-haiku-4-5"
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    "served_body",
+    (
+        {**_NATIVE_PRICED_MESSAGE, "content": None},
+        {key: value for key, value in _NATIVE_PRICED_MESSAGE.items() if key != "content"},
+    ),
+    ids=("content-null", "content-missing"),
+)
+def test_a_native_messages_body_without_content_is_priced_from_its_usage(served_body: dict[str, object]) -> None:
+    """Regression: #48254 converted every native /v1/messages body before pricing it, and the conversion
+    raised on a 200 whose ``content`` was null or missing, turning the served 200 into a 500."""
+    with_content: Final = _native_anthropic_messages_logging_obj().response_cost_calculator(
+        result=_NATIVE_PRICED_MESSAGE
+    )
+    assert with_content is not None and with_content > 0
+
+    without_content: Final = _native_anthropic_messages_logging_obj().response_cost_calculator(result=served_body)
+
+    assert without_content == with_content
+
+
+def _fast_mode_native_logging_obj(requested_speed: str | None) -> LitellmLogging:
+    logging_obj: Final = _native_anthropic_messages_logging_obj()
+    logging_obj.model = "claude-opus-5"
+    logging_obj.model_call_details["model"] = "claude-opus-5"
+    logging_obj.optional_params = {"speed": requested_speed} if requested_speed else {}
+    return logging_obj
+
+
+def test_a_native_messages_body_without_a_reported_speed_bills_the_requested_speed() -> None:
+    """A fast-mode request whose upstream usage block omits ``speed`` is still billed at the fast rate,
+    the same rate the spend row applies from the request's ``speed``."""
+    body: Final = {**_NATIVE_PRICED_MESSAGE, "model": "claude-opus-5"}
+    standard: Final = _fast_mode_native_logging_obj(None).response_cost_calculator(result=body)
+    reported_fast: Final = _fast_mode_native_logging_obj(None).response_cost_calculator(
+        result={**body, "usage": {**_NATIVE_PRICED_MESSAGE["usage"], "speed": "fast"}}
+    )
+    assert standard is not None and reported_fast is not None and reported_fast > standard
+
+    requested_fast: Final = _fast_mode_native_logging_obj("fast").response_cost_calculator(result=body)
+
+    assert requested_fast == reported_fast
 
 
 def test_record_native_bedrock_guardrail_bills_when_the_metadata_is_none() -> None:

@@ -18,6 +18,7 @@ from integration._support.anthropic_refusal import (
     DECLARED_PARTIAL_JSON,
     DOCS_PARTIAL_TEXT,
     DOCS_REFUSAL,
+    DOCS_REFUSAL_EXPLANATION,
     DOCS_STOP_DETAILS,
     ENVELOPED_PARTIAL_JSON,
     FIXTURES,
@@ -200,20 +201,27 @@ def _marker() -> str:
     return uuid.uuid4().hex
 
 
+def _bedrock_invoke_deployment(
+    scenario: Scenario, wire_url: str, model_info: Mapping[str, JsonValue] | None = None
+) -> str:
+    return scenario.model(
+        model=f"bedrock/invoke/{BEDROCK_MODEL}",
+        model_info=model_info,
+        api_base=wire_url,
+        aws_access_key_id="AKIASCRIPTEDPROVIDER",
+        aws_secret_access_key="scripted-secret",
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint=wire_url,
+    )
+
+
 def _deployment(scenario: Scenario, provider: Provider, rig: Rig) -> str:
     wire_url: Final = rig.wire.url
     match provider:
         case "anthropic":
             return scenario.model(model=f"anthropic/{MODEL}", api_base=wire_url, api_key=_ANTHROPIC_KEY)
         case "bedrock_invoke":
-            return scenario.model(
-                model=f"bedrock/invoke/{BEDROCK_MODEL}",
-                api_base=wire_url,
-                aws_access_key_id="AKIASCRIPTEDPROVIDER",
-                aws_secret_access_key="scripted-secret",
-                aws_region_name="us-east-1",
-                aws_bedrock_runtime_endpoint=wire_url,
-            )
+            return _bedrock_invoke_deployment(scenario, wire_url)
         case "claude_platform":
             return scenario.model(
                 model=f"bedrock/claude_platform/{MODEL}",
@@ -651,8 +659,7 @@ def test_family_messages_stream_refusal_keeps_frames_and_logs_the_stop_details(r
         model: Final = _deployment(scenario, provider, rig)
         key: Final = scenario.key()
         events: Final = _messages_stream(rig, key, model, refusal_prompt("refusal", _marker()))
-        native: Final = {"stop_reason": "refusal"} if provider == "snowflake" else REFUSAL_FIELDS
-        assert _native_deltas(events) == (native,), events
+        assert _native_deltas(events) == (REFUSAL_FIELDS,), events
         assert _relayed_in(events) == (), events
         assert _paths(rig.wire) == (_STREAM_TARGETS[provider][1],)
         logged: Final = _logged_response(rig, key)
@@ -783,10 +790,10 @@ def test_responses_cache_hit_logs_the_same_stop_details_as_the_miss(rig: Rig) ->
         served_from_cache: Final = tuple(event.get("cache_hit") is True for event in logged)
         assert (len(_paths(rig.wire)), served_from_cache.count(True)) == (1, 1), (served_from_cache, logged)
         assert relayed(first) == ((_RESPONSE_FIELDS, REFUSAL_FIELDS),), first
-        assert tuple(relayed(event["response"]) for event in logged) == (((_CHAT_FIELDS, REFUSAL_FIELDS),),) * 2, (
-            served_from_cache,
-            logged,
-        )
+        assert tuple(relayed(event["response"]) for event in logged) == (
+            ((_CHAT_FIELDS, REFUSAL_FIELDS),),
+            relayed(first),
+        ), (served_from_cache, logged)
 
 
 def test_passthrough_is_not_served_from_the_response_cache(rig: Rig) -> None:
@@ -1184,7 +1191,7 @@ def test_stream_cache_hit_skips_cached_provider_fields_that_are_not_an_object(ri
         assert tuple(_message_fields(event["response"]) for event in stale_logs) == ((),) * len(stale_logs), stale_logs
 
 
-JsonModeRoute: TypeAlias = Literal["anthropic_native", "anthropic_tool", "bedrock_invoke"]
+JsonModeRoute: TypeAlias = Literal["anthropic_native", "anthropic_tool", "bedrock_invoke_native", "bedrock_invoke_tool"]
 _UNMAPPED_MODEL: Final = "claude-scripted-9"
 _JSON_ANSWER: Final = json.dumps({"answer": DOCS_PARTIAL_TEXT})
 
@@ -1216,11 +1223,20 @@ _JSON_MODE_CASES: Final[Mapping[str, JsonModeCase]] = {
     "anthropic_tool_enveloped": JsonModeCase(
         "anthropic_tool", "jsonheld", ENVELOPED_PARTIAL_JSON, _JSON_ANSWER, "content_filter", "stop", "json_tool"
     ),
+    "bedrock_invoke_native": JsonModeCase(
+        "bedrock_invoke_native",
+        "partial",
+        DOCS_PARTIAL_TEXT,
+        DOCS_PARTIAL_TEXT,
+        "content_filter",
+        "content_filter",
+        "native",
+    ),
     "bedrock_invoke_declared": JsonModeCase(
-        "bedrock_invoke", "jsontool", DECLARED_PARTIAL_JSON, _JSON_ANSWER, "content_filter", "stop", "json_tool"
+        "bedrock_invoke_tool", "jsontool", DECLARED_PARTIAL_JSON, _JSON_ANSWER, "content_filter", "stop", "json_tool"
     ),
     "bedrock_invoke_enveloped": JsonModeCase(
-        "bedrock_invoke", "jsonheld", ENVELOPED_PARTIAL_JSON, _JSON_ANSWER, "content_filter", "stop", "json_tool"
+        "bedrock_invoke_tool", "jsonheld", ENVELOPED_PARTIAL_JSON, _JSON_ANSWER, "content_filter", "stop", "json_tool"
     ),
 }
 
@@ -1234,8 +1250,15 @@ def _json_mode_deployment(scenario: Scenario, route: JsonModeRoute, rig: Rig) ->
                 scenario.model(model=f"anthropic/{_UNMAPPED_MODEL}", api_base=rig.wire.url, api_key=_ANTHROPIC_KEY),
                 "anthropic",
             )
-        case "bedrock_invoke":
+        case "bedrock_invoke_native":
             return _deployment(scenario, "bedrock_invoke", rig), "bedrock_invoke"
+        case "bedrock_invoke_tool":
+            return (
+                _bedrock_invoke_deployment(
+                    scenario, rig.wire.url, {"supports_bedrock_native_structured_output": False}
+                ),
+                "bedrock_invoke",
+            )
 
 
 def _requested_format(body: Mapping[str, JsonValue]) -> tuple[bool, bool]:
@@ -1310,6 +1333,7 @@ def test_chat_refusal_body_serializes_the_stop_details_beside_the_existing_messa
             "message": {
                 "content": content,
                 "role": "assistant",
+                "refusal": DOCS_REFUSAL_EXPLANATION,
                 "provider_specific_fields": {**_ANTHROPIC_MESSAGE_FIELDS, **REFUSAL_FIELDS},
             },
         }

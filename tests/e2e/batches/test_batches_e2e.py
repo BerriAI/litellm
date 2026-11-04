@@ -1210,6 +1210,7 @@ def _govcloud_params() -> LiteLLMParamsBody:
     )
 
 
+@pytest.mark.skip(reason="GovCloud E2E infrastructure is not provisioned")
 class TestBedrockBatchGovCloud:
     """Bedrock batch lifecycle in the AWS GovCloud partition (us-gov-west-1).
 
