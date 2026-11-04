@@ -190,10 +190,27 @@ async def test_server_denial_cannot_be_bypassed_by_tool_name(servers: list[str],
 async def test_duplicate_url_registration_neither_shadows_nor_widens_the_granted_one(
     native_auth: UserAPIKeyAuth, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    catalog: Final = mcp_server_manager.global_mcp_server_manager.catalog
-    granted: Final = catalog.provider_registrations()["native-id"]
-    duplicate: Final = granted.model_copy(update={"server_id": "duplicate-id", "alias": None, "allowed_tools": ["delete"]})
-    monkeypatch.setattr(catalog, "provider_registrations", lambda: {"native-id": granted, "duplicate-id": duplicate})
+    """Two database rows share one URL, as a database without the partial index can hold. The ungranted
+    duplicate is listed last, where a one-registration-per-URL map would have picked it."""
+    from litellm.models.mcp_server import LiteLLM_MCPServerTable
+
+    granted: Final = LiteLLM_MCPServerTable(
+        server_id="native-id", server_name="docs", alias="native-alias", execution_mode="provider",
+        transport=None, url="https://native.example/mcp", allowed_tools=["search", "fetch"],
+    )
+    duplicate: Final = LiteLLM_MCPServerTable(
+        server_id="duplicate-id", server_name="duplicate", execution_mode="provider",
+        transport=None, url="https://native.example/mcp", allowed_tools=["delete"],
+    )
+    team: Final = await proxy_server.user_api_key_cache.async_get_cache(key="team_id:team")
+    tables: Final = SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=AsyncMock(return_value=[granted, duplicate])),
+        litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace(reload_revision=1))),
+        litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=team)),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=tables, writer_db=tables))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", mcp_server_manager.MCPServerManager())
 
     await authorize_provider_mcp(_openai(["search"]), native_auth)
     with pytest.raises(ProxyException) as denied:
@@ -215,15 +232,24 @@ async def test_empty_openai_tool_name_filter_is_denied_because_openai_reads_it_a
 async def test_failed_tool_grant_lookup_denies_instead_of_allowing_every_registered_tool(
     native_auth: UserAPIKeyAuth, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
-
-    async def unavailable(*_: object, **__: object) -> list[str] | None:
-        raise RuntimeError("policy store unavailable")
-
-    monkeypatch.setattr(MCPRequestHandler, "_single_credential_tools", staticmethod(unavailable))
-    monkeypatch.setattr(MCPRequestHandler, "resolve_personal_key_team_tools", staticmethod(unavailable))
+    """The key reaches the server directly, but its toolset grant cannot be read: the tool lookup fails
+    while server admission still succeeds, and that failure must not widen to every registered tool."""
+    team: Final = await proxy_server.user_api_key_cache.async_get_cache(key="team_id:team")
+    toolset_store_down: Final = SimpleNamespace(
+        litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=team)),
+        litellm_mcptoolsettable=SimpleNamespace(find_many=AsyncMock(side_effect=RuntimeError("toolset store down"))),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=toolset_store_down, writer_db=toolset_store_down))
+    auth: Final = native_auth.model_copy(
+        update={
+            "requires_fresh_policy": True,
+            "object_permission": LiteLLM_ObjectPermissionTable(
+                object_permission_id="key-grant", mcp_servers=["native-alias"], mcp_toolsets=["research"]
+            ),
+        }
+    )
     with pytest.raises(ProxyException) as denied:
-        await authorize_provider_mcp(_openai(["fetch"]), native_auth)
+        await authorize_provider_mcp(_openai(["search"]), auth)
     assert denied.value.code == "403"
 
 
