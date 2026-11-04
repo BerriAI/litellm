@@ -67,8 +67,6 @@ _MIGRATION_TS_RE = re.compile(r"^(\d{14})_")
 _MIGRATION_DEADLOCK_MARKER = "deadlock detected"
 _MIGRATION_LOCK_TIMEOUT_MARKER = "canceling statement due to lock timeout"
 INDEX_REPAIR_ADVISORY_LOCK_KEY: Final = int.from_bytes(b"litellm", "big")
-MCP_SERVER_TABLE: Final = "LiteLLM_MCPServerTable"
-PROVIDER_URL_INDEX: Final = "LiteLLM_MCPServerTable_provider_url_key"
 _TRANSIENT_INDEX_SUFFIX_RE: Final = re.compile(r"_cc(?:new|old)\d*$")
 _INVALID_LITELLM_INDEXES_SQL: Final = (
     "SELECT n.nspname, c.relname, pg_size_pretty(pg_table_size(t.oid)) "
@@ -943,66 +941,6 @@ class ProxyExtrasDBManager:
         return not remaining
 
     @staticmethod
-    def ensure_provider_url_index(lock_timeout: str = "30s") -> bool:
-        """Create the partial unique index on provider MCP URLs when it is missing.
-
-        The index exists only in migration SQL, because Prisma's schema cannot express a
-        partial index. `prisma db push` never creates it, and adopting a pushed database
-        marks migrations applied without running their SQL, so every database setup path
-        ends here. Never raises: returns True when the index exists, False when creation was
-        skipped or failed and will be retried on the next database setup run."""
-        prisma_url: Final = os.getenv("DATABASE_URL")
-        if not prisma_url:
-            return False
-        try:
-            import psycopg
-            from psycopg import sql
-        except ImportError:
-            logger.warning(
-                "psycopg is not installed; skipping the provider MCP URL index check. "
-                "Install the litellm[extra_proxy] extra, which includes psycopg."
-            )
-            return False
-
-        schema: Final = ProxyExtrasDBManager._prisma_schema_param(prisma_url) or "public"
-        cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(os.getenv("DIRECT_URL") or prisma_url)
-        index_name: Final = sql.Identifier(schema, PROVIDER_URL_INDEX)
-        try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
-                present: Final = conn.execute("SELECT to_regclass(%s)", (index_name.as_string(conn),)).fetchone()
-                if present is not None and present[0] is not None:
-                    return True
-                column: Final = conn.execute(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_schema = %s AND table_name = %s AND column_name = 'execution_mode'",
-                    (schema, MCP_SERVER_TABLE),
-                ).fetchone()
-                if column is None:
-                    return False
-                conn.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(lock_timeout)))
-                with held_migration_lock(conn) as held:
-                    if not held:
-                        logger.info(
-                            "Another process holds the migration lock; leaving the provider MCP URL index "
-                            "to the next database setup run"
-                        )
-                        return False
-                    conn.execute(
-                        sql.SQL(
-                            "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} (\"url\") WHERE \"execution_mode\" = 'provider'"
-                        ).format(sql.Identifier(PROVIDER_URL_INDEX), sql.Identifier(schema, MCP_SERVER_TABLE))
-                    )
-        except psycopg.Error as e:
-            logger.warning(
-                "Could not create the provider MCP URL unique index, will retry on the next database setup run. "
-                "Error: %s",
-                e,
-            )
-            return False
-        logger.info("Created the provider MCP URL unique index that prisma db push and schema adoption skip")
-        return True
-
-    @staticmethod
     def _repair_under_migration_lock(
         conn: "psycopg.Connection[tuple[str, str, str]]",
         schema: str,
@@ -1484,7 +1422,6 @@ class ProxyExtrasDBManager:
         if not migrated:
             return False
         ProxyExtrasDBManager.repair_invalid_indexes()
-        ProxyExtrasDBManager.ensure_provider_url_index()
         ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
         return True
 
