@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import socket
 import ssl
 import threading
@@ -98,9 +99,18 @@ def _await_release(
     return gate.is_set()
 
 
-def _stop_reading(connection: socket.socket) -> None:
+class _RequestReader(io.BufferedReader):
+    cut = False
+
+    def readline(self, size: int | None = -1, /) -> bytes:
+        line: Final = super().readline(size)
+        self.cut = self.cut or not line.endswith(b"\n")
+        return line
+
+
+def _shut(connection: socket.socket, how: int) -> None:
     with suppress(OSError):
-        socket.socket.shutdown(connection, socket.SHUT_RD)
+        socket.socket.shutdown(connection, how)
 
 
 @contextmanager
@@ -109,6 +119,7 @@ def wire_server(
     tls: ssl.SSLContext | None = None,
     port: int = 0,
     keep_alive: bool = False,
+    write_grace: float = 10,
 ) -> Generator[Wire, None, None]:
     """Owned TCP peer; requests traverse the real HTTP client and serialization. With `keep_alive` the
     peer honours HTTP/1.1 persistent connections so `connections()` counts the client's TCP sessions."""
@@ -122,9 +133,12 @@ def wire_server(
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        reader: _RequestReader
 
         def setup(self) -> None:
             super().setup()
+            self.reader = _RequestReader(self.rfile.detach())
+            self.rfile = self.reader
             connected.put(f"{self.client_address[0]}:{self.client_address[1]}")
 
         def finish(self) -> None:
@@ -136,7 +150,7 @@ def wire_server(
             self.wfile.flush()
 
         def respond(self) -> None:
-            if closing.is_set():
+            if self.reader.cut:
                 self.close_connection = True
                 return
             headers: Final = {name.lower(): value for name, value in self.headers.items()}
@@ -248,10 +262,18 @@ def wire_server(
         finally:
             closing.set()
             server.shutdown()
-            for connection in tuple(accepted.get_nowait() for _ in range(accepted.qsize())):
-                _stop_reading(connection)
+            connections: Final = tuple(accepted.get_nowait() for _ in range(accepted.qsize()))
+            for connection in connections:
+                _shut(connection, socket.SHUT_RD)
             thread.join(timeout=6)
             assert not thread.is_alive(), "Owned HTTP server survived cleanup"
-            server.server_close()
+            closer: Final = threading.Thread(target=server.server_close)
+            closer.start()
+            closer.join(timeout=write_grace)
+            if closer.is_alive():
+                errors.put(TimeoutError(f"a reply was still being written {write_grace} s into teardown"))
+                for connection in connections:
+                    _shut(connection, socket.SHUT_WR)
+                closer.join()
             failure: Final = None if errors.empty() else errors.get_nowait()
             assert failure is None, f"Owned HTTP peer failed: {failure!r}"
