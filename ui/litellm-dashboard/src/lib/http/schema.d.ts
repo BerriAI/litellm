@@ -58984,11 +58984,270 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or a conversation of user, developer, system and assistant messages and function_call, function_call_output, custom_tool_call and custom_tool_call_output items
                      */
-                    input: string | {
+                    input: string | ({
                         /** Content */
                         content: string | ({
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
+                        })[];
+                        /**
+                         * Role
+                         * @default user
+                         * @constant
+                         */
+                        role?: "user";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    } | {
+                        /** Content */
+                        content: string | {
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        }[];
+                        /**
+                         * Role
+                         * @enum {string}
+                         */
+                        role: "developer" | "system";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    } | {
+                        /** Content */
+                        content: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "output_text";
+                        } | {
+                            /** Refusal */
+                            refusal: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "refusal";
+                        })[];
+                        /** Phase */
+                        phase?: ("commentary" | "final_answer") | null;
+                        /**
+                         * Role
+                         * @constant
+                         */
+                        role: "assistant";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    } | {
+                        /** Arguments */
+                        arguments: string;
+                        /** Call Id */
+                        call_id: string;
+                        /** Id */
+                        id?: string | null;
+                        /** Name */
+                        name: string;
+                        /** Namespace */
+                        namespace?: string | null;
+                        /** Status */
+                        status?: ("in_progress" | "completed" | "incomplete") | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "function_call";
+                    } | {
+                        /** Call Id */
+                        call_id: string;
+                        /** Id */
+                        id?: string | null;
+                        /** Output */
+                        output: string | ({
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /** Status */
+                        status?: ("in_progress" | "completed" | "incomplete") | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "function_call_output";
+                    } | {
+                        /** Call Id */
+                        call_id: string;
+                        /** Id */
+                        id?: string | null;
+                        /** Input */
+                        input: string;
+                        /** Name */
+                        name: string;
+                        /** Namespace */
+                        namespace?: string | null;
+                        /** Status */
+                        status?: ("in_progress" | "completed" | "incomplete") | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "custom_tool_call";
+                    } | {
+                        /** Call Id */
+                        call_id: string;
+                        /** Id */
+                        id?: string | null;
+                        /** Output */
+                        output: string | ({
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /** Status */
+                        status?: ("in_progress" | "completed" | "incomplete") | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "custom_tool_call_output";
+                    })[];
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Predicate, choice and score questions. Answers come back in the same order
+                     */
+                    questions: ({
+                        /**
+                         * Instructions
+                         * @description The yes/no question to ask about the input, as text or input_text, input_image and input_json parts
+                         */
+                        instructions: string | ({
                             /** Text */
                             text: string;
                             /**
@@ -59006,35 +59265,17 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
-                        /**
-                         * Role
-                         * @default user
-                         * @constant
-                         */
-                        role?: "user";
-                        /**
-                         * Type
-                         * @default message
-                         * @constant
-                         */
-                        type?: "message";
-                    }[];
-                    /**
-                     * Model
-                     * @description A decision model from the proxy model_list
-                     */
-                    model: string;
-                    /**
-                     * Questions
-                     * @description Predicate, choice and score questions. Answers come back in the same order
-                     */
-                    questions: ({
-                        /**
-                         * Instructions
-                         * @description The yes/no question to ask about the input
-                         */
-                        instructions: string;
                         /**
                          * Name
                          * @description Echoed in the matching answer
@@ -59058,9 +59299,37 @@ export interface operations {
                         }[];
                         /**
                          * Instructions
-                         * @description The question to ask about the input
+                         * @description The question to ask about the input, as text or input_text, input_image and input_json parts
                          */
-                        instructions: string;
+                        instructions: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
+                        })[];
                         /**
                          * Name
                          * @description Echoed in the matching answer
@@ -59074,9 +59343,37 @@ export interface operations {
                     } | {
                         /**
                          * Instructions
-                         * @description The question to ask about the input
+                         * @description The question to ask about the input, as text or input_text, input_image and input_json parts
                          */
-                        instructions: string;
+                        instructions: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
+                        })[];
                         /**
                          * Levels
                          * @description Scale levels from lowest to highest. The score is a level index
@@ -79738,11 +80035,270 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or a conversation of user, developer, system and assistant messages and function_call, function_call_output, custom_tool_call and custom_tool_call_output items
                      */
-                    input: string | {
+                    input: string | ({
                         /** Content */
                         content: string | ({
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
+                        })[];
+                        /**
+                         * Role
+                         * @default user
+                         * @constant
+                         */
+                        role?: "user";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    } | {
+                        /** Content */
+                        content: string | {
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        }[];
+                        /**
+                         * Role
+                         * @enum {string}
+                         */
+                        role: "developer" | "system";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    } | {
+                        /** Content */
+                        content: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "output_text";
+                        } | {
+                            /** Refusal */
+                            refusal: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "refusal";
+                        })[];
+                        /** Phase */
+                        phase?: ("commentary" | "final_answer") | null;
+                        /**
+                         * Role
+                         * @constant
+                         */
+                        role: "assistant";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    } | {
+                        /** Arguments */
+                        arguments: string;
+                        /** Call Id */
+                        call_id: string;
+                        /** Id */
+                        id?: string | null;
+                        /** Name */
+                        name: string;
+                        /** Namespace */
+                        namespace?: string | null;
+                        /** Status */
+                        status?: ("in_progress" | "completed" | "incomplete") | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "function_call";
+                    } | {
+                        /** Call Id */
+                        call_id: string;
+                        /** Id */
+                        id?: string | null;
+                        /** Output */
+                        output: string | ({
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /** Status */
+                        status?: ("in_progress" | "completed" | "incomplete") | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "function_call_output";
+                    } | {
+                        /** Call Id */
+                        call_id: string;
+                        /** Id */
+                        id?: string | null;
+                        /** Input */
+                        input: string;
+                        /** Name */
+                        name: string;
+                        /** Namespace */
+                        namespace?: string | null;
+                        /** Status */
+                        status?: ("in_progress" | "completed" | "incomplete") | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "custom_tool_call";
+                    } | {
+                        /** Call Id */
+                        call_id: string;
+                        /** Id */
+                        id?: string | null;
+                        /** Output */
+                        output: string | ({
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            prompt_cache_breakpoint?: {
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                            } | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /** Status */
+                        status?: ("in_progress" | "completed" | "incomplete") | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "custom_tool_call_output";
+                    })[];
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Predicate, choice and score questions. Answers come back in the same order
+                     */
+                    questions: ({
+                        /**
+                         * Instructions
+                         * @description The yes/no question to ask about the input, as text or input_text, input_image and input_json parts
+                         */
+                        instructions: string | ({
                             /** Text */
                             text: string;
                             /**
@@ -79760,35 +80316,17 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
-                        /**
-                         * Role
-                         * @default user
-                         * @constant
-                         */
-                        role?: "user";
-                        /**
-                         * Type
-                         * @default message
-                         * @constant
-                         */
-                        type?: "message";
-                    }[];
-                    /**
-                     * Model
-                     * @description A decision model from the proxy model_list
-                     */
-                    model: string;
-                    /**
-                     * Questions
-                     * @description Predicate, choice and score questions. Answers come back in the same order
-                     */
-                    questions: ({
-                        /**
-                         * Instructions
-                         * @description The yes/no question to ask about the input
-                         */
-                        instructions: string;
                         /**
                          * Name
                          * @description Echoed in the matching answer
@@ -79812,9 +80350,37 @@ export interface operations {
                         }[];
                         /**
                          * Instructions
-                         * @description The question to ask about the input
+                         * @description The question to ask about the input, as text or input_text, input_image and input_json parts
                          */
-                        instructions: string;
+                        instructions: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
+                        })[];
                         /**
                          * Name
                          * @description Echoed in the matching answer
@@ -79828,9 +80394,37 @@ export interface operations {
                     } | {
                         /**
                          * Instructions
-                         * @description The question to ask about the input
+                         * @description The question to ask about the input, as text or input_text, input_image and input_json parts
                          */
-                        instructions: string;
+                        instructions: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
+                        })[];
                         /**
                          * Levels
                          * @description Scale levels from lowest to highest. The score is a level index

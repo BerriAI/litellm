@@ -7,7 +7,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.decisions.call import NativeOpenAIDecisionsCall
+from litellm.decisions.call import DecisionsCall, NativeOpenAIDecisionsCall
 from litellm.decisions.main import _prepare_decisions_call
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.systemone.main import _prepare_systemone_call
@@ -96,6 +96,49 @@ def test_an_openai_body_carries_the_caller_fields_and_none_of_the_settings_litel
         "input": "My card was charged twice.",
         "questions": [question],
         "prompt_cache_key": "billing-v1",
+    }
+
+
+@pytest.mark.parametrize("drop_params", (False, True), ids=("strict", "drop_params"))
+def test_prompt_cache_fields_never_reach_a_provider_that_is_not_openai(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    image: Final = "data:image/png;base64,AA=="
+
+    call: Final = _prepare_decisions_call(
+        **CONNECTION,
+        decision_input=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "My card was charged twice.",
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    },
+                    {"type": "input_image", "image_url": image, "prompt_cache_breakpoint": {"mode": "explicit"}},
+                ],
+            }
+        ],
+        questions=[{"type": "predicate", "name": "billing", "instructions": QUESTION_TEXT}],
+        audio=None,
+        videos=None,
+        kwargs={
+            "prompt_cache_key": "billing-v1",
+            "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+            "drop_params": drop_params,
+        },
+    )
+
+    assert isinstance(call, DecisionsCall)
+    assert call.provider_config.transform_decisions_request(
+        model=call.model, request=call.ir_request, custom_llm_provider=call.custom_llm_provider
+    ) == {
+        "model": "jev-fake",
+        "state": "My card was charged twice.",
+        "images": [image],
+        "questions": {"billing": {"type": "noul", "instructions": QUESTION_TEXT}},
     }
 
 

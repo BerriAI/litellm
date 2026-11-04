@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.decisions.transformation import (
     DecisionsResponseValidationError,
+    ir_to_systemone_request,
     ir_to_systemone_response,
     systemone_request_to_ir,
 )
@@ -94,13 +95,73 @@ _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
 
 
 def _openai_ir(raw: Mapping[str, object]) -> DecisionsIRRequest:
-    return openai_request_to_ir(_OPENAI_BODY.validate_python(raw))
+    return openai_request_to_ir(_OPENAI_BODY.validate_python(raw)).request
 
 
 def test_an_openai_request_round_trips_through_the_ir_unchanged() -> None:
     assert ir_to_openai_request("gpt-6-luna", _openai_ir(_OPENAI_REQUEST)) == {
         "model": "gpt-6-luna",
         **_OPENAI_REQUEST,
+    }
+
+
+def test_a_conversation_becomes_ordered_evidence_text_and_names_what_the_ir_cannot_carry() -> None:
+    conversion: Final = openai_request_to_ir(
+        _OPENAI_BODY.validate_python(
+            {
+                "input": [
+                    {"role": "developer", "content": "Judge for the refunds team."},
+                    {"role": "assistant", "content": "Looking up the order.", "phase": "commentary"},
+                    {"type": "function_call", "call_id": "call_1", "name": "lookup_order", "arguments": "{}"},
+                    {"role": "system", "content": [{"type": "input_text", "text": "Only judge visible damage."}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "It arrived broken.",
+                                "prompt_cache_breakpoint": {"mode": "explicit"},
+                            },
+                            {"type": "input_json", "data": {"order": 1234}},
+                        ],
+                    },
+                    {"type": "function_call_output", "call_id": "call_1", "output": "Delivered."},
+                    {"role": "assistant", "content": [{"type": "refusal", "refusal": "No."}]},
+                ],
+                "questions": [
+                    {
+                        "type": "predicate",
+                        "name": "damaged",
+                        "instructions": [
+                            {"type": "input_text", "text": "Is it damaged?"},
+                            {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+                            {"type": "input_json", "data": ["screen", "case"]},
+                        ],
+                    },
+                    {
+                        "type": "predicate",
+                        "name": "matches_photo",
+                        "instructions": [{"type": "input_image", "image_url": "data:image/png;base64,AA=="}],
+                    },
+                ],
+            }
+        )
+    )
+
+    assert conversion.unrepresented_params == (
+        "assistant messages",
+        "function_call items",
+        "function_call_output items",
+        "input_image in question instructions",
+    )
+    assert [question.name for question in conversion.questions_after_drop] == ["damaged"]
+    assert ir_to_systemone_request("jev-latest", conversion.request) == {
+        "model": "jev-latest",
+        "state": 'Judge for the refunds team.\n\nOnly judge visible damage.\n\nIt arrived broken.\n\n{"order": 1234}',
+        "questions": {
+            "damaged": {"type": "noul", "instructions": 'Is it damaged?\n\n["screen", "case"]'},
+            "matches_photo": {"type": "noul", "instructions": ""},
+        },
     }
 
 

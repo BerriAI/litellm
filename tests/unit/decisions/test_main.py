@@ -4109,17 +4109,266 @@ def test_dropping_every_question_answers_400_before_http(
     assert not route.called
 
 
-_NATIVE_OPENAI_INPUT: Final[tuple[Mapping[str, object], ...]] = (
+_PROMPT_CACHE_FIELDS: Final[Mapping[str, object]] = MappingProxyType(
+    {"prompt_cache_key": "refunds-v2", "prompt_cache_options": {"mode": "explicit", "ttl": "30m"}}
+)
+_CONVERSATION_EVIDENCE: Final[tuple[Mapping[str, object], ...]] = (
     {"type": "message", "role": "developer", "content": "Judge for the refunds team."},
-    {"role": "user", "content": [{"type": "input_json", "json": {"order": 1234, "status": "damaged"}}]},
+    {"role": "system", "content": [{"type": "input_text", "text": "Only judge visible damage."}]},
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "input_text",
+                "text": "Order 1234 arrived broken.",
+                "prompt_cache_breakpoint": {"mode": "explicit"},
+            },
+            {"type": "input_json", "data": {"order": 1234, "status": "damaged"}},
+        ],
+    },
+)
+_CONVERSATION_STATE: Final = (
+    "Judge for the refunds team.\n\nOnly judge visible damage.\n\nOrder 1234 arrived broken.\n\n"
+    '{"order": 1234, "status": "damaged"}'
+)
+_ITEMS_ONLY_OPENAI_TAKES: Final[tuple[Mapping[str, object], ...]] = (
+    {"role": "assistant", "content": [{"type": "output_text", "text": "Looking up the order."}], "phase": "commentary"},
+    {"type": "function_call", "call_id": "call_1", "name": "lookup_order", "arguments": '{"order": 1234}'},
+    {"type": "function_call_output", "call_id": "call_1", "output": "Delivered damaged."},
+    {"type": "custom_tool_call", "call_id": "call_2", "name": "photo_check", "input": "screen"},
+    {"type": "custom_tool_call_output", "call_id": "call_2", "output": [{"type": "input_text", "text": "Cracked."}]},
+)
+_ITEMS_ONLY_OPENAI_TAKES_NAMES: Final = (
+    "assistant messages",
+    "function_call items",
+    "function_call_output items",
+    "custom_tool_call items",
+    "custom_tool_call_output items",
+)
+_MIXED_INSTRUCTIONS_QUESTION: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "predicate",
+        "name": "is_defect",
+        "instructions": [
+            {"type": "input_text", "text": "Is this a defect?"},
+            {"type": "input_image", "image_url": _PNG_DATA_URL},
+        ],
+    }
+)
+_IMAGE_ONLY_QUESTION: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "predicate", "name": "crack", "instructions": [{"type": "input_image", "image_url": _PNG_DATA_URL}]}
+)
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_reaches_a_translated_provider_as_ordered_text_without_cache_fields(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="perplexity/pplx-decider-v1-27b",
+        api_key="caller-key",
+        input=_CONVERSATION_EVIDENCE,
+        questions=_PREDICATE_QUESTIONS,
+        **_PROMPT_CACHE_FIELDS,
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": _CONVERSATION_STATE,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.model_dump(mode="json")["answers"] == [
+        {"type": "predicate", "name": "is_defect", "probability": 0.9}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_instruction_parts_reach_a_translated_provider_as_one_string(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="perplexity/pplx-decider-v1-27b",
+        api_key="caller-key",
+        input="review",
+        questions=[
+            {
+                "type": "predicate",
+                "name": "is_defect",
+                "instructions": [
+                    {"type": "input_text", "text": "Is this a defect?"},
+                    {"type": "input_text", "text": "Ignore cosmetic scuffs."},
+                    {"type": "input_json", "data": {"severity_floor": "major"}},
+                ],
+            }
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.content)["questions"] == {
+        "is_defect": {
+            "type": "noul",
+            "instructions": 'Is this a defect?\n\nIgnore cosmetic scuffs.\n\n{"severity_floor": "major"}',
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("request_kwargs", "names"),
+    (
+        (
+            MappingProxyType({"input": "review", "questions": (_MIXED_INSTRUCTIONS_QUESTION,)}),
+            ("input_image in question instructions",),
+        ),
+        (
+            MappingProxyType(
+                {
+                    "input": ({"role": "user", "content": "review"}, *_ITEMS_ONLY_OPENAI_TAKES),
+                    "questions": _PREDICATE_QUESTIONS,
+                }
+            ),
+            _ITEMS_ONLY_OPENAI_TAKES_NAMES,
+        ),
+    ),
+    ids=("instruction_images", "assistant_and_tool_items"),
+)
+def test_what_a_translated_provider_cannot_take_is_refused_before_http_without_drop_params(
+    request_kwargs: Mapping[str, object],
+    names: tuple[str, ...],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=rf"{re.escape(str(list(names)))}.*drop_params") as caught:
+        litellm.decisions(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", **request_kwargs)
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_instruction_images_are_dropped_under_drop_params_and_an_image_only_question_is_a_refusal(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="perplexity/pplx-decider-v1-27b",
+        api_key="caller-key",
+        input="review",
+        questions=[_MIXED_INSTRUCTIONS_QUESTION, _IMAGE_ONLY_QUESTION],
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content)["questions"] == {
+        "is_defect": {"type": "noul", "instructions": "Is this a defect?"}
+    }
+    assert response.model_dump(mode="json")["answers"] == [
+        {"type": "predicate", "name": "is_defect", "probability": 0.9},
+        {"type": "refusal", "name": "crack"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_image_only_question_equal_to_a_sent_question_still_gets_its_own_refusal(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(
+        json={**_RESPONSE, "answers": {"0": {"type": "noul", "noul": 0.9}}}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="perplexity/pplx-decider-v1-27b",
+        api_key="caller-key",
+        input="review",
+        questions=[
+            {"type": "predicate", "instructions": [{"type": "input_image", "image_url": _PNG_DATA_URL}]},
+            {"type": "predicate", "instructions": ""},
+        ],
+        drop_params=True,
+    )
+
+    assert len(json.loads(route.calls.last.request.content)["questions"]) == 1
+    assert response.model_dump(mode="json")["answers"] == [
+        {"type": "refusal", "name": None},
+        {"type": "predicate", "name": None, "probability": 0.9},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_assistant_messages_and_tool_items_are_dropped_under_drop_params(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="perplexity/pplx-decider-v1-27b",
+        api_key="caller-key",
+        input=(*_CONVERSATION_EVIDENCE, *_ITEMS_ONLY_OPENAI_TAKES),
+        questions=_PREDICATE_QUESTIONS,
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": _CONVERSATION_STATE,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("request_kwargs", "missing"),
+    (
+        (MappingProxyType({"input": "review", "questions": (_IMAGE_ONLY_QUESTION,)}), "questions to answer"),
+        (
+            MappingProxyType({"input": _ITEMS_ONLY_OPENAI_TAKES, "questions": _PREDICATE_QUESTIONS}),
+            "input to decide on",
+        ),
+    ),
+    ids=("image_only_questions", "assistant_and_tool_items_only"),
+)
+def test_dropping_everything_a_translated_provider_cannot_take_answers_400_before_http(
+    request_kwargs: Mapping[str, object], missing: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match=f"leaves no {missing}") as caught:
+        litellm.decisions(
+            model="perplexity/pplx-decider-v1-27b", api_key="caller-key", drop_params=True, **request_kwargs
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+_NATIVE_OPENAI_INPUT: Final[tuple[Mapping[str, object], ...]] = (
+    *_CONVERSATION_EVIDENCE,
+    {
+        "role": "user",
+        "content": [
+            {"type": "input_image", "image_url": _REMOTE_IMAGE_URL, "prompt_cache_breakpoint": {"mode": "explicit"}}
+        ],
+    },
+    *_ITEMS_ONLY_OPENAI_TAKES,
 )
 _NATIVE_OPENAI_QUESTIONS: Final[tuple[Mapping[str, object], ...]] = (
-    {"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?", "rubric": "visible damage only"},
+    {
+        "type": "predicate",
+        "name": "is_defect",
+        "instructions": [
+            {"type": "input_text", "text": "Is this a defect?"},
+            {"type": "input_image", "image_url": _REMOTE_IMAGE_URL, "detail": "low"},
+            {"type": "input_json", "data": [{"defect": "crack"}]},
+        ],
+        "rubric": "visible damage only",
+    },
     {"type": "ranking", "name": "remedy", "instructions": "Rank the remedies", "options": ["refund", "replace"]},
 )
-_NATIVE_OPENAI_FIELDS: Final[Mapping[str, object]] = MappingProxyType(
-    {"prompt_cache_key": "refunds-v2", "prompt_cache_options": {"retention": "24h"}}
-)
+_NATIVE_OPENAI_FIELDS: Final[Mapping[str, object]] = _PROMPT_CACHE_FIELDS
 _NATIVE_OPENAI_RESPONSE: Final[Mapping[str, object]] = MappingProxyType(
     {
         "id": "decision_123",
@@ -4195,7 +4444,11 @@ def test_a_caller_value_that_cannot_be_sent_as_json_is_a_client_error_before_htt
 
     with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request") as caught:
         litellm.decisions(
-            model="openai/gpt-6-luna", api_key="caller-key", input="review", questions=_PREDICATE_QUESTIONS, **unsendable
+            model="openai/gpt-6-luna",
+            api_key="caller-key",
+            input="review",
+            questions=_PREDICATE_QUESTIONS,
+            **unsendable,
         )
 
     assert caught.value.status_code == 400

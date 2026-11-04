@@ -50,6 +50,7 @@ from litellm.types.decisions import (
     DecisionsImage,
     DecisionsIRAnswer,
     DecisionsIRBoxQuestion,
+    DecisionsIRConversion,
     DecisionsIRMessages,
     DecisionsIRQuestion,
     DecisionsIRRefusal,
@@ -271,10 +272,13 @@ def get_decisions_provider_config(model: str, custom_llm_provider: str) -> BaseD
     return provider_config
 
 
-def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
+def _ir_conversion(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRConversion:
     match request:
         case DecisionsRequestBody():
-            return replace(systemone_request_to_ir(request), safety_identifier=safety_identifier)
+            ir_request: Final = replace(systemone_request_to_ir(request), safety_identifier=safety_identifier)
+            return DecisionsIRConversion(
+                request=ir_request, unrepresented_params=(), questions_after_drop=ir_request.questions
+            )
         case OpenAIDecisionRequestBody():
             return openai_request_to_ir(request)
         case _:
@@ -485,19 +489,25 @@ def _without_malformed_images(
 
 
 def _provider_ir_request(
-    ir_request: DecisionsIRRequest,
+    conversion: DecisionsIRConversion,
     *,
     provider_config: BaseDecisionsConfig,
     headers: Mapping[str, str],
     support: _ResolvedSupport,
     kwargs: Mapping[str, object],
 ) -> DecisionsIRRequest | _UnsupportedParams | _NothingLeftAfterDrop:
-    unsupported: Final = _unsupported_params(ir_request, provider_config, headers, support)
+    ir_request: Final = conversion.request
+    unsupported: Final = (
+        *_unsupported_params(ir_request, provider_config, headers, support),
+        *conversion.unrepresented_params,
+    )
     if not unsupported:
         return ir_request
     if not _drops_params(kwargs):
         return _UnsupportedParams(names=unsupported)
-    supported: Final = _without_unsupported_params(ir_request, provider_config, headers, support)
+    supported: Final = _without_unsupported_params(
+        replace(ir_request, questions=conversion.questions_after_drop), provider_config, headers, support
+    )
     if _leaves_no_input(supported.input):
         return _NothingLeftAfterDrop(names=unsupported, missing="input to decide on")
     if not supported.questions:
@@ -691,9 +701,8 @@ def _ir_call(
     except ValidationError as error:
         raise _invalid_request(error, route) from error
     resolved_api_base, resolved_api_key = _connection(route, kwargs)
-    caller_ir_request: Final = _without_malformed_images(
-        _ir_request(request, request_safety_identifier), _drops_params(kwargs)
-    )
+    conversion: Final = _ir_conversion(request, request_safety_identifier)
+    caller_ir_request: Final = _without_malformed_images(conversion.request, _drops_params(kwargs))
     if isinstance(caller_ir_request, _MalformedImages):
         raise litellm.BadRequestError(
             message=(
@@ -704,7 +713,11 @@ def _ir_call(
             llm_provider=route.custom_llm_provider,
         )
     ir_request: Final = _provider_ir_request(
-        caller_ir_request, provider_config=provider_config, headers=headers, support=support, kwargs=kwargs
+        replace(conversion, request=caller_ir_request),
+        provider_config=provider_config,
+        headers=headers,
+        support=support,
+        kwargs=kwargs,
     )
     if isinstance(ir_request, _UnsupportedParams):
         raise _unsupported_params_error(ir_request.names, route)
@@ -1020,8 +1033,9 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
 
 def _caller_answers(call: DecisionsCall, answers: Sequence[DecisionsIRAnswer]) -> tuple[DecisionsIRAnswer, ...]:
     sent_answers: Final = iter(answers)
+    sent_questions: Final = frozenset(map(id, call.ir_request.questions))
     return tuple(
-        next(sent_answers) if question in call.ir_request.questions else DecisionsIRRefusal()
+        next(sent_answers) if id(question) in sent_questions else DecisionsIRRefusal()
         for question in call.caller_questions
     )
 

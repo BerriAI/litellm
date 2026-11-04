@@ -753,7 +753,7 @@ _UNTRANSLATABLE_OPENAI_FORMAT_REQUEST: Final[Mapping[str, object]] = {
     "model": "decider",
     "input": [
         {"type": "message", "role": "developer", "content": "Judge for the refunds team."},
-        {"role": "user", "content": [{"type": "input_json", "json": {"order": 1234}}]},
+        {"role": "user", "content": [{"type": "input_json", "data": {"order": 1234}}]},
     ],
     "questions": [
         {"type": "choice", "instructions": "Pick one", "choices": [{"value": True}, {"value": "true"}]},
@@ -803,6 +803,55 @@ def test_only_a_deployment_that_cannot_take_an_openai_format_body_as_sent_refuse
         "model": "gpt-6-luna",
     }
     assert response.json()["answers"] == _UNTRANSLATABLE_OPENAI_FORMAT_ANSWERS
+
+
+_CONVERSATION_REQUEST: Final[Mapping[str, object]] = {
+    "model": "decider",
+    "input": [
+        {"role": "developer", "content": "Judge for the refunds team."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "It arrived broken.", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {"type": "input_json", "data": {"order": 1234}},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "output_text", "text": "Looking up the order."}]},
+        {"type": "function_call", "call_id": "call_1", "name": "lookup_order", "arguments": '{"order": 1234}'},
+    ],
+    "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    "prompt_cache_key": "refunds-v2",
+    "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+}
+
+
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+def test_a_conversation_reaches_a_translated_deployment_as_text_unless_it_holds_what_the_deployment_cannot_take(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_drops_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(
+        monkeypatch,
+        {"model": "perplexity/pplx-decider-v1-27b", "api_key": "k", "drop_params": deployment_drops_params},
+    )
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post("/v1/decisions", json=_CONVERSATION_REQUEST)
+
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert "['assistant messages', 'function_call items']" in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": 'Judge for the refunds team.\n\nIt arrived broken.\n\n{"order": 1234}',
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
 
 
 _CLEF_OMNI_MEDIA: Final[Mapping[str, object]] = {

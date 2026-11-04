@@ -111,7 +111,7 @@ def test_azure_decision_deployments_use_catalog_limits_without_typesafe_modes(
 
 
 def _openai_ir(raw: Mapping[str, object]) -> DecisionsIRRequest:
-    return openai_request_to_ir(_OPENAI_BODY.validate_python(raw))
+    return openai_request_to_ir(_OPENAI_BODY.validate_python(raw)).request
 
 
 def test_a_systemone_request_reaches_a_systemone_provider_unchanged() -> None:

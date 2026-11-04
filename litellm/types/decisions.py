@@ -288,9 +288,16 @@ class DecisionsResponse(_HiddenParamsResponse):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+class OpenAIPromptCacheBreakpoint(LiteLLMPydanticObjectBase):
+    mode: Literal["explicit"]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 class OpenAIDecisionInputText(LiteLLMPydanticObjectBase):
     type: Literal["input_text"]
     text: str
+    prompt_cache_breakpoint: OpenAIPromptCacheBreakpoint | None = None
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -299,6 +306,14 @@ class OpenAIDecisionInputImage(LiteLLMPydanticObjectBase):
     type: Literal["input_image"]
     image_url: str
     detail: str | None = None
+    prompt_cache_breakpoint: OpenAIPromptCacheBreakpoint | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionInputJson(LiteLLMPydanticObjectBase):
+    type: Literal["input_json"]
+    data: Mapping[str, object] | Sequence[object]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -307,23 +322,176 @@ OpenAIDecisionContentPart: TypeAlias = Annotated[
     OpenAIDecisionInputText | OpenAIDecisionInputImage,
     Field(discriminator="type"),
 ]
+OpenAIDecisionUserContentPart: TypeAlias = Annotated[
+    OpenAIDecisionInputText | OpenAIDecisionInputImage | OpenAIDecisionInputJson,
+    Field(discriminator="type"),
+]
 
 
 class OpenAIDecisionInputMessage(LiteLLMPydanticObjectBase):
-    role: Literal["user"] = "user"
+    role: Literal["user", "developer", "system"] = "user"
     type: Literal["message"] = "message"
     content: str | Sequence[OpenAIDecisionContentPart]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-OpenAIDecisionInput: TypeAlias = str | Sequence[OpenAIDecisionInputMessage]
+class OpenAIDecisionUserMessage(LiteLLMPydanticObjectBase):
+    role: Literal["user"] = "user"
+    type: Literal["message"] = "message"
+    content: str | Sequence[OpenAIDecisionUserContentPart]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionDeveloperMessage(LiteLLMPydanticObjectBase):
+    role: Literal["developer", "system"]
+    type: Literal["message"] = "message"
+    content: str | Sequence[OpenAIDecisionInputText]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionOutputText(LiteLLMPydanticObjectBase):
+    type: Literal["output_text"]
+    text: str
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionRefusal(LiteLLMPydanticObjectBase):
+    type: Literal["refusal"]
+    refusal: str
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionAssistantMessage(LiteLLMPydanticObjectBase):
+    role: Literal["assistant"]
+    type: Literal["message"] = "message"
+    content: str | Sequence[Annotated[OpenAIDecisionOutputText | OpenAIDecisionRefusal, Field(discriminator="type")]]
+    phase: Literal["commentary", "final_answer"] | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+OpenAIToolCallStatus: TypeAlias = Literal["in_progress", "completed", "incomplete"]
+
+
+class OpenAIDecisionFunctionCall(LiteLLMPydanticObjectBase):
+    type: Literal["function_call"]
+    call_id: str
+    name: str
+    arguments: str
+    id: str | None = None
+    namespace: str | None = None
+    status: OpenAIToolCallStatus | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionFunctionCallOutput(LiteLLMPydanticObjectBase):
+    type: Literal["function_call_output"]
+    call_id: str
+    output: str | Sequence[OpenAIDecisionContentPart]
+    id: str | None = None
+    status: OpenAIToolCallStatus | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionCustomToolCall(LiteLLMPydanticObjectBase):
+    type: Literal["custom_tool_call"]
+    call_id: str
+    name: str
+    input: str
+    id: str | None = None
+    namespace: str | None = None
+    status: OpenAIToolCallStatus | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionCustomToolCallOutput(LiteLLMPydanticObjectBase):
+    type: Literal["custom_tool_call_output"]
+    call_id: str
+    output: str | Sequence[OpenAIDecisionContentPart]
+    id: str | None = None
+    status: OpenAIToolCallStatus | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class _TaggedInputItem(TypedDict, total=False):
+    role: ReadOnly[object]
+    type: ReadOnly[object]
+
+
+_TAGGED_INPUT_ITEM_ADAPTER: Final[TypeAdapter[_TaggedInputItem]] = TypeAdapter(_TaggedInputItem)
+
+
+def _input_item_field(item: object, name: Literal["role", "type"]) -> object:
+    if isinstance(item, Mapping):
+        return _TAGGED_INPUT_ITEM_ADAPTER.validate_python(item).get(name)
+    return getattr(item, name, None)
+
+
+def _openai_input_item_tag(item: object) -> str | None:
+    role: Final = _input_item_field(item, "role")
+    item_type: Final = _input_item_field(item, "type")
+    if item_type not in (None, "message"):
+        return item_type if isinstance(item_type, str) else None
+    if role is None or role == "user":
+        return "user"
+    if role == "system":
+        return "developer"
+    return role if isinstance(role, str) else None
+
+
+OpenAIDecisionInputItem: TypeAlias = Annotated[
+    Annotated[OpenAIDecisionUserMessage, Tag("user")]
+    | Annotated[OpenAIDecisionDeveloperMessage, Tag("developer")]
+    | Annotated[OpenAIDecisionAssistantMessage, Tag("assistant")]
+    | Annotated[OpenAIDecisionFunctionCall, Tag("function_call")]
+    | Annotated[OpenAIDecisionFunctionCallOutput, Tag("function_call_output")]
+    | Annotated[OpenAIDecisionCustomToolCall, Tag("custom_tool_call")]
+    | Annotated[OpenAIDecisionCustomToolCallOutput, Tag("custom_tool_call_output")],
+    Discriminator(_openai_input_item_tag),
+]
+OpenAIDecisionInput: TypeAlias = str | Sequence[OpenAIDecisionInputItem]
+
+
+class OpenAIInstructionText(LiteLLMPydanticObjectBase):
+    type: Literal["input_text"]
+    text: str
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIInstructionImage(LiteLLMPydanticObjectBase):
+    type: Literal["input_image"]
+    image_url: str
+    detail: str | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+OpenAIInstructionPart: TypeAlias = Annotated[
+    OpenAIInstructionText | OpenAIInstructionImage | OpenAIDecisionInputJson,
+    Field(discriminator="type"),
+]
+OpenAIQuestionInstructions: TypeAlias = str | Annotated[Sequence[OpenAIInstructionPart], Field(min_length=1)]
 
 
 class OpenAIPredicateQuestion(LiteLLMPydanticObjectBase):
     type: Literal["predicate"]
     name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
-    instructions: Annotated[str, Field(description="The yes/no question to ask about the input")]
+    instructions: Annotated[
+        OpenAIQuestionInstructions,
+        Field(
+            description="The yes/no question to ask about the input, as text or input_text, input_image and input_json parts"
+        ),
+    ]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -344,7 +512,12 @@ def systemone_choice_key(value: str | bool) -> str:
 class OpenAIChoiceQuestion(LiteLLMPydanticObjectBase):
     type: Literal["choice"]
     name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
-    instructions: Annotated[str, Field(description="The question to ask about the input")]
+    instructions: Annotated[
+        OpenAIQuestionInstructions,
+        Field(
+            description="The question to ask about the input, as text or input_text, input_image and input_json parts"
+        ),
+    ]
     choices: Annotated[
         Sequence[OpenAIChoiceOption],
         Field(min_length=2, max_length=255, description="The options the model picks from. Values must be unique"),
@@ -370,7 +543,12 @@ class OpenAIScoreLevel(LiteLLMPydanticObjectBase):
 class OpenAIScoreQuestion(LiteLLMPydanticObjectBase):
     type: Literal["score"]
     name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
-    instructions: Annotated[str, Field(description="The question to ask about the input")]
+    instructions: Annotated[
+        OpenAIQuestionInstructions,
+        Field(
+            description="The question to ask about the input, as text or input_text, input_image and input_json parts"
+        ),
+    ]
     levels: Annotated[
         Sequence[OpenAIScoreLevel],
         Field(
@@ -399,7 +577,10 @@ class OpenAIDecisionRequestBody(DecisionsMediaBody):
     input: Annotated[
         OpenAIDecisionInput,
         Field(
-            description="The text being judged, or user messages whose content mixes input_text and input_image parts"
+            description=(
+                "The text being judged, or a conversation of user, developer, system and assistant messages and "
+                "function_call, function_call_output, custom_tool_call and custom_tool_call_output items"
+            )
         ),
     ]
     questions: Annotated[
@@ -620,6 +801,13 @@ class DecisionsIRRequest:
     assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
     audio: tuple[DecisionsAudio, ...] = ()
     videos: tuple[DecisionsVideo, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRConversion:
+    request: DecisionsIRRequest
+    unrepresented_params: tuple[str, ...]
+    questions_after_drop: tuple[DecisionsIRQuestion, ...]
 
 
 @dataclass(frozen=True, slots=True)

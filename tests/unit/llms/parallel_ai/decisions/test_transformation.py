@@ -123,7 +123,7 @@ def test_openai_predicate_is_translated_to_a_named_noul_question() -> None:
                 "questions": [{"type": "predicate", "name": "available", "instructions": "Available?"}],
             }
         )
-    )
+    ).request
     assert ParallelAIDecisionsConfig().transform_decisions_request("decision", request, "parallel_ai") == {
         "mode": "fast",
         "state": "Example product",

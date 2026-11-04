@@ -22,6 +22,7 @@ from litellm.types.decisions import (
     DecisionsIRChoiceOption,
     DecisionsIRChoiceProbability,
     DecisionsIRChoiceQuestion,
+    DecisionsIRConversion,
     DecisionsIRMessages,
     DecisionsIRPredicateAnswer,
     DecisionsIRPredicateQuestion,
@@ -42,8 +43,16 @@ from litellm.types.decisions import (
     OpenAIChoiceProbability,
     OpenAIChoiceQuestion,
     OpenAIDecisionAnswer,
+    OpenAIDecisionAssistantMessage,
+    OpenAIDecisionCustomToolCall,
+    OpenAIDecisionCustomToolCallOutput,
+    OpenAIDecisionDeveloperMessage,
+    OpenAIDecisionFunctionCall,
+    OpenAIDecisionFunctionCallOutput,
     OpenAIDecisionInput,
     OpenAIDecisionInputImage,
+    OpenAIDecisionInputItem,
+    OpenAIDecisionInputJson,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
     OpenAIDecisionInputTokensDetails,
@@ -52,8 +61,14 @@ from litellm.types.decisions import (
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
     OpenAIDecisionUsage,
+    OpenAIDecisionUserContentPart,
+    OpenAIDecisionUserMessage,
+    OpenAIInstructionImage,
+    OpenAIInstructionPart,
+    OpenAIInstructionText,
     OpenAIPredicateAnswer,
     OpenAIPredicateQuestion,
+    OpenAIQuestionInstructions,
     OpenAIRefusalAnswer,
     OpenAIScoreAnswer,
     OpenAIScoreProbability,
@@ -68,20 +83,91 @@ _SINGLE_OPTION: Final = UnsupportedDecisionsRequest(
 )
 
 
-def _ir_input(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
+def _ir_part(part: OpenAIDecisionUserContentPart) -> OpenAIDecisionInputText | OpenAIDecisionInputImage:
+    match part:
+        case OpenAIDecisionInputJson():
+            return OpenAIDecisionInputText(type="input_text", text=decisions_text(part.data))
+        case OpenAIDecisionInputText() | OpenAIDecisionInputImage():
+            return part
+        case _:
+            assert_never(part)
+
+
+def _ir_user_message(message: OpenAIDecisionUserMessage) -> OpenAIDecisionInputMessage:
+    return OpenAIDecisionInputMessage(
+        content=message.content if isinstance(message.content, str) else tuple(map(_ir_part, message.content))
+    )
+
+
+def _ir_message_or_param(item: OpenAIDecisionInputItem) -> OpenAIDecisionInputMessage | str:
+    match item:
+        case OpenAIDecisionUserMessage():
+            return _ir_user_message(item)
+        case OpenAIDecisionDeveloperMessage():
+            return OpenAIDecisionInputMessage(role=item.role, content=item.content)
+        case OpenAIDecisionAssistantMessage():
+            return "assistant messages"
+        case (
+            OpenAIDecisionFunctionCall()
+            | OpenAIDecisionFunctionCallOutput()
+            | OpenAIDecisionCustomToolCall()
+            | OpenAIDecisionCustomToolCallOutput()
+        ):
+            return f"{item.type} items"
+        case _:
+            assert_never(item)
+
+
+def _input_items(decision_input: OpenAIDecisionInput) -> tuple[OpenAIDecisionInputMessage | str, ...]:
+    return () if isinstance(decision_input, str) else tuple(map(_ir_message_or_param, decision_input))
+
+
+def _ir_input(
+    decision_input: OpenAIDecisionInput, items: Sequence[OpenAIDecisionInputMessage | str]
+) -> DecisionsIRState | DecisionsIRMessages:
     if isinstance(decision_input, str):
         return DecisionsIRState(state=decision_input)
-    return DecisionsIRMessages(messages=tuple(decision_input))
+    return DecisionsIRMessages(messages=tuple(item for item in items if isinstance(item, OpenAIDecisionInputMessage)))
+
+
+def _instruction_text(part: OpenAIInstructionPart) -> str | None:
+    match part:
+        case OpenAIInstructionText():
+            return part.text
+        case OpenAIDecisionInputJson():
+            return decisions_text(part.data)
+        case OpenAIInstructionImage():
+            return None
+        case _:
+            assert_never(part)
+
+
+def _instruction_texts(instructions: OpenAIQuestionInstructions) -> tuple[str, ...]:
+    if isinstance(instructions, str):
+        return (instructions,)
+    return tuple(text for text in map(_instruction_text, instructions) if text is not None)
+
+
+def _ir_instructions(instructions: OpenAIQuestionInstructions) -> str:
+    return "\n\n".join(_instruction_texts(instructions))
+
+
+def _has_instruction_image(question: OpenAIDecisionQuestion) -> bool:
+    return not isinstance(question.instructions, str) and any(
+        isinstance(part, OpenAIInstructionImage) for part in question.instructions
+    )
 
 
 def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
     match question:
         case OpenAIPredicateQuestion():
-            return DecisionsIRPredicateQuestion(name=question.name, instructions=question.instructions)
+            return DecisionsIRPredicateQuestion(
+                name=question.name, instructions=_ir_instructions(question.instructions)
+            )
         case OpenAIChoiceQuestion():
             return DecisionsIRChoiceQuestion(
                 name=question.name,
-                instructions=question.instructions,
+                instructions=_ir_instructions(question.instructions),
                 choices=tuple(
                     DecisionsIRChoiceOption(value=option.value, description=option.description)
                     for option in question.choices
@@ -90,7 +176,7 @@ def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
         case OpenAIScoreQuestion():
             return DecisionsIRScoreQuestion(
                 name=question.name,
-                instructions=question.instructions,
+                instructions=_ir_instructions(question.instructions),
                 levels=tuple(
                     DecisionsIRScoreLevel(label=level.label, description=level.description) for level in question.levels
                 ),
@@ -101,13 +187,27 @@ def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
             assert_never(question)
 
 
-def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRRequest:
-    return DecisionsIRRequest(
-        input=_ir_input(request.input),
-        audio=request.audio,
-        videos=request.videos,
-        questions=tuple(_ir_question(question) for question in request.questions),
-        safety_identifier=request.safety_identifier,
+def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRConversion:
+    items: Final = _input_items(request.input)
+    questions: Final = tuple(map(_ir_question, request.questions))
+    has_instruction_images: Final = any(map(_has_instruction_image, request.questions))
+    return DecisionsIRConversion(
+        request=DecisionsIRRequest(
+            input=_ir_input(request.input, items),
+            audio=request.audio,
+            videos=request.videos,
+            questions=questions,
+            safety_identifier=request.safety_identifier,
+        ),
+        unrepresented_params=(
+            *dict.fromkeys(item for item in items if isinstance(item, str)),
+            *(("input_image in question instructions",) if has_instruction_images else ()),
+        ),
+        questions_after_drop=tuple(
+            ir_question
+            for ir_question, question in zip(questions, request.questions, strict=True)
+            if _instruction_texts(question.instructions)
+        ),
     )
 
 
