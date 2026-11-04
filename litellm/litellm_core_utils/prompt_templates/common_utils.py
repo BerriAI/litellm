@@ -18,7 +18,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import TypeAdapter, ValidationError
-from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
 from litellm import verbose_logger
@@ -448,11 +447,7 @@ def _tpm_embedding_leaf(value: object) -> _TPMMediaProjection:
     return _TPMMediaProjection("" if media else value, media)
 
 
-def _is_json_array(
-    value: object,
-) -> TypeIs[  # guard-ok: validates the exact list and tuple types  # mutable-ok: JSON input arrays are mutable
-    list[object] | tuple[object, ...]
-]:
+def _is_json_array(value: object) -> bool:
     return isinstance(value, (list, tuple))
 
 
@@ -468,7 +463,7 @@ def split_embedding_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[
 
 
 def embedding_input_is_all_media(value: object) -> bool:
-    items: Final = value if _is_json_array(value) else (value,)
+    items: Final = cast(Sequence[object], value) if _is_json_array(value) else (value,)  # cast-ok: JSON input array
     return all(_tpm_embedding_leaf(item).media for item in items)
 
 
