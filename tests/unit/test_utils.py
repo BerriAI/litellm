@@ -1082,6 +1082,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "regional_endpoint_uplift_multiplier": {"type": "number"},
             "regional_processing_uplift_multiplier_eu": {"type": "number"},
             "regional_processing_uplift_multiplier_us": {"type": "number"},
+            "fedramp_uplift_multiplier": {"type": "number"},
             "input_cost_per_pixel": {"type": "number"},
             "input_cost_per_query": {"type": "number"},
             "input_cost_per_request": {"type": "number"},
@@ -4243,23 +4244,29 @@ def test_speech_stream_is_logged_when_the_audio_ends(
     assert audio.rest_sent_at is not None and _logged_end(logged) >= audio.rest_sent_at
 
 
+class _InlineExecutor:
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> Future[object]:
+        future: Final = Future[object]()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
 @pytest.mark.usefixtures("local_model_cost_map")
-def test_speech_stream_usage_is_captured_when_the_audio_ends(
+def test_speech_stream_success_handler_runs_when_the_audio_ends(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     audio: Final = _SyncAudio(b"first", b"rest")
     _mock_elevenlabs_audio(respx_mock, audio)
-    captured_at: Final[queue.Queue[float]] = queue.Queue()
-    monkeypatch.setattr(
-        litellm_logging.Logging, "usage_capture_callback", lambda *_: captured_at.put(time.time())
-    )
+    speech_logger: Final = _SyncSpeechLogger()
+    monkeypatch.setattr(litellm, "callbacks", [speech_logger])
+    monkeypatch.setattr("litellm.utils.executor", _InlineExecutor())
 
     response: Final = litellm.speech(**_SPEECH_ARGS, stream=True)
-    captured_before_read: Final = captured_at.qsize()
+    logged_at_headers: Final = speech_logger.logged_payloads.qsize()
     assert response.read() == b"firstrest"
 
-    assert captured_before_read == 0
-    assert audio.rest_sent_at is not None and captured_at.get(timeout=5) >= audio.rest_sent_at
+    assert logged_at_headers == 0
+    assert speech_logger.logged_payloads.get_nowait()["response"] == _audio_summary(len(b"firstrest"))
 
 
 class TestCallbackAsyncSyncSeparation:

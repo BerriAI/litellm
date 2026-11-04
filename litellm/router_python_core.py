@@ -3866,11 +3866,6 @@ class PythonCore(DeprecatedRouterMembers):
         priced_partial._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # no public accessor
             key: value for key, value in get_hidden_params_dict(partial_response).items() if key != "response_cost"
         }
-        if LiteLLMLogging.usage_capture_callback is not None:
-            from litellm._internal_context import internal_sub_call
-
-            with internal_sub_call(cut_logging.litellm_call_id):
-                cut_logging.capture_usage_before_logging(priced_partial)
         return ContinuedPartial(
             usage=BaseTokenUsageProcessor.combine_usage_objects(
                 usage_objects=[partial_usage, inherited_usage]
@@ -5240,8 +5235,19 @@ class PythonCore(DeprecatedRouterMembers):
         # _update_kwargs_with_deployment and stamped into kwargs["model_info"]; stamping
         # the static shared deployment's id instead would let one tenant's bad credentials
         # cool down the deployment every other tenant sharing this config relies on.
+        if getattr(exception, "failed_deployment_id", None):
+            return
         effective_model_info: Final = kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
         self._set_failed_deployment_id_on_exception(exception, MappingProxyType({"model_info": effective_model_info}))
+        configured_deployment_id: Final = _MODEL_INFO_ADAPTER.validate_python(effective_model_info).get(
+            "original_model_id"
+        )
+        if isinstance(configured_deployment_id, str) and configured_deployment_id:
+            exception.failed_configured_deployment_id = configured_deployment_id  # pyright: ignore[reportAttributeAccessIssue]  # rebind-ok: the exception carries the failure to _maybe_run_weighted_failover
+
+    def _stamp_failed_attempt(self, exception: Exception, kwargs: Mapping[str, object], *, picked: bool) -> None:
+        if picked:
+            self._stamp_failed_deployment_id_with_effective_model_info(exception, MappingProxyType({}), kwargs)
 
     @staticmethod
     def _stamp_retry_skip_deployment_id(exception: Exception, kwargs: Mapping[str, object]) -> None:
@@ -6118,9 +6124,10 @@ class PythonCore(DeprecatedRouterMembers):
 
     def _image_generation(self, prompt: str, model: str, **kwargs):
         model_name: Final = ""
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _image_generation()- model: %s", model)
-            deployment: Final = self.get_available_deployment(
+            deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6156,6 +6163,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def aimage_generation(self, prompt: str, model: str, **kwargs):
@@ -6181,11 +6191,12 @@ class PythonCore(DeprecatedRouterMembers):
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
         model_name = model
         start_time: Final = datetime.now()  # noqa: DTZ005  # SDK logging uses naive local timestamps
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _image_generation()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             try:
-                deployment: Final = await self._core_async_get_available_deployment(
+                deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                     model=model,
                     messages=[{"role": "user", "content": "prompt"}],
                     specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6246,6 +6257,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def atranscription(self, file: FileTypes, model: str, **kwargs):
@@ -6292,10 +6306,11 @@ class PythonCore(DeprecatedRouterMembers):
 
     async def _atranscription(self, file: FileTypes, model: str, **kwargs):
         model_name: Final = model
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _atranscription()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
+            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6329,6 +6344,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
@@ -6389,10 +6407,11 @@ class PythonCore(DeprecatedRouterMembers):
 
     async def _aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
         model_name: Final = model
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _aspeech()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
+            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6433,6 +6452,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def arerank(self, model: str, **kwargs):
@@ -6458,9 +6480,10 @@ class PythonCore(DeprecatedRouterMembers):
 
     async def _arerank(self, model: str, **kwargs):
         model_name = None
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _rerank()- model: %s", model)
-            deployment: Final = await self._core_async_get_available_deployment(
+            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
@@ -6492,6 +6515,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     def text_completion(
@@ -6573,10 +6599,11 @@ class PythonCore(DeprecatedRouterMembers):
             raise e
 
     async def _atext_completion(self, model: str, prompt: str, **kwargs):
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _atext_completion()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
+            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6612,6 +6639,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model is not None:
                 self.fail_calls[model] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def aadapter_completion(
@@ -6643,10 +6673,11 @@ class PythonCore(DeprecatedRouterMembers):
             raise e
 
     async def _aadapter_completion(self, adapter_id: str, model: str, **kwargs):
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _aadapter_completion()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
+            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                 model=model,
                 messages=[{"role": "user", "content": "default text"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -6682,6 +6713,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model is not None:
                 self.fail_calls[model] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs) -> object:
@@ -7670,6 +7704,7 @@ class PythonCore(DeprecatedRouterMembers):
         """
         handler_name: Final = original_function.__name__
         metadata_variable_name: Final = get_router_metadata_variable_name(function_name="generic_api_call")
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _generic_api_call() - handler: %s, model: %s", handler_name, model)
             self._update_kwargs_before_fallbacks(
@@ -7678,7 +7713,7 @@ class PythonCore(DeprecatedRouterMembers):
                 metadata_variable_name=metadata_variable_name,
             )
             with self._video_call_pin(handler_name, kwargs), self._route_capability_pin(handler_name):
-                deployment: Final = self.get_available_deployment(
+                deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
                     model=model,
                     messages=kwargs.get("messages", None),
                     input=kwargs.get("input", None),
@@ -7724,6 +7759,9 @@ class PythonCore(DeprecatedRouterMembers):
             verbose_router_logger.info("%s(model=%s)\x1b[31m Exception %s\x1b[0m", handler_name, model, e)
             if model is not None:
                 self.fail_calls[model] += 1
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     def embedding(
@@ -7745,10 +7783,11 @@ class PythonCore(DeprecatedRouterMembers):
 
     def _embedding(self, input: str | list[object], model: str, **kwargs):
         model_name = None
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside embedding()- model: %s", model)
             with embedding_deployment_selection():
-                deployment: Final = self.get_available_deployment(
+                deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
                     model=model,
                     input=input,
                     specific_deployment=kwargs.pop("specific_deployment", None),
@@ -7805,6 +7844,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     async def aembedding(
@@ -7834,11 +7876,12 @@ class PythonCore(DeprecatedRouterMembers):
 
     async def _aembedding(self, input: str | list[object], model: str, **kwargs):
         model_name = None
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _aembedding()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             with embedding_deployment_selection():
-                deployment: Final = await self._core_async_get_available_deployment(
+                deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
                     model=model,
                     input=input,
                     specific_deployment=kwargs.pop("specific_deployment", None),
@@ -7885,6 +7928,9 @@ class PythonCore(DeprecatedRouterMembers):
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             self._stamp_retry_skip_deployment_id(e, kwargs)
+            self._stamp_failed_attempt(
+                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+            )
             raise e
 
     #### FILES API ####
@@ -9123,8 +9169,9 @@ class PythonCore(DeprecatedRouterMembers):
             kwargs[metadata_variable_name] = meta
         if not isinstance(meta, dict):
             return None
+        configured_failed_id: Final[str | None] = getattr(exception, "failed_configured_deployment_id", None)
         prev_excluded: Final = set(meta.get("_failover_excluded_ids") or [])
-        excluded: Final = prev_excluded | {failed_id}
+        excluded: Final = prev_excluded | {configured_failed_id or failed_id}
 
         all_ids: Final = {
             (d.get("model_info") or {}).get("id")
