@@ -850,7 +850,7 @@ def convert_to_model_response_object(
                     # Preserve provider_specific_fields if already present
                     # in the response (e.g. from proxy passthrough)
                     provider_specific_fields = dict(choice["message"].get("provider_specific_fields", None) or {})
-                    for f in choice["message"].keys() - _MESSAGE_FIELDS - {"reasoning"}:
+                    for f in choice["message"].keys() - _MESSAGE_FIELDS:
                         provider_specific_fields[f] = choice["message"][f]
                     annotations, other_annotations = partition_annotations(choice["message"].get("annotations", None))
                     if other_annotations:
