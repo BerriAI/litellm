@@ -5271,7 +5271,7 @@
         "batches": false,
         "messages": false,
         "interactions": false,
-        "systemone": true,
+        "systemone": false,
         "a2a": false,
         "generateContent": false
       }
