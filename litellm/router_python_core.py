@@ -48,7 +48,20 @@ from datetime import datetime, timezone
 from functools import lru_cache, partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Generic,
+    Literal,
+    NoReturn,
+    Optional,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import anyio
 import httpx
@@ -672,6 +685,29 @@ _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
+
+
+class _ModelInfoDiscoverer(Protocol):
+    def __call__(
+        self, *, model: str, api_base: str, headers: Mapping[str, str], client: AsyncHTTPHandler, cache: InMemoryCache
+    ) -> Awaitable[Mapping[str, int] | None]: ...
+
+
+async def _discover_openai_compatible_model_info(
+    *, model: str, api_base: str, headers: Mapping[str, str], client: AsyncHTTPHandler, cache: InMemoryCache
+) -> Mapping[str, int] | None:
+    limits: Final = await get_openai_compatible_model_info(
+        model=model, api_base=api_base, headers=headers, client=client, cache=cache
+    )
+    return limits or None
+
+
+_MODEL_INFO_DISCOVERERS: Final[Mapping[str, _ModelInfoDiscoverer]] = MappingProxyType(
+    {
+        **dict.fromkeys(MODEL_INFO_DISCOVERY_PROVIDERS, _discover_openai_compatible_model_info),
+        "lm_studio": get_lm_studio_model_info,
+    }
+)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -12467,7 +12503,8 @@ class PythonCore(DeprecatedRouterMembers):
         model, provider, dynamic_api_key, api_base = self._host.invoke("get_llm_provider")(
             model=params.model, litellm_params=params
         )
-        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS and provider != "lm_studio":
+        discover: Final = _MODEL_INFO_DISCOVERERS.get(provider)
+        if discover is None:
             return
         if api_base is None or "*" in model or params.get("use_clientside_credentials"):
             return
@@ -12483,7 +12520,6 @@ class PythonCore(DeprecatedRouterMembers):
         auth_headers: Final = (
             MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
         )
-        discover: Final = get_lm_studio_model_info if provider == "lm_studio" else get_openai_compatible_model_info
         limits: Final = await discover(
             model=model,
             api_base=api_base,
@@ -12497,11 +12533,7 @@ class PythonCore(DeprecatedRouterMembers):
             cache=self._core_cache.in_memory_cache,
         )
         model_id: Final = deployment.model_info.id
-        if (
-            (not limits and provider != "lm_studio")
-            or model_id is None
-            or self._core_get_model_info(model_id) is not raw_deployment
-        ):
+        if limits is None or model_id is None or self._core_get_model_info(model_id) is not raw_deployment:
             return
         self._discovered_model_info_cache.max_size_in_memory = max(len(self._core_model_list), 1)
         self._discovered_model_info_cache.delete_cache(model_id)

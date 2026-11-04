@@ -3,15 +3,16 @@ import json
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Annotated, Final, Protocol, TypeAlias
+from typing import Annotated, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
-from pydantic import BeforeValidator, ConfigDict
+from pydantic import BeforeValidator, ConfigDict, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.types.llms.base import LiteLLMBaseModel
+
+RESPONSE_REUSE_SECONDS: Final = 60
 
 
 class _MetadataCache(Protocol):
@@ -80,6 +81,13 @@ class _ModelsV0(LiteLLMBaseModel):
         return card.loaded_context_length if card is not None and card.state == "loaded" else None
 
 
+class _Unavailable(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+
+_Models: Final = TypeVar("_Models", _ModelsV1, _ModelsV0)
+
+
 async def get_lm_studio_model_info(
     *,
     model: str,
@@ -87,51 +95,70 @@ async def get_lm_studio_model_info(
     headers: Mapping[str, str],
     client: AsyncHTTPHandler,
     cache: _MetadataCache,
-) -> Mapping[str, int]:
+) -> Mapping[str, int] | None:
     try:
         base: Final = httpx.URL(api_base)
     except (ValueError, httpx.InvalidURL):
-        return MappingProxyType({})
+        return None
     if base.scheme not in ("http", "https") or not base.host or base.username or base.password:
-        return MappingProxyType({})
+        return None
     path: Final = base.path.rstrip("/")
     suffix: Final = next((suffix for suffix in ("/api/v1", "/api/v0", "/v1") if path.endswith(suffix)), "")
     prefix: Final = path[: -len(suffix)] if suffix else path
-    url: Final = str(base.copy_with(path=prefix + "/api/v1/models", fragment=None))
+    current_url: Final = base.copy_with(path=prefix + "/api/v1/models", fragment=None)
     cache_key: Final = (
-        "lm_studio_model_info:" + hashlib.sha256(json.dumps((url, sorted(headers.items()))).encode()).hexdigest()
+        "lm_studio_model_info:"
+        + hashlib.sha256(json.dumps((str(current_url), sorted(headers.items()))).encode()).hexdigest()
     )
     cached: Final[object] = cache.get_cache(cache_key)
+    if isinstance(cached, _Unavailable):
+        return None
     if isinstance(cached, (_ModelsV1, _ModelsV0)):
         return _token_limits(cached.context_length(model))
-    try:
-        response: Final = await client.get(  # pyright: ignore[reportUnknownMemberType]  # untyped options
-            url=url,
-            headers=dict(headers),
-            timeout=httpx.Timeout(5.0),
-            follow_redirects=False,
-            max_response_bytes=2 * 1024 * 1024,
-        )
-        if response.status_code in (404, 405):
-            legacy_response: Final = await client.get(  # pyright: ignore[reportUnknownMemberType]  # untyped options
-                url=str(base.copy_with(path=prefix + "/api/v0/models", fragment=None)),
-                headers=dict(headers),
-                timeout=httpx.Timeout(5.0),
-                follow_redirects=False,
-                max_response_bytes=2 * 1024 * 1024,
-            )
-            legacy_response.raise_for_status()
-            models: Final = _ModelsV0.model_validate_json(legacy_response.content)
-            cache.set_cache(cache_key, models, ttl=MODEL_INFO_REFRESH_SECONDS)
-            return _token_limits(models.context_length(model))
-        response.raise_for_status()
-        current_models: Final = _ModelsV1.model_validate_json(response.content)
-        cache.set_cache(cache_key, current_models, ttl=MODEL_INFO_REFRESH_SECONDS)
-        return _token_limits(current_models.context_length(model))
-    except Exception:  # noqa: BLE001  # optional metadata must not interrupt proxy refresh
+    models: Final = await _fetch_models(
+        client=client,
+        current_url=current_url,
+        legacy_url=base.copy_with(path=prefix + "/api/v0/models", fragment=None),
+        headers=headers,
+    )
+    if models is None:
         verbose_logger.debug("Could not discover LM Studio model token limits")
-        cache.set_cache(cache_key, _ModelsV1(models=()), ttl=60)
-        return MappingProxyType({})
+        cache.set_cache(cache_key, _Unavailable(), ttl=RESPONSE_REUSE_SECONDS)
+        return None
+    cache.set_cache(cache_key, models, ttl=RESPONSE_REUSE_SECONDS)
+    return _token_limits(models.context_length(model))
+
+
+async def _fetch_models(
+    *, client: AsyncHTTPHandler, current_url: httpx.URL, legacy_url: httpx.URL, headers: Mapping[str, str]
+) -> _ModelsV1 | _ModelsV0 | None:
+    try:
+        current: Final = await _get(client=client, url=current_url, headers=headers)
+        current_models: Final = _parse(current, _ModelsV1)
+        if current_models is not None or not (current.is_success or current.status_code in (404, 405)):
+            return current_models
+        return _parse(await _get(client=client, url=legacy_url, headers=headers), _ModelsV0)
+    except Exception:  # noqa: BLE001  # optional metadata must not interrupt proxy refresh
+        return None
+
+
+async def _get(*, client: AsyncHTTPHandler, url: httpx.URL, headers: Mapping[str, str]) -> httpx.Response:
+    return await client.get(  # pyright: ignore[reportUnknownMemberType]  # untyped options
+        url=str(url),
+        headers=dict(headers),
+        timeout=httpx.Timeout(5.0),
+        follow_redirects=False,
+        max_response_bytes=2 * 1024 * 1024,
+    )
+
+
+def _parse(response: httpx.Response, shape: type[_Models]) -> _Models | None:
+    if not response.is_success:
+        return None
+    try:
+        return shape.model_validate_json(response.content)
+    except ValidationError:
+        return None
 
 
 def _token_limits(context: int | None) -> Mapping[str, int]:

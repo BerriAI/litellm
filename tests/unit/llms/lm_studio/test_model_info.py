@@ -66,13 +66,22 @@ async def test_matches_loaded_instances_without_using_theoretical_limits(model: 
 
 
 @pytest.mark.parametrize("base_path", ("", "/v1/", "/api/v1", "/api/v0"))
-@pytest.mark.parametrize("status", (404, 405))
-async def test_legacy_fallback_preserves_origin_and_proxy_prefix(base_path: str, status: int) -> None:
+@pytest.mark.parametrize(
+    "current_api_response",
+    (
+        httpx.Response(404),
+        httpx.Response(405),
+        httpx.Response(200, json={"error": "Unexpected endpoint or method. (GET /api/v1/models)"}),
+    ),
+)
+async def test_legacy_fallback_preserves_origin_and_proxy_prefix(
+    base_path: str, current_api_response: httpx.Response
+) -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "backend.test"
         assert request.headers["authorization"] == "Bearer local-key"
         if request.url.path == "/tenant/api/v1/models":
-            return httpx.Response(status)
+            return current_api_response
         assert request.url.path == "/tenant/api/v0/models"
         return httpx.Response(
             200,
@@ -146,14 +155,13 @@ async def test_invalid_context_is_not_advertised(context: object) -> None:
         (httpx.Response(404), 2),
         (httpx.Response(405), 2),
         (httpx.Response(302, headers={"location": "https://elsewhere.test"}), 1),
-        (httpx.Response(200, content=b"not json"), 1),
-        (httpx.Response(200, json={"models": None}), 1),
-        (httpx.Response(200, json={"data": []}), 1),
+        (httpx.Response(200, content=b"not json"), 2),
+        (httpx.Response(200, json={"models": None}), 2),
         (httpx.ReadTimeout("offline"), 1),
         (httpx.ConnectError("offline"), 1),
     ),
 )
-async def test_failures_are_negative_cached_without_redirects_or_unbounded_fallbacks(
+async def test_failures_are_reported_as_unknown_and_negative_cached_without_redirects_or_unbounded_fallbacks(
     response: httpx.Response | Exception,
     requests_per_attempt: int,
 ) -> None:
@@ -164,30 +172,37 @@ async def test_failures_are_negative_cached_without_redirects_or_unbounded_fallb
     async with httpx.AsyncClient(transport=httpx.MockTransport(responder), follow_redirects=True) as client:
         handler.client = client
         cache: Final = InMemoryCache(clock=clock)
-        for _ in range(2):
-            assert (
-                await get_lm_studio_model_info(
-                    model="model",
-                    api_base="https://backend.test",
-                    headers={"authorization": "secret"},
-                    client=handler,
-                    cache=cache,
-                )
-                == {}
-            )
-        assert responder.call_count == requests_per_attempt
-        clock.return_value = 61
-        assert (
-            await get_lm_studio_model_info(
+
+        async def lookup() -> Mapping[str, int] | None:
+            return await get_lm_studio_model_info(
                 model="model",
                 api_base="https://backend.test",
                 headers={"authorization": "secret"},
                 client=handler,
                 cache=cache,
             )
+
+        assert await lookup() is None
+        assert await lookup() is None
+        assert responder.call_count == requests_per_attempt
+        clock.return_value = 61
+        assert await lookup() is None
+        assert responder.call_count == 2 * requests_per_attempt
+
+
+async def test_server_without_the_model_loaded_is_known_to_have_no_limits() -> None:
+    responder: Final = Mock(return_value=httpx.Response(200, json={"models": []}))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as client:
+        handler.client = client
+        assert (
+            await get_lm_studio_model_info(
+                model="model", api_base="https://backend.test", headers={}, client=handler, cache=InMemoryCache()
+            )
             == {}
         )
-        assert responder.call_count == 2 * requests_per_attempt
+        assert responder.call_count == 1
 
 
 async def test_cache_is_scoped_to_server_and_credentials_and_refreshes_context() -> None:
@@ -215,16 +230,18 @@ async def test_cache_is_scoped_to_server_and_credentials_and_refreshes_context()
         cache: Final = InMemoryCache(clock=clock)
 
         async def lookup(model: str = "model", host: str = "one.test", key: str = "one") -> Mapping[str, int]:
-            return await get_lm_studio_model_info(
+            limits: Final = await get_lm_studio_model_info(
                 model=model, api_base=f"https://{host}/v1", headers={"authorization": key}, client=handler, cache=cache
             )
+            assert limits is not None
+            return limits
 
         assert (await lookup())["max_input_tokens"] == 8192
         assert (await lookup("instance"))["max_input_tokens"] == 8192
         assert responder.call_count == 1
         assert (await lookup(key="two"))["max_input_tokens"] == 4096
         assert (await lookup(host="two.test"))["max_input_tokens"] == 2048
-        clock.return_value = MODEL_INFO_REFRESH_SECONDS + 1
+        clock.return_value = MODEL_INFO_REFRESH_SECONDS // 2
         assert (await lookup())["max_input_tokens"] == 1024
         assert responder.call_count == 4
 
@@ -244,6 +261,6 @@ async def test_invalid_or_missing_server_never_sends_credentials(api_base: str) 
                 client=handler,
                 cache=InMemoryCache(),
             )
-            == {}
+            is None
         )
         assert responder.call_count == 0

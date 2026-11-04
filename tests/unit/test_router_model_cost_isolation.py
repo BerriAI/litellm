@@ -174,20 +174,26 @@ async def test_discovery_discards_metadata_for_a_replaced_deployment(monkeypatch
     _invalidate_model_cost_lowercase_map()
 
 
-async def test_discovery_sends_the_secret_behind_an_oidc_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_discovery_sends_the_secret_behind_an_oidc_api_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
     token: Final = tmp_path / "token"
     token.write_text("local-secret")
-    router: Final = Router(model_list=[{
-        "model_name": "local",
-        "litellm_params": {
-            "model": "hosted_vllm/local-model",
-            "api_base": "https://discovery.test/v1",
-            "api_key": f"oidc/file/{token}",
-        },
-        "model_info": {"id": "oidc-deployment"},
-    }])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "local",
+                "litellm_params": {
+                    "model": "hosted_vllm/local-model",
+                    "api_base": "https://discovery.test/v1",
+                    "api_key": f"oidc/file/{token}",
+                },
+                "model_info": {"id": "oidc-deployment"},
+            }
+        ]
+    )
     authorizations: Final[list[str | None]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -293,7 +299,28 @@ async def test_discovery_refreshes_other_endpoints_while_one_is_pending(monkeypa
     _invalidate_model_cost_lowercase_map()
 
 
-async def test_discovered_limits_expire_after_the_last_successful_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+def _upstream_models_response(provider: str, context: int) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json=(
+            {
+                "models": [
+                    {
+                        "key": "local-model",
+                        "loaded_instances": [{"id": "local-model", "config": {"context_length": context}}],
+                    }
+                ]
+            }
+            if provider == "lm_studio"
+            else {"data": [{"id": "local-model", "max_model_len": context}]}
+        ),
+    )
+
+
+@pytest.mark.parametrize("provider", ("hosted_vllm", "lm_studio"))
+async def test_discovered_limits_expire_after_the_last_successful_refresh(
+    provider: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     clock: Final = Mock(return_value=0.0)
     router: Final = Router(
@@ -301,7 +328,7 @@ async def test_discovered_limits_expire_after_the_last_successful_refresh(monkey
             {
                 "model_name": "local",
                 "litellm_params": {
-                    "model": "hosted_vllm/local-model",
+                    "model": f"{provider}/local-model",
                     "api_base": "https://expiry.test/v1",
                     "api_key": "local-key",
                 },
@@ -312,8 +339,8 @@ async def test_discovered_limits_expire_after_the_last_successful_refresh(monkey
     router._discovered_model_info_cache = InMemoryCache(clock=clock, default_ttl=2 * MODEL_INFO_REFRESH_SECONDS)
     responses: Final = iter(
         (
-            httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]}),
-            httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 8192}]}),
+            _upstream_models_response(provider, 4096),
+            _upstream_models_response(provider, 8192),
             httpx.Response(503),
         )
     )
@@ -601,7 +628,9 @@ def test_should_not_pollute_shared_key_with_custom_nonzero_pricing():
     )
 
 
-@pytest.mark.parametrize("flag", ["supports_regex_lookaround", "supports_assistant_prefill", "supports_sampling_params"])
+@pytest.mark.parametrize(
+    "flag", ["supports_regex_lookaround", "supports_assistant_prefill", "supports_sampling_params"]
+)
 def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
     """A deployment's capability override must not land on the shared
     ``{provider}/{model}`` key, or every sibling deployment of that model would inherit it."""
@@ -1083,8 +1112,12 @@ def test_bedrock_deployment_keeps_custom_prices_when_profile_lookup_fails(
     tier_rates: Final = inherit_configured and service_tier != "default"
     input_rate: Final = configured_prices[f"input_cost_per_token_{service_tier}"] if tier_rates else 0.01
     output_rate: Final = configured_prices[f"output_cost_per_token_{service_tier}"] if tier_rates else 0.02
-    effective_input: Final = 0.0 if override == "input_cost_per_token_priority" and service_tier == "priority" else input_rate
-    cache_rate: Final = 0.0 if override == "cache_read_input_token_cost" else (0.001 if inherit_configured else effective_input)
+    effective_input: Final = (
+        0.0 if override == "input_cost_per_token_priority" and service_tier == "priority" else input_rate
+    )
+    cache_rate: Final = (
+        0.0 if override == "cache_read_input_token_cost" else (0.001 if inherit_configured else effective_input)
+    )
     assert completion_cost(
         model=model,
         completion_response=ModelResponse(
@@ -2859,7 +2892,8 @@ def test_a_github_copilot_chat_pin_opts_a_dual_endpoint_model_out_of_the_respons
 
 @pytest.mark.parametrize("registered_mode, pinned_mode", [("chat", "responses"), ("responses", "chat")])
 @pytest.mark.parametrize(
-    "model, custom_llm_provider", [("github_copilot/routing-test-model", None), ("routing-test-model", "github_copilot")]
+    "model, custom_llm_provider",
+    [("github_copilot/routing-test-model", None), ("routing-test-model", "github_copilot")],
 )
 def test_a_github_copilot_responses_pin_still_opts_the_model_into_the_responses_api(
     monkeypatch: pytest.MonkeyPatch,
@@ -4037,7 +4071,9 @@ def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(
     assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price
 
 
-def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_pricing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     catalog: Final = litellm.get_model_cost_map(url="")
     monkeypatch.setattr(litellm, "model_cost", dict(catalog))
@@ -4525,7 +4561,6 @@ def test_pricing_provider_fills_unset_rates_from_that_providers_catalog_row() ->
     (
         httpx.Response(200, json={"models": [{"key": "org/model", "loaded_instances": []}]}),
         httpx.Response(200, json={"models": []}),
-        httpx.Response(503),
     ),
 )
 @pytest.mark.parametrize("input_limit", (None, 1000))
