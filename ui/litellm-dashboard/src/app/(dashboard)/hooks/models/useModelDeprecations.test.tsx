@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useModelDeprecations } from "./useModelDeprecations";
@@ -31,14 +31,18 @@ describe("useModelDeprecations", () => {
     vi.unstubAllGlobals();
   });
 
-  it("does not fetch deprecations for an internal user", () => {
+  it("does not fetch deprecations for an internal user", async () => {
     const queryClient = new QueryClient();
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
 
-    renderHook(() => useModelDeprecations(), { wrapper });
+    const { result } = renderHook(() => useModelDeprecations(), { wrapper });
 
+    await waitFor(() => expect(result.current.fetchStatus).toBe("idle"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
