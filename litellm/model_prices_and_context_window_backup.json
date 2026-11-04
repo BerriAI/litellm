@@ -22047,6 +22047,7 @@
         "output_cost_per_token": 2.8e-07,
         "output_dbu_cost_per_token": 4e-06,
         "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "successor_model": "databricks/databricks-deepseek-v4-1-flash-1017",
         "supported_modalities": [
             "text"
         ],
@@ -22060,8 +22061,12 @@
         "supports_vision": false
     },
     "databricks/system.ai.deepseek-v4-flash-0731": {
+        "deprecation_date": "2026-11-05",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/retired-models-policy",
         "litellm_provider": "databricks",
         "mode": "chat",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/retired-models-policy",
+        "successor_model": "databricks/databricks-deepseek-v4-1-flash-1017",
         "token_count_framing": 97
     },
     "databricks/databricks-deepseek-v4-pro-0813": {
@@ -22081,6 +22086,7 @@
         "output_cost_per_token": 3.95997e-06,
         "output_dbu_cost_per_token": 5.6571e-05,
         "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "successor_model": "databricks/databricks-deepseek-v4-1-flash-1017",
         "supported_modalities": [
             "text"
         ],
@@ -23158,6 +23164,7 @@
         "output_cost_per_token": 4.04999e-06,
         "output_dbu_cost_per_token": 5.7857e-05,
         "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "successor_model": "databricks/databricks-glm-5-3",
         "supported_modalities": [
             "text",
             "image"
@@ -81729,7 +81736,8 @@
         "input_cost_per_token_priority": 5.25e-07,
         "output_cost_per_token_priority": 2.1e-06,
         "cache_read_input_token_cost_priority": 5.25e-08,
-        "cache_creation_input_token_cost_priority": 5.25e-07
+        "cache_creation_input_token_cost_priority": 5.25e-07,
+        "successor_model": "databricks/databricks-deepseek-v4-1-flash-1017"
     },
     "databricks/databricks-deepseek-v4-1-flash-1017": {
         "cache_creation_input_token_cost": 3.0002e-07,
@@ -82181,6 +82189,8 @@
     "databricks/databricks-kimi-k2-7": {
         "cache_creation_input_token_cost": 9.4997e-07,
         "cache_read_input_token_cost": 1.8998e-07,
+        "deprecation_date": "2026-10-30",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/retired-models-policy",
         "input_cost_per_token": 9.4997e-07,
         "input_dbu_cost_per_token": 1.3571e-05,
         "litellm_provider": "databricks",
@@ -82193,6 +82203,7 @@
         "output_cost_per_token": 4.00001e-06,
         "output_dbu_cost_per_token": 5.7143e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
+        "successor_model": "databricks/databricks-kimi-k3",
         "supported_modalities": [
             "text",
             "image"
