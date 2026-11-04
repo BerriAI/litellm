@@ -1,33 +1,64 @@
 "use client";
 
-import { TriangleAlert } from "lucide-react";
+import { TriangleAlert, X } from "lucide-react";
 import { useState } from "react";
 import { useModelDeprecations } from "@/app/(dashboard)/hooks/models/useModelDeprecations";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { getLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
 import { uiHref } from "@/utils/uiHref";
-import { deprecationBannerTitle, deprecationEntryText } from "./deprecationBannerText";
+import {
+  dedupeDeprecationEntries,
+  deprecationBannerFingerprint,
+  deprecationBannerTitle,
+  deprecationEntryText,
+} from "./deprecationBannerText";
+
+const STORAGE_KEY = "modelDeprecationBannerDismissed";
 
 const ModelDeprecationBanner = () => {
   const { data, isError, isLoading } = useModelDeprecations();
   const [isExpanded, setIsExpanded] = useState(false);
+  const [dismissedFingerprint, setDismissedFingerprint] = useState<string | null>(() =>
+    getLocalStorageItem(STORAGE_KEY),
+  );
 
   if (isLoading || isError || !data) {
     return null;
   }
 
-  const deprecated = data.deprecated ?? [];
-  const imminent = data.imminent ?? [];
+  const deprecated = dedupeDeprecationEntries(data.deprecated ?? []);
+  const imminent = dedupeDeprecationEntries(data.imminent ?? []);
 
   if (deprecated.length === 0 && imminent.length === 0) {
     return null;
   }
 
   const entries = [...deprecated, ...imminent];
+  const fingerprint = deprecationBannerFingerprint(entries);
+  if (dismissedFingerprint === fingerprint) {
+    return null;
+  }
+
   const visibleEntries = isExpanded ? entries : entries.slice(0, 5);
 
   return (
     <Alert variant={deprecated.length > 0 ? "destructive" : "default"} className="mb-4">
       <TriangleAlert />
+      <AlertAction>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => {
+            setDismissedFingerprint(fingerprint);
+            setLocalStorageItem(STORAGE_KEY, fingerprint);
+          }}
+          aria-label="Dismiss deprecation warning"
+        >
+          <X />
+        </Button>
+      </AlertAction>
       <AlertTitle>{deprecationBannerTitle(deprecated.length, imminent.length, data.warn_within_days)}</AlertTitle>
       <AlertDescription>
         <ul className="list-disc pl-5">

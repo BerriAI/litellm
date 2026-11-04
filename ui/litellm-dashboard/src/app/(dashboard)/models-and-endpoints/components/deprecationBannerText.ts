@@ -1,5 +1,27 @@
 import type { ModelDeprecationInfo } from "@/app/(dashboard)/hooks/models/useModelDeprecations";
 
+const shownModelName = (info: ModelDeprecationInfo): string => info.team_public_model_name ?? info.model_name;
+
+export const dedupeDeprecationEntries = (infos: readonly ModelDeprecationInfo[]): ModelDeprecationInfo[] =>
+  infos.filter(
+    (info, index) =>
+      infos.findIndex(
+        (candidate) =>
+          shownModelName(candidate) === shownModelName(info) &&
+          (candidate.litellm_provider ?? null) === (info.litellm_provider ?? null) &&
+          candidate.deprecation_date === info.deprecation_date,
+      ) === index,
+  );
+
+export const deprecationBannerFingerprint = (infos: readonly ModelDeprecationInfo[]): string =>
+  JSON.stringify(
+    infos
+      .map((info) =>
+        JSON.stringify([shownModelName(info), info.litellm_provider ?? null, info.deprecation_date, info.status]),
+      )
+      .sort(),
+  );
+
 export const deprecationBannerTitle = (
   deprecatedCount: number,
   imminentCount: number,
@@ -15,7 +37,7 @@ export const deprecationBannerTitle = (
 };
 
 export const deprecationEntryText = (info: ModelDeprecationInfo): string => {
-  const model = `${info.team_public_model_name ?? info.model_name}${info.litellm_provider ? ` (${info.litellm_provider})` : ""}`;
+  const model = `${shownModelName(info)}${info.litellm_provider ? ` (${info.litellm_provider})` : ""}`;
   const successor = info.successor_model ? `, migrate to ${info.successor_model}` : "";
 
   if (info.status === "deprecated") {

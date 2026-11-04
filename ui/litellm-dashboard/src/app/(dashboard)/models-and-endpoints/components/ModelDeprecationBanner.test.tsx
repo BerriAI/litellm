@@ -42,6 +42,7 @@ const queryResult = (
 describe("ModelDeprecationBanner", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
   });
 
   it("renders nothing when there are no deprecated or imminent models", () => {
@@ -114,8 +115,134 @@ describe("ModelDeprecationBanner", () => {
     );
   });
 
+  it("deduplicates entries by their displayed name, provider, and deprecation date", () => {
+    const globalInfoOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "o4-mini",
+      team_public_model_name: null,
+      litellm_provider: "openai",
+      deprecation_date: "2026-10-23",
+      status: "deprecated",
+    };
+    const firstTeamInfoOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "o4-mini-team-a",
+      team_public_model_name: "o4-mini",
+      litellm_provider: "openai",
+      deprecation_date: "2026-10-23",
+      status: "deprecated",
+    };
+    const secondTeamInfoOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "o4-mini-team-b",
+      team_public_model_name: "o4-mini",
+      litellm_provider: "openai",
+      deprecation_date: "2026-10-23",
+      status: "deprecated",
+    };
+    mockedUseModelDeprecations.mockReturnValue(
+      queryResult(
+        makeResponse({
+          deprecated: [
+            makeInfo(globalInfoOverrides),
+            makeInfo(firstTeamInfoOverrides),
+            makeInfo(secondTeamInfoOverrides),
+          ],
+        }),
+      ),
+    );
+
+    render(<ModelDeprecationBanner />);
+
+    expect(screen.getByText("1 model is deprecated")).toBeInTheDocument();
+    const entries = within(screen.getByRole("list")).getAllByRole("listitem");
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toHaveTextContent("o4-mini (openai) was deprecated on 2026-10-23");
+  });
+
+  it("dismisses the banner and keeps it dismissed after remounting the same entries", async () => {
+    const info = makeInfo();
+    const secondInfo = makeInfo({ model_name: "claude-sonnet-4" });
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent: [info, secondInfo] })));
+    const user = userEvent.setup();
+    const { unmount } = render(<ModelDeprecationBanner />);
+
+    await user.click(screen.getByRole("button", { name: "Dismiss deprecation warning" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    unmount();
+
+    const changedSecondInfoOverrides: Partial<ModelDeprecationInfo> = {
+      ...secondInfo,
+      days_until_deprecation: secondInfo.days_until_deprecation - 1,
+    };
+    const changedInfoOverrides: Partial<ModelDeprecationInfo> = {
+      ...info,
+      days_until_deprecation: info.days_until_deprecation - 1,
+    };
+    const teamAliasInfoOverrides: Partial<ModelDeprecationInfo> = {
+      ...info,
+      model_name: "team-internal-name",
+      team_public_model_name: info.model_name,
+      days_until_deprecation: info.days_until_deprecation - 1,
+    };
+    mockedUseModelDeprecations.mockReturnValue(
+      queryResult(
+        makeResponse({
+          imminent: [
+            makeInfo(changedSecondInfoOverrides),
+            makeInfo(changedInfoOverrides),
+            makeInfo(teamAliasInfoOverrides),
+          ],
+        }),
+      ),
+    );
+    render(<ModelDeprecationBanner />);
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows the banner again when a new entry is added after dismissal", async () => {
+    const firstEntry = makeInfo({ model_name: "gpt-4", status: "deprecated" });
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ deprecated: [firstEntry] })));
+    const user = userEvent.setup();
+    const { rerender } = render(<ModelDeprecationBanner />);
+
+    await user.click(screen.getByRole("button", { name: "Dismiss deprecation warning" }));
+    mockedUseModelDeprecations.mockReturnValue(
+      queryResult(
+        makeResponse({
+          deprecated: [firstEntry, makeInfo({ model_name: "gpt-3.5", status: "deprecated" })],
+        }),
+      ),
+    );
+    rerender(<ModelDeprecationBanner />);
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("2 models are deprecated")).toBeInTheDocument();
+  });
+
+  it("shows the banner again when an imminent entry becomes deprecated", async () => {
+    const imminentEntry = makeInfo({ model_name: "gpt-4o", status: "imminent" });
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent: [imminentEntry] })));
+    const user = userEvent.setup();
+    const { rerender } = render(<ModelDeprecationBanner />);
+
+    await user.click(screen.getByRole("button", { name: "Dismiss deprecation warning" }));
+    mockedUseModelDeprecations.mockReturnValue(
+      queryResult(
+        makeResponse({
+          deprecated: [makeInfo({ ...imminentEntry, status: "deprecated", days_until_deprecation: -1 })],
+        }),
+      ),
+    );
+    rerender(<ModelDeprecationBanner />);
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("1 model is deprecated")).toBeInTheDocument();
+  });
+
   it("expands all entries and collapses back to the first five", async () => {
-    const imminent = Array.from({ length: 7 }, (_value, index) => makeInfo({ model_name: `model-${index + 1}` }));
+    const imminent = [
+      ...Array.from({ length: 7 }, (_value, index) => makeInfo({ model_name: `model-${index + 1}` })),
+      makeInfo({ model_name: "team-model-1", team_public_model_name: "model-1" }),
+    ];
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent })));
     const user = userEvent.setup();
 
