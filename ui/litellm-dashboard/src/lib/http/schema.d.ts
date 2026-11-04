@@ -8029,7 +8029,9 @@ export interface paths {
          *     answer from turn 2. Three checks come out of it:
          *
          *     - `conversation`: every turn parses, turn 1 calls the tool, turn 2 uses the tool result, turn 3 carries it on
-         *     - `prompt_caching`: turns 2 and 3 report cached input tokens, with no cache markers in the request
+         *     - `prompt_caching`: turns 2 and 3 report cached input tokens and turn 3 reads at least as many as turn 2.
+         *       Chat Completions and Responses send no cache markers, so the provider has to cache the repeated prefix on
+         *       its own. Messages sends `cache_control` on the latest user message the way Claude Code does
          *     - `cost_tracking`: every turn carries a non-zero response cost, and the spend log row lands when a
          *       database is connected
          *
