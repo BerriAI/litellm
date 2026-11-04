@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from functools import partial
+from functools import partial, reduce
 from itertools import takewhile
 from operator import attrgetter
 from types import MappingProxyType
@@ -66,6 +66,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     SPEND_LOG_QUEUE_MAX_BYTES,
+    SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
     VLLM_CHOICE_FIELDS,
@@ -167,7 +168,6 @@ from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
     Logging,
-    UsageObservation,
     deployment_pricing_model_info,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -1680,14 +1680,17 @@ _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "updat
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
 
 
+def _extended_exception_chain(chain: tuple[BaseException, ...], iteration: int) -> tuple[BaseException, ...]:
+    if len(chain) != iteration + 1:
+        return chain
+    following: Final = chain[-1].__cause__ or chain[-1].__context__
+    if following is None or following in chain:
+        return chain
+    return (*chain, following)
+
+
 def _exception_chain(exception: BaseException) -> tuple[BaseException, ...]:
-    chain: Final[list[BaseException]] = [exception]  # mutable-ok: built once, returned frozen
-    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
-        following = chain[-1].__cause__ or chain[-1].__context__
-        if following is None or following in chain:
-            break
-        chain.append(following)
-    return tuple(chain)
+    return reduce(_extended_exception_chain, range(_EXCEPTION_CHAIN_MAX_DEPTH), (exception,))
 
 
 def _timed_out_reading_from_provider(exception: Exception) -> bool:
@@ -1801,39 +1804,6 @@ def _failure_fields_to_lift(
         if _prompt_estimate is not None
         else ()
     )
-    from litellm.litellm_core_utils.litellm_logging import UsageCaptureObservation
-
-    _recorded_observation: Final[object] = _model_call_details.get("_accounting_usage_observed")
-    _current_usage: Final = (
-        _current_failure_usage_to_lift(
-            _model_call_details,
-            request_data,
-            _model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
-            _billed,
-            _deployment_id,
-            _base_model,
-            _estimate_call_type,
-        )
-        if Logging.usage_capture_callback is not None
-        and (_billed or _model_call_details.get("combined_usage_object") is not None)
-        else None
-    )
-    _current_observation: Final = (
-        _recorded_observation
-        if isinstance(_recorded_observation, UsageObservation)
-        else UsageObservation.UNKNOWN
-        if _current_usage is None
-        else UsageObservation.KNOWN
-        if _model_call_details.get("combined_usage_object") is not None
-        else UsageObservation.ESTIMATED
-    )
-    _capture_observation: Final = UsageCaptureObservation.from_usage(
-        _current_usage[0] if _current_usage is not None and isinstance(_current_usage[0], Usage) else None,
-        _current_observation,
-        float(_current_usage[1])
-        if _current_usage is not None and isinstance(_current_usage[1], (int, float))
-        else None,
-    )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
         ("first_api_call_start_time", _first_handoff),
@@ -1842,16 +1812,12 @@ def _failure_fields_to_lift(
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
         ("billed_failed_attempts", _earlier_attempts or None),
-        ("_accounting_capture", _model_call_details.get("_accounting_capture")),
         ("_accounting_pricing_snapshot", _model_call_details.get("_accounting_pricing_snapshot")),
         ("_accounting_finalized_cost", _logging_obj.finalized_cost if isinstance(_logging_obj, Logging) else None),
         (
             "_accounting_allocation",
             _logging_obj.cost_allowance_allocation if isinstance(_logging_obj, Logging) else None,
         ),
-        ("_accounting_usage_observed", _current_observation if Logging.usage_capture_callback is not None else None),
-        ("_accounting_usage_snapshot", _capture_observation if Logging.usage_capture_callback is not None else None),
-        ("_accounting_prior_captures", _model_call_details.get("_accounting_prior_captures")),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 
@@ -5309,6 +5275,39 @@ _deprecated_key_cache: Final[LimitedSizeOrderedDict] = LimitedSizeOrderedDict(ma
 _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
 _PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 _PRISMA_DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
+_SPEND_LOG_READ_STATEMENT_TIMEOUT: Final = timedelta(seconds=SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS)
+_STATEMENT_TIMEOUT_TRANSACTION_GRACE: Final = timedelta(seconds=5)
+
+
+class _ReadTransactionClient(Protocol):
+    @property
+    def read_db(self) -> PrismaWrapper: ...
+
+
+async def query_raw_within_statement_timeout(
+    prisma_client: _ReadTransactionClient,
+    sql: str,
+    *params: object,
+    what: str = "Spend logs",
+    timeout: timedelta = _SPEND_LOG_READ_STATEMENT_TIMEOUT,
+) -> Sequence[Mapping[str, object]]:
+    """One raw read on the read target that Postgres cancels at ``timeout``.
+
+    Prisma's HTTP client gives up on a statement after 30s anyway, so without
+    this the Admin UI's error is the same but Postgres keeps running the scan.
+    A cancelled read surfaces as a 503 asking for a narrower date range.
+    """
+    try:
+        async with prisma_client.read_db.tx(timeout=timeout + _STATEMENT_TIMEOUT_TRANSACTION_GRACE) as transaction:
+            await transaction.execute_raw(f"SET LOCAL statement_timeout = {int(timeout / timedelta(milliseconds=1))}")
+            return await transaction.query_raw(sql, *params)
+    except Exception as e:
+        if not PrismaDBExceptionHandler.is_statement_timeout_error(e):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": f"{what} took longer than {int(timeout.total_seconds())}s. Pick a shorter date range"},
+        ) from e
 
 
 async def _lookup_deprecated_key(

@@ -530,6 +530,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
+from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -876,8 +877,6 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
-from litellm.proxy.spend_tracking.usage_capture import UsageBatchWriter, UsageCaptureRuntime
-from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
 from litellm.proxy.telemetry.endpoints import router as telemetry_router
 from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
@@ -1391,7 +1390,6 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     finally:
         await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
     await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
-    await usage_capture.stop(GracefulShutdownManager.remaining(clock=clock))
     await flush_spend()
 
 
@@ -1672,6 +1670,8 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             decoded_worker_config: Final = as_str_mapping(_UNTYPED_VALUE.validate_python(json.loads(worker_config)))
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
+
+    enforce_fips_mode(general_settings_view())
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
@@ -2928,9 +2928,15 @@ def configured_max_request_size_mb() -> int | float | None:
     return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
 
 
+_ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProxyType(
+    {("POST", "/claude-code/plugins/upload"): 11}
+)
+
+
 app.add_middleware(
     RequestBodyDecompressionMiddleware,
     get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -3300,39 +3306,9 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 spend_event_producer: SpendEventProducer | None = None
 
-usage_capture: Final = UsageCaptureRuntime()
-
-
-def _configure_usage_capture() -> None:
-    settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
-    capture_settings: Final = settings.get("accounting_capture")
-    if settings.get("accounting_sync_ack") and capture_settings is None:
-        raise ValueError("accounting_sync_ack requires accounting_capture")
-    if capture_settings is None:
-        if usage_capture.meter is not None:
-            raise ValueError("Disabling accounting_capture requires a worker restart")
-        return
-    if (
-        prisma_client is None
-        or CollectorSettings().enabled
-        or os.getenv("SPEND_LOGS_URL")
-        or litellm.apply_search_free_tier
-    ):
-        raise ValueError(
-            "Usage capture requires local Prisma writes and disabled collector, remote writer and search free tier"
-        )
-    from litellm.proxy.db.accounting_ledger import AccountingLedger
-
-    ledger: Final = AccountingLedger.for_client(prisma_client)
-    writer: Final = UsageBatchWriter(ledger.insert_usage_batch, ledger.load_usage_batch)
-    usage_capture.start(
-        writer.write, UsageCaptureSettings.model_validate(capture_settings), load=ledger.load_usage_batch
-    )
-
 
 def cost_tracking():
     global prisma_client, spend_event_producer
-    _configure_usage_capture()
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
@@ -13910,7 +13886,7 @@ async def audio_transcriptions(
             api_base=api_base,
             version=version,
             response_cost=response_cost,
-            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            model_region=user_api_key_dict.allowed_model_region,
             call_id=response_call_id,
             request_data=data,
             hidden_params=hidden_params,
@@ -17000,9 +16976,6 @@ async def _apply_search_filter_to_models(
         team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
         if search_lower in team_public_model_name.lower():
             return True
-        # Also match the underlying LiteLLM model name (e.g.
-        # "openrouter/deepseek/deepseek-chat"), so users can find
-        # deployments by typing the provider or the upstream model id.
         litellm_params: Final[Mapping[str, object]] = m.get("litellm_params") or MappingProxyType({})
         litellm_model: Final = litellm_params.get("model")
         return isinstance(litellm_model, str) and search_lower in litellm_model.lower()
@@ -22417,6 +22390,7 @@ app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     AdmissionControlMiddleware,

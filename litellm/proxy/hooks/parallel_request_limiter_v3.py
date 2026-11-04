@@ -55,7 +55,6 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
-from litellm.litellm_core_utils.audio_utils.utils import estimate_audio_tokens
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -64,7 +63,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
-from litellm.litellm_core_utils.token_counter import estimate_image_tokens, offload_token_count
+from litellm.litellm_core_utils.token_counter import (
+    estimate_media_block_tokens,
+    offload_token_count,
+    split_embedding_input_tokens,
+)
 from litellm.llms.azure.ptu_capacity import normalized_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -154,6 +157,12 @@ def _resolve_media_models(router: "Router | None", model: str, team_id: str | No
     if router is None:
         return (model,)
     return tuple(dict.fromkeys(router.registry().names(model, kind="litellm_base_models", team_id=team_id))) or (model,)
+
+
+def _media_models(
+    resolver: Callable[[str, str | None], tuple[str, ...]] | None, model: str, team_id: str | None
+) -> tuple[str, ...]:
+    return resolver(model, team_id) if resolver is not None else (model,)
 
 
 def _resolve_media_models_via_proxy_router(model: str, team_id: str | None) -> tuple[str, ...]:
@@ -1378,20 +1387,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         media_source: Final = messages if messages is not None else original_input
+        is_embedding_call: Final = call_type in EMBEDDING_API_CALL_TYPES
         projected, media = (
             split_media_for_tpm(media_source)
             if include_media and (isinstance(messages, list) or call_type in RESPONSES_API_CALL_TYPES)
             else (original_input, ())
         )
-        input_text: Final = projected if call_type in RESPONSES_API_CALL_TYPES else original_input
         fallback_model: Final = request_model if isinstance(request_model, str) else None
         resolved_models: Final = (
-            media_model_resolver(fallback_model or "", team_id)
-            if media and media_model_resolver is not None
-            else (fallback_model or "",)
+            _media_models(media_model_resolver, fallback_model or "", team_id) if media else (fallback_model or "",)
         )
-        media_tokens: Final = sum(
-            self._estimate_media_block_tokens(block, resolved_models, fallback_model) for block in media
+        embedding_text, embedding_media_tokens = (
+            split_embedding_input_tokens(
+                original_input,
+                lambda: _media_models(media_model_resolver, fallback_model or "", team_id),
+                fallback_model,
+            )
+            if include_media and is_embedding_call
+            else (original_input, 0)
+        )
+        input_text: Final = projected if call_type in RESPONSES_API_CALL_TYPES else embedding_text
+        media_tokens: Final = embedding_media_tokens + sum(
+            estimate_media_block_tokens(block, resolved_models, fallback_model) for block in media
         )
 
         total_chars: Final = (
@@ -1435,24 +1452,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         return estimated_input_tokens, max_tokens_estimate * self.get_output_candidate_count(data, call_type)
-
-    @staticmethod
-    def _estimate_media_block_tokens(
-        block: Mapping[str, object], models: tuple[str, ...], fallback_model: str | None
-    ) -> int:
-        if block.get("type") == "input_audio":
-            audio: Final = _callback_kwargs_mapping(block.get("input_audio"))
-            data: Final = audio.get("data")
-            return estimate_audio_tokens(data if isinstance(data, str) else None, models, fallback_model=fallback_model)
-        image: Final = _callback_kwargs_mapping(block.get("image_url"))
-        url: Final = image.get("url")
-        detail: Final = image.get("detail")
-        return estimate_image_tokens(
-            models,
-            url if isinstance(url, str) else "",
-            detail if isinstance(detail, str) else "auto",
-            fallback_model=fallback_model,
-        )
 
     def _is_redis_cluster(self) -> bool:
         """
@@ -4098,12 +4097,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             None if is_responses_request else self._translate_google_genai_native_request(data, call_type)
         )
         is_embedding_request: Final = self._is_embedding_request(data, call_type)
-        embedding_text: Final = data.get("input") if is_embedding_request else None
+        request: Final = as_str_mapping(data)
+        raw_embedding_input: Final = request.get("input") if is_embedding_request and request is not None else None
         pretokenized_input_tokens: Final = (
-            self._count_pretokenized_embedding_input(embedding_text) if is_embedding_request else None
+            self._count_pretokenized_embedding_input(raw_embedding_input) if is_embedding_request else None
         )
         if pretokenized_input_tokens is not None:
             return pretokenized_input_tokens
+        embedding_text, embedding_media_tokens = (
+            split_embedding_input_tokens(
+                raw_embedding_input, lambda: self._media_model_resolver(model or "", team_id), model
+            )
+            if is_embedding_request
+            else (None, 0)
+        )
 
         prompt: Final = data.get("prompt")
         fallback_text: Final = prompt if prompt is not None else data.get("input")
@@ -4153,12 +4160,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     for tokenizer_model in (self._counted_models_resolver(model, team_id) if model else ("",))
                 ),
             )
-            return estimate + audio_token_estimate
+            return estimate + audio_token_estimate + embedding_media_tokens
         except Exception:  # noqa: BLE001  # tokenizer failures degrade to the cheap estimate
             if call_type in RERANK_API_CALL_TYPES and isinstance(selected_text, str):
                 return max(0, len(selected_text) // DEFAULT_CHARS_PER_TOKEN)
             estimated_input_tokens, _ = self._estimate_input_and_output_tokens(
-                data=data, call_type=call_type, include_media=False
+                data=data,
+                call_type=call_type,
+                include_media=is_embedding_request,
+                team_id=team_id,
+                media_model_resolver=self._media_model_resolver,
             )
             return estimated_input_tokens + audio_token_estimate
 

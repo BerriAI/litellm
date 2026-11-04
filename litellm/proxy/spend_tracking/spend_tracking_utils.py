@@ -3,7 +3,7 @@ import json
 import os
 import re
 import secrets
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
 from functools import reduce
@@ -38,6 +38,12 @@ from litellm.constants import (
 )
 from litellm.integrations.otel.model.metadata import caller_session_id
 from litellm.integrations.otel.model.trace_controls import TraceControls
+from litellm.litellm_core_utils.batch_utils import (
+    BATCH_COST_REQUEST_ID_SUFFIX,
+    charged_poll_cost,
+    charged_video_id,
+    pays_only_its_guardrail,
+)
 from litellm.litellm_core_utils.classifier_logging import (
     CLASSIFIER_AUDIT_FIELDS,
     classifier_audit_fields,
@@ -58,7 +64,6 @@ from litellm.litellm_core_utils.internal_call_metadata import (
 )
 from litellm.litellm_core_utils.litellm_logging import (
     StandardLoggingPayloadSetup,
-    UsageObservation,
     coerce_model_access_groups,
     is_valid_sha256_hash,
     request_model_access_groups_from_litellm_params,
@@ -75,7 +80,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
-from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.proxy.utils import PrismaClient, hash_token, query_raw_within_statement_timeout
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     summary_only_compaction_content,
@@ -99,6 +104,7 @@ from litellm.types.utils import (
     VectorStoreSearchResponse,
     batch_chat_usage,
 )
+from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
@@ -343,7 +349,7 @@ def _get_spend_logs_metadata(
     return clean_metadata
 
 
-BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
+JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX: Final = "_guardrail_cost"
 
 
 def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> str:
@@ -371,6 +377,13 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
+    response_cost: Final = charged_poll_cost(kwargs)
+    charged_video: Final = charged_video_id(call_type, kwargs, resolved_id, response_cost)
+    if charged_video is not None:
+        return f"{charged_video}{VIDEO_COST_REQUEST_ID_SUFFIX}"
+    call_id: Final = kwargs.get("litellm_call_id")
+    if pays_only_its_guardrail(call_type, kwargs, response_cost) and isinstance(call_id, str) and call_id:
+        return f"{call_id}{JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX}"
     return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
 
@@ -592,7 +605,6 @@ def get_logging_payload(
     start_time: datetime,
     end_time: datetime,
     llm_router: "Router | None" = None,
-    capture_usage: Callable[[SpendLogsPayload, str | None], None] | None = None,
 ) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
@@ -649,10 +661,12 @@ def get_logging_payload(
             usage = _usage
 
     # A request that failed mid-stream has no usable response_obj usage, and a stream
-    # continued on a fallback only has the fallback's. combined_usage_object holds the
-    # usage of every call the client's answer took, so it wins in both cases.
+    # continued on a fallback or a success that bills a failed follow-up only has its own.
+    # combined_usage_object holds the usage of every call the row bills, so it wins in each case.
     _combined_usage: Final = kwargs.get("combined_usage_object")
-    if (not usage or "continued_partial_usage" in kwargs) and isinstance(_combined_usage, litellm.Usage):
+    if (
+        not usage or "continued_partial_usage" in kwargs or "failed_attempts_billed_on_success" in kwargs
+    ) and isinstance(_combined_usage, litellm.Usage):
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs, metadata)
@@ -980,14 +994,6 @@ def get_logging_payload(
             payload.get("spend"),
         )
 
-        if capture_usage is not None:
-            observed_usage: Final = (
-                StandardLoggingPayloadSetup.get_usage_as_dict({"usage": usage})
-                if usage and kwargs.get("_accounting_usage_observed") is not UsageObservation.UNKNOWN
-                else None
-            )
-            capture_usage(payload, safe_dumps(observed_usage) if observed_usage is not None else None)
-
         # Explicitly clear large intermediate objects to reduce memory pressure
         del response_obj_dict, usage, clean_metadata, additional_usage_values
 
@@ -1092,7 +1098,7 @@ async def _query_raw_rows(
     sql_query: str,
     *args: object,
 ) -> Sequence[Mapping[str, object]] | None:
-    return await prisma_client.db.query_raw(sql_query, *args)
+    return await query_raw_within_statement_timeout(prisma_client, sql_query, *args)
 
 
 async def get_spend_by_team(
