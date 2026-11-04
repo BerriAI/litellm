@@ -162,23 +162,22 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _validate_input_param(
         self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
     ) -> str | ResponseInputParam:
-        """
-        Override parent method to also filter out 'status' field from message items.
-        Azure OpenAI API does not accept 'status' field in input messages.
-        """
+        """Remove output-only fields rejected by Azure when replaying Responses input."""
         from typing import cast
 
-        # First call parent's validation
         validated_input: Final = super()._validate_input_param(input, drops_set_created_by=drops_set_created_by)
 
-        # Then filter out status from message items
         if isinstance(validated_input, list):
             filtered_input: Final[list[object]] = []
             for item in validated_input:
-                if isinstance(item, dict) and item.get("type") == "message":
-                    # Filter out status field from message items
-                    filtered_item = {k: v for k, v in item.items() if k != "status"}
-                    filtered_input.append(filtered_item)
+                if isinstance(item, dict) and item.get("type") in ("message", "reasoning"):
+                    filtered_input.append(
+                        {
+                            k: v
+                            for k, v in item.items()
+                            if k != "status" and (k != "content" or item.get("type") != "reasoning")
+                        }
+                    )
                 else:
                     filtered_input.append(item)
             return cast(ResponseInputParam, filtered_input)

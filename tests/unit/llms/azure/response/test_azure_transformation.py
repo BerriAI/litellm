@@ -7,15 +7,17 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import respx
+from openai.types.responses import ResponseReasoningItem
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.azure.responses.o_series_transformation import (
     AzureOpenAIOSeriesResponsesAPIConfig,
 )
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -1547,3 +1549,150 @@ def test_openai_gpt5_resolves_to_responses_config_with_temperature() -> None:
     config: Final = ProviderConfigManager.get_provider_responses_api_config(provider=LlmProviders.OPENAI, model="gpt-5")
     assert type(config) is OpenAIResponsesAPIConfig
     assert "temperature" in config.get_supported_openai_params("gpt-5")
+
+
+@pytest.mark.parametrize("config", [AzureOpenAIResponsesAPIConfig(), AzureOpenAIOSeriesResponsesAPIConfig()])
+@pytest.mark.parametrize("as_model", [False, True], ids=["dict", "pydantic"])
+def test_azure_reasoning_replay_removes_output_content_without_changing_history(
+    config: AzureOpenAIResponsesAPIConfig, as_model: bool
+) -> None:
+    replayable_reasoning: Final = {
+        "id": "rs_saved_reasoning",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "Check the file before changing it."}],
+        "encrypted_content": "opaque-saved-reasoning",
+    }
+    saved_reasoning: Final = {
+        **replayable_reasoning,
+        "content": [{"type": "reasoning_text", "text": "I should inspect the file first."}],
+    }
+    tool_call: Final = {
+        "type": "function_call",
+        "id": "fc_read",
+        "call_id": "call_read",
+        "name": "read_file",
+        "arguments": '{"path":"main.py"}',
+    }
+    tool_result: Final = {"type": "function_call_output", "call_id": "call_read", "output": "print(1)"}
+    answer: Final = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "The file prints 1.", "annotations": []}],
+    }
+    prompt: Final = {"role": "user", "content": "Continue."}
+    history: Final = [
+        ResponseReasoningItem.model_validate(saved_reasoning) if as_model else saved_reasoning,
+        tool_call,
+        tool_result,
+        answer,
+        prompt,
+    ]
+    original: Final = deepcopy(history)
+
+    request: Final = config.transform_responses_api_request(
+        model="gpt-6.1-sol",
+        input=history,
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["input"] == [replayable_reasoning, tool_call, tool_result, answer, prompt]
+    assert history == original
+
+
+@pytest.mark.parametrize("as_model", [False, True], ids=["dict", "pydantic"])
+def test_azure_reasoning_content_filter_does_not_change_openai_replay(as_model: bool) -> None:
+    saved_reasoning: Final = {
+        "id": "rs_saved_reasoning",
+        "type": "reasoning",
+        "summary": [],
+        "content": [{"type": "reasoning_text", "text": "Inspect the file."}],
+    }
+    history: Final = [ResponseReasoningItem.model_validate(saved_reasoning) if as_model else saved_reasoning]
+
+    request: Final = OpenAIResponsesAPIConfig().transform_responses_api_request(
+        model="gpt-6.1-sol",
+        input=history,
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["input"] == [saved_reasoning]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("async_call", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_azure_responses_does_not_send_reasoning_content_at_input_51(
+    respx_mock: respx.MockRouter, stream: bool, async_call: bool
+) -> None:
+    prefix: Final = [{"role": "user", "content": f"Earlier context {index}."} for index in range(51)]
+    replayable_reasoning: Final = {"id": "rs_saved_reasoning", "type": "reasoning", "summary": []}
+    saved_reasoning: Final = {
+        **replayable_reasoning,
+        "content": [{"type": "reasoning_text", "text": "Inspect the file before editing."}],
+    }
+    answer: Final = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Ready to continue.", "annotations": []}],
+    }
+    prompt: Final = {"role": "user", "content": "Continue."}
+    history: Final = [*prefix, saved_reasoning, answer, prompt]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
+        items: Final = body["input"]
+        assert isinstance(items, list)
+        reasoning: Final = items[51]
+        assert isinstance(reasoning, dict)
+        if reasoning.get("content"):
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Invalid 'input[51].content': array too long. Expected an array with maximum length 0, "
+                        "but got an array with length 1 instead.",
+                        "type": "invalid_request_error",
+                        "param": "input[51].content",
+                        "code": "array_above_max_length",
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            text=_COMPLETED_RESPONSE_SSE if stream else json.dumps(_COMPLETED_RESPONSE),
+            headers={"content-type": "text/event-stream" if stream else "application/json"},
+        )
+
+    route: Final = respx_mock.post(host="example-resource.openai.azure.com").mock(side_effect=respond)
+    request_params: Final = {
+        "model": "azure/gpt-6.1-sol",
+        "input": history,
+        "api_base": _AZURE_RESOURCE,
+        "api_key": "azure-test-key",
+        "stream": stream,
+    }
+    response: Final = await litellm.aresponses(**request_params) if async_call else litellm.responses(**request_params)
+    deltas: Final = (
+        (
+            [event.delta async for event in response if event.type == "response.output_text.delta"]
+            if async_call
+            else [event.delta for event in response if event.type == "response.output_text.delta"]
+        )
+        if stream
+        else []
+    )
+    text: Final = "".join(deltas) if stream else response.output[0].content[0].text
+
+    assert text == "Done."
+    assert route.call_count == 1
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(route.calls[0].request.content)["input"] == [
+        *prefix,
+        replayable_reasoning,
+        answer,
+        prompt,
+    ]
