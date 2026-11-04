@@ -7360,6 +7360,60 @@ class TestRouterModelRelayUpstreamContract:
         assert not deployment_route.called
 
 
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_a_later_deployment_failure_after_an_entra_rejection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from azure.core.exceptions import ClientAuthenticationError
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        def rejected_token() -> str:
+            raise ClientAuthenticationError(message="AADSTS7000215: Invalid client secret provided.")
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "azure/gpt-5",
+                        "api_base": "https://litellm-qa.openai.azure.com",
+                        "api_version": "2025-04-01-preview",
+                        "azure_ad_token_provider": rejected_token,
+                        "order": 1,
+                    },
+                },
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "azure/gpt-5",
+                        "api_base": "https://litellm-qa-unreachable.openai.azure.com",
+                        "api_version": "2025-04-01-preview",
+                        "api_key": "configured-key",
+                        "order": 2,
+                    },
+                },
+            ],
+            num_retries=1,
+        )
+        self._install_router(monkeypatch, router, {"model": "gpt-5", "stream": False})
+
+        with respx.mock:
+            unreachable_route: Final = respx.post(url__startswith="https://litellm-qa-unreachable.openai.azure.com").mock(
+                side_effect=httpx.ConnectError("Connection refused")
+            )
+            with pytest.raises(BaseLLMException) as excinfo:
+                await azure_proxy_route(
+                    endpoint="openai/deployments/gpt-5/chat/completions",
+                    request=self._request("application/json"),
+                    fastapi_response=MagicMock(spec=Response),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+                )
+
+        assert unreachable_route.called
+        assert excinfo.value.status_code == 500
+
+
 NIM_INFER_BODY = {
     "input": [
         {"type": "image_url", "url": "data:image/png;base64,AAAA"},

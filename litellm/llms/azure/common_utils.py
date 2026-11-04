@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -9,7 +10,7 @@ from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, NoReturn, cast
 
 import httpx
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import APIError, AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
 
@@ -55,6 +56,10 @@ _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AsyncAzureClientParams)
 _AZURE_AD_TOKEN_PROVIDER_ADAPTER: Final = TypeAdapter[Callable[[], str | Awaitable[str]] | None](
     Callable[[], str | Awaitable[str]] | None
 )
+
+
+def _callable_azure_ad_token_provider(provider: object) -> Callable[[], str | Awaitable[str]] | None:
+    return _AZURE_AD_TOKEN_PROVIDER_ADAPTER.validate_python(provider) if callable(provider) else None
 
 
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
@@ -192,8 +197,22 @@ def _exception_chain(error: BaseException) -> Iterator[BaseException]:
         link = link.__cause__ or link.__context__
 
 
+_REQUEST_FAILURE_TYPES: Final = (BaseLLMException, APIError, httpx.HTTPError)
+
+
+def _belongs_to_the_same_attempt(link: BaseException) -> bool:
+    return isinstance(link, EntraRejectionError) or not isinstance(link, _REQUEST_FAILURE_TYPES)
+
+
+def _links_within_the_failed_attempt(error: BaseException) -> Iterator[BaseException]:
+    yield error
+    yield from itertools.takewhile(_belongs_to_the_same_attempt, itertools.islice(_exception_chain(error), 1, None))
+
+
 def entra_rejection_in(error: BaseException) -> EntraRejectionError | None:
-    return next((link for link in _exception_chain(error) if isinstance(link, EntraRejectionError)), None)
+    return next(
+        (link for link in _links_within_the_failed_attempt(error) if isinstance(link, EntraRejectionError)), None
+    )
 
 
 def caused_by_entra_rejection(error: BaseException) -> bool:
@@ -230,7 +249,7 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
         openai_headers["x-ratelimit-limit-tokens"] = headers["x-ratelimit-limit-tokens"]
     if "x-ratelimit-remaining-tokens" in headers:
         openai_headers["x-ratelimit-remaining-tokens"] = headers["x-ratelimit-remaining-tokens"]
-    llm_response_headers: Final = {"{}-{}".format("llm_provider", k): v for k, v in headers.items()}
+    llm_response_headers: Final = {f"llm_provider-{k}": v for k, v in headers.items()}
 
     return {**llm_response_headers, **openai_headers}
 
@@ -850,9 +869,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_version: str | None,
         is_async: bool,
     ) -> dict:
-        azure_ad_token_provider = _AZURE_AD_TOKEN_PROVIDER_ADAPTER.validate_python(
-            litellm_params.get("azure_ad_token_provider")
-        )
+        azure_ad_token_provider = _callable_azure_ad_token_provider(litellm_params.get("azure_ad_token_provider"))
         # If we have api_key, then we have higher priority
         azure_ad_token = litellm_params.get("azure_ad_token")
 

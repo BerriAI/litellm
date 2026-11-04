@@ -25791,6 +25791,63 @@ async def test_router_auth_failure_entra_did_not_cause_cools_down_despite_a_call
 
     assert excinfo.value.all_deployments_in_cooldown is True
 
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_fallback_auth_failure_after_an_entra_rejection_still_cools_down_the_fallback(monkeypatch):
+    from azure.core.exceptions import ClientAuthenticationError
+
+    def rejected_token() -> str:
+        raise ClientAuthenticationError(message="AADSTS7000215: Invalid client secret provided.")
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "azure_ad_token_provider": rejected_token,
+                },
+                "model_info": {"id": "entra-deployment"},
+            },
+            {
+                "model_name": "key-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa-fallback.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "api_key": "revoked-key",
+                },
+                "model_info": {"id": "key-deployment"},
+            },
+        ],
+        fallbacks=[{"entra-model": ["key-model"]}],
+    )
+
+    with respx.mock:
+        fallback_route: Final = respx.post(url__startswith="https://litellm-qa-fallback.openai.azure.com").mock(
+            return_value=httpx.Response(
+                401, json={"error": {"code": "401", "message": "Access denied due to invalid subscription key."}}
+            )
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            await router.acompletion(
+                model="entra-model",
+                messages=[{"role": "user", "content": "hi"}],
+                client_secret="not-the-credential",
+            )
+
+        with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+            await router.acompletion(
+                model="key-model",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    assert fallback_route.call_count == 1
+    assert excinfo.value.all_deployments_in_cooldown is True
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_async_openai_model_client():
     router = Router(

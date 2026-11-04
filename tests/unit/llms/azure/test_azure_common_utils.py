@@ -2971,3 +2971,23 @@ def test_token_provider_error_without_azure_core_installed_keeps_the_generic_tok
         get_azure_ad_token(
             GenericLiteLLMParams(azure_ad_token_provider=_raising_token_provider(ValueError("token service down")))
         )
+
+
+def test_image_generation_with_an_api_key_ignores_a_non_callable_azure_ad_token_provider():
+    import respx
+
+    with respx.mock:
+        image_route: Final = respx.post(url__startswith="https://litellm-qa.openai.azure.com").mock(
+            return_value=httpx.Response(200, json={"created": 1, "data": [{"b64_json": "aGk="}]})
+        )
+        response: Final = litellm.image_generation(
+            model="azure/gpt-image-1",
+            prompt="a red dot",
+            api_base="https://litellm-qa.openai.azure.com",
+            api_version="2025-04-01-preview",
+            api_key="configured-key",
+            azure_ad_token_provider="not-a-callable",
+        )
+
+    assert image_route.calls.last.request.headers["api-key"] == "configured-key"
+    assert response.data[0].b64_json == "aGk="
