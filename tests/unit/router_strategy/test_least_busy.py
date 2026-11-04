@@ -616,7 +616,7 @@ def test_a_reservation_and_a_release_on_one_deployment_at_once_both_count() -> N
 
 
 class _SlowLocalRead(InMemoryCache):
-    """Answers a count read with the counts from when the read started, after giving another thread a moment to run."""
+    """Answers a count read with the counts from when the read started, once another thread has begun its request."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -625,8 +625,15 @@ class _SlowLocalRead(InMemoryCache):
 
     def batch_get_cache(self, keys: list[str], **kwargs: object) -> list[object]:
         counts_when_asked: Final = super().batch_get_cache(keys, **kwargs)
-        self.other_thread = threading.Thread(target=self.while_reading)
+        began: Final = threading.Event()
+
+        def begin_then_run() -> None:
+            began.set()
+            self.while_reading()
+
+        self.other_thread = threading.Thread(target=begin_then_run)
         self.other_thread.start()
+        began.wait()
         self.other_thread.join(timeout=0.2)
         return counts_when_asked
 
