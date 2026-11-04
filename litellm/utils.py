@@ -7445,6 +7445,18 @@ def get_model_info_helper(
                 input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_audio_token_flex=_model_info.get("input_cost_per_audio_token_flex", None),
+                input_cost_per_audio_token_above_200k_tokens=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_flex=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_flex", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_priority=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_priority", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_batches=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_batches", None
+                ),
                 input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
@@ -7458,12 +7470,18 @@ def get_model_info_helper(
                 input_cost_per_token_above_200k_tokens_batches=_model_info.get(
                     "input_cost_per_token_above_200k_tokens_batches"
                 ),
+                input_cost_per_token_above_200k_tokens_flex=_model_info.get(
+                    "input_cost_per_token_above_200k_tokens_flex", None
+                ),
                 input_cost_per_token_above_272k_tokens_batches=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_batches"
                 ),
                 output_cost_per_token_batches=_model_info.get("output_cost_per_token_batches"),
                 output_cost_per_token_above_200k_tokens_batches=_model_info.get(
                     "output_cost_per_token_above_200k_tokens_batches"
+                ),
+                output_cost_per_token_above_200k_tokens_flex=_model_info.get(
+                    "output_cost_per_token_above_200k_tokens_flex", None
                 ),
                 output_cost_per_token_above_272k_tokens_batches=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_batches"
@@ -7527,6 +7545,7 @@ def get_model_info_helper(
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
+                output_cost_per_image_token_priority=_model_info.get("output_cost_per_image_token_priority", None),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),

@@ -28,7 +28,11 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.asyncify import is_event_loop_running
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    coerce_token_limit,
+    drops_unsupported_params,
+    map_finish_reason,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     invalid_type_message,
@@ -581,12 +585,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @classmethod
-    def get_config(cls, *, model: str | None = None):
+    def get_config(cls, *, model: str | None = None, configured_max_output_tokens: int | None = None):
         config: Final = super().get_config()
 
         # anthropic requires a default value for max_tokens
         if config.get("max_tokens") is None:
-            config["max_tokens"] = cls.get_max_tokens_for_model(model)
+            config["max_tokens"] = (
+                configured_max_output_tokens
+                if configured_max_output_tokens is not None
+                else cls.get_max_tokens_for_model(model)
+            )
 
         return config
 
@@ -2539,7 +2547,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params["tools"] = tools
 
         ## Load Config
-        config: Final[Mapping[str, object]] = MappingProxyType(litellm.AnthropicConfig.get_config(model=model))
+        model_info: Final[object] = cast(  # cast-ok: request parameters are a Mapping
+            Mapping[str, object], litellm_params
+        ).get("model_info")
+        configured_max_output_tokens: Final = (
+            coerce_token_limit(
+                cast(Mapping[str, object], model_info).get("max_output_tokens")  # cast-ok: runtime Mapping check
+            )
+            if isinstance(model_info, Mapping)
+            else None
+        )
+        config: Final[Mapping[str, object]] = MappingProxyType(
+            litellm.AnthropicConfig.get_config(model=model, configured_max_output_tokens=configured_max_output_tokens)
+        )
         for k, v in config.items():
             if (
                 k not in optional_params
