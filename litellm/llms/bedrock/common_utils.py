@@ -1634,7 +1634,7 @@ def normalize_bedrock_opus_output_config_effort(model: str, output_config: objec
         return
 
     effort: Final = output_config.get("effort")
-    if effort not in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
+    if not isinstance(effort, str) or effort not in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
         return
 
     ceiling: Final = _get_bedrock_output_config_effort_ceiling(model)

@@ -142,11 +142,6 @@ ADAPTIVE_THINKING_ON_UNRESOLVED_ARN_WARNING: Final = (
     "does not name its model, so LiteLLM cannot tell whether it supports adaptive thinking. Set `base_model` on "
     "the deployment (for example `us.anthropic.claude-opus-4-8`) to send adaptive thinking as requested."
 )
-UNRESOLVED_ARN_OUTPUT_CONFIG_WARNING: Final = (
-    "Dropping `output_config` for model=%s under drop_params: an application inference profile ARN does not name "
-    "its model, so LiteLLM cannot tell whether it takes an effort. Set `base_model` on the deployment (for example "
-    "`us.anthropic.claude-opus-4-8`) to send it."
-)
 DROP_UNSUPPORTED_EFFORT_WARNING: Final = "Dropping `output_config.effort` for model=%s under drop_params: %s"
 
 # Computer use tool prefixes supported by Bedrock
@@ -583,7 +578,7 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["_output_config_normalized"] = True
 
     @staticmethod
-    def _anthropic_adaptive_effort_error(model: str, effort: object) -> str | None:
+    def _anthropic_adaptive_effort_error(model: str, effort: object, checks_tier: bool) -> str | None:
         """Why ``output_config.effort`` is not valid on ``model``, or None when it is."""
         valid_efforts: Final = {"high", "medium", "low", "xhigh", "max"}
         if not isinstance(effort, str) or effort not in valid_efforts:
@@ -592,12 +587,14 @@ class AmazonConverseConfig(BaseConfig):
                 f"{effort!r}. Must be one of: 'low', 'medium', 'high', "
                 f"'xhigh', or 'max'."
             )
+        if not checks_tier:
+            return None
         return AnthropicConfig.validate_effort_for_model(model=model, effort=effort, custom_llm_provider="bedrock")
 
     @staticmethod
     def _validate_anthropic_adaptive_effort(model: str, effort: str) -> None:
         """Validate ``output_config.effort`` for adaptive-thinking Claude 4.6/4.7."""
-        error: Final = AmazonConverseConfig._anthropic_adaptive_effort_error(model, effort)
+        error: Final = AmazonConverseConfig._anthropic_adaptive_effort_error(model, effort, checks_tier=True)
         if error is not None:
             raise litellm.exceptions.BadRequestError(
                 message=error,
@@ -614,15 +611,11 @@ class AmazonConverseConfig(BaseConfig):
         drops_unsupported_effort: bool,
     ) -> Mapping[str, object] | None:
         if is_bedrock_application_inference_profile_arn(model):
-            if not drops_unsupported_effort:
-                return output_config
-            litellm.verbose_logger.warning(UNRESOLVED_ARN_OUTPUT_CONFIG_WARNING, model)
-            return None
+            return output_config
         if not base_model.startswith("anthropic"):
             return None
-        model_takes_effort: Final = AnthropicConfig.model_supports_effort_param(
-            model, "bedrock"
-        ) or AnthropicConfig.is_adaptive_thinking_model(model, "bedrock")
+        model_lists_effort: Final = AnthropicConfig.model_supports_effort_param(model, "bedrock")
+        model_takes_effort: Final = model_lists_effort or AnthropicConfig.is_adaptive_thinking_model(model, "bedrock")
         if drops_unsupported_effort and not model_takes_effort:
             litellm.verbose_logger.warning(DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING, model)
             return None
@@ -631,7 +624,9 @@ class AmazonConverseConfig(BaseConfig):
             normalize_bedrock_opus_output_config_effort(model=model, output_config=normalized_output_config)
         effort: Final = normalized_output_config.get("effort")
         effort_error: Final = (
-            None if effort is None else AmazonConverseConfig._anthropic_adaptive_effort_error(model, effort)
+            None
+            if effort is None
+            else AmazonConverseConfig._anthropic_adaptive_effort_error(model, effort, checks_tier=model_lists_effort)
         )
         if effort_error is None:
             return normalized_output_config

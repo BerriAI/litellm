@@ -16,6 +16,7 @@ from litellm.llms.anthropic.messages.utils import (
     json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
+from litellm.llms.bedrock.common_utils import is_bedrock_application_inference_profile_arn
 from litellm.responses.utils import auto_reasoning_summary
 
 # OpenAI has a 64-character limit for function/tool names
@@ -366,6 +367,11 @@ _BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
 
 
 _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.value})
+UNRESOLVED_ARN_EFFORT_WITHOUT_THINKING_WARNING: Final = (
+    "Dropping `output_config` for model=%s under drop_params: an application inference profile ARN does not name "
+    "its model, so LiteLLM cannot tell whether it takes an effort without a `thinking` block. Turn off drop_params "
+    "on the deployment to send it."
+)
 
 
 class LiteLLMAnthropicMessagesAdapter:
@@ -1203,6 +1209,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
+        drop_params: bool,
     ) -> None:
         """Forward the effort-bearing part of ``output_config`` to a Bedrock Claude target.
 
@@ -1218,8 +1225,17 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         effort_config: Final = {k: v for k, v in output_config.items() if k != "format"}
-        if effort_config:
-            new_kwargs["output_config"] = effort_config  # rebind-ok: out-param store like its sibling translators
+        if not effort_config:
+            return
+        model: Final = new_kwargs["model"]
+        if (
+            drop_params
+            and not anthropic_message_request.get("thinking")
+            and is_bedrock_application_inference_profile_arn(model)
+        ):
+            litellm.verbose_logger.warning(UNRESOLVED_ARN_EFFORT_WITHOUT_THINKING_WARNING, model)
+            return
+        new_kwargs["output_config"] = effort_config  # rebind-ok: out-param store like its sibling translators
 
     def _translate_output_format_to_openai(
         self,
@@ -1324,6 +1340,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self._translate_output_config_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
+            drop_params=drop_params,
         )
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(

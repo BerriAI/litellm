@@ -5553,6 +5553,39 @@ async def test_bedrock_converse_claude_without_effort_support_drops_the_effort_o
     assert ("output_config" in _sent_converse_fields(_converse_route)) is forwards_effort
 
 
+_APPLICATION_INFERENCE_PROFILE: Final = (
+    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("thinking", "drop_params", "forwards_effort"),
+    [
+        pytest.param(None, False, True, id="no_thinking"),
+        pytest.param(None, True, False, id="no_thinking_drop_params"),
+        pytest.param({"type": "enabled", "budget_tokens": 1024}, True, True, id="thinking_drop_params"),
+    ],
+)
+async def test_bedrock_application_inference_profile_loses_the_effort_only_without_thinking_under_drop_params(
+    _converse_route: respx.Route,
+    thinking: Mapping[str, object] | None,
+    drop_params: bool,
+    forwards_effort: bool,
+) -> None:
+    await litellm.anthropic.messages.acreate(
+        model=f"bedrock/converse/{_APPLICATION_INFERENCE_PROFILE}",
+        max_tokens=2048,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        output_config={"effort": "high", "format": _CITY_FORMAT},
+        drop_params=drop_params,
+        **({"thinking": thinking} if thinking else {}),
+    )
+
+    sent: Final = _sent_converse_fields(_converse_route)
+    assert sent.get("output_config") == ({"effort": "high"} if forwards_effort else None)
+
+
 @pytest.mark.parametrize(
     "output_config",
     [pytest.param(None, id="null"), pytest.param({"format": _CITY_FORMAT}, id="format_only")],

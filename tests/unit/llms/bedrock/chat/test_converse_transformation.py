@@ -5581,13 +5581,13 @@ def _converse_output_config(model: str, output_config: dict, litellm_params: dic
     return result.get("additionalModelRequestFields", {}).get("output_config")
 
 
-@pytest.mark.parametrize("effort", ["xhigh", "turbo"])
+@pytest.mark.parametrize("effort", ["xhigh", "turbo", ["high"]])
 def test_converse_refuses_an_effort_the_model_cannot_take_without_drop_params(local_model_cost_map, effort):
     with pytest.raises(litellm.BadRequestError, match="effort"):
         _converse_output_config("us.anthropic.claude-sonnet-4-6", {"effort": effort}, {})
 
 
-@pytest.mark.parametrize("effort", ["xhigh", "turbo"])
+@pytest.mark.parametrize("effort", ["xhigh", "turbo", ["high"]])
 def test_converse_drops_an_effort_the_model_cannot_take_under_deployment_drop_params(
     local_model_cost_map, caplog, effort
 ):
@@ -5600,9 +5600,11 @@ def test_converse_drops_an_effort_the_model_cannot_take_under_deployment_drop_pa
     assert any("output_config.effort" in record.getMessage() for record in caplog.records)
 
 
-def test_converse_forwards_an_unresolved_arn_effort_only_without_drop_params(local_model_cost_map):
-    assert _converse_output_config(_APPLICATION_INFERENCE_PROFILE_ARN, {"effort": "high"}, {}) == {"effort": "high"}
-    assert _converse_output_config(_APPLICATION_INFERENCE_PROFILE_ARN, {"effort": "high"}, {"drop_params": True}) is None
+@pytest.mark.parametrize("litellm_params", [{}, {"drop_params": True}])
+def test_converse_forwards_an_unresolved_arn_effort_verbatim(local_model_cost_map, litellm_params):
+    sent: Final = _converse_output_config(_APPLICATION_INFERENCE_PROFILE_ARN, {"effort": "high"}, litellm_params)
+
+    assert sent == {"effort": "high"}
 
 
 @pytest.mark.parametrize(
@@ -5625,11 +5627,15 @@ def test_converse_refuses_a_reasoning_effort_tier_the_model_cannot_take(local_mo
         )
 
 
-def test_converse_keeps_the_effort_for_a_claude_id_the_cost_map_does_not_list_yet(local_model_cost_map):
+@pytest.mark.parametrize("effort", ["high", "xhigh", "max"])
+@pytest.mark.parametrize("litellm_params", [{}, {"drop_params": True}])
+def test_converse_keeps_the_effort_for_a_claude_id_the_cost_map_does_not_list_yet(
+    local_model_cost_map, effort, litellm_params
+):
     model: Final = "us.anthropic.claude-opus-9-9-v1:0"
     assert model not in litellm.model_cost
 
-    assert _converse_output_config(model, {"effort": "high"}, {"drop_params": True}) == {"effort": "high"}
+    assert _converse_output_config(model, {"effort": effort}, litellm_params) == {"effort": effort}
 
 
 def test_transform_response_native_structured_output():
