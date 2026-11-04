@@ -117,6 +117,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.router_api import deployment_usable_by_team
 from litellm.secret_managers.main import get_secret_bool
@@ -2738,33 +2739,50 @@ def _turn_caller(
     pinned_model_id: str | None,
     call_params: Mapping[str, object],
     proxy_metadata: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
 ) -> Callable[[EndpointScript, Mapping[str, object], str], Awaitable[CalledTurn]]:
     """The two ways a turn reaches the provider: pinned to a saved deployment through the router, so the
     deployment's own credentials and pricing apply, or straight through litellm with the submitted params.
-    Either way the call carries the proxy's own logging object, the way every proxied request does, so the
-    cost read back is the one the spend log row gets. Every turn skips LiteLLM's response cache, so the reply,
-    and the cache-miss retry of the same prompt, come from the provider and not from a stored answer."""
+    Either way the turn goes through the proxy's pre-call hooks first, so the caller's rate limits, parallel
+    request cap and guardrails apply to it the way they apply to every proxied request, and it carries the
+    proxy's own logging object, so the cost read back is the one the spend log row gets. Every turn skips
+    LiteLLM's response cache, so the reply, and the cache-miss retry of the same prompt, come from the provider
+    and not from a stored answer."""
 
     async def call(script: EndpointScript, body: Mapping[str, object], call_id: str) -> CalledTurn:
         target_params: Final = {"model": pinned_model_id} if pinned_model_id is not None else call_params
-        logging_obj, prepared = litellm.utils.function_setup(
-            original_function=script.route_type,
-            rules_obj=litellm.utils.Rules(),
-            start_time=datetime.now(),  # noqa: DTZ005  # Logging pairs it with the naive end_time it records
-            **{  # pyright: ignore[reportArgumentType]  # takes the untyped request dict, like the proxy
-                **target_params,
-                **body,
-                script.metadata_key: {**proxy_metadata, "tags": [_test_model_tag(call_id)]},
-                "litellm_call_id": call_id,
-                "drop_params": True,
-                "cache": {"no-cache": True},
-            },
-        )
-        prepared["litellm_logging_obj"] = logging_obj
-        target: Final = llm_router if pinned_model_id is not None and llm_router is not None else litellm
-        response: Final[object] = await asyncio.wait_for(
-            getattr(target, script.route_type)(**prepared), HEALTH_CHECK_TIMEOUT_SECONDS
-        )
+        request: Final = {
+            **target_params,
+            **body,
+            script.metadata_key: {**proxy_metadata, "tags": [_test_model_tag(call_id)]},
+            "litellm_call_id": call_id,
+            "drop_params": True,
+            "cache": {"no-cache": True},
+        }
+        try:
+            admitted: Final = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict, data=request, call_type=script.route_type
+            )
+            logging_obj, prepared = litellm.utils.function_setup(
+                original_function=script.route_type,
+                rules_obj=litellm.utils.Rules(),
+                start_time=datetime.now(),  # noqa: DTZ005  # Logging pairs it with the naive end_time it records
+                **admitted,  # pyright: ignore[reportArgumentType]  # takes the untyped request dict, like the proxy
+            )
+            prepared["litellm_logging_obj"] = logging_obj
+            target: Final = llm_router if pinned_model_id is not None and llm_router is not None else litellm
+            response: Final[object] = await asyncio.wait_for(
+                getattr(target, script.route_type)(**prepared), HEALTH_CHECK_TIMEOUT_SECONDS
+            )
+        except Exception as error:
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request,
+                original_exception=error,
+                user_api_key_dict=user_api_key_dict,
+                route="/health/test_model",
+            )
+            raise
         return CalledTurn(response=response, cost=await _logged_cost(logging_obj, response_cost(response)))
 
     return call
@@ -2842,6 +2860,7 @@ async def test_model(
         llm_router,
         premium_user,
         prisma_client,
+        proxy_logging_obj,
     )
     from litellm.types.router import Deployment, LiteLLM_Params
 
@@ -2915,6 +2934,8 @@ async def test_model(
                 ),
             },
             proxy_metadata=proxy_metadata,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
         )
         run_query: Final[_RawQuery | None] = prisma_client.db.query_raw if prisma_client is not None else None
         started_at: Final = datetime.now(timezone.utc) - timedelta(minutes=1)

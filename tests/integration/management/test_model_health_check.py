@@ -1645,3 +1645,34 @@ def test_health_test_model_with_a_different_model_than_the_saved_deployment_call
         assert [request.headers["authorization"] for request in requests] == ["Bearer synthetic-override-key"] * 3, (
             response.text
         )
+
+
+def test_health_test_model_turns_count_against_the_calling_keys_rate_limit(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        wire_server(lambda request: _test_model_chat_reply(request, cached_tokens=4800)) as wire,
+    ):
+        model_name: Final = scenario.model(api_base=f"{wire.url}/v1", api_key="synthetic-test-model-key")
+        model_id: Final = next(
+            string_value(object_value(info["model_info"])["id"])
+            for info in (object_value(entry) for entry in list_value(gateway.get("/v1/model/info")["data"]))
+            if info["model_name"] == model_name
+        )
+        admin: Final = scenario.user(user_role="proxy_admin")
+        one_per_minute: Final = scenario.key(user_id=admin, rpm_limit=1)
+
+        response: Final = gateway.request(
+            "POST",
+            "/health/test_model",
+            {"model_id": model_id, "endpoints": ["/v1/chat/completions"]},
+            key=one_per_minute,
+        )
+
+        assert response.status_code == 200, response.text
+        payload: Final = JSON_OBJECT.validate_json(response.content)
+        assert payload["status"] == "error", response.text
+        checks: Final = _check_statuses(object_value(list_value(payload["endpoints"])[0]))
+        assert checks["conversation"][0] == "fail", response.text
+        assert checks["conversation"][1].startswith("turn 2 request with the tool result failed"), response.text
+        assert "Rate limit exceeded" in checks["conversation"][1], response.text
+        assert len(wire.drain()) == 1, response.text
