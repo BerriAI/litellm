@@ -45,3 +45,22 @@ The environment-login banner is an actual warning from the disposable proxy. The
 - [Quick panel, light](rebuilt-panel-light.jpg)
 - [Mobile](rebuilt-aria-dark-mobile.jpg)
 - [Collapsed navigation](rebuilt-collapsed-light.jpg)
+
+## Selected Aria design and final navigation
+
+Source: db4ec9832df2b11cf0d72a3d51288a2b3e1931c1
+
+Aria has one dedicated page; Home remains the default. Usage links to Aria instead of embedding another composer. Suggestions fill an editable draft. The access description follows the account permissions. Theme remains in the header; the shield appears only for active warnings, with deployment health still reachable under the bell.
+
+The personal-spend screenshot is a real model response using the signed-in disposable QA user without requesting an ID. This uses synthetic test activity in the isolated local database. Admin write approvals are covered by integration tests, not this live run.
+
+Notification before/after captures show the intermediate layout immediately before and after grouping content above the utility footer. Original main screenshots remain above.
+
+- [aria-focused-light.jpg](aria-focused-light.jpg)
+- [aria-focused-dark.jpg](aria-focused-dark.jpg)
+- [aria-focused-laptop-dark.jpg](aria-focused-laptop-dark.jpg)
+- [aria-focused-mobile-dark.jpg](aria-focused-mobile-dark.jpg)
+- [aria-personal-spend-live.jpg](aria-personal-spend-live.jpg)
+- [usage-page-only-entry.jpg](usage-page-only-entry.jpg)
+- [notifications-before-hierarchy.jpg](notifications-before-hierarchy.jpg)
+- [notifications-after-hierarchy.jpg](notifications-after-hierarchy.jpg)
