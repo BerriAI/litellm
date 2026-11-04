@@ -141,6 +141,121 @@ async def test_apply_guardrail_text_concatenation(mock_api_call):
     assert call_args.kwargs["content"] == "Hello world"
 
 
+_CONVERSATION: Final = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "What is two plus two?"},
+    {"role": "assistant", "content": "Four."},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("last_turn", "expected_content"),
+    [
+        ([{"role": "user", "content": "And three plus three?"}], "And three plus three?"),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "And three"}, {"type": "text", "text": " plus three?"}],
+                }
+            ],
+            "And three plus three?",
+        ),
+        (
+            [{"role": "user", "content": "And three plus three?"}, {"role": "user", "content": "Answer in words."}],
+            "And three plus three?\nAnswer in words.",
+        ),
+    ],
+    ids=["string-content", "content-parts", "consecutive-user-messages"],
+)
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_request_scans_only_the_last_user_turn(
+    mock_api_call: AsyncMock, last_turn: list[dict[str, object]], expected_content: str
+) -> None:
+    guardrail: Final = ZscalerAIGuard(policy_id=100)
+    messages: Final = [*_CONVERSATION, *last_turn]
+    inputs: Final = {"texts": ["every", "message", "flattened"], "structured_messages": messages}
+
+    await guardrail.apply_guardrail(inputs, {}, "request")
+
+    mock_api_call.assert_called_once()
+    assert mock_api_call.call_args.kwargs["content"] == expected_content
+    assert mock_api_call.call_args.kwargs["direction"] == "IN"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "last_turn",
+    [
+        {"role": "assistant", "content": "Prefilled answer:"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "tool output"},
+    ],
+    ids=["assistant", "tool"],
+)
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_request_ending_on_a_non_user_turn_is_not_scanned(
+    mock_api_call: AsyncMock, last_turn: dict[str, object]
+) -> None:
+    guardrail: Final = ZscalerAIGuard(policy_id=100)
+    inputs: Final = {"texts": ["every", "message"], "structured_messages": [*_CONVERSATION, last_turn]}
+
+    result: Final = await guardrail.apply_guardrail(inputs, {}, "request")
+
+    mock_api_call.assert_not_called()
+    assert result is inputs
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_response_scans_every_text_and_ignores_structured_messages(mock_api_call: AsyncMock) -> None:
+    guardrail: Final = ZscalerAIGuard(policy_id=100)
+    inputs: Final = {
+        "texts": ["First choice.", "Second choice."],
+        "structured_messages": [*_CONVERSATION, {"role": "user", "content": "And three plus three?"}],
+    }
+
+    await guardrail.apply_guardrail(inputs, {}, "response")
+
+    mock_api_call.assert_called_once()
+    assert mock_api_call.call_args.kwargs["content"] == "First choice. Second choice."
+    assert mock_api_call.call_args.kwargs["direction"] == "OUT"
+
+
+@pytest.mark.asyncio
+async def test_last_user_turn_is_the_execute_policy_body_content() -> None:
+    received: Final = asyncio.Queue[object]()
+
+    async def execute_policy(request: web.Request) -> web.Response:
+        await received.put(await request.json())
+        return web.json_response({"statusCode": 200, "action": "ALLOW"})
+
+    app: Final = web.Application()
+    app.router.add_post("/v1/detection/execute-policy", execute_policy)
+    async with TestServer(app) as server:
+        guardrail: Final = ZscalerAIGuard(
+            api_key="test_key",
+            api_base=str(server.make_url("/v1/detection/execute-policy")),
+            policy_id=1,
+        )
+        messages: Final = [*_CONVERSATION, {"role": "user", "content": "And three plus three?"}]
+        await guardrail.apply_guardrail(
+            {"texts": [str(m["content"]) for m in messages], "structured_messages": messages}, {}, "request"
+        )
+
+    assert received.get_nowait() == {"direction": "IN", "content": "And three plus three?", "policyId": 1}
+    assert received.empty()
+
+
 @pytest.mark.asyncio
 @patch(
     "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
