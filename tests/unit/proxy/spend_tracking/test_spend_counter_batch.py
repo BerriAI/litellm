@@ -22,7 +22,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     release_spend_counter_batch,
     spend_counter_batch_scope,
 )
-from litellm.rust_bridge._native import NativeSpendCounterError
+from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.caching.redis_batch import request_redis_batch_scope
 from tests.unit.caching.test_redis_batch import FakeNativePending, FakeNatives
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
@@ -515,7 +515,7 @@ async def test_a_failed_post_call_pipeline_invalidates_every_counter_it_carried_
     monkeypatch.setattr(ps, "prisma_client", None)
     reservation = _reservation(reserved_cost=0.4)
 
-    with pytest.raises(NativeSpendCounterError):
+    with pytest.raises(NativeRedisStoreError):
         await ps.increment_spend_counters(
             token="hashed",
             team_id="team",

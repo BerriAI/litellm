@@ -23,7 +23,7 @@ from litellm.redis.stores.spend_counters import (
     team_window_counter,
     user_counter,
 )
-from litellm.rust_bridge._native import NativeRedisClient, NativeSpendCounterError, NativeSpendCounters
+from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError, NativeSpendCounters
 from tests.unit.caching.test_redis_batch import FakeNatives
 
 from .spend_counters_double import FakeSpendCounters
@@ -119,7 +119,7 @@ def test_a_broadcast_writes_and_drops_only_spend_counter_copies() -> None:
     [("timeout", True), ("breaker_open", True), ("transport", False), ("rejected", False), ("memory", False)],
 )
 def test_only_a_timeout_or_an_open_breaker_lets_a_post_call_increment_drop(kind: str, dropped: bool) -> None:
-    assert is_unavailable(NativeSpendCounterError(kind, "message")) is dropped
+    assert is_unavailable(NativeRedisStoreError(kind, "message")) is dropped
     assert not is_unavailable(TimeoutError(kind))
 
 
@@ -173,7 +173,7 @@ async def test_an_unreachable_redis_fails_writes_as_transport_and_serves_reads_f
     )
     store.set_local("spend:key:k", 4.0)
 
-    with pytest.raises(NativeSpendCounterError) as failure:
+    with pytest.raises(NativeRedisStoreError) as failure:
         await store.increment("spend:key:k", 1.0)
 
     assert failure.value.args[0] == "transport"

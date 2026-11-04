@@ -58,7 +58,7 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from tests._master_key import MASTER_KEY
 from litellm.redis.stores.spend_counters import SpendCounterStore
-from litellm.rust_bridge._native import NativeSpendCounterError
+from litellm.rust_bridge._native import NativeRedisStoreError
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
@@ -9489,7 +9489,7 @@ async def test_increment_spend_counter_invalidates_stale_cache_on_redis_failure(
     spend = FakeSpendCounters(memory={"spend:team:redis-fail": 4.0}, fail=True)
     monkeypatch.setattr(ps, "spend_counter_store", spend.store())
 
-    with pytest.raises(NativeSpendCounterError):
+    with pytest.raises(NativeRedisStoreError):
         await ps.increment_spend_counter_cache(counter_key="spend:team:redis-fail", increment=0.5)
 
     assert spend.memory == {}

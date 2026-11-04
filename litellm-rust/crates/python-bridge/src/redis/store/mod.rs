@@ -114,6 +114,25 @@ impl NativePending {
     }
 }
 
+pyo3::create_exception!(
+    _native,
+    NativeRedisStoreError,
+    pyo3::exceptions::PyException,
+    "A native Redis store operation failed. Args are (kind, message), kind one of \"breaker_open\", \"timeout\", \"transport\", \"rejected\", \"decode\", \"encode\" or \"memory\"."
+);
+
+/// The failure class a caller branches on, `timeout` and `breaker_open` being the ones it may drop.
+fn redis_error_kind(error: &litellm_redis_client::Error) -> &'static str {
+    use litellm_redis_client::Error;
+    match error {
+        Error::BreakerOpen => "breaker_open",
+        Error::Transport(error) if error.is_timeout() => "timeout",
+        Error::Transport(_) => "transport",
+        Error::Server(_) => "rejected",
+        Error::Decode(_) => "decode",
+    }
+}
+
 fn store_error(error: litellm_cache::Error) -> PyErr {
     PyRuntimeError::new_err(litellm_error::Report::new(&error).to_string())
 }

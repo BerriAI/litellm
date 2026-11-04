@@ -19,7 +19,7 @@ import pytest
 
 from litellm.caching import DualCache
 from litellm.proxy import proxy_server
-from litellm.rust_bridge._native import NativeSpendCounterError
+from litellm.rust_bridge._native import NativeRedisStoreError
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
@@ -54,7 +54,7 @@ async def test_direct_increment_runs_when_reservation_reconcile_hits_redis_failu
         ],
     }
 
-    with pytest.raises(NativeSpendCounterError, match="transport"):
+    with pytest.raises(NativeRedisStoreError, match="transport"):
         await proxy_server.increment_spend_counters(
             token=hashed_token,
             team_id=None,

@@ -52,7 +52,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_u
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
 
 from .conftest import normalize
-from litellm.rust_bridge._native import NativeSpendCounterError
+from litellm.rust_bridge._native import NativeRedisStoreError
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
@@ -759,7 +759,7 @@ async def test_increment_spend_counters_pipeline_failure_invalidates_all_counter
     instead of trusting a value the write may have partially applied."""
     spend = _warm_counters_behind_a_failing_pipeline(monkeypatch, failure="transport")
 
-    with pytest.raises(NativeSpendCounterError):
+    with pytest.raises(NativeRedisStoreError):
         await _increment_every_spend_counter()
 
     _assert_every_pending_counter_invalidated(spend)
@@ -1086,7 +1086,7 @@ async def test_apply_spend_counter_increments_redis_timeout_invalidates_and_retu
 async def test_apply_spend_counter_increments_other_redis_error_invalidates_and_raises(monkeypatch):
     spend = _spend_counters(monkeypatch, memory={"spend:key:k": 1.0, "spend:team:t": 1.0}, fail_pipelines=True)
 
-    with pytest.raises(NativeSpendCounterError, match="transport"):
+    with pytest.raises(NativeRedisStoreError, match="transport"):
         await ps._apply_spend_counter_increments(_two_pending_increments())
 
     assert spend.memory == {}
@@ -1280,7 +1280,7 @@ async def test_increment_spend_counter_cache_redis_error_raises_and_invalidates(
 ):
     spend = _spend_counters(monkeypatch, memory={"spend:key:k": 3.0}, fail=True)
 
-    with pytest.raises(NativeSpendCounterError):
+    with pytest.raises(NativeRedisStoreError):
         await ps._increment_spend_counter_cache(counter_key="spend:key:k", increment=1.0)
 
     assert spend.memory == {}

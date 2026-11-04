@@ -1,39 +1,25 @@
-use std::{
-    sync::{Arc, Mutex, PoisonError},
-    time::Duration,
-};
+use std::{convert::Infallible, sync::Arc, time::Duration};
 
-use litellm_redis_store::spend_counters::{
-    DeclaredReads, Error, LostSeed, Reading, SpendCounter, SpendCounters,
-};
-use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
-    prelude::*,
-    types::PyDict,
-};
+use litellm_redis_store::spend_counters::{Error, LostSeed, Reading, SpendCounter, SpendCounters};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
-use super::{PyNumber, call, request::NativeRequestRedis, store_error};
-use crate::execution::run_async_value;
+use super::{
+    NativePending, NativeRedisStoreError, PyNumber, redis_async, redis_error_kind,
+    request::NativeRequestRedis, store_error, ttl,
+};
 use crate::redis::client::NativeRedisClient;
 
-pyo3::create_exception!(
-    _native,
-    NativeSpendCounterError,
-    pyo3::exceptions::PyException,
-    "A spend counter operation failed. Args are (kind, message), kind one of \"breaker_open\", \"timeout\", \"transport\", \"rejected\", \"decode\" or \"memory\"."
-);
-
 fn spend_error(error: Error) -> PyErr {
-    use litellm_redis_client::Error as RedisError;
     let kind = match &error {
-        Error::Redis(RedisError::BreakerOpen) => "breaker_open",
-        Error::Redis(RedisError::Transport(error)) if error.is_timeout() => "timeout",
-        Error::Redis(RedisError::Transport(_)) => "transport",
-        Error::Redis(RedisError::Server(_)) => "rejected",
-        Error::Redis(RedisError::Decode(_)) | Error::Decode(_) => "decode",
+        Error::Redis(error) => redis_error_kind(error),
+        Error::Decode(_) => "decode",
         Error::Memory(_) => "memory",
     };
-    NativeSpendCounterError::new_err((kind, litellm_error::Report::new(&error).to_string()))
+    NativeRedisStoreError::new_err((kind, litellm_error::Report::new(&error).to_string()))
+}
+
+fn infallible(error: Infallible) -> PyErr {
+    match error {}
 }
 
 /// A `spend:*` key, refused when it names anything outside the spend counter keyspace.
@@ -63,10 +49,6 @@ fn increments(
         .collect()
 }
 
-fn ttl(seconds: Option<f64>) -> Option<Duration> {
-    seconds.map(|seconds| Duration::from_secs_f64(seconds.max(0.0)))
-}
-
 fn numbers(values: Vec<Option<litellm_redis_store::Number>>) -> Vec<Option<PyNumber>> {
     values
         .into_iter()
@@ -92,13 +74,8 @@ impl NativeSpendCounters {
     /// `("redis" | "memory", value)`: where the answer came from, a Redis miss included.
     fn read<'py>(&self, py: Python<'py>, counter: PySpendCounter) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_get_cache")?;
-        run_async_value(py, async move {
-            let reading = scope
-                .scope(store.read(&counter.0))
-                .await
-                .map_err(store_error)?;
-            Ok(match reading {
+        redis_async(py, "async_get_cache", store_error, async move {
+            Ok(match store.read(&counter.0).await? {
                 Reading::Redis(value) => ("redis", value.map(PyNumber)),
                 Reading::Memory(value) => ("memory", value.map(PyNumber)),
             })
@@ -112,9 +89,8 @@ impl NativeSpendCounters {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let counters = self::counters(counters);
-        let scope = call(py, "async_batch_get_cache")?;
-        run_async_value(py, async move {
-            Ok(scope.scope(store.read_many(&counters)).await.map(numbers))
+        redis_async(py, "async_batch_get_cache", infallible, async move {
+            Ok(store.read_many(&counters).await.map(numbers))
         })
     }
 
@@ -122,10 +98,14 @@ impl NativeSpendCounters {
         &self,
         request: &NativeRequestRedis,
         counters: Vec<PySpendCounter>,
-    ) -> Option<NativeDeclaredSpendCounters> {
+    ) -> Option<NativePending> {
         self.0
             .declare_read_many_pre_call(&request.0, &self::counters(counters))
-            .map(|declared| NativeDeclaredSpendCounters(Mutex::new(Some(declared))))
+            .map(|declared| {
+                NativePending::new("async_batch_get_cache", infallible, async move {
+                    Ok(declared.resolve().await.map(numbers))
+                })
+            })
     }
 
     fn increment<'py>(
@@ -135,13 +115,8 @@ impl NativeSpendCounters {
         amount: PyNumber,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_increment")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.increment(&counter.0, amount.0))
-                .await
-                .map(PyNumber)
-                .map_err(spend_error)
+        redis_async(py, "async_increment", spend_error, async move {
+            store.increment(&counter.0, amount.0).await.map(PyNumber)
         })
     }
 
@@ -152,12 +127,8 @@ impl NativeSpendCounters {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let increments = self::increments(increments);
-        let scope = call(py, "async_increment_pipeline")?;
-        run_async_value(py, async move {
-            let totals = scope
-                .scope(store.increment_many(&increments))
-                .await
-                .map_err(spend_error)?;
+        redis_async(py, "async_increment_pipeline", spend_error, async move {
+            let totals = store.increment_many(&increments).await?;
             Ok(totals.into_iter().map(PyNumber).collect::<Vec<_>>())
         })
     }
@@ -179,13 +150,11 @@ impl NativeSpendCounters {
         spend: PyNumber,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_set_max")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.set_max(&counter.0, spend.0))
+        redis_async(py, "async_set_max", spend_error, async move {
+            store
+                .set_max(&counter.0, spend.0)
                 .await
                 .map(|stored| stored.map(PyNumber))
-                .map_err(spend_error)
         })
     }
 
@@ -203,13 +172,8 @@ impl NativeSpendCounters {
         } else {
             LostSeed::Answer
         };
-        let scope = call(py, "async_set_cache")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.seed(&counter.0, spend.0, lost))
-                .await
-                .map(PyNumber)
-                .map_err(spend_error)
+        redis_async(py, "async_set_cache", spend_error, async move {
+            store.seed(&counter.0, spend.0, lost).await.map(PyNumber)
         })
     }
 
@@ -222,12 +186,8 @@ impl NativeSpendCounters {
         ttl_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_set_cache")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.set(&counter.0, spend.0, ttl(ttl_seconds)))
-                .await
-                .map_err(spend_error)
+        redis_async(py, "async_set_cache", spend_error, async move {
+            store.set(&counter.0, spend.0, ttl(ttl_seconds)).await
         })
     }
 
@@ -238,12 +198,8 @@ impl NativeSpendCounters {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let counters = self::counters(counters);
-        let scope = call(py, "async_delete_cache")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.delete(&counters))
-                .await
-                .map_err(spend_error)
+        redis_async(py, "async_delete_cache", spend_error, async move {
+            store.delete(&counters).await
         })
     }
 
@@ -253,12 +209,8 @@ impl NativeSpendCounters {
         counter: PySpendCounter,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_refresh_ttl")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.refresh_ttl(&counter.0))
-                .await
-                .map_err(spend_error)
+        redis_async(py, "async_refresh_ttl", spend_error, async move {
+            store.refresh_ttl(&counter.0).await
         })
     }
 
@@ -303,27 +255,5 @@ impl NativeSpendCounters {
             snapshot.set_item(key, PyNumber(spend))?;
         }
         Ok(snapshot)
-    }
-}
-
-/// A `read_many` declared on a request's pre-call batch. `resolve` answers it once.
-#[pyclass(frozen, name = "NativeDeclaredSpendCounters")]
-pub(crate) struct NativeDeclaredSpendCounters(Mutex<Option<DeclaredReads>>);
-
-#[pymethods]
-impl NativeDeclaredSpendCounters {
-    fn resolve<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let declared = self
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-            .ok_or_else(|| {
-                PyRuntimeError::new_err("this spend counter read was already resolved")
-            })?;
-        let scope = call(py, "async_batch_get_cache")?;
-        run_async_value(py, async move {
-            Ok(scope.scope(declared.resolve()).await.map(numbers))
-        })
     }
 }

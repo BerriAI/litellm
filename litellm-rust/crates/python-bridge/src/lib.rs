@@ -45,10 +45,10 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::router_usage::NativeRouterUsage;
     #[pymodule_export]
-    use crate::redis::store::{NativePending, router_cooldowns::NativeRouterCooldowns};
+    use crate::redis::store::spend_counters::NativeSpendCounters;
     #[pymodule_export]
-    use crate::redis::store::spend_counters::{
-        NativeDeclaredSpendCounters, NativeSpendCounterError, NativeSpendCounters,
+    use crate::redis::store::{
+        NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
     };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
@@ -128,8 +128,7 @@ mod tests {
                 "NativePending",
                 "NativeRouterCooldowns",
                 "NativeRouterUsage",
-                "NativeDeclaredSpendCounters",
-                "NativeSpendCounterError",
+                "NativeRedisStoreError",
                 "NativeSpendCounters",
                 "native_redis_breaker_states",
                 "NativeClickHouseSpendConfig",

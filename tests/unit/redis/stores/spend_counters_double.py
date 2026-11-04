@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Final, Literal, TypeVar
 
 from litellm.redis.stores.spend_counters import SpendCounterStore, SpendIncrement
-from litellm.rust_bridge._native import NativeRedisClient, NativeSpendCounterError
+from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError
 
 T = TypeVar("T")
 
@@ -26,8 +26,8 @@ def _failed(error: BaseException) -> asyncio.Future[T]:
     return future
 
 
-def unavailable(kind: str = "transport") -> NativeSpendCounterError:
-    return NativeSpendCounterError(kind, "Redis did not answer")
+def unavailable(kind: str = "transport") -> NativeRedisStoreError:
+    return NativeRedisStoreError(kind, "Redis did not answer")
 
 
 def _is_number(value: object) -> bool:

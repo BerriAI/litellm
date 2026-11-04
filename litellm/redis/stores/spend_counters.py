@@ -12,8 +12,8 @@ from litellm.caching.redis_batch import (
 )
 from litellm.rust_bridge._native import (
     NativeRedisClient,
+    NativeRedisStoreError,
     NativeRequestRedis,
-    NativeSpendCounterError,
     NativeSpendCounters,
 )
 
@@ -76,7 +76,7 @@ def shadow_eval_counter(job_id: str) -> str:
 
 def is_unavailable(error: BaseException) -> bool:
     """Redis timed out or its breaker is open, the failures a post-call increment drops."""
-    return isinstance(error, NativeSpendCounterError) and error.args[:1] in (("timeout",), ("breaker_open",))
+    return isinstance(error, NativeRedisStoreError) and error.args[:1] in (("timeout",), ("breaker_open",))
 
 
 class SpendCountersHandle(Protocol):
