@@ -75,6 +75,7 @@ def mock_riva(monkeypatch):
                 auth_calls["use_ssl"] = args[1] if len(args) > 1 else None
                 auth_calls["uri"] = args[2] if len(args) > 2 else None
                 auth_calls["metadata_args"] = args[3] if len(args) > 3 else None
+            auth_calls["instance"] = self
 
     class FakeRecognitionConfig:
         def __init__(self, **kwargs):
@@ -595,9 +596,10 @@ def test_auth_nvcf_defaults_use_ssl_and_attaches_function_id(mock_riva, logging_
 
     assert mock_riva.auth_calls["uri"] == "grpc.nvcf.nvidia.com:443"
     assert mock_riva.auth_calls["use_ssl"] is True
-    metadata = dict(mock_riva.auth_calls["metadata_args"])
-    assert metadata["function-id"] == "abc-123"
-    assert metadata["authorization"] == "Bearer nvapi-xxx"
+    assert tuple(mock_riva.auth_calls["instance"].get_auth_metadata()) == (
+        ("function-id", "abc-123"),
+        ("authorization", "Bearer nvapi-xxx"),
+    )
 
 
 def test_auth_self_hosted_defaults_no_ssl_and_no_function_id(mock_riva, logging_obj):
@@ -623,10 +625,7 @@ def test_auth_self_hosted_defaults_no_ssl_and_no_function_id(mock_riva, logging_
 
     assert mock_riva.auth_calls["uri"] == "localhost:50051"
     assert mock_riva.auth_calls["use_ssl"] is False
-    metadata = dict(mock_riva.auth_calls["metadata_args"])
-    # No function-id, no authorization metadata.
-    assert "function-id" not in metadata
-    assert "authorization" not in metadata
+    assert tuple(mock_riva.auth_calls["instance"].get_auth_metadata()) == ()
 
 
 def test_explicit_use_ssl_override_wins(mock_riva, logging_obj):
@@ -778,3 +777,111 @@ def test_grpc_error_is_wrapped_as_nvidia_riva_exception(mock_riva, logging_obj):
 
     assert excinfo.value.status_code == 401
     assert "UNAUTHENTICATED" in excinfo.value.message
+
+
+def _header_values(
+    headers: tuple[tuple[str, str], ...], name: str
+) -> tuple[str, ...]:
+    return tuple(value for key, value in headers if key == name)
+
+
+def _install_versioned_riva(
+    mock_riva: SimpleNamespace,
+    *,
+    client_style: str,
+    positional_only: bool,
+    recorded: list[tuple[tuple[str, str], ...]],
+) -> None:
+    """Stand-in for ``riva.client.Auth`` plus the one ``ASRService`` RPC.
+
+    Through 2.18 ``get_auth_metadata`` returns nothing, and constructor
+    metadata is attached only as TLS channel call credentials. From 2.19
+    ``get_auth_metadata`` returns that metadata, and ``ASRService`` sends it
+    on the RPC as well. The channel callback closes over the constructor
+    list, so a later rebind of ``auth.metadata`` does not change it.
+    """
+
+    class VersionedAuth:
+        def __init__(self, *args, **kwargs):
+            if positional_only and kwargs:
+                raise TypeError("positional-only signature")
+            if kwargs:
+                use_ssl = bool(kwargs.get("use_ssl"))
+                raw = kwargs.get("metadata_args") or ()
+            else:
+                use_ssl = bool(args[1]) if len(args) > 1 else False
+                raw = args[3] if len(args) > 3 else ()
+            self.metadata = [(str(key), str(value)) for key, value in raw]
+            self._channel_metadata = self.metadata if use_ssl else []
+
+        def get_auth_metadata(self):
+            if client_style == "old":
+                return []
+            return list(self.metadata)
+
+    class VersionedASR:
+        def __init__(self, auth):
+            self.auth = auth
+
+        def streaming_response_generator(self, audio_chunks, streaming_config):
+            list(audio_chunks)
+            per_call = tuple(self.auth.get_auth_metadata())
+            recorded.append((*tuple(self.auth._channel_metadata), *per_call))
+            yield _fake_response(
+                results=[
+                    _fake_result(is_final=True, alternatives=[_fake_alternative("ok")])
+                ]
+            )
+
+    mock_riva.client.Auth = VersionedAuth
+    mock_riva.client.ASRService = VersionedASR
+
+
+@pytest.mark.parametrize("client_style", ["old", "new"])
+@pytest.mark.parametrize("use_ssl", [False, True])
+@pytest.mark.parametrize("nvcf_function_id", [None, "abc-123"])
+@pytest.mark.parametrize("positional_only", [False, True])
+def test_audio_transcription_sends_each_auth_header_once(
+    mock_riva: SimpleNamespace,
+    logging_obj: MagicMock,
+    client_style: str,
+    use_ssl: bool,
+    nvcf_function_id: str | None,
+    positional_only: bool,
+) -> None:
+    recorded: list[tuple[tuple[str, str], ...]] = []
+    _install_versioned_riva(
+        mock_riva,
+        client_style=client_style,
+        positional_only=positional_only,
+        recorded=recorded,
+    )
+    optional_params = {
+        "language_code": "en-US",
+        "use_ssl": use_ssl,
+        **(
+            {}
+            if nvcf_function_id is None
+            else {"nvcf_function_id": nvcf_function_id}
+        ),
+    }
+
+    response = NvidiaRivaAudioTranscription().audio_transcriptions(
+        model="m",
+        audio_file=_make_wav_bytes(),
+        optional_params=optional_params,
+        litellm_params={},
+        model_response=TranscriptionResponse(),
+        timeout=60,
+        logging_obj=logging_obj,
+        api_key="nvapi-xxx",
+        api_base="localhost:50051",
+    )
+
+    assert response.text == "ok"
+    assert len(recorded) == 1
+    headers = recorded[0]
+    assert _header_values(headers, "authorization") == ("Bearer nvapi-xxx",), headers
+    assert _header_values(headers, "function-id") == (
+        () if nvcf_function_id is None else (nvcf_function_id,)
+    ), headers

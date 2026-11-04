@@ -75,7 +75,10 @@ _RIVA_INSTALL_HINT = "NVIDIA Riva client is not installed. Install with `pip ins
 
 
 class _RivaAuth(Protocol):
-    """Opaque ``riva.client.Auth`` handle."""
+    """``riva.client.Auth`` handle. Per-call metadata is the only header source."""
+
+    metadata: Sequence[tuple[str, str]]
+    get_auth_metadata: Callable[[], Sequence[tuple[str, str]]]
 
 
 class _RecognizeFuture(Protocol):
@@ -143,6 +146,23 @@ class _RivaAsrModule(Protocol):
 
 def _auth_factory(riva_module: _RivaClientModule) -> Callable[..., _RivaAuth]:
     return riva_module.Auth
+
+
+def _per_call_metadata(
+    metadata: tuple[tuple[str, str], ...],
+) -> Callable[[], tuple[tuple[str, str], ...]]:
+    def get_auth_metadata() -> tuple[tuple[str, str], ...]:
+        return metadata
+
+    return get_auth_metadata
+
+
+def _open_riva_auth(riva_module: _RivaClientModule, api_base: str, use_ssl: bool) -> _RivaAuth:
+    try:
+        return _auth_factory(riva_module)(uri=api_base, use_ssl=use_ssl)
+    except TypeError:
+        # Older riva-client signatures used positional-only args.
+        return _auth_factory(riva_module)(None, use_ssl, api_base)
 
 
 def _audio_encoding(riva_asr_module: _RivaAsrModule) -> _AudioEncoding:
@@ -408,30 +428,27 @@ class NvidiaRivaAudioTranscription:
         optional_params: dict,
     ) -> _RivaAuth:
         """
-        Build a ``riva.client.Auth`` object.
+        Build a ``riva.client.Auth`` for this request.
 
-        - When ``nvcf_function_id`` is provided we attach the NVCF
-          ``function-id`` and bearer ``authorization`` metadata, and default
-          ``use_ssl`` to True (NVCF endpoints are TLS-only).
-        - Otherwise (self-hosted) we default ``use_ssl`` to False but still
-          honor an explicit override — self-hosted Riva behind an ingress
-          with TLS termination is a real deployment topology.
+        NVCF defaults ``use_ssl`` to True. Self-hosted defaults it to False,
+        and an explicit ``use_ssl`` wins either way. Headers ride on
+        ``get_auth_metadata`` only. ``metadata_args`` would become TLS channel
+        credentials and either drop the header (riva-client <=2.18, plaintext)
+        or send it twice (riva-client >=2.19, TLS), because ``ASRService``
+        already passes ``get_auth_metadata()`` on every RPC.
         """
         nvcf_function_id: Final = optional_params.get("nvcf_function_id")
         use_ssl_override: Final = optional_params.get("use_ssl")
         use_ssl: Final = bool(use_ssl_override) if use_ssl_override is not None else bool(nvcf_function_id)
-
-        metadata: Final[list[tuple[str, str]]] = []
-        if nvcf_function_id:
-            metadata.append(("function-id", str(nvcf_function_id)))
-        if api_key:
-            metadata.append(("authorization", f"Bearer {api_key}"))
-
-        try:
-            return _auth_factory(riva_module)(uri=api_base, use_ssl=use_ssl, metadata_args=metadata)
-        except TypeError:
-            # Older riva-client signatures used positional-only args.
-            return _auth_factory(riva_module)(None, use_ssl, api_base, metadata)
+        function_id: Final[tuple[tuple[str, str], ...]] = (
+            (("function-id", str(nvcf_function_id)),) if nvcf_function_id else ()
+        )
+        authorization: Final[tuple[tuple[str, str], ...]] = (("authorization", f"Bearer {api_key}"),) if api_key else ()
+        metadata: Final[tuple[tuple[str, str], ...]] = (*function_id, *authorization)
+        auth: Final = _open_riva_auth(riva_module, api_base, use_ssl)
+        auth.metadata = metadata
+        auth.get_auth_metadata = _per_call_metadata(metadata)
+        return auth
 
     def _build_recognition_config_proto(
         self, riva_asr_module: _RivaAsrModule, recognition_config_dict: dict[str, Any]
