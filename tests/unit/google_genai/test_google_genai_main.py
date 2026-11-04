@@ -736,14 +736,53 @@ async def test_proxy_forwarded_headers_reach_generate_content_without_leaking_pr
         ({"x-goog-api-key": "sk-litellm-virtual-key", "x-cost-center": "core-platform"}, _UPSTREAM_KEY),
         (
             {
+                "authorization": "Bearer sk-litellm-virtual-key",
+                "x-goog-api-key": "sk-litellm-virtual-key",
+                "x-cost-center": "core-platform",
+            },
+            _UPSTREAM_KEY,
+        ),
+        (
+            {
+                "x-api-key": "",
+                "x-goog-api-key": "sk-litellm-virtual-key",
+                "x-cost-center": "core-platform",
+            },
+            _UPSTREAM_KEY,
+        ),
+        (
+            {
+                "authorization": "Bearer sk-litellm-virtual-key",
+                "x-goog-api-key": "",
+                "x-cost-center": "core-platform",
+            },
+            _UPSTREAM_KEY,
+        ),
+        (
+            {
                 "x-litellm-api-key": "sk-litellm-virtual-key",
                 "x-goog-api-key": "AIza-caller-key",
                 "x-cost-center": "core-platform",
             },
             "AIza-caller-key",
         ),
+        (
+            {
+                "authorization": "Bearer sk-litellm-virtual-key",
+                "x-goog-api-key": "AIza-caller-key",
+                "x-cost-center": "core-platform",
+            },
+            "AIza-caller-key",
+        ),
     ],
-    ids=["proxy-key-in-goog-header", "caller-key-beside-proxy-key"],
+    ids=[
+        "proxy-key-in-goog-header",
+        "sdk-dual-bearer-and-goog-proxy-key",
+        "empty-higher-precedence-header",
+        "empty-goog-header-beside-bearer-key",
+        "caller-key-beside-litellm-key",
+        "caller-key-beside-bearer-key",
+    ],
 )
 async def test_provider_auth_forwarding_never_sends_proxy_key_to_generate_content(
     header_capture_wire: _WireCapture,
