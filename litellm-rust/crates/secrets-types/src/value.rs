@@ -1,4 +1,4 @@
-use crate::SecretValue;
+use litellm_secret_value::SecretValue;
 
 #[derive(Clone, PartialEq, Eq, veil::Redact)]
 pub enum Secret {

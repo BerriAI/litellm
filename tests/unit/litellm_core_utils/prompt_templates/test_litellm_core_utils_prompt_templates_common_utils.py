@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_semantic_cache_prompt_from_messages,
     get_str_from_messages,
     handle_any_messages_to_chat_completion_str_messages_conversion,
+    handle_messages_with_content_list_to_str_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
@@ -38,6 +39,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     schema_has_unresolvable_ref,
     schema_property_count,
     split_concatenated_json_objects,
+    split_embedding_media_for_tpm,
     split_media_for_tpm,
     strip_encrypted_reasoning_from_messages,
     strip_litellm_response_only_fields,
@@ -2000,6 +2002,12 @@ class TestRequestContainsImageContent:
             [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "x"}}]}],
             [{"role": "user", "content": [{"type": "tool_result", "content": [{"type": "text", "text": "ok"}]}]}],
             [{"role": "user", "content": None}],
+            [{"role": "user", "content": [None, "text", {"type": []}]}],
+            ["malformed"],
+            [None, 5],
+            "malformed",
+            5,
+            None,
             [],
         ],
     )
@@ -2336,7 +2344,8 @@ _MALFORMED_PROMPT_CACHE_BREAKPOINTS: Final = (
     "",
     {},
     {"mode": "bogus"},
-    {"mode": "explicit", "ttl": "1h"},
+    {"mode": "bogus", "ttl": "30m"},
+    {1: "explicit"},
 )
 _MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS: Final = (
     "string",
@@ -2345,7 +2354,8 @@ _MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS: Final = (
     "empty-string",
     "empty-object",
     "bogus-mode",
-    "bad-ttl",
+    "bogus-mode-with-ttl",
+    "non-string-key",
 )
 _VALID_PROMPT_CACHE_BREAKPOINTS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
 
@@ -2373,6 +2383,18 @@ def test_prompt_cache_breakpoint_for_wire_keeps_a_valid_marker(marker: dict[str,
 
 def test_prompt_cache_breakpoint_for_wire_strips_an_unknown_key_under_drop_params() -> None:
     assert prompt_cache_breakpoint_for_wire({"mode": "explicit", "note": "kept"}, True) == {"mode": "explicit"}
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ({"mode": "explicit", "ttl": "1h"}, {"mode": "explicit", "ttl": "1h", "note": "kept"}),
+    ids=("bad-ttl", "bad-ttl-and-unknown-key"),
+)
+def test_prompt_cache_breakpoint_for_wire_drops_an_unsupported_ttl_and_keeps_the_mode_under_drop_params(
+    marker: dict[str, str],
+) -> None:
+    assert prompt_cache_breakpoint_for_wire(marker, True) == {"mode": "explicit"}
+    assert prompt_cache_breakpoint_for_wire(marker, False) is marker
 
 
 def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
@@ -2675,3 +2697,35 @@ def test_tpm_projection_preserves_non_media_identity_and_opaque_values() -> None
     projected, media = split_media_for_tpm(request)
     assert projected is request
     assert media == ()
+
+
+def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_untouched() -> None:
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}, {"type": "text", "text": " world"}]},
+        {"role": "assistant", "content": "Hi"},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    flattened: Final = handle_messages_with_content_list_to_str_conversion(messages)
+
+    assert flattened == [{"role": "user", "content": "Hello world"}, {"role": "assistant", "content": "Hi"}]
+    assert messages == messages_before
+
+
+@pytest.mark.parametrize("mime", ["application/pdf", "video/mp4", "audio/wav", "image/png"])
+def test_embedding_media_split_holds_at_most_one_copy_of_a_large_payload(mime: str) -> None:
+    import gc
+    import tracemalloc
+
+    uri: Final = f"data:{mime};base64," + base64.b64encode(bytes(3 * 1024 * 1024)).decode("ascii")
+    split_embedding_media_for_tpm(f"data:{mime};base64,AAAA")
+    gc.collect()
+    tracemalloc.start()
+    try:
+        _, media = split_embedding_media_for_tpm(uri)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert media
+    assert peak < 1.5 * len(uri)

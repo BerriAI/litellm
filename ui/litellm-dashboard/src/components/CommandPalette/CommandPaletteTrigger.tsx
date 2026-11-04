@@ -1,5 +1,6 @@
 "use client";
 
+import { cn } from "@/lib/cva.config";
 import { Search } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,7 @@ import { paletteScopeForRoute } from "./utils";
 import { useCommandPalette } from "./CommandPaletteProvider";
 import { useShortcutLabel } from "./useShortcutLabel";
 
-export function CommandPaletteTrigger({ mobile = false }: { mobile?: boolean }) {
+export function CommandPaletteTrigger({ mobile = false, className }: { mobile?: boolean; className?: string }) {
   const pathname = usePathname();
   const { open, setOpen } = useCommandPalette();
   const shortcut = useShortcutLabel();
@@ -21,7 +22,7 @@ export function CommandPaletteTrigger({ mobile = false }: { mobile?: boolean }) 
       <Button
         variant="ghost"
         size="icon"
-        className="size-11 md:hidden"
+        className={cn("text-muted-foreground", className ?? "size-11 md:hidden")}
         aria-label="Search"
         aria-expanded={open}
         onClick={() => setOpen(true)}
@@ -32,18 +33,21 @@ export function CommandPaletteTrigger({ mobile = false }: { mobile?: boolean }) 
   }
 
   return (
-    <button
-      type="button"
-      className="hidden h-8 w-64 shrink-0 items-center justify-between rounded-lg border border-border bg-muted/40 px-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted lg:w-80 md:flex"
+    <Button
+      variant="ghost"
+      className={cn(
+        "justify-between bg-muted/50 font-normal text-muted-foreground hover:bg-muted",
+        className ?? "hidden w-64 md:flex lg:w-80",
+      )}
       aria-label={label}
       aria-expanded={open}
       onClick={() => setOpen(true)}
     >
       <span className="flex min-w-0 items-center gap-2">
-        <Search className="size-4 shrink-0" />
+        <Search />
         <span className="truncate">{label}</span>
       </span>
-      <Kbd className="ml-2 shrink-0">{shortcut}</Kbd>
-    </button>
+      <Kbd className="bg-background/70 font-normal">{shortcut}</Kbd>
+    </Button>
   );
 }

@@ -10,7 +10,7 @@ from litellm import Router
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.router_utils.common_utils import (
+from litellm.litellm_core_utils.routing_common_utils import (
     _deployment_supports_web_search,
     add_model_file_id_mappings,
     filter_team_based_models,

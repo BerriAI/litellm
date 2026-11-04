@@ -3380,6 +3380,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-auth-types",
+ "litellm-secret-value",
 ]
 
 [[package]]
@@ -3416,6 +3417,7 @@ dependencies = [
  "azure_identity",
  "litellm-auth-types",
  "litellm-error",
+ "litellm-secret-value",
  "moka",
  "rstest",
  "serde_json",
@@ -3435,6 +3437,7 @@ dependencies = [
  "http 1.4.2",
  "litellm-auth-types",
  "litellm-error",
+ "litellm-secret-value",
  "moka",
  "rstest",
  "serde",
@@ -3450,10 +3453,10 @@ name = "litellm-auth-types"
 version = "0.1.0"
 dependencies = [
  "litellm-error",
+ "litellm-secret-value",
  "rstest",
  "serde",
  "serde_json",
- "subtle",
  "thiserror 2.0.19",
  "tokio",
  "veil",
@@ -3523,6 +3526,7 @@ dependencies = [
  "litellm-cache-testing",
  "litellm-error",
  "litellm-http",
+ "litellm-secret-value",
  "percent-encoding",
  "reqwest",
  "rstest",
@@ -3566,48 +3570,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-cache-redis"
-version = "0.1.0"
-dependencies = [
- "litellm-cache",
- "litellm-cache-testing",
- "litellm-error",
- "r2d2",
- "redis",
- "redis-test",
- "rstest",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
-]
-
-[[package]]
-name = "litellm-cache-redis-semantic"
-version = "0.1.0"
-dependencies = [
- "litellm-cache",
- "litellm-cache-redis",
- "litellm-cache-testing",
- "redis",
- "redis-test",
- "rstest",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
-]
-
-[[package]]
 name = "litellm-cache-response"
 version = "0.1.0"
 dependencies = [
  "litellm-cache",
  "litellm-cache-gcs",
  "litellm-cache-memory",
- "litellm-cache-redis",
  "litellm-http",
  "py_literal",
- "redis",
- "redis-test",
  "rstest",
  "serde",
  "serde_json",
@@ -3647,31 +3617,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-cache-valkey-semantic"
-version = "0.1.0"
-dependencies = [
- "litellm-cache",
- "litellm-cache-redis",
- "litellm-cache-testing",
- "litellm-error",
- "redis",
- "redis-test",
- "rstest",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.19",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
- "litellm-auth",
  "litellm-error",
  "litellm-host",
  "litellm-host-python",
+ "litellm-secret-value",
  "proptest",
  "pyo3",
  "rstest",
@@ -3692,9 +3644,9 @@ dependencies = [
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
- "litellm-auth-types",
  "litellm-error",
  "litellm-router-types",
+ "litellm-secret-value",
  "rstest",
  "serde",
  "serde_json",
@@ -3804,7 +3756,6 @@ dependencies = [
  "envy",
  "futures-util",
  "http-body-util",
- "litellm-auth-types",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-error",
@@ -3817,6 +3768,7 @@ dependencies = [
  "litellm-llms",
  "litellm-redis-client",
  "litellm-redis-testing",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
  "rstest",
@@ -3839,9 +3791,9 @@ dependencies = [
  "axum",
  "axum-login",
  "futures-util",
- "litellm-auth-types",
  "litellm-config",
  "litellm-error",
+ "litellm-secret-value",
  "litellm-secrets",
  "rstest",
  "serde",
@@ -3879,6 +3831,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router",
+ "litellm-secret-value",
  "litellm-secrets",
  "rstest",
  "serde",
@@ -3895,9 +3848,9 @@ name = "litellm-gateway-management"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "litellm-auth-types",
  "litellm-error",
  "litellm-gateway-auth",
+ "litellm-secret-value",
  "rand 0.8.7",
  "rstest",
  "thiserror 2.0.19",
@@ -3912,9 +3865,9 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "http 1.4.2",
- "litellm-auth-types",
  "litellm-config",
  "litellm-error",
+ "litellm-secret-value",
  "litellm-secrets",
  "moka",
  "rmcp",
@@ -3942,9 +3895,9 @@ dependencies = [
  "futures-util",
  "governor",
  "jsonwebtoken",
- "litellm-auth-types",
  "litellm-error",
  "litellm-gateway-auth",
+ "litellm-secret-value",
  "rand 0.8.7",
  "rstest",
  "serde",
@@ -3964,8 +3917,8 @@ name = "litellm-host"
 version = "0.1.0"
 dependencies = [
  "futures-util",
- "litellm-auth",
  "litellm-coroutine",
+ "litellm-secret-value",
  "rstest",
  "serde_json",
  "thiserror 2.0.19",
@@ -4094,6 +4047,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
  "rstest",
@@ -4124,6 +4078,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
  "reqwest",
@@ -4154,6 +4109,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
  "mime_guess",
@@ -4188,6 +4144,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
  "reqwest",
@@ -4207,6 +4164,7 @@ dependencies = [
  "litellm-auth",
  "litellm-http",
  "litellm-inference",
+ "litellm-secret-value",
  "litellm-secrets",
  "tokio",
 ]
@@ -4254,6 +4212,7 @@ dependencies = [
  "litellm-llms-types",
  "litellm-python-compat",
  "litellm-router-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "reqwest",
  "rstest",
@@ -4328,8 +4287,6 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-cache",
- "litellm-cache-memory",
- "litellm-cache-redis",
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
  "litellm-core-utils",
@@ -4347,6 +4304,7 @@ dependencies = [
  "litellm-llms-types",
  "litellm-model-catalog",
  "litellm-router-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
@@ -4357,7 +4315,6 @@ dependencies = [
  "prost",
  "pyo3",
  "pyo3-async-runtimes",
- "redis",
  "reqwest",
  "rstest",
  "serde",
@@ -4396,6 +4353,7 @@ dependencies = [
  "futures-util",
  "litellm-circuit-breaker",
  "litellm-redis-testing",
+ "litellm-secret-value",
  "redis",
  "rstest",
  "thiserror 2.0.19",
@@ -4432,10 +4390,21 @@ name = "litellm-router-types"
 version = "0.1.0"
 dependencies = [
  "litellm-auth-types",
+ "litellm-secret-value",
  "rstest",
  "serde",
  "serde_json",
  "serde_with",
+]
+
+[[package]]
+name = "litellm-secret-value"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "subtle",
+ "veil",
 ]
 
 [[package]]
@@ -4451,6 +4420,7 @@ dependencies = [
  "litellm-error",
  "litellm-http",
  "litellm-python-compat",
+ "litellm-secret-value",
  "litellm-secrets-aws",
  "litellm-secrets-azure",
  "litellm-secrets-cyberark",
@@ -4479,6 +4449,7 @@ dependencies = [
  "base64 0.22.1",
  "litellm-auth-aws",
  "litellm-core-utils",
+ "litellm-secret-value",
  "litellm-secrets-types",
  "litellm-tracing",
  "rstest",
@@ -4498,6 +4469,7 @@ dependencies = [
  "litellm-auth-types",
  "litellm-core-utils",
  "litellm-http",
+ "litellm-secret-value",
  "litellm-secrets-types",
  "percent-encoding",
  "reqwest",
@@ -4519,6 +4491,7 @@ dependencies = [
  "base64 0.22.1",
  "litellm-core-utils",
  "litellm-http",
+ "litellm-secret-value",
  "litellm-secrets-types",
  "litellm-tracing",
  "moka",
@@ -4549,6 +4522,7 @@ dependencies = [
  "litellm-auth-types",
  "litellm-core-utils",
  "litellm-http",
+ "litellm-secret-value",
  "litellm-secrets-types",
  "moka",
  "percent-encoding",
@@ -4570,6 +4544,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-error",
  "litellm-http",
+ "litellm-secret-value",
  "litellm-secrets-types",
  "reqwest",
  "rstest",
@@ -4589,7 +4564,7 @@ dependencies = [
 name = "litellm-secrets-types"
 version = "0.1.0"
 dependencies = [
- "litellm-auth-types",
+ "litellm-secret-value",
  "moka",
  "rstest",
  "serde",
@@ -5753,17 +5728,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
-name = "r2d2"
-version = "0.8.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51de85fb3fb6524929c8a2eb85e6b6d363de4e8c48f9e2c2eac4944abc181c93"
-dependencies = [
- "log",
- "parking_lot",
- "scheduled-thread-pool",
-]
-
-[[package]]
 name = "rand"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5934,18 +5898,6 @@ dependencies = [
  "tokio-util",
  "url",
  "xxhash-rust",
-]
-
-[[package]]
-name = "redis-test"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "804d36862e4323b69f96440cbb13c9894fc90176abdeaf91264e21d5d77f6aca"
-dependencies = [
- "rand 0.9.5",
- "redis",
- "socket2 0.6.5",
- "tempfile",
 ]
 
 [[package]]
@@ -6422,15 +6374,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91c1b7e4904c873ef0710c1f407dde2e6287de2bebc1bbbf7d430bb7cbffd939"
 dependencies = [
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "scheduled-thread-pool"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cbc66816425a074528352f5789333ecff06ca41b36b0b0efdfbb29edc391a19"
-dependencies = [
- "parking_lot",
 ]
 
 [[package]]

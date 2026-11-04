@@ -33,6 +33,9 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 )
 
 PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
+AGENTIC_LOOP_CONTROL_KWARGS_KEYS: Final = frozenset(
+    {"_agentic_loop_depth", "_agentic_loop_fingerprints", "max_agentic_loops"}
+)
 OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS: Final = frozenset(
     {
         "token_exchange_endpoint",
@@ -84,6 +87,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "github_copilot_host",
             "github_copilot_user_session",
             "fireworks_forward_user_id",
+            "thought_signature_in_tool_call_id",
             "responses_api_version",
             "allowed_openai_params",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
@@ -93,11 +97,14 @@ OPTIONAL_KWARGS_KEYS: Final = (
     | ANTHROPIC_WIF_KWARGS_KEYS
     | OPENAI_WIF_KWARGS_KEYS
     | OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS
+    | AGENTIC_LOOP_CONTROL_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
+
+SUPPLEMENTAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS | {"provider_specific_header", "extra_headers"}
 
 _CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
 _CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))

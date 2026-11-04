@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import json
-from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -27,6 +27,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     AnthropicCacheControlHook,
     configured_injection_points,
+    routed_model_info,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
@@ -42,6 +43,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_tools_with_model_file_ids,
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    deployment_reasoning_effort_levels,
+    model_group_from_metadata,
+    resolve_deployment_reasoning_effort,
+)
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
@@ -63,11 +69,6 @@ from litellm.responses.mcp.round_billing import (
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.reasoning_effort_capability import (
-    deployment_reasoning_effort_levels,
-    model_group_from_metadata,
-    resolve_deployment_reasoning_effort,
-)
 from litellm.types.llms.openai import (
     PromptObject,
     Reasoning,
@@ -81,7 +82,7 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
     from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
@@ -437,7 +438,7 @@ async def aresponses_api_with_mcp(
     #########################################################
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.carry_failed_attempt_usage()
-    with internal_sub_call():
+    with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
         response: Final = await aresponses(
             input=input,
             model=model,
@@ -514,7 +515,9 @@ async def aresponses_api_with_mcp(
                             tool_calls=tool_calls, tool_results=tool_results
                         )
 
-                    with internal_sub_call():
+                    with internal_sub_call(
+                        logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
+                    ):
                         final_response = await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
                             follow_up_input=follow_up_input,
                             model=model,
@@ -756,9 +759,7 @@ def _api_base_kwarg(kwargs: Mapping[str, object]) -> str | None:
     return api_base if isinstance(api_base, str) else None
 
 
-def _dispatched_model_name(
-    model: str, custom_llm_provider: str, api_base: str | None, litellm_params: GenericLiteLLMParams | None = None
-) -> str:
+def _dispatched_model_name(model: str, custom_llm_provider: str) -> str:
     from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 
     provider_model, _ = resolve_model_and_provider_for_metadata(model=model, custom_llm_provider=custom_llm_provider)
@@ -771,7 +772,6 @@ def _will_bridge_to_chat_completions(
     use_chat_completions_api: bool,
     model_info: object,
     api_base: str | None,
-    litellm_params: GenericLiteLLMParams | None = None,
 ) -> bool:
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
@@ -788,7 +788,7 @@ def _will_bridge_to_chat_completions(
         return True
     return _bridges_to_chat_completions(
         _resolve_responses_api_provider_config(
-            _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base, litellm_params),
+            _dispatched_model_name(normalized_model[0], custom_llm_provider),
             custom_llm_provider,
             model_info,
             api_base,
@@ -813,7 +813,6 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
         bool(kwargs.get("use_chat_completions_api")),
         kwargs.get("model_info"),
         api_base,
-        litellm_params,
     )
 
 
@@ -880,6 +879,7 @@ def _stamp_injection_points_for_the_hook(
         custom_llm_provider,
         kwargs.get("api_base") or kwargs.get("base_url"),
         kwargs.get("prompt_cache_options"),
+        routed_model_info(kwargs.get("model_info")),
     )
 
 
@@ -995,7 +995,6 @@ async def aresponses(
                     bool(kwargs.get("use_chat_completions_api")),
                     kwargs.get("model_info"),
                     _api_base_kwarg(kwargs),
-                    GenericLiteLLMParams(**kwargs),
                 ),
             ):
                 _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
@@ -1171,7 +1170,6 @@ def _apply_prompt_management_to_responses_call(
                 use_chat_completions_api,
                 kwargs.get("model_info"),
                 _api_base_kwarg(kwargs),
-                GenericLiteLLMParams(**kwargs),
             ),
         ):
             _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
@@ -2867,7 +2865,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
-    turn_admission: Callable[[], Awaitable[None]] | None = None,
+    turn_admission: "ResponsesWsTurnAdmission | None" = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:

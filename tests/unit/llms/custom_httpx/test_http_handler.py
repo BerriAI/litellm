@@ -1,13 +1,16 @@
 import asyncio, importlib, json, time
 import gc
 import io
+import logging
 import os
 import pathlib
 import ssl
 import threading
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from contextvars import Context
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -15,7 +18,10 @@ import certifi
 import httpx
 import pytest
 import respx
-from aiohttp import ClientSession, TCPConnector
+from aiohttp import ClientResponse, ClientSession, RequestInfo, TCPConnector
+from aiohttp.tracing import Trace
+from multidict import CIMultiDict, CIMultiDictProxy
+from yarl import URL
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -2304,3 +2310,217 @@ async def test_async_timeout_reports_the_per_call_timeout_as_a_float_when_one_is
         await handler.close()
 
     assert "Read timed out. Timeout passed=30.0, time taken=" in str(raised.value), str(raised.value)
+
+
+class _PoolDiagnosticClock:
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.now = 1000.0
+        self.loop = loop
+        self.schedule = loop.call_later
+        self.timers: list[asyncio.TimerHandle] = []
+
+    def time(self) -> float:
+        return self.now
+
+    def call_later(
+        self, delay: float, callback: Callable[..., object],
+        *args: object, context: Context | None = None,
+    ) -> asyncio.TimerHandle:
+        timer: Final = self.schedule(delay, callback, *args, context=context)
+        self.timers.append(timer)
+        return timer
+
+    async def advance(self, seconds: float) -> None:
+        self.now += seconds
+        checkpoint: Final[asyncio.Future[None]] = self.loop.create_future()
+        self.loop.call_soon(checkpoint.set_result, None)
+        await checkpoint
+
+
+def _pool_diagnostic_clock(monkeypatch: pytest.MonkeyPatch) -> _PoolDiagnosticClock:
+    loop: Final = asyncio.get_running_loop()
+    clock: Final = _PoolDiagnosticClock(loop)
+    monkeypatch.setattr(loop, "time", clock.time)
+    monkeypatch.setattr(loop, "call_later", clock.call_later)
+    return clock
+
+
+@asynccontextmanager
+async def _pool_diagnostic_session(source: str) -> AsyncIterator[ClientSession]:
+    if source == "proxy":
+        from litellm.proxy.proxy_server import initialize_shared_aiohttp_session
+
+        session: Final = await initialize_shared_aiohttp_session()
+        assert session is not None
+        async with session:
+            yield session
+        return
+    if source == "native-connector":
+        from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
+
+        handler: Final = BaseLLMAIOHTTPHandler(connector=TCPConnector(limit=7, limit_per_host=2))
+        try:
+            yield handler._get_async_client_session()
+        finally:
+            await handler.close()
+        return
+    transport: Final = AsyncHTTPHandler.create_aiohttp_transport()
+    if source == "rebuilt":
+        await transport.get_valid_client_session().close()
+    try:
+        yield transport.get_valid_client_session()
+    finally:
+        await transport.aclose()
+
+
+async def _pool_diagnostic_request(session: ClientSession, url: URL) -> tuple[Trace, ...]:
+    traces: Final = tuple(Trace(session, config, config.trace_config_ctx()) for config in session.trace_configs)
+    for trace in traces:
+        await trace.send_request_start("POST", url, CIMultiDict())
+    return traces
+
+
+def _pool_diagnostic_messages(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(record.getMessage() for record in caplog.records if "connection pool" in record.getMessage())
+
+
+@pytest.mark.parametrize("source", ["sdk", "proxy", "native-connector", "rebuilt"])
+@pytest.mark.parametrize("error", [TimeoutError("private timeout"), asyncio.CancelledError("private cancellation")])
+async def test_aiohttp_pool_failure_identifies_queue_wait_and_cleans_up_timer(
+    source: str, error: BaseException, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool_diagnostic_clock: Final = _pool_diagnostic_clock(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    url: Final = URL("https://private-user:private-password@pool.test:8443/private-path?token=private-query")
+    async with _pool_diagnostic_session(source) as session:
+        connector: Final = session.connector
+        assert connector is not None
+        traces: Final = await _pool_diagnostic_request(session, url)
+        for trace in traces:
+            await trace.send_connection_queued_start()
+        await pool_diagnostic_clock.advance(0.25)
+        for trace in traces:
+            await trace.send_request_exception("POST", url, CIMultiDict(), error)
+        messages: Final = _pool_diagnostic_messages(caplog)
+        assert len(messages) == 1, messages
+        message: Final = messages[0]
+        assert "host=pool.test" in message
+        assert "port=8443" in message
+        assert "0.25" in message
+        assert "acquired_total=0" in message
+        assert f"limit={connector.limit}" in message
+        assert f"limit_per_host={connector.limit_per_host}" in message
+        assert "private" not in message
+        assert all(timer.cancelled() for timer in pool_diagnostic_clock.timers)
+        await pool_diagnostic_clock.advance(2.0)
+        assert _pool_diagnostic_messages(caplog) == messages
+
+
+@pytest.mark.parametrize("queued", [False, True])
+async def test_aiohttp_pool_diagnostics_do_not_label_slow_upstream_as_pool_saturation(
+    queued: bool, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool_diagnostic_clock: Final = _pool_diagnostic_clock(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    url: Final = URL("https://healthy.test/completions")
+    async with _pool_diagnostic_session("sdk") as session:
+        traces: Final = await _pool_diagnostic_request(session, url)
+        if queued:
+            for trace in traces:
+                await trace.send_connection_queued_start()
+            await pool_diagnostic_clock.advance(0.25)
+            for trace in traces:
+                await trace.send_connection_queued_end()
+        await pool_diagnostic_clock.advance(2.0)
+        for trace in traces:
+            await trace.send_request_exception("POST", url, CIMultiDict(), TimeoutError("slow upstream"))
+        assert _pool_diagnostic_messages(caplog) == ()
+        assert all(timer.cancelled() for timer in pool_diagnostic_clock.timers)
+
+
+async def test_aiohttp_pool_warns_while_queued_once_per_request_with_isolated_concurrent_waits(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool_diagnostic_clock: Final = _pool_diagnostic_clock(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    slow_url: Final = URL("https://blocked.test/completions")
+    fast_url: Final = URL("https://available.test/completions")
+    async with _pool_diagnostic_session("sdk") as session:
+        blocked: Final = await _pool_diagnostic_request(session, slow_url)
+        available: Final = await _pool_diagnostic_request(session, fast_url)
+        for trace in blocked + available:
+            await trace.send_connection_queued_start()
+        await pool_diagnostic_clock.advance(0.25)
+        for trace in available:
+            await trace.send_connection_queued_end()
+        for trace in blocked:
+            await trace.send_connection_queued_end()
+            await trace.send_connection_queued_start()
+        await pool_diagnostic_clock.advance(0.8)
+        messages: Final = _pool_diagnostic_messages(caplog)
+        assert len(messages) == 1, messages
+        assert "host=blocked.test" in messages[0]
+        assert "1.05" in messages[0]
+        assert "available.test" not in messages[0]
+        for trace in blocked:
+            await trace.send_connection_queued_end()
+            await trace.send_connection_queued_start()
+        await pool_diagnostic_clock.advance(2.0)
+        for trace in blocked:
+            await trace.send_request_exception("POST", slow_url, CIMultiDict(), TimeoutError())
+        for trace in available:
+            await trace.send_request_exception("POST", fast_url, CIMultiDict(), TimeoutError())
+        await pool_diagnostic_clock.advance(2.0)
+        assert _pool_diagnostic_messages(caplog) == messages
+        assert all(timer.cancelled() for timer in pool_diagnostic_clock.timers)
+
+
+@pytest.mark.parametrize(("header", "location", "host", "port"), [
+    ("Location", "https://redirected.test:9443/private-path?token=private-query", "redirected.test", 9443),
+    ("Location", "/private-path?token=private-query", "initial.test", 8443),
+    ("URI", "https://redirected.test/private-path", "redirected.test", 443),
+    ("Location", "http://[invalid", None, None),
+])
+async def test_aiohttp_pool_warning_tracks_redirect_destination_without_masking_invalid_redirects(
+    header: str, location: str, host: str | None, port: int | None,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    from aiohttp.client_proto import ResponseHandler
+    from aiohttp.helpers import TimerNoop
+    from aiohttp.http_writer import StreamWriter
+
+    clock: Final = _pool_diagnostic_clock(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    url: Final = URL("https://initial.test:8443/completions")
+    async with _pool_diagnostic_session("sdk") as session:
+        traces: Final = await _pool_diagnostic_request(session, url)
+        loop: Final = asyncio.get_running_loop()
+        response: Final = ClientResponse(
+            "POST", url, writer=None, continue100=None, timer=TimerNoop(),
+            request_info=RequestInfo(url, "POST", CIMultiDictProxy(CIMultiDict()), url),
+            traces=[], loop=loop, session=session,
+            stream_writer=StreamWriter(ResponseHandler(loop), loop),
+        )
+        response._headers = CIMultiDictProxy(CIMultiDict({header: location}))
+        try:
+            for trace in traces:
+                await trace.send_request_redirect("POST", url, CIMultiDict(), response)
+            if host is None:
+                for trace in traces:
+                    await trace.send_request_exception("POST", url, CIMultiDict(), ValueError("invalid redirect"))
+                assert _pool_diagnostic_messages(caplog) == ()
+                return
+            for trace in traces:
+                await trace.send_connection_queued_start()
+            await clock.advance(0.25)
+            for trace in traces:
+                await trace.send_request_exception("POST", url, CIMultiDict(), TimeoutError())
+            messages: Final = _pool_diagnostic_messages(caplog)
+            assert len(messages) == 1, messages
+            assert f"host={host}" in messages[0]
+            assert f"port={port}" in messages[0]
+            assert "private" not in messages[0]
+        finally:
+            response.close()

@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.opencode.common_utils import is_opencode_api_base
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
@@ -146,6 +147,10 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
+def declared_provider(model: str | None, custom_llm_provider: str | None = None) -> str | None:
+    return custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
+
+
 def declared_authenticating_provider(model: str | None, custom_llm_provider: str | None = None) -> str | None:
     """The authenticating provider this pair already names, or None.
 
@@ -154,7 +159,7 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     and for a declared pair the resolver's answer is the declaration itself, so metadata callers
     adopt the declaration instead of resolving.
     """
-    declared: Final = custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
+    declared: Final = declared_provider(model, custom_llm_provider)
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
@@ -1004,6 +1009,4 @@ def _get_openai_compatible_provider_info(
 
 
 def get_provider_affinity_header(api_base: str | None) -> str | None:
-    from litellm.llms.opencode.transformation import OpenCodeProviderAdapter
-
-    return OpenCodeProviderAdapter().get_provider_affinity_header(api_base)
+    return "x-opencode-session" if is_opencode_api_base(api_base) else None
