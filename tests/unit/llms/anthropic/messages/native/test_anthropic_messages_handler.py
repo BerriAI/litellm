@@ -1433,6 +1433,91 @@ async def test_messages_honors_a_chat_pin_on_a_prefixed_responses_deployment(
     assert {str(call.request.url) for call in upstream.calls} == {expected_url}
 
 
+def _replayed_encrypted_reasoning(body: Mapping[str, object]) -> tuple[object, ...]:
+    items: Final = body.get("input")
+    if not isinstance(items, list):
+        return ()
+    return tuple(item.get("encrypted_content") for item in items if item.get("type") == "reasoning")
+
+
+_AZURE_RESPONSES: Final = "/openai/v1/responses"
+_AZURE_CHAT: Final = "/openai/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize(
+    "model, model_info, expected_path, expected_replay",
+    [
+        ("azure/responses/qa-deployment", None, _AZURE_RESPONSES, ("qa-opaque-reasoning",)),
+        ("azure/qa-deployment", {"id": "pinned-id", "mode": "responses"}, _AZURE_RESPONSES, ("qa-opaque-reasoning",)),
+        ("azure/qa-responses-row", None, _AZURE_RESPONSES, ("qa-opaque-reasoning",)),
+        ("azure/qa-responses-row", {"id": "pinned-id", "mode": "chat"}, _AZURE_CHAT, ()),
+        ("azure/qa-deployment", None, _AZURE_CHAT, ()),
+    ],
+    ids=["responses_prefix", "responses_pin", "responses_row", "chat_pin_on_responses_row", "chat_deployment"],
+)
+async def test_azure_responses_deployments_replay_encrypted_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    model_info: dict[str, str] | None,
+    expected_path: str,
+    expected_replay: tuple[str, ...],
+    stream: bool,
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+    from litellm.llms.anthropic.messages.responses_adapters.transformation import (
+        RESPONSES_INCLUDE_ENCRYPTED_REASONING,
+    )
+
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.model_cost["azure/qa-responses-row"] = {
+        "litellm_provider": "azure",
+        "mode": "responses",
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+    }
+    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route(host="qa-resource.openai.azure.com").mock(
+            side_effect=httpx.ConnectError("cut at the wire")
+        )
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[
+                    {"role": "user", "content": "Use calc for 17*23."},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": "Multiply with the tool.",
+                                "signature": encrypted_reasoning_signature("qa-opaque-reasoning"),
+                            },
+                            {"type": "tool_use", "id": "call_1", "name": "calc", "input": {"x": 391}},
+                        ],
+                    },
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "391"}]},
+                ],
+                model=model,
+                api_base="https://qa-resource.openai.azure.com",
+                api_version="v1",
+                api_key="test-api-key",
+                model_info=model_info,
+                stream=stream,
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert {call.request.url.path for call in upstream.calls} == {expected_path}
+    assert {_replayed_encrypted_reasoning(body) for body in bodies} == {expected_replay}
+    assert all(
+        body.get("include") == ([RESPONSES_INCLUDE_ENCRYPTED_REASONING] if expected_replay else None) for body in bodies
+    )
+
+
 @pytest.mark.asyncio
 async def test_native_messages_strips_replayed_provider_specific_fields_from_wire():
     captured = {}

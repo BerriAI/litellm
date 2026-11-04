@@ -178,6 +178,8 @@ def _should_route_to_responses_api(
         return True
     if custom_llm_provider is None or requested_model is None or resolved_model is None:
         return False
+    if custom_llm_provider == LlmProviders.AZURE.value:
+        return _bridges_to_responses_api(resolved_model, custom_llm_provider, deployment_model_info)
     return _responses_mode_is_lost_by_prefix_strip(
         requested_model, resolved_model, custom_llm_provider, deployment_model_info
     )
