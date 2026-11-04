@@ -85,6 +85,26 @@ async def test_azure_content_policy_stream_ends_with_one_finish_reason(monkeypat
 class TestAzureExceptionMapping:
     """Test Azure OpenAI exception mapping with provider-specific fields"""
 
+    def test_azure_403_content_filter_stays_content_policy_violation(self) -> None:
+        """A 403 content_filter reply must stay ContentPolicyViolationError, not PermissionDeniedError (#49936)"""
+        mock_exception = Exception(
+            "The response was filtered due to the prompt triggering Azure OpenAI's content management policy"
+        )
+        mock_exception.status_code = 403
+        mock_exception.body = {"code": "content_filter", "message": "filtered"}
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_exception.response = mock_response
+
+        with pytest.raises(ContentPolicyViolationError) as exc_info:
+            exception_type(
+                model="azure/gpt-4",
+                original_exception=mock_exception,
+                custom_llm_provider="azure",
+            )
+
+        assert not isinstance(exc_info.value, litellm.PermissionDeniedError)
+
     def test_azure_content_policy_violation_innererror_access(self):
         """Test that Azure content policy violation exceptions provide access to innererror details"""
 
@@ -738,7 +758,7 @@ async def _azure_atext_completion_stream() -> None:
     (
         (400, _AZURE_REFUSAL_BODY, BadRequestError),
         (400, _AZURE_CONTENT_FILTER_BODY, BadRequestError),
-        (403, _AZURE_REFUSAL_BODY, litellm.APIError),
+        (403, _AZURE_REFUSAL_BODY, litellm.PermissionDeniedError),
         (404, _AZURE_DEPLOYMENT_NOT_FOUND_BODY, litellm.NotFoundError),
         (500, _AZURE_INTERNAL_ERROR_BODY, openai.APIError),
         (502, _AZURE_REFUSAL_BODY, litellm.BadGatewayError),

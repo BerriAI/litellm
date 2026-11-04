@@ -1141,8 +1141,8 @@ def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(
 
 
 @pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
-@pytest.mark.parametrize("status_code", [403, 409, 422, 429, 500, 503])
-def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_and_404(
+@pytest.mark.parametrize("status_code", [409, 422, 429, 500, 503])
+def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_403_and_404(
     provider: str, status_code: int
 ) -> None:
     message: Final = "Cannot cancel a batch that is already completed."
@@ -1244,7 +1244,7 @@ OPENAI_SHAPED = {
     400: (litellm.BadRequestError, 400),
     401: (litellm.AuthenticationError, 401),
     402: (litellm.PaymentRequiredError, 402),
-    403: (litellm.APIError, 403),
+    403: (litellm.PermissionDeniedError, 403),
     404: (litellm.NotFoundError, 404),
     408: (litellm.Timeout, 408),
     422: (litellm.BadRequestError, 422),
@@ -3167,3 +3167,33 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.headers["x-request-id"] == "req-openai"
     assert "sk-openai-secret" not in str(error_response.request.headers)
     assert error_response.request.content == b""
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+@pytest.mark.parametrize("error_type", ["request_forbidden", "invalid_request_error"])
+def test_openai_403_maps_to_permission_denied(provider: str, error_type: str) -> None:
+    """Regression for #49936, a 403 must raise PermissionDeniedError like the openai SDK does"""
+    message: Final = "Country, region, or territory not supported"
+    error_message: Final = json.dumps(
+        {
+            "error": {
+                "message": message,
+                "type": error_type,
+                "param": None,
+                "code": "unsupported_country_region_territory",
+            }
+        }
+    )
+    original_exception: Final = OpenAIError(status_code=403, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="gpt-4o",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is litellm.PermissionDeniedError
+    assert isinstance(excinfo.value, openai.PermissionDeniedError)
+    assert excinfo.value.status_code == 403
+    assert message in excinfo.value.message
