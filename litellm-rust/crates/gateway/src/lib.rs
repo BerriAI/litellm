@@ -19,6 +19,7 @@ use http_body_util::BodyExt;
 use litellm_config::Config;
 use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelRouter};
+use litellm_gateway_model_catalog::{ModelCatalog, Settings};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
     media::PublicDnsResolver,
@@ -66,6 +67,21 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     ));
     let resources = CoreResources::new(pool);
     Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
+}
+
+/// The cost map the gateway serves, booted from the bundled map. Its fetches use the gateway's pooled HTTP client
+pub fn build_model_catalog(
+    inference: &Gateway,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> Result<Arc<ModelCatalog>, Error> {
+    let env = |name: &str| std::env::var(name).ok();
+    let http = inference
+        .resources
+        .pool
+        .client(&inference.http, ClientVariant::NoRedirect)?;
+    let catalog = ModelCatalog::boot(Settings::from_env(env), http, &env, shutdown)
+        .map_err(Error::BundledModelCatalog)?;
+    Ok(Arc::new(catalog))
 }
 
 pub async fn build_redis(config: &Config) -> Result<RedisClients, Error> {
@@ -124,12 +140,14 @@ pub async fn build_mcp(
 
 pub fn router(
     inference: Arc<Gateway>,
+    model_catalog: Arc<ModelCatalog>,
     config: &Config,
     ui: Option<Router>,
     mcp: Option<Router>,
 ) -> Router {
     let auth = Auth::from_config(config, inference.secrets.clone());
     let inference = litellm_gateway_inference::router(inference)
+        .merge(litellm_gateway_model_catalog::router(model_catalog))
         .merge(mcp.unwrap_or_default())
         .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
         .route_layer(axum::middleware::from_fn_with_state(

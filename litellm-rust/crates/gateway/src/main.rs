@@ -71,6 +71,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         shutdown_signal().await;
         signal_shutdown.cancel();
     });
+    let model_catalog = litellm_gateway::build_model_catalog(&inference, shutdown.clone())?;
+    let revalidating = model_catalog.spawn_revalidate();
     let mcp = litellm_gateway::build_mcp(
         &config,
         inference.secrets.clone(),
@@ -102,13 +104,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let result = axum::serve(
         listener,
-        litellm_gateway::router(inference, &config, ui, mcp_router),
+        litellm_gateway::router(inference, model_catalog, &config, ui, mcp_router),
     )
     .with_graceful_shutdown(shutdown.clone().cancelled_owned())
     .await;
     shutdown.cancel();
     if let Some(mcp) = mcp {
         mcp.close().await;
+    }
+    if let Some(revalidating) = revalidating {
+        let _ = revalidating.await;
     }
     result?;
     Ok(())

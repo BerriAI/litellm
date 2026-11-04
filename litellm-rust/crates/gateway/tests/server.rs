@@ -1,3 +1,5 @@
+mod support;
+
 use std::{
     sync::{Arc, mpsc},
     time::Duration,
@@ -11,6 +13,7 @@ use litellm_http::ClientVariant;
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
+use support::bundled_catalog;
 use tokio::{net::TcpListener, sync::oneshot, time::timeout};
 use tower::ServiceExt;
 
@@ -74,7 +77,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            litellm_gateway::router(inference, &config, None, None),
+            litellm_gateway::router(inference, bundled_catalog(), &config, None, None),
         )
         .with_graceful_shutdown(async move {
             let _ = stopped.await;
@@ -128,13 +131,11 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
         .header("authorization", "Bearer header-secret")
         .body(Body::empty())
         .unwrap();
+    let app = litellm_gateway::router(inference, bundled_catalog(), &config, None, None);
     let (sender, receiver) = mpsc::channel();
     let logger = Logger::new(LogSink(sender));
 
-    let response = logger
-        .instrument(litellm_gateway::router(inference, &config, None, None).oneshot(request))
-        .await
-        .unwrap();
+    let response = logger.instrument(app.oneshot(request)).await.unwrap();
 
     assert_eq!(response.status().as_u16(), 401);
     let record = receiver.try_recv().unwrap();
@@ -168,7 +169,7 @@ async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inferen
         false,
     )
     .merge(litellm_gateway_ui::dashboard_assets(assets.path()));
-    let app = litellm_gateway::router(inference, &config, Some(ui), None);
+    let app = litellm_gateway::router(inference, bundled_catalog(), &config, Some(ui), None);
     let page = app
         .clone()
         .oneshot(Request::get("/ui/").body(Body::empty()).unwrap())
@@ -278,7 +279,7 @@ async fn ui_routes_are_absent_when_not_mounted(
     let config =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
             .unwrap();
-    let response = litellm_gateway::router(inference, &config, None, None)
+    let response = litellm_gateway::router(inference, bundled_catalog(), &config, None, None)
         .oneshot(
             Request::builder()
                 .method(method)
@@ -300,7 +301,7 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
     #[case] yaml: &str,
 ) {
     let config = Config::from_yaml(yaml).unwrap();
-    let app = litellm_gateway::router(inference, &config, None, None);
+    let app = litellm_gateway::router(inference, bundled_catalog(), &config, None, None);
 
     let response = app
         .oneshot(
@@ -319,4 +320,33 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
         serde_json::from_slice::<Value>(&body).unwrap(),
         json!({"status": "healthy", "db": "Not connected"})
     );
+}
+
+#[rstest]
+#[case::source_admin("/model/cost_map/source", "GET", Some("Bearer gateway-key"), 200)]
+#[case::source_anonymous("/model/cost_map/source", "GET", None, 401)]
+#[case::source_wrong_key("/model/cost_map/source", "GET", Some("Bearer wrong"), 401)]
+#[case::reload_admin("/reload/model_cost_map", "POST", Some("Bearer gateway-key"), 200)]
+#[case::reload_anonymous("/reload/model_cost_map", "POST", None, 401)]
+#[tokio::test]
+async fn model_cost_map_routes_are_admin_only(
+    inference: Arc<Gateway>,
+    #[case] path: &str,
+    #[case] method: &str,
+    #[case] authorization: Option<&str>,
+    #[case] status: u16,
+) {
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
+            .unwrap();
+    let request = Request::builder().method(method).uri(path);
+    let request = match authorization {
+        Some(value) => request.header("authorization", value),
+        None => request,
+    };
+    let response = litellm_gateway::router(inference, bundled_catalog(), &config, None, None)
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), status);
 }

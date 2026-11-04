@@ -19,6 +19,8 @@ pub enum Error {
     },
     #[error(transparent)]
     RedisConnect(#[from] litellm_redis_client::ConnectError),
+    #[error("the bundled model cost map is invalid")]
+    BundledModelCatalog(#[source] litellm_model_catalog::Error),
     #[error("MCP requires working gateway authentication")]
     Auth(#[from] litellm_gateway_auth::Error),
 }

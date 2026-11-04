@@ -3762,10 +3762,12 @@ dependencies = [
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
+ "litellm-gateway-model-catalog",
  "litellm-gateway-ui",
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
+ "litellm-model-catalog",
  "litellm-redis-client",
  "litellm-redis-testing",
  "litellm-secret-value",
@@ -3883,6 +3885,31 @@ dependencies = [
  "url",
  "uuid",
  "veil",
+]
+
+[[package]]
+name = "litellm-gateway-model-catalog"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "axum",
+ "chrono",
+ "litellm-error",
+ "litellm-http",
+ "litellm-model-catalog",
+ "litellm-model-catalog-refresh",
+ "litellm-python-compat",
+ "rand 0.8.7",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]
