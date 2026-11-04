@@ -76,6 +76,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
+from litellm.exceptions import PreviousResponseNotReplayableError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
@@ -8033,6 +8034,7 @@ class Router:
             or original_model_group is None
             or is_guardrail_intervention(e)
             or unsupported_params_without_fallback
+            or isinstance(e, PreviousResponseNotReplayableError)
         ):
             raise e
 

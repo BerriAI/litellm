@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -54,10 +55,15 @@ def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> s
     return instructions if isinstance(instructions, str) and instructions else None
 
 
+_REDACTED_REQUEST_FIELDS: Final = MappingProxyType(
+    {"messages": [{"role": "user", "content": REDACTED_BY_LITELLM}], "prompt": "", "input": ""}
+)
+
+
 def _is_redacted_request(proxy_server_request: Mapping[str, object] | None) -> bool:
-    return proxy_server_request is not None and proxy_server_request.get("messages") == [
-        {"role": "user", "content": REDACTED_BY_LITELLM}
-    ]
+    return proxy_server_request is not None and all(
+        proxy_server_request.get(field) == value for field, value in _REDACTED_REQUEST_FIELDS.items()
+    )
 
 
 class ResponsesSessionHandler:
