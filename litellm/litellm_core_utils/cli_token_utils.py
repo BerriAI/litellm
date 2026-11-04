@@ -225,17 +225,16 @@ def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretClear:
 
     The token file goes whatever the keychain answers, so nothing left on disk reads as a login. A
     keychain that could not be checked, or that would not give up its entry, may still hold a
-    credential of ours, so a logout that had something to end leaves a note beside the file holding
-    that login's record without its secret. The next logout warns again instead of reading the
-    missing file as a clean keychain, and once the keychain answers it pairs the note with the entry
-    to revoke that login at the proxy. Only a keychain that confirms the erase takes the note away. A
-    file that will not go has its secret taken out where it lies instead.
+    credential of ours, so a logout that had something to end leaves a note beside the file, and the
+    next logout warns again instead of reading the missing file as a clean keychain. Only a keychain
+    that confirms the erase takes the note away. A file that will not go has its secret taken out
+    where it lies instead.
     """
     outcome: Final = vault.erase()
     record: Final = _read_token_file()
     settled: Final = _nothing_left_behind(outcome, record)
     left_on_disk: Final = _end_the_local_login(record)
-    _note_what_the_keychain_answered(outcome, settled, record)
+    _note_what_the_keychain_answered(outcome, record)
     if left_on_disk is not None:
         return left_on_disk
     return SecretErased() if settled else outcome
@@ -287,8 +286,14 @@ def _read_keychain_not_cleared_note() -> CliTokenRecord | None:
         return None
 
 
-def _note_what_the_keychain_answered(outcome: SecretErase, settled: bool, record: CliTokenRecord | None) -> None:
+def _note_what_the_keychain_answered(outcome: SecretErase, record: CliTokenRecord | None) -> None:
     """Keep the note that a logout left the keychain uncleared for exactly as long as that is true.
+
+    A keychain that could not be read kept this logout from revoking the login, so the note holds
+    that login's record without its secret, and the next logout or login that finds the keychain
+    answering pairs it with the entry to revoke it. One that would not give up its entry had already
+    handed this logout the refresh token, so its note holds nothing to revoke again. A logout with no
+    file to end keeps whatever note an earlier one left.
 
     The secret is off disk by the time this runs, so a note that will not be written or removed is
     no reason to fail the logout. The warning printed now is then the only one the user gets.
@@ -298,15 +303,15 @@ def _note_what_the_keychain_answered(outcome: SecretErase, settled: bool, record
         match outcome:
             case SecretErased():
                 note.unlink(missing_ok=True)
-            case SecretStranded() | KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
-                if not settled:
+            case SecretStranded():
+                _write_keychain_not_cleared_note(note, None)
+            case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
+                if record is not None:
                     _write_keychain_not_cleared_note(note, record)
 
 
 def _write_keychain_not_cleared_note(note: Path, record: CliTokenRecord | None) -> None:
-    """Record the login whose entry may still be in the keychain, or keep the note that already does"""
-    if record is None and note.exists():
-        return
+    """Record the login a later command can still revoke, or only that the keychain was left uncleared"""
     ensure_private_dir(note.parent)
     if record is None:
         write_private_bytes(str(note), b"")

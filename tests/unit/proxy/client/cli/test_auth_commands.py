@@ -1975,6 +1975,52 @@ class TestPkceLogoutCommand:
             )
         ]
 
+    def test_a_login_after_a_logout_that_missed_the_keychain_revokes_the_login_it_replaces(
+        self, isolated_home, secret_vault_factory
+    ):
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            self.runner.invoke(logout, obj={"secret_vault": locked})
+            result = self.runner.invoke(
+                login, ["--pkce"], obj={"base_url": PKCE_BASE_URL, "secret_vault": unlocked}
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Could not revoke" not in result.output
+        assert [post for session in _FakeSession.instances for post in session.posts] == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_old", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+
+    def test_a_logout_after_the_keychain_refused_the_erase_does_not_revoke_the_login_again(
+        self, isolated_home, secret_vault_factory
+    ):
+        vault = secret_vault_factory(erasable=False)
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=vault)
+
+        with patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession):
+            first = self.runner.invoke(logout, obj={"secret_vault": vault})
+            second = self.runner.invoke(logout, obj={"secret_vault": vault})
+
+        assert first.exit_code == 0, first.output
+        assert second.exit_code == 0, second.output
+        assert "still in the OS keychain" in second.output
+        assert [post for session in _FakeSession.instances for post in session.posts] == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_old", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+
     def test_logout_of_a_classic_token_makes_no_request(self):
         with (
             patch("litellm.proxy.client.cli.commands.auth.load_token", return_value={"key": "sk-classic"}),

@@ -236,7 +236,7 @@ def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] |
 
 
 def _credential_to_revoke(vault: SecretVault) -> Mapping[str, object] | None:
-    """The login this logout ends, or the one an earlier logout left in a keychain it could not reach"""
+    """The stored login, or the one an earlier logout left in a keychain it could not reach"""
     current: Final = load_token(vault=vault)
     if current is not None:
         return current
@@ -863,7 +863,7 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
 
 
 def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
-    previous: Final = load_token(vault=vault)
+    previous: Final = _credential_to_revoke(vault)
     stored: Final = save_token(record, vault=vault)
     if previous is None or isinstance(stored, CredentialNotSaved):
         return stored
