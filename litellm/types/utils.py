@@ -4298,6 +4298,10 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
     }
 )
 
+DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"max_input_tokens", "max_output_tokens", "max_tokens"}
+)
+
 DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "token_count_framing",
