@@ -35,22 +35,21 @@ const ModelDeprecationBanner = () => {
             <li key={`${info.model_name}-${info.deprecation_date}-${index}`}>{deprecationEntryText(info)}</li>
           ))}
         </ul>
-        {entries.length > 5 && (
-          <button
-            type="button"
-            className="mt-2 underline"
-            aria-expanded={isExpanded}
-            onClick={() => setIsExpanded((expanded) => !expanded)}
-          >
-            {isExpanded ? "Show fewer" : `Show all ${entries.length}`}
-          </button>
-        )}
-        <a
-          href={`${uiHref("logging-and-alerts")}?tab=alerting-types`}
-          className="mt-2 inline-block font-medium underline"
-        >
-          Get Slack alerts for deprecations
-        </a>
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+          {entries.length > 5 && (
+            <button
+              type="button"
+              className="underline"
+              aria-expanded={isExpanded}
+              onClick={() => setIsExpanded((expanded) => !expanded)}
+            >
+              {isExpanded ? "Show fewer" : `Show all ${entries.length}`}
+            </button>
+          )}
+          <a href={`${uiHref("logging-and-alerts")}?tab=alerting-types`} className="font-medium underline">
+            Get Slack alerts for deprecations
+          </a>
+        </div>
       </AlertDescription>
     </Alert>
   );
