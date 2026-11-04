@@ -146,7 +146,12 @@ def test_enable_disable_hides_server_from_callers_but_not_admin_and_restores(gat
         disabled: Final = gateway.request("PUT", f"/v1/mcp/server/{identity}/disable")
         assert disabled.status_code == 200, disabled.text
         assert disabled.json()["enabled"] is False
-        eventually(lambda: listed_tools(gateway, key, identity), lambda value: value == {})
+        eventually(
+            lambda: gateway.client.get(
+                "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
+            ),
+            lambda value: value.status_code >= 400 or value.json().get("tools") == [],
+        )
         peer.drain()
         rejected: Final = call_tool(gateway, key, identity, name, ADD)
         assert rejected.status_code >= 400, rejected.text
