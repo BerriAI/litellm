@@ -2856,7 +2856,8 @@
         "enableMoyai": {
           "ariaLabel": "Enable Moyai",
           "label": "[BETA] Enable Moyai",
-          "description": "If enabled, shows Moyai in the workspace switcher and lets admins connect a Moyai deployment."
+          "description": "If enabled, shows Moyai in the workspace switcher and lets admins connect a Moyai deployment.",
+          "managedByConfig": "Managed by general_settings.enable_moyai_ui in the config file. Change it there."
         },
         "disableAgents": {
           "label": "Disable agents for internal users"

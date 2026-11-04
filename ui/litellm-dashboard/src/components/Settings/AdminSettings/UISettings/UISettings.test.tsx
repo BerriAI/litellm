@@ -226,6 +226,22 @@ describe("UISettings", () => {
     expect(screen.queryByRole("link", { name: "Connect from the Moyai page" })).not.toBeInTheDocument();
   });
 
+  it("locks the Moyai switch when the config file owns enable_moyai_ui", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          ...buildSettingsResponse().data,
+          values: { ...buildSettingsResponse().data.values, enable_moyai_ui: false },
+          source: { enable_moyai_ui: "config" },
+        },
+      }),
+    );
+    render(<UISettings />);
+
+    expect(screen.getByRole("switch", { name: "Enable Moyai" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText(/Managed by general_settings.enable_moyai_ui in the config file/)).toBeInTheDocument();
+  });
+
   it("turns Moyai off by patching enable_moyai_ui", () => {
     const mutateMock = vi.fn((_settings, options) => {
       options?.onSuccess?.();

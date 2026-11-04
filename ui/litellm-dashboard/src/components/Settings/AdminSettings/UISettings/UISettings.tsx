@@ -90,6 +90,7 @@ export default function UISettings() {
   const usageRangeConfigOwned = data?.source?.usage_default_time_range === "config";
   const moyaiUrl = (values.moyai_url as string | undefined) ?? null;
   const isMoyaiEnabled = Boolean(values.enable_moyai_ui);
+  const moyaiConfigOwned = data?.source?.enable_moyai_ui === "config";
   const moyaiStatus = moyaiStatusLabel(t, isMoyaiEnabled, moyaiUrl);
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -471,16 +472,23 @@ export default function UISettings() {
                 enableChatUIProperty?.description ?? t("adminPanel.uiSettings.settings.enableChat.description")
               }
             />
-            <SettingRow
-              checked={isMoyaiEnabled}
-              disabled={isUpdating}
-              onCheckedChange={handleToggleEnableMoyaiUI}
-              ariaLabel={t("adminPanel.uiSettings.settings.enableMoyai.ariaLabel")}
-              label={t("adminPanel.uiSettings.settings.enableMoyai.label")}
-              description={
-                enableMoyaiUIProperty?.description ?? t("adminPanel.uiSettings.settings.enableMoyai.description")
-              }
-            />
+            <div className="space-y-1">
+              <SettingRow
+                checked={isMoyaiEnabled}
+                disabled={isUpdating || moyaiConfigOwned}
+                onCheckedChange={handleToggleEnableMoyaiUI}
+                ariaLabel={t("adminPanel.uiSettings.settings.enableMoyai.ariaLabel")}
+                label={t("adminPanel.uiSettings.settings.enableMoyai.label")}
+                description={
+                  enableMoyaiUIProperty?.description ?? t("adminPanel.uiSettings.settings.enableMoyai.description")
+                }
+              />
+              {moyaiConfigOwned && (
+                <p className="ml-11 text-sm text-muted-foreground">
+                  {t("adminPanel.uiSettings.settings.enableMoyai.managedByConfig")}
+                </p>
+              )}
+            </div>
 
             <BackgroundChatSettings />
 
