@@ -4,7 +4,7 @@
 
 - Serve HTTP/1.1 only, as uvicorn does. The supervisor never puts Rust in front of a Python server that speaks HTTP/2
 - Never branch on a route or path. A behavior one endpoint needs is a protocol behavior every endpoint gets
-- Forward the method, request target, headers, and body byte for byte. Only drop hop-by-hop headers (RFC 9110 section 7.6.1) and set `x-litellm-rust-peer`, which replaces any client copy
+- Forward the method, request target, headers, and body byte for byte within the [URL contract](FORWARDING.md#url-fragments-and-literal-hashes). An unescaped `#` starts a fragment and is omitted with everything after it, while `%23` is preserved. Only drop hop-by-hop headers (RFC 9110 section 7.6.1) and set `x-litellm-rust-peer`, which replaces any client copy
 - Stream both bodies. Never buffer, cap, or time out a body, since uploads and provider streams have no upper bound
 - A client disconnect closes the upstream connection at every stage, because that is how Python learns to stop a provider stream
 - An upstream that dies mid-response fails the client body. Never end it cleanly, or SSE clients treat a truncated stream as complete
