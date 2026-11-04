@@ -151,6 +151,36 @@ async def test_success_falls_back_to_release_when_reconcile_fails(
     release.assert_awaited_once_with(budget_reservation=reservation)
 
 
+@pytest.mark.asyncio
+async def test_success_retains_known_spend_when_reconcile_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reservation = _reservation()
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        AsyncMock(side_effect=RuntimeError("counter down")),
+    )
+    release = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.budget_reservation.release_or_invalidate_budget_reservation",
+        release,
+    )
+    logger = BudgetReservationReconcileLogger()
+
+    await logger.async_log_success_event(
+        {
+            "litellm_params": {"metadata": {"user_api_key_budget_reservation": reservation}},
+            "response_cost": 0.004,
+        },
+        response_obj=object(),
+        start_time=datetime.now(UTC),
+        end_time=datetime.now(UTC),
+    )
+
+    release.assert_not_awaited()
+    assert reservation["finalized"] is False
+
+
 @pytest.fixture
 def spend_counter_cache(monkeypatch: pytest.MonkeyPatch) -> DualCache:
     cache: Final = DualCache()
