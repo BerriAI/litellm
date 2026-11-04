@@ -86,7 +86,7 @@ def _declares_field(model: object, name: str) -> bool:
 
 
 def _is_missing_spacy_model(exc: OSError) -> bool:
-    """spaCy's E050. Permission, disk and network errors must not trigger a download."""
+    """True for spaCy's E050 only: permission, disk and network errors must not trigger a download."""
     message: Final = str(exc)
     return "E050" in message or "Can't find model" in message
 
@@ -152,7 +152,7 @@ def restore_mapping(pairs: Iterable[tuple[str, str]]) -> RestoreMapping:
 
 
 def restore_buffer_factory() -> Callable[[RestoreMapping], RestoreBuffer]:
-    """privaite's streaming de-anonymizer, which holds back a placeholder split across chunks."""
+    """The privaite streaming de-anonymizer, which holds back a placeholder split across chunks."""
     make_buffer: Final = _factory(_module("privaite.streaming.buffer"), "StreamingDeAnonymizer")
 
     def _buffer(mapping: RestoreMapping) -> RestoreBuffer:
