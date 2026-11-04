@@ -28,6 +28,7 @@ import AccessGroupBudgetsPanel from "@/app/(dashboard)/models-and-endpoints/pane
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import ModelDeprecationBanner from "./components/ModelDeprecationBanner";
 
 const MODEL_TAB_SLUGS = [
   "add",
@@ -201,6 +202,7 @@ export default function ModelsAndEndpointsPage() {
         </div>
 
         {!isViewOnly && <DecisionModelsBanner />}
+        <ModelDeprecationBanner />
 
         {modelId ? (
           <ModelInfoView
