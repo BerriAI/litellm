@@ -16,7 +16,7 @@ import io
 import json
 import math
 import wave
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -498,7 +498,11 @@ async def _serve_until_disconnect(response: StreamingResponse) -> None:
         await response({"type": "http", "asgi": {"spec_version": "2.4"}}, _receive, _send)
 
 
-def _route_speech_to(monkeypatch: pytest.MonkeyPatch, response: HttpxBinaryResponseContent) -> AsyncMock:
+def _route_speech_to(
+    monkeypatch: pytest.MonkeyPatch,
+    response: HttpxBinaryResponseContent,
+    response_headers_hook: Callable[..., Awaitable[dict[str, str]]] | None = None,
+) -> AsyncMock:
     failure_hook: Final = AsyncMock()
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
     monkeypatch.setattr(
@@ -507,7 +511,7 @@ def _route_speech_to(monkeypatch: pytest.MonkeyPatch, response: HttpxBinaryRespo
         MagicMock(
             pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
             post_call_failure_hook=failure_hook,
-            post_call_response_headers_hook=AsyncMock(return_value={}),
+            post_call_response_headers_hook=response_headers_hook or AsyncMock(return_value={}),
             update_request_status=AsyncMock(),
         ),
     )
@@ -584,6 +588,61 @@ async def test_audio_speech_route_releases_an_upstream_whose_body_is_never_read(
     await captured[0].background()
 
     assert stream.closed is True
+
+
+def _elevenlabs_client(stream: httpx.AsyncByteStream) -> litellm.AsyncHTTPHandler:
+    return litellm.AsyncHTTPHandler(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, headers={"content-type": "audio/mpeg"}, stream=stream)
+        )
+    )
+
+
+async def _headers_from_the_audio_body(*, response: HttpxBinaryResponseContent, **_: object) -> dict[str, str]:
+    return {"x-audio-bytes": str(len(response.content))}
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_route_frees_the_deployment_slot_when_a_response_hook_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A response hook that fails before any audio is sent must not keep the deployment's only
+    slot, or every later clip on max_parallel_requests: 1 is turned away."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "tts",
+                "litellm_params": {
+                    "model": "elevenlabs/eleven_multilingual_v2",
+                    "api_key": "fake-key",
+                    "max_parallel_requests": 1,
+                },
+            }
+        ]
+    )
+    first_upstream: Final = _RecordingAudioStream([b"audio"], [])
+    first_clip: Final = await router.aspeech(
+        model="tts", input="hello", voice="voice-id", client=_elevenlabs_client(first_upstream), stream=True
+    )
+    _route_speech_to(monkeypatch, first_clip, response_headers_hook=_headers_from_the_audio_body)
+
+    with pytest.raises(ProxyException):
+        await proxy_server.audio_speech(
+            request=_speech_request({"model": "tts", "input": "hello", "voice": "voice-id", "stream": True}),
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    next_clip: Final = await router.aspeech(
+        model="tts",
+        input="hello",
+        voice="voice-id",
+        client=_elevenlabs_client(_RecordingAudioStream([b"audio"], [])),
+        stream=True,
+    )
+    await next_clip.aclose()
+    assert first_upstream.closed is True
 
 
 class _BreaksMidClipAudioStream(httpx.AsyncByteStream):

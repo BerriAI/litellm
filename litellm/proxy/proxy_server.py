@@ -13740,64 +13740,68 @@ async def audio_speech(
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
-        ### RESPONSE HEADERS ###
-        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
-        model_id: Final = hidden_params.get("model_id", None) or ""
-        cache_key: Final = hidden_params.get("cache_key", None) or ""
-        api_base: Final = hidden_params.get("api_base", None) or ""
-        response_cost: Final = hidden_params.get("response_cost", None) or ""
-        response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
+        try:
+            ### RESPONSE HEADERS ###
+            hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+            model_id: Final = hidden_params.get("model_id", None) or ""
+            cache_key: Final = hidden_params.get("cache_key", None) or ""
+            api_base: Final = hidden_params.get("api_base", None) or ""
+            response_cost: Final = hidden_params.get("response_cost", None) or ""
+            response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
 
-        custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
-            user_api_key_dict=user_api_key_dict,
-            model_id=model_id,
-            cache_key=cache_key,
-            api_base=api_base,
-            version=version,
-            response_cost=response_cost,
-            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-            fastest_response_batch_completion=None,
-            call_id=response_call_id,
-            request_data=data,
-            hidden_params=hidden_params,
-        )
+            custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                model_id=model_id,
+                cache_key=cache_key,
+                api_base=api_base,
+                version=version,
+                response_cost=response_cost,
+                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                fastest_response_batch_completion=None,
+                call_id=response_call_id,
+                request_data=data,
+                hidden_params=hidden_params,
+            )
 
-        # Call response headers hook (matches audio_transcription behavior)
-        callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-            request_headers=dict(request.headers),
-        )
-        if callback_headers:
-            custom_headers.update(callback_headers)
+            # Call response headers hook (matches audio_transcription behavior)
+            callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if callback_headers:
+                custom_headers.update(callback_headers)
 
-        requested_format: Final = data.get("response_format")
-        upstream_content_type: Final = (
-            response.content_type if isinstance(response, HttpxBinaryResponseContent) else None
-        )
-        media_type: Final = resolve_speech_media_type(
-            upstream_content_type=upstream_content_type,
-            response_format=requested_format if isinstance(requested_format, str) else None,
-        )
+            requested_format: Final = data.get("response_format")
+            upstream_content_type: Final = (
+                response.content_type if isinstance(response, HttpxBinaryResponseContent) else None
+            )
+            media_type: Final = resolve_speech_media_type(
+                upstream_content_type=upstream_content_type,
+                response_format=requested_format if isinstance(requested_format, str) else None,
+            )
 
-        audio: Final = cast(  # cast-ok: the speech routes return this, and resolve_speech_media_type above already reads it as such
-            HttpxBinaryResponseContent, response
-        )
-        return StreamingResponse(
-            _audio_speech_chunk_generator(
-                audio,
-                on_upstream_error=partial(
-                    _log_audio_speech_stream_failure,
-                    request_data=data,
-                    user_api_key_dict=user_api_key_dict,
-                    response_cost=float(hidden_params.get("response_cost") or 0.0),
+            audio: Final = cast(  # cast-ok: the speech routes return this, and resolve_speech_media_type above already reads it as such
+                HttpxBinaryResponseContent, response
+            )
+            return StreamingResponse(
+                _audio_speech_chunk_generator(
+                    audio,
+                    on_upstream_error=partial(
+                        _log_audio_speech_stream_failure,
+                        request_data=data,
+                        user_api_key_dict=user_api_key_dict,
+                        response_cost=float(hidden_params.get("response_cost") or 0.0),
+                    ),
                 ),
-            ),
-            media_type=media_type,
-            headers=custom_headers,
-            background=BackgroundTask(_close_audio_speech_response, audio),
-        )
+                media_type=media_type,
+                headers=custom_headers,
+                background=BackgroundTask(_close_audio_speech_response, audio),
+            )
+        except BaseException:
+            await _close_audio_speech_response(response)
+            raise
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
