@@ -1,5 +1,6 @@
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { invalidateModelQueries } from "@/app/(dashboard)/hooks/models/invalidateModelQueries";
 import { useQueryClient } from "@tanstack/react-query";
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
@@ -811,7 +812,7 @@ export default function ModelInfoView({
           accessToken={accessToken}
           modelId={modelId}
           onUpdated={() => {
-            queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+            void invalidateModelQueries(queryClient);
           }}
         />
       )}

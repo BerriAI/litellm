@@ -5,6 +5,7 @@ import { RefreshCw } from "lucide-react";
 import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { invalidateModelQueries } from "@/app/(dashboard)/hooks/models/invalidateModelQueries";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useUrlTab } from "@/hooks/useUrlTab";
@@ -162,10 +163,10 @@ export default function ModelsAndEndpointsPage() {
 
   const handleRefreshClick = () => {
     setLastRefreshed(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
-    queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+    void invalidateModelQueries(queryClient);
   };
 
-  const invalidateModels = () => queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+  const invalidateModels = () => invalidateModelQueries(queryClient);
 
   if (teamId) {
     return (

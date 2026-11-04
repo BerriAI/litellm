@@ -10,7 +10,7 @@ import { createQueryKeys } from "../common/queryKeysFactory";
 export type ModelDeprecationInfo = components["schemas"]["ModelDeprecationInfo"];
 export type ModelDeprecationResponse = components["schemas"]["ModelDeprecationResponse"];
 
-const modelDeprecationKeys = createQueryKeys("modelDeprecations");
+export const modelDeprecationKeys = createQueryKeys("modelDeprecations");
 
 const fetchModelDeprecations = async (): Promise<ModelDeprecationResponse> => {
   const { data } = await backgroundFetchClient.GET("/model/deprecations");
