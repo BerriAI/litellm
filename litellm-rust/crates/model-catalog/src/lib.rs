@@ -35,10 +35,12 @@ macro_rules_attribute::attribute_alias! {
         #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 }
 
+mod aliases;
 mod bundled;
 mod catalog;
 mod error;
 mod fallback;
+mod integrity;
 mod layers;
 mod lower;
 mod model;
@@ -49,10 +51,12 @@ mod store;
 mod vocabulary;
 pub mod wire;
 
+pub use aliases::*;
 pub use bundled::*;
 pub use catalog::*;
 pub use error::*;
 pub use fallback::*;
+pub use integrity::*;
 pub use layers::*;
 pub use model::*;
 pub use model_info::*;

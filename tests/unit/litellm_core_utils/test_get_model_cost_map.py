@@ -522,7 +522,7 @@ from litellm.litellm_core_utils.get_model_cost_map import (
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 
 class _FakeS3Body:
@@ -806,6 +806,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -814,6 +815,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -848,6 +850,7 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -861,6 +864,7 @@ _SCALAR_DEFAULTS = {
     "api_key": getattr(litellm, "api_key", None),
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCheckIsValidDict:
@@ -885,6 +889,7 @@ class TestCheckIsValidDict:
     def test_should_accept_non_empty_dict(self):
         """Non-empty dict should pass."""
         assert GetModelCostMap._check_is_valid_dict({"model": {}}) is True
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCheckModelCountNotReduced:
@@ -940,6 +945,59 @@ class TestCheckModelCountNotReduced:
             is True
         )
 
+
+@pytest.mark.parametrize(
+    ("model_cost", "expected"),
+    [
+        pytest.param({"a": {}, "sample_spec": {}, FALLBACK_GENERALIZATIONS_KEY: {}}, 1, id="sections"),
+        pytest.param({1: {}, None: {}, "Sample_Spec": {}}, 3, id="non_string_and_case_differing_keys"),
+        pytest.param({}, 0, id="empty"),
+    ],
+)
+def test_count_model_entries_matches_main(model_cost: dict[object, object], expected: int):
+    assert _count_model_entries(model_cost) == expected
+
+
+_BELOW_MINIMUM = (
+    "LiteLLM: Fetched model cost map has only %d models (minimum=%d). "
+    "This may indicate a corrupted upstream file. "
+    "Falling back to local backup."
+)
+_SHRUNK = (
+    "LiteLLM: Fetched model cost map shrank significantly "
+    "(fetched=%d, backup=%d, threshold=%.0f%%). "
+    "This may indicate a corrupted upstream file. "
+    "Falling back to local backup."
+)
+
+
+@pytest.mark.parametrize(
+    ("models", "backup", "minimum", "ratio", "warning"),
+    [
+        pytest.param(5, 10, 6, 0.5, (_BELOW_MINIMUM, 5, 6), id="below_minimum_wins_over_shrunk"),
+        pytest.param(5, 11, 0, 0.5, (_SHRUNK, 5, 11, 50.0), id="shrunk"),
+        pytest.param(5, 10, 0, 0.5, None, id="exactly_at_the_ratio"),
+        pytest.param(1, -5, -1, 0.5, None, id="negative_minimum_and_backup_pass"),
+        pytest.param(0, 0, 0, 2.0, None, id="empty_backup_skips_the_ratio"),
+        pytest.param(10, 10, 0, 1.5, (_SHRUNK, 10, 10, 150.0), id="ratio_above_one"),
+        pytest.param(0, 10, 0, float("nan"), None, id="nan_ratio_never_shrinks"),
+    ],
+)
+def test_model_count_check_matches_main(
+    models: int, backup: int, minimum: int, ratio: float, warning: tuple[object, ...] | None
+):
+    with patch.object(get_model_cost_map_module.verbose_logger, "warning") as warn:
+        passed = GetModelCostMap._check_model_count_not_reduced(
+            fetched_map={**_make_models(models), "sample_spec": {}},
+            backup_model_count=backup,
+            min_model_count=minimum,
+            max_shrink_ratio=ratio,
+        )
+
+    assert passed is (warning is None)
+    assert warn.call_args_list == ([] if warning is None else [call(*warning)])
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestValidateModelCostMap:
     """Unit tests for validate_model_cost_map (combines both checks)."""
@@ -975,6 +1033,7 @@ class TestValidateModelCostMap:
             GetModelCostMap.validate_model_cost_map(fetched_map=fetched, backup_model_count=100, min_model_count=10)
             is True
         )
+
 
 def _fetch_with_single_outcome(monkeypatch, outcome):
     from litellm.litellm_core_utils import get_model_cost_map as module
@@ -1051,6 +1110,7 @@ class TestGetModelCostMapFallback:
         assert isinstance(result, dict)
         assert len(result) > 0
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBackupModelCostMapExists:
     """Validates the local backup file is always present and valid."""
@@ -1065,6 +1125,7 @@ class TestBackupModelCostMapExists:
         """The backup must contain a reasonable number of models."""
         backup = GetModelCostMap.load_local_model_cost_map()
         assert len(backup) > 100, f"Backup has only {len(backup)} models, expected > 100"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBadHostedModelCostMap:
@@ -1130,11 +1191,13 @@ class TestBadHostedModelCostMap:
         finally:
             litellm.model_cost = original
 
+
 @pytest.fixture()
 def _vcr_outcome_gate_local_testing(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -1188,6 +1251,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS_local_testing = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1207,6 +1271,7 @@ _SCALAR_DEFAULTS_local_testing = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown_local_testing():
@@ -1230,6 +1295,7 @@ def setup_and_teardown_local_testing():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -1240,6 +1306,7 @@ def test_get_model_cost_map():
         print(litellm.get_model_cost_map(url="fake-url"))
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",

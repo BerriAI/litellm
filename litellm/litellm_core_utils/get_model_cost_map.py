@@ -10,7 +10,6 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 """
 
 import asyncio
-import hashlib
 import json
 import os
 import random
@@ -29,7 +28,7 @@ from typing import Final, Protocol, cast  # noqa: TID251  # adapts boto3 and bot
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm import verbose_logger
 from litellm.constants import (
@@ -40,6 +39,14 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
+from litellm.rust_bridge._native import (
+    AliasWarning,
+    ModelCountProblem,
+    count_model_entries,
+    expand_model_aliases,
+    git_blob_id,
+    model_count_problem,
+)
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
@@ -52,18 +59,9 @@ def _is_cli_process() -> bool:
     return Path(sys.argv[0]).stem in _CLI_ENTRYPOINT_NAMES
 
 
-# Reserved top-level keys that are not model entries. They must be excluded
-# from the model-count integrity check so a real upstream shrink can't be masked.
-RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
-
-
 def _count_model_entries(model_cost: dict) -> int:
     """Count actual model entries, excluding reserved meta keys."""
-    return sum(1 for key in model_cost if key not in RESERVED_TOP_LEVEL_KEYS)
-
-
-def git_blob_id(body: bytes) -> str:
-    return hashlib.sha1(b"blob %d\0" % len(body) + body, usedforsecurity=False).hexdigest()
+    return count_model_entries(model_cost)
 
 
 class GetModelCostMap:
@@ -152,31 +150,31 @@ class GetModelCostMap:
         max_shrink_ratio: float = MODEL_COST_MAP_MAX_SHRINK_RATIO,
     ) -> bool:
         """Check 2: model count has not reduced significantly vs backup."""
-        fetched_count: Final = _count_model_entries(fetched_map)
-
-        if fetched_count < min_model_count:
-            verbose_logger.warning(
-                "LiteLLM: Fetched model cost map has only %d models (minimum=%d). "
-                "This may indicate a corrupted upstream file. "
-                "Falling back to local backup.",
-                fetched_count,
-                min_model_count,
-            )
-            return False
-
-        if backup_model_count > 0 and fetched_count < backup_model_count * max_shrink_ratio:
-            verbose_logger.warning(
-                "LiteLLM: Fetched model cost map shrank significantly "
-                "(fetched=%d, backup=%d, threshold=%.0f%%). "
-                "This may indicate a corrupted upstream file. "
-                "Falling back to local backup.",
-                fetched_count,
-                backup_model_count,
-                max_shrink_ratio * 100,
-            )
-            return False
-
-        return True
+        problem: Final = model_count_problem(fetched_map, backup_model_count, min_model_count, max_shrink_ratio)
+        match problem:
+            case None:
+                return True
+            case ModelCountProblem.BelowMinimum(actual=actual, minimum=minimum):
+                verbose_logger.warning(
+                    "LiteLLM: Fetched model cost map has only %d models (minimum=%d). "
+                    "This may indicate a corrupted upstream file. "
+                    "Falling back to local backup.",
+                    actual,
+                    minimum,
+                )
+            case ModelCountProblem.Shrunk(actual=actual, reference=reference):
+                verbose_logger.warning(
+                    "LiteLLM: Fetched model cost map shrank significantly "
+                    "(fetched=%d, backup=%d, threshold=%.0f%%). "
+                    "This may indicate a corrupted upstream file. "
+                    "Falling back to local backup.",
+                    actual,
+                    reference,
+                    max_shrink_ratio * 100,
+                )
+            case _:
+                assert_never(problem)
+        return False
 
     @classmethod
     def validate_model_cost_map(
@@ -571,13 +569,28 @@ class AliasedCostEntry(dict[str, object]):
         self.registered_fields: frozenset[str] = registered_fields
 
 
-def _alias_groups(alias_owners: Mapping[str, str]) -> Mapping[str, tuple[str, ...]]:
-    return MappingProxyType(
-        {
-            owner: (owner, *(alias for alias, alias_owner in alias_owners.items() if alias_owner == owner))
-            for owner in dict.fromkeys(alias_owners.values())
-        }
-    )
+def _warn_skipped_alias(warning: AliasWarning.NotAList | AliasWarning.ShadowsModel | AliasWarning.Taken) -> None:
+    match warning:
+        case AliasWarning.NotAList(model=model, type_name=type_name):
+            verbose_logger.warning(
+                "LiteLLM model alias field for '%s' is not a list (got %s) — skipping.",
+                model,
+                type_name,
+            )
+        case AliasWarning.ShadowsModel(alias=alias, model=model):
+            verbose_logger.warning(
+                "LiteLLM model alias conflict: alias '%s' (from '%s') already exists as a canonical entry — skipping.",
+                alias,
+                model,
+            )
+        case AliasWarning.Taken(alias=alias, model=model):
+            verbose_logger.warning(
+                "LiteLLM model alias conflict: alias '%s' (from '%s') was already claimed by another entry — skipping.",
+                alias,
+                model,
+            )
+        case _:
+            assert_never(warning)
 
 
 def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
@@ -591,48 +604,11 @@ def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str,
     If an alias collides with an existing canonical entry the alias is
     skipped and a warning is logged.
     """
-    alias_owners: Final[dict[str, str]] = {}
-    keys_with_aliases: Final[list[str]] = []
-
-    for model_name, model_info in model_cost.items():
-        aliases: object = model_info.get("aliases")
-        if aliases is None:
-            continue
-        keys_with_aliases.append(model_name)
-        if not isinstance(aliases, list):
-            verbose_logger.warning(
-                "LiteLLM model alias field for '%s' is not a list (got %s) — skipping.",
-                model_name,
-                type(aliases).__name__,
-            )
-            continue
-        if not aliases:
-            continue
-        for alias in aliases:
-            if alias in model_cost:
-                verbose_logger.warning(
-                    "LiteLLM model alias conflict: alias '%s' (from '%s') "
-                    "already exists as a canonical entry — skipping.",
-                    alias,
-                    model_name,
-                )
-                continue
-            if alias in alias_owners:
-                verbose_logger.warning(
-                    "LiteLLM model alias conflict: alias '%s' (from '%s') "
-                    "was already claimed by another entry — skipping.",
-                    alias,
-                    model_name,
-                )
-                continue
-            alias_owners[alias] = model_name
-
-    # Remove the ``aliases`` key from entries so it doesn't pollute model info
-    for key in keys_with_aliases:
-        model_cost[key].pop("aliases", None)
-
-    for owner, names in _alias_groups(alias_owners).items():
-        model_cost.update(dict.fromkeys(names, AliasedCostEntry(model_cost[owner], names)))
+    warnings, error = expand_model_aliases(model_cost, AliasedCostEntry)
+    for warning in warnings:
+        _warn_skipped_alias(warning)
+    if error is not None:
+        raise error
     return model_cost
 
 

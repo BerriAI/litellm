@@ -4256,6 +4256,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "sha1 0.10.7",
  "strum",
  "thiserror 2.0.19",
  "time",

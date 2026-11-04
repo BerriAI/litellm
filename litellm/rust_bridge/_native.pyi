@@ -1,5 +1,5 @@
 from asyncio import Future
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Never, final
 
 import httpx
@@ -15,6 +15,62 @@ class ProcessReservedForForking(RuntimeError): ...
 
 def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
+def count_model_entries(model_cost: Mapping[str, object]) -> int: ...
+def git_blob_id(body: bytes) -> str: ...
+
+class ModelCountProblem:
+    @final
+    class BelowMinimum(ModelCountProblem):
+        __match_args__ = ("actual", "minimum")
+        @property
+        def actual(self) -> int: ...
+        @property
+        def minimum(self) -> int: ...
+
+    @final
+    class Shrunk(ModelCountProblem):
+        __match_args__ = ("actual", "reference")
+        @property
+        def actual(self) -> int: ...
+        @property
+        def reference(self) -> int: ...
+
+def model_count_problem(
+    fetched_map: Mapping[str, object], backup_model_count: int, min_model_count: int, max_shrink_ratio: float
+) -> ModelCountProblem.BelowMinimum | ModelCountProblem.Shrunk | None: ...
+
+class AliasWarning:
+    @final
+    class NotAList(AliasWarning):
+        __match_args__ = ("model", "type_name")
+        @property
+        def model(self) -> object: ...
+        @property
+        def type_name(self) -> str: ...
+
+    @final
+    class ShadowsModel(AliasWarning):
+        __match_args__ = ("alias", "model")
+        @property
+        def alias(self) -> object: ...
+        @property
+        def model(self) -> object: ...
+
+    @final
+    class Taken(AliasWarning):
+        __match_args__ = ("alias", "model")
+        @property
+        def alias(self) -> object: ...
+        @property
+        def model(self) -> object: ...
+
+def expand_model_aliases(
+    model_cost: dict[str, dict[str, object]],
+    entry_type: Callable[[Mapping[str, object], tuple[str, ...]], dict[str, object]],
+) -> tuple[
+    list[AliasWarning.NotAList | AliasWarning.ShadowsModel | AliasWarning.Taken],
+    BaseException | None,
+]: ...
 
 @final
 class NativeClickHouseSpendConfig:
@@ -210,8 +266,10 @@ def process_state_started() -> bool: ...
 def reserve_process_for_forking() -> None: ...
 
 __all__ = [
+    "AliasWarning",
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
+    "ModelCountProblem",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeDatabase",
@@ -230,9 +288,13 @@ __all__ = [
     "atranscription",
     "bundled_model_cost_map",
     "completion",
+    "count_model_entries",
     "embedding",
+    "expand_model_aliases",
     "gil_stats",
+    "git_blob_id",
     "messages",
+    "model_count_problem",
     "ocr",
     "ocr_health_check_document",
     "ocr_passthrough_response",

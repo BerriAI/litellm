@@ -5,14 +5,15 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::aliases::{AliasClaims, Unclaimed};
 use crate::error::{Error, Loaded, Rejects, Repr, pointer_child, pointer_for_key};
 use crate::fallback::{FallbackGeneralizations, FallbackRule};
+use crate::integrity::{
+    FALLBACK_GENERALIZATIONS, SAMPLE_SPEC, SizeProblem, is_model_key, size_problem,
+};
 use crate::model::Model;
 use crate::store::{Rows, Store};
 use crate::wire::{EntryWire, Fields};
-
-const SAMPLE_SPEC: &str = "sample_spec";
-const FALLBACK_GENERALIZATIONS: &str = "fallback_generalizations";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IntegrityLimits {
@@ -172,24 +173,24 @@ impl Catalog {
             return Err(Error::new("", Repr::Empty));
         }
 
-        let mut aliases: IndexMap<String, String> = IndexMap::new();
+        let mut claims = AliasClaims::new();
         for (model, names) in alias_lists {
             for alias in names {
-                if entries.contains_key(&alias) {
-                    problems.push(Error::from_key(&model, Repr::AliasShadowsModel { alias }));
-                } else if let Some(taken_by) = aliases.get(&alias) {
-                    problems.push(Error::from_key(
-                        &model,
-                        Repr::AliasTaken {
-                            alias,
-                            taken_by: taken_by.clone(),
-                        },
-                    ));
-                } else {
-                    aliases.insert(alias, model.clone());
+                match claims.claim(&alias, &model, entries.contains_key(&alias)) {
+                    Ok(()) => {}
+                    Err(Unclaimed::ShadowsModel) => {
+                        problems.push(Error::from_key(&model, Repr::AliasShadowsModel { alias }));
+                    }
+                    Err(Unclaimed::TakenBy(taken_by)) => {
+                        problems.push(Error::from_key(
+                            &model,
+                            Repr::AliasTaken { alias, taken_by },
+                        ));
+                    }
                 }
             }
         }
+        let aliases = claims.into_owners();
 
         let fallback_generalizations = sections
             .iter()
@@ -275,27 +276,30 @@ impl Catalog {
     }
 
     pub fn check_size(&self, reference: usize, limits: IntegrityLimits) -> Result<(), Error> {
-        let actual = self.model_count();
-        if actual < limits.min_model_count {
-            return Err(Error::new(
-                "",
-                Repr::BelowMinimum {
-                    actual,
-                    minimum: limits.min_model_count,
-                },
-            ));
-        }
-        if (actual as f64) < (reference as f64) * limits.min_reference_ratio {
-            return Err(Error::new(
+        let problem = size_problem(
+            self.model_count(),
+            reference,
+            limits.min_model_count,
+            limits.min_reference_ratio,
+        );
+        match problem {
+            None => Ok(()),
+            Some(SizeProblem::BelowMinimum { actual, minimum }) => {
+                Err(Error::new("", Repr::BelowMinimum { actual, minimum }))
+            }
+            Some(SizeProblem::Shrunk {
+                actual,
+                reference,
+                ratio,
+            }) => Err(Error::new(
                 "",
                 Repr::Shrunk {
                     actual,
                     reference,
-                    ratio: limits.min_reference_ratio,
+                    ratio,
                 },
-            ));
+            )),
         }
-        Ok(())
     }
 
     pub fn without_rejected(self, errors: &[Error]) -> (Self, Vec<&Error>) {
@@ -420,7 +424,7 @@ fn read_row(fields: &Fields) -> (Option<Model>, Option<Vec<String>>, Vec<Error>)
 }
 
 fn is_section(key: &str) -> bool {
-    key == SAMPLE_SPEC || key == FALLBACK_GENERALIZATIONS
+    !is_model_key(key)
 }
 
 fn unknown_timezone(wire: &EntryWire) -> Option<Error> {

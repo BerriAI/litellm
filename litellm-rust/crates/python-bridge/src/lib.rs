@@ -34,7 +34,10 @@ mod _native {
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
-    use crate::model_registry::bundled_model_cost_map;
+    use crate::model_registry::{
+        AliasWarning, ModelCountProblem, bundled_model_cost_map, count_model_entries,
+        expand_model_aliases, git_blob_id, model_count_problem,
+    };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -113,6 +116,12 @@ mod tests {
                 "NativeDatabase",
                 "trace_encode_error",
                 "bundled_model_cost_map",
+                "count_model_entries",
+                "model_count_problem",
+                "ModelCountProblem",
+                "expand_model_aliases",
+                "AliasWarning",
+                "git_blob_id",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",
