@@ -1498,12 +1498,30 @@ def _tenant_service_name(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     )
 
 
-def litellm_auth_header_name(headers: Headers) -> str:
-    if "x-litellm-api-key" in headers:
-        return "x-litellm-api-key"
-    if "authorization" in headers:
-        return "authorization"
-    return "x-api-key"
+_PROXY_AUTH_HEADER_PRECEDENCE: Final = tuple(
+    header.value.lower()
+    for header in (
+        SpecialHeaders.custom_litellm_api_key,
+        SpecialHeaders.openai_authorization,
+        SpecialHeaders.azure_authorization,
+        SpecialHeaders.anthropic_authorization,
+        SpecialHeaders.google_ai_studio_authorization,
+        SpecialHeaders.azure_apim_authorization,
+    )
+)
+
+
+def litellm_auth_header_name(headers: Headers, litellm_key_header_name: str | None = None) -> str:
+    if litellm_key_header_name is not None and litellm_key_header_name in headers:
+        return litellm_key_header_name.lower()
+    return next(
+        (
+            name
+            for name in _PROXY_AUTH_HEADER_PRECEDENCE
+            if name in headers and (name != "authorization" or headers[name])
+        ),
+        "x-api-key",
+    )
 
 
 def forwarded_anthropic_oauth_token(headers: Headers) -> str | None:
@@ -1559,6 +1577,8 @@ def clean_headers(
                 clean_headers[header] = value
         elif forward_llm_provider_auth_headers and header_lower in _SPECIAL_HEADERS_CACHE:
             if litellm_key_lower and header_lower == litellm_key_lower:
+                continue
+            if authenticated_with_header is not None and header_lower == authenticated_with_header.lower():
                 continue
             if header_lower == "authorization":
                 continue
@@ -2669,13 +2689,14 @@ async def add_litellm_data_to_request(
         forward_llm_auth = general_settings.get("forward_llm_provider_auth_headers", False)
     if not forward_llm_auth:
         forward_llm_auth = getattr(litellm, "forward_llm_provider_auth_headers", False)
+    litellm_key_header_name: Final = (
+        general_settings.get("litellm_key_header_name") if general_settings is not None else None
+    )
     _headers: Final[dict[str, str]] = clean_headers(
         request.headers,
-        litellm_key_header_name=(
-            general_settings.get("litellm_key_header_name") if general_settings is not None else None
-        ),
+        litellm_key_header_name=litellm_key_header_name,
         forward_llm_provider_auth_headers=forward_llm_auth,
-        authenticated_with_header=litellm_auth_header_name(request.headers),
+        authenticated_with_header=litellm_auth_header_name(request.headers, litellm_key_header_name),
     )
     _strip_untrusted_request_header_controls(
         _headers,
