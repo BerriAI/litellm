@@ -1731,6 +1731,16 @@
         "field_type": "password",
         "options": null,
         "default_value": null
+      },
+      {
+        "key": "github_copilot_host",
+        "label": "GitHub host",
+        "placeholder": "github.com",
+        "tooltip": "Leave empty for github.com. For GHE.com data residency enter your SUBDOMAIN.ghe.com host",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
