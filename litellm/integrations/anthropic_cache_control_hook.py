@@ -907,7 +907,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             )
         )
         processed_messages = copy.deepcopy(
-            [without_prompt_cache_breakpoints(message) for message in messages]
+            [
+                without_prompt_cache_breakpoints(message) if isinstance(message, dict) else message  # pyright: ignore[reportUnnecessaryIsInstance]  # a caller can send a non-object message
+                for message in messages
+            ]
             if not openai_dialect and message_points and _translates_prompt_cache_breakpoint(model, custom_llm_provider)
             else messages
         )
