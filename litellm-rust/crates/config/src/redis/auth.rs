@@ -1,5 +1,5 @@
 use litellm_core_utils::settings::Lookup;
-use litellm_redis_types::{AwsIamAuth, AzureAdAuth, RedisAuth};
+use litellm_redis_types::{Auth, AwsIamAuth, AzureAdAuth, ProviderHandle, StaticAuth};
 
 use super::{
     RedisError,
@@ -8,10 +8,13 @@ use super::{
 
 pub(super) fn redis_auth(
     options: &Options,
+    provider: Option<ProviderHandle>,
     environment: &dyn Lookup,
-) -> Result<RedisAuth, RedisError> {
-    if options.credential_provider.is_some() {
-        return Ok(RedisAuth::Host);
+) -> Result<Auth, RedisError> {
+    match (provider, &options.credential_provider) {
+        (Some(handle), _) => return Ok(Auth::Provider(handle)),
+        (None, Some(_)) => return Err(RedisError::ProviderWithoutHandle),
+        (None, None) => {}
     }
     let gcp = text(options.gcp.service_account.as_ref());
     let azure = text(options.azure.ad_token.as_ref())
@@ -29,7 +32,7 @@ pub(super) fn redis_auth(
                     "Both GCP IAM (gcp_service_account) and AWS ElastiCache IAM (aws_iam_auth) are configured for Redis. Using GCP IAM. Remove one to avoid misconfiguration."
                 );
             }
-            Ok(RedisAuth::GcpIam { service_account })
+            Ok(Auth::GcpIam { service_account })
         }
         (None, true, aws) => {
             if aws {
@@ -37,7 +40,7 @@ pub(super) fn redis_auth(
                     "Both Azure AD (azure_redis_ad_token) and AWS ElastiCache IAM (aws_iam_auth) are configured for Redis. Using Azure AD. Remove one to avoid misconfiguration."
                 );
             }
-            Ok(RedisAuth::AzureAd(AzureAdAuth {
+            Ok(Auth::AzureAd(AzureAdAuth {
                 client_id: text(options.azure.client_id.as_ref()),
                 tenant_id: text(options.azure.tenant_id.as_ref()),
                 client_secret: secret(options.azure.client_secret.as_ref()),
@@ -46,11 +49,11 @@ pub(super) fn redis_auth(
                     .filter(|username| !username.is_empty()),
             }))
         }
-        (None, false, true) => aws_iam(&options.aws, uses_tls(options)?).map(RedisAuth::AwsIam),
-        (None, false, false) => Ok(RedisAuth::Static {
+        (None, false, true) => aws_iam(&options.aws, uses_tls(options)?).map(Auth::AwsIam),
+        (None, false, false) => Ok(Auth::Static(StaticAuth {
             username: secret(options.username.as_ref()),
             password: secret(options.password.as_ref()),
-        }),
+        })),
     }
 }
 

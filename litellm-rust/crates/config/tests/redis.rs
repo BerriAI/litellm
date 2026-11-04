@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use litellm_config::{
-    CacheSettings, Config, ConfiguredRedis, Expected, RedisError, Resolution, SecretSnapshot, Value,
+    CacheSettings, Config, ConfiguredRedis, Expected, RedisError, SecretSnapshot, Value,
 };
 use litellm_redis_types::{
-    AwsIamAuth, AzureAdAuth, ClusterNode, Endpoint, RedisAuth, ResolvedRedis, TlsOptions,
+    Auth, AwsIamAuth, AzureAdAuth, Node, ProviderHandle, Resolution, StaticAuth, Target, TlsOptions,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -26,11 +26,22 @@ fn redis_cache_kwargs(kwargs: serde_json::Value) -> ConfiguredRedis {
     )
 }
 
+const PROVIDER: ProviderHandle = ProviderHandle::new(7);
+
+// python-bridge hands a credential_provider object over as a handle, so the contract cases do the same
 fn resolve_kwargs(
     kwargs: serde_json::Value,
     environment: &HashMap<String, String>,
-) -> Result<ResolvedRedis, RedisError> {
-    resolution(&redis_cache_kwargs(kwargs), environment).map(|resolution| resolution.redis)
+) -> Result<Resolution, RedisError> {
+    let has_provider = kwargs
+        .get("credential_provider")
+        .is_some_and(|provider| !provider.is_null());
+    let configured = redis_cache_kwargs(kwargs);
+    let configured = match has_provider {
+        true => configured.with_credential_provider(PROVIDER),
+        false => configured,
+    };
+    resolution(&configured, environment)
 }
 
 fn coordination_resolution(
@@ -50,15 +61,15 @@ fn coordination_resolution(
     resolution(&configured, &environment)
 }
 
-fn resolve(yaml: &str, environment: &[(&str, &str)]) -> Result<ResolvedRedis, RedisError> {
-    coordination_resolution(yaml, environment).map(|resolution| resolution.redis)
+fn resolve(yaml: &str, environment: &[(&str, &str)]) -> Result<Resolution, RedisError> {
+    coordination_resolution(yaml, environment)
 }
 
-fn resolve_cache(yaml: &str) -> Result<ResolvedRedis, RedisError> {
+fn resolve_cache(yaml: &str) -> Result<Resolution, RedisError> {
     resolve_cache_in(yaml, &[])
 }
 
-fn resolve_cache_in(yaml: &str, environment: &[(&str, &str)]) -> Result<ResolvedRedis, RedisError> {
+fn resolve_cache_in(yaml: &str, environment: &[(&str, &str)]) -> Result<Resolution, RedisError> {
     let lookup = |name: &str| {
         environment
             .iter()
@@ -70,18 +81,16 @@ fn resolve_cache_in(yaml: &str, environment: &[(&str, &str)]) -> Result<Resolved
         CacheSettings::Redis(settings) => settings.cache_params(),
         CacheSettings::Other(_) => panic!("expected a Redis cache"),
     };
-    configured
-        .resolve(
-            &SecretSnapshot::read(configured.secret_names(), &lookup),
-            &lookup,
-        )
-        .map(|resolution| resolution.redis)
+    configured.resolve(
+        &SecretSnapshot::read(configured.secret_names(), &lookup),
+        &lookup,
+    )
 }
 
-fn cluster_ports(resolved: &ResolvedRedis) -> Vec<u16> {
-    match &resolved.endpoint {
-        Endpoint::Cluster(cluster) => cluster.nodes.iter().map(|node| node.port).collect(),
-        endpoint => panic!("expected a cluster, got {endpoint:?}"),
+fn cluster_ports(resolved: &Resolution) -> Vec<u16> {
+    match &resolved.target {
+        Target::Cluster(cluster) => cluster.nodes.iter().map(|node| node.port).collect(),
+        target => panic!("expected a cluster, got {target:?}"),
     }
 }
 
@@ -107,10 +116,10 @@ fn resolves_redis_through_the_parsed_config(
     #[case] expected: &str,
 ) {
     let resolved = resolve(yaml, environment).unwrap();
-    let description = match resolved.endpoint {
-        Endpoint::Url { url, .. } => format!("url:{}", url.expose()),
-        Endpoint::Sentinel(sentinel) => format!("sentinel:{}", sentinel.service_name),
-        Endpoint::Host(host) => format!(
+    let description = match resolved.target {
+        Target::Url(url) => format!("url:{}", url.url.expose()),
+        Target::Sentinel(sentinel) => format!("sentinel:{}", sentinel.service_name),
+        Target::Standalone(host) => format!(
             "host:{}:{}:{}:{}:{}:{}",
             host.host,
             host.port,
@@ -122,7 +131,7 @@ fn resolves_redis_through_the_parsed_config(
                 .map(|timeout| timeout.as_millis().to_string())
                 .unwrap_or_else(|| "none".to_owned())
         ),
-        Endpoint::Cluster(cluster) => format!(
+        Target::Cluster(cluster) => format!(
             "cluster:{}",
             cluster
                 .nodes
@@ -162,11 +171,11 @@ fn rejected_settings_name_their_source(
     assert!(matches!(error, RedisError::Unsupported { setting } if setting == expected));
 }
 
-fn static_auth(username: Option<&str>, password: Option<&str>) -> RedisAuth {
-    RedisAuth::Static {
+fn static_auth(username: Option<&str>, password: Option<&str>) -> Auth {
+    Auth::Static(StaticAuth {
         username: username.map(litellm_secret_value::SecretValue::new),
         password: password.map(litellm_secret_value::SecretValue::new),
-    }
+    })
 }
 
 #[rstest]
@@ -181,11 +190,11 @@ fn an_explicit_host_keeps_environment_credentials() {
     .unwrap();
 
     assert_eq!(resolved.auth, static_auth(None, Some("environment-secret")));
-    assert!(matches!(resolved.endpoint, Endpoint::Host(host) if host.tls.is_some()));
+    assert!(matches!(resolved.target, Target::Standalone(host) if host.tls.is_some()));
 }
 
-fn azure(username: Option<&str>) -> RedisAuth {
-    RedisAuth::AzureAd(AzureAdAuth {
+fn azure(username: Option<&str>) -> Auth {
+    Auth::AzureAd(AzureAdAuth {
         client_id: Some("client".to_owned()),
         tenant_id: None,
         client_secret: None,
@@ -193,8 +202,8 @@ fn azure(username: Option<&str>) -> RedisAuth {
     })
 }
 
-fn aws(serverless: bool) -> RedisAuth {
-    RedisAuth::AwsIam(AwsIamAuth {
+fn aws(serverless: bool) -> Auth {
+    Auth::AwsIam(AwsIamAuth {
         user_name: "iam-user".to_owned(),
         cache_name: "cache-1".to_owned(),
         region: "us-east-1".to_owned(),
@@ -208,15 +217,10 @@ fn aws(serverless: bool) -> RedisAuth {
     &[],
     static_auth(Some("user"), Some("pass"))
 )]
-#[case::an_explicit_provider_beats_every_cloud_auth(
-    "general_settings:\n  coordination_redis:\n    host: redis\n    password: pass\n    credential_provider: host-object\n    gcp_service_account: account\n    aws_iam_auth: true",
-    &[("REDIS_AZURE_AD_TOKEN", "true")],
-    RedisAuth::Host
-)]
 #[case::gcp_beats_azure_and_aws(
     "general_settings:\n  coordination_redis:\n    host: redis\n    password: pass\n    azure_redis_ad_token: \"True\"\n    aws_iam_auth: true",
     &[("REDIS_GCP_SERVICE_ACCOUNT", "projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com")],
-    RedisAuth::GcpIam { service_account: "projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com".to_owned() }
+    Auth::GcpIam { service_account: "projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com".to_owned() }
 )]
 #[case::azure_beats_aws_and_takes_the_environment_username(
     "general_settings:\n  coordination_redis:\n    host: redis\n    username: configured-user\n    azure_redis_ad_token: true\n    azure_client_id: client\n    aws_iam_auth: true",
@@ -246,9 +250,43 @@ fn aws(serverless: bool) -> RedisAuth {
 fn auth_follows_python_precedence(
     #[case] yaml: &str,
     #[case] environment: &[(&str, &str)],
-    #[case] expected: RedisAuth,
+    #[case] expected: Auth,
 ) {
     assert_eq!(resolve(yaml, environment).unwrap().auth, expected);
+}
+
+#[rstest]
+fn a_provider_handle_beats_every_cloud_auth_and_static_credentials() {
+    let configured = redis_cache_kwargs(json!({
+        "host": "redis", "password": "pass", "credential_provider": "host-object",
+        "gcp_service_account": "account", "aws_iam_auth": true, "azure_redis_ad_token": "true",
+    }))
+    .with_credential_provider(PROVIDER);
+
+    let resolved = resolution(&configured, &HashMap::new()).unwrap();
+
+    assert_eq!(resolved.auth, Auth::Provider(PROVIDER));
+}
+
+#[rstest]
+#[case::coordination(
+    "general_settings:\n  coordination_redis:\n    host: redis\n    credential_provider: host-object",
+    &[]
+)]
+#[case::without_a_target(
+    "general_settings:\n  coordination_redis:\n    credential_provider: host-object",
+    &[("REDIS_HOST", "redis")]
+)]
+fn a_credential_provider_without_a_host_handle_fails(
+    #[case] yaml: &str,
+    #[case] environment: &[(&str, &str)],
+) {
+    let error = resolve(yaml, environment).unwrap_err();
+
+    assert!(
+        matches!(error, RedisError::ProviderWithoutHandle),
+        "{error}"
+    );
 }
 
 #[rstest]
@@ -301,7 +339,7 @@ fn tls_options_resolve_like_redis_py(
 
     let resolved = resolve(&yaml, environment).unwrap();
 
-    assert!(matches!(resolved.endpoint, Endpoint::Host(host) if host.tls == expected));
+    assert!(matches!(resolved.target, Target::Standalone(host) if host.tls == expected));
 }
 
 #[rstest]
@@ -336,18 +374,18 @@ fn sentinel_nodes_resolve_to_a_sentinel_endpoint(
     #[case] yaml: &str,
     #[case] environment: &[(&str, &str)],
 ) {
-    let Endpoint::Sentinel(sentinel) = resolve(yaml, environment).unwrap().endpoint else {
+    let Target::Sentinel(sentinel) = resolve(yaml, environment).unwrap().target else {
         panic!("expected a sentinel endpoint");
     };
 
     assert_eq!(
-        sentinel.sentinels,
+        sentinel.monitors,
         vec![
-            ClusterNode {
+            Node {
                 host: "sentinel-a".to_owned(),
                 port: 26379
             },
-            ClusterNode {
+            Node {
                 host: "sentinel-b".to_owned(),
                 port: 26380
             },
@@ -355,11 +393,11 @@ fn sentinel_nodes_resolve_to_a_sentinel_endpoint(
     );
     assert_eq!(sentinel.service_name, "primary");
     assert_eq!(
-        sentinel
-            .sentinel_password
-            .as_ref()
-            .map(|password| password.expose()),
-        Some("sentinel-secret")
+        sentinel.monitor_auth,
+        Some(StaticAuth {
+            username: None,
+            password: Some(litellm_secret_value::SecretValue::new("sentinel-secret")),
+        })
     );
     assert_eq!(sentinel.db, 2);
 }
@@ -371,9 +409,9 @@ fn sentinel_nodes_resolve_to_a_sentinel_endpoint(
 )]
 fn sentinel_precedence(#[case] yaml: &str, #[case] expected: &str) {
     let resolved = resolve(yaml, &[]).unwrap();
-    let description = match resolved.endpoint {
-        Endpoint::Url { url, .. } => format!("url:{}", url.expose()),
-        Endpoint::Sentinel(sentinel) => format!("sentinel:{}", sentinel.service_name),
+    let description = match resolved.target {
+        Target::Url(url) => format!("url:{}", url.url.expose()),
+        Target::Sentinel(sentinel) => format!("sentinel:{}", sentinel.service_name),
         other => panic!("unexpected {other:?}"),
     };
 
@@ -523,7 +561,7 @@ fn a_null_canonical_startup_nodes_setting_shadows_the_cache_alias() {
     )
     .unwrap();
 
-    assert!(matches!(resolved.endpoint, Endpoint::Host(_)));
+    assert!(matches!(resolved.target, Target::Standalone(_)));
 }
 
 #[rstest]
@@ -533,7 +571,7 @@ fn a_missing_canonical_startup_nodes_reference_shadows_the_cache_alias() {
     )
     .unwrap();
 
-    assert!(matches!(resolved.endpoint, Endpoint::Host(_)));
+    assert!(matches!(resolved.target, Target::Standalone(_)));
 }
 
 #[rstest]
@@ -570,17 +608,18 @@ fn rejects_bad_socket_timeout(#[case] timeout: &str) {
 #[rstest]
 fn debug_redacts_redis_secrets_and_url() {
     let config = Config::from_yaml(
-        "general_settings:\n  coordination_redis:\n    url: redis://user:password@redis:6379\n    username: credential-user\n    password: credential-password",
+        "general_settings:\n  coordination_redis:\n    url: redis://user:password@redis:6379\n    username: credential-user\n    password: credential-password\n    sentinel_kwargs: {password: credential-passthrough}",
     )
     .unwrap();
     let settings = config.general_settings.coordination_redis.unwrap();
     let configured = settings.coordination().unwrap();
-    let resolved = resolution(&configured, &HashMap::new()).unwrap().redis;
+    let resolved = resolution(&configured, &HashMap::new()).unwrap();
     let debug = format!("{settings:?} {configured:?} {resolved:?}");
 
     assert!(!debug.contains("redis://user:password"));
     assert!(!debug.contains("credential-user"));
     assert!(!debug.contains("credential-password"));
+    assert!(!debug.contains("credential-passthrough"));
     assert!(debug.contains("redacted") || debug.contains("REDACTED"));
 }
 
@@ -618,7 +657,7 @@ fn legacy_unknown_settings_do_not_change_resolution() {
     )
     .unwrap();
 
-    assert!(matches!(resolved.endpoint, Endpoint::Host(_)));
+    assert!(matches!(resolved.target, Target::Standalone(_)));
 }
 
 #[rstest]
@@ -642,6 +681,48 @@ fn ignored_settings_are_named_by_their_source(
     assert_eq!(resolution.ignored, vec![source.to_owned()]);
 }
 
+#[rstest]
+#[case::configured(
+    json!({"host": "redis", "client_name": "worker", "read_from_replicas": true, "connection_class": "SSLConnection", "retry_on_error": null}),
+    &[],
+    json!({"client_name": "worker", "read_from_replicas": true}),
+    &["connection_class", "retry_on_error"],
+)]
+#[case::from_the_environment(
+    json!({"host": "redis"}),
+    &[("REDIS_CLIENT_NAME", "worker")],
+    json!({"client_name": "worker"}),
+    &[],
+)]
+fn settings_rust_does_not_model_reach_the_host_instead_of_being_dropped(
+    #[case] kwargs: serde_json::Value,
+    #[case] environment: &[(&str, &str)],
+    #[case] passthrough: serde_json::Value,
+    #[case] host_objects: &[&str],
+) {
+    let environment: HashMap<String, String> = environment
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+
+    let resolved = resolve_kwargs(kwargs, &environment).unwrap();
+
+    let passed: serde_json::Map<String, serde_json::Value> = resolved
+        .passthrough
+        .iter()
+        .map(|(key, value)| (key.to_owned(), value.clone()))
+        .collect();
+    assert_eq!(serde_json::Value::Object(passed), passthrough);
+    assert_eq!(
+        resolved
+            .host_objects
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        host_objects
+    );
+}
+
 fn tls_view(tls: Option<&TlsOptions>) -> serde_json::Value {
     tls.map_or(serde_json::Value::Null, |tls| {
         serde_json::json!({
@@ -654,7 +735,7 @@ fn tls_view(tls: Option<&TlsOptions>) -> serde_json::Value {
     })
 }
 
-fn nodes_view(nodes: &[ClusterNode]) -> Vec<String> {
+fn nodes_view(nodes: &[Node]) -> Vec<String> {
     nodes
         .iter()
         .map(|node| format!("{}:{}", node.host, node.port))
@@ -681,48 +762,48 @@ fn expected_view(fields: serde_json::Value) -> serde_json::Value {
     serde_json::Value::Object(defaults.into_iter().chain(fields).collect())
 }
 
-fn view(resolved: &ResolvedRedis) -> serde_json::Value {
-    let target = match &resolved.endpoint {
-        Endpoint::Host(host) => serde_json::json!({
+fn view(resolved: &Resolution) -> serde_json::Value {
+    let target = match &resolved.target {
+        Target::Standalone(host) => serde_json::json!({
             "mode": "host",
             "host": host.host,
             "port": host.port,
             "db": host.db,
             "tls": tls_view(host.tls.as_ref()),
         }),
-        Endpoint::Url { url, tls } => serde_json::json!({
+        Target::Url(url) => serde_json::json!({
             "mode": "url",
-            "url": url.expose(),
-            "tls": tls_view(url.expose().starts_with("rediss://").then_some(tls)),
+            "url": url.url.expose(),
+            "tls": tls_view(url.tls.as_ref()),
         }),
-        Endpoint::Cluster(cluster) => serde_json::json!({
+        Target::Cluster(cluster) => serde_json::json!({
             "mode": "cluster",
             "nodes": nodes_view(&cluster.nodes),
             "tls": tls_view(cluster.tls.as_ref()),
         }),
-        Endpoint::Sentinel(sentinel) => serde_json::json!({
+        Target::Sentinel(sentinel) => serde_json::json!({
             "mode": "sentinel",
-            "nodes": nodes_view(&sentinel.sentinels),
+            "nodes": nodes_view(&sentinel.monitors),
             "service_name": sentinel.service_name,
-            "sentinel_password": expose(sentinel.sentinel_password.as_ref()),
+            "sentinel_password": expose(sentinel.monitor_auth.as_ref().and_then(|auth| auth.password.as_ref())),
             "db": sentinel.db,
             "tls": tls_view(sentinel.tls.as_ref()),
         }),
     };
     let auth = match &resolved.auth {
-        RedisAuth::Static { username, password } => serde_json::json!({
+        Auth::Static(StaticAuth { username, password }) => serde_json::json!({
             "kind": "static",
             "username": expose(username.as_ref()),
             "password": expose(password.as_ref()),
         }),
-        RedisAuth::Host => serde_json::json!({"kind": "host"}),
-        RedisAuth::GcpIam { service_account } => {
+        Auth::Provider(_) => serde_json::json!({"kind": "host"}),
+        Auth::GcpIam { service_account } => {
             serde_json::json!({"kind": "gcp_iam", "service_account": service_account})
         }
-        RedisAuth::AzureAd(azure) => {
+        Auth::AzureAd(azure) => {
             serde_json::json!({"kind": "azure_ad", "username": azure.username})
         }
-        RedisAuth::AwsIam(aws) => serde_json::json!({
+        Auth::AwsIam(aws) => serde_json::json!({
             "kind": "aws_iam",
             "user_name": aws.user_name,
             "cache_name": aws.cache_name,
@@ -1089,9 +1170,11 @@ fn secret_manager_values_reach_the_resolver_through_the_snapshot() {
         _ => None,
     });
 
-    let resolved = settings.resolve(&secrets, &|_: &str| None).unwrap().redis;
+    let resolved = settings.resolve(&secrets, &|_: &str| None).unwrap();
 
-    assert!(matches!(&resolved.endpoint, Endpoint::Host(host) if host.host == "from-the-manager"));
+    assert!(
+        matches!(&resolved.target, Target::Standalone(host) if host.host == "from-the-manager")
+    );
     assert_eq!(resolved.auth, static_auth(None, Some("manager-secret")));
 }
 
@@ -1110,11 +1193,10 @@ fn the_azure_username_comes_from_the_process_environment_like_python(
         .resolve(&snapshot(secrets), &|name: &str| {
             environment.get(name).map(|value| (*value).to_owned())
         })
-        .unwrap()
-        .redis;
+        .unwrap();
 
     assert!(
-        matches!(&resolved.auth, RedisAuth::AzureAd(azure) if azure.username.as_deref() == expected),
+        matches!(&resolved.auth, Auth::AzureAd(azure) if azure.username.as_deref() == expected),
         "{:?}",
         resolved.auth
     );
@@ -1148,8 +1230,8 @@ fn a_null_overrides_the_environment_only_where_python_passes_it_on(
     }
     .unwrap();
 
-    let Endpoint::Host(host) = resolved.endpoint else {
-        panic!("expected a host endpoint, got {:?}", resolved.endpoint);
+    let Target::Standalone(host) = resolved.target else {
+        panic!("expected a standalone target, got {:?}", resolved.target);
     };
     assert_eq!(host.tls.is_some(), tls);
 }

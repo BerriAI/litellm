@@ -1,28 +1,41 @@
-use std::{path::PathBuf, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    time::Duration,
+};
 
 use litellm_secret_value::SecretValue;
+use veil::Redact;
 
-/// One Redis connection with every setting, environment value and secret already applied, the
-/// value a host hands to the connector.
+/// One Redis connection with every setting, environment value and secret already applied. Each
+/// client library builds its client from this one value, so they cannot read a setting differently.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ResolvedRedis {
-    pub endpoint: Endpoint,
-    pub auth: RedisAuth,
+pub struct Resolution {
+    pub target: Target,
+    pub auth: Auth,
     pub namespace: Option<String>,
     pub timeout: Option<Duration>,
     pub connect_timeout: Option<Duration>,
+    /// Plain settings the resolver does not model, kept verbatim for the redis-py projection.
+    pub passthrough: Passthrough,
+    /// Settings whose value is a host object, like redis-py's `retry` or `connection_class`, which
+    /// only the host can reattach.
+    pub host_objects: BTreeSet<String>,
+    /// Where each setting the Rust client accepts without honoring came from: its key, or the
+    /// environment variable that set it.
+    pub ignored: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Endpoint {
-    Url { url: SecretValue, tls: TlsOptions },
-    Host(HostEndpoint),
-    Cluster(ClusterEndpoint),
-    Sentinel(SentinelEndpoint),
+pub enum Target {
+    Standalone(Standalone),
+    Url(RedisUrl),
+    Cluster(Cluster),
+    Sentinel(Sentinel),
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct HostEndpoint {
+pub struct Standalone {
     pub host: String,
     pub port: u16,
     pub tls: Option<TlsOptions>,
@@ -30,27 +43,35 @@ pub struct HostEndpoint {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ClusterEndpoint {
-    pub nodes: Vec<ClusterNode>,
+pub struct RedisUrl {
+    pub url: SecretValue,
+    /// Set only for a `rediss://` url, from its query parameters.
     pub tls: Option<TlsOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ClusterNode {
+pub struct Cluster {
+    pub nodes: Vec<Node>,
+    pub tls: Option<TlsOptions>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Node {
     pub host: String,
     pub port: u16,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct SentinelEndpoint {
-    pub sentinels: Vec<ClusterNode>,
+pub struct Sentinel {
+    pub monitors: Vec<Node>,
     pub service_name: String,
-    pub sentinel_password: Option<SecretValue>,
+    /// How to authenticate to the monitors, which are separate servers from the data node.
+    pub monitor_auth: Option<StaticAuth>,
     pub tls: Option<TlsOptions>,
     pub db: i64,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TlsOptions {
     pub ca_certs: Option<PathBuf>,
     pub certfile: Option<PathBuf>,
@@ -62,25 +83,46 @@ pub struct TlsOptions {
 impl TlsOptions {
     pub fn verified() -> Self {
         Self {
+            ca_certs: None,
+            certfile: None,
+            keyfile: None,
             verify_certificate: true,
-            ..Self::default()
+            check_hostname: false,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum RedisAuth {
-    Static {
-        username: Option<SecretValue>,
-        password: Option<SecretValue>,
-    },
-    /// The host supplies credentials, like a redis-py `credential_provider` object.
-    Host,
+pub enum Auth {
+    Static(StaticAuth),
+    /// Credentials come from a host object, like a redis-py `credential_provider`.
+    Provider(ProviderHandle),
     GcpIam {
         service_account: String,
     },
     AzureAd(AzureAdAuth),
     AwsIam(AwsIamAuth),
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StaticAuth {
+    pub username: Option<SecretValue>,
+    pub password: Option<SecretValue>,
+}
+
+/// Names one credential provider the host holds. Two resolutions with the same handle use the
+/// same provider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ProviderHandle(u64);
+
+impl ProviderHandle {
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    pub const fn id(self) -> u64 {
+        self.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -97,4 +139,22 @@ pub struct AwsIamAuth {
     pub cache_name: String,
     pub region: String,
     pub serverless: bool,
+}
+
+/// Settings passed through untouched. They can hold credentials, so they never print.
+#[derive(Clone, Default, PartialEq, Redact)]
+pub struct Passthrough(#[redact(with = "[REDACTED]")] BTreeMap<String, serde_json::Value>);
+
+impl Passthrough {
+    pub fn new(settings: BTreeMap<String, serde_json::Value>) -> Self {
+        Self(settings)
+    }
+
+    pub fn get(&self, key: &str) -> Option<&serde_json::Value> {
+        self.0.get(key)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &serde_json::Value)> {
+        self.0.iter().map(|(key, value)| (key.as_str(), value))
+    }
 }

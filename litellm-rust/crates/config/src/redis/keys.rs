@@ -163,6 +163,28 @@ pub(super) const SETTINGS: &[Setting] = &[
     Setting::new("username", Handling::Read, true, &[]),
 ];
 
+// redis-py parameters whose value is a Python object rather than plain data. credential_provider is modeled as
+// Auth::Provider instead
+const HOST_OBJECTS: &[&str] = &[
+    "address_remap",
+    "cache",
+    "cache_config",
+    "connection_class",
+    "connection_pool",
+    "driver_info",
+    "event_dispatcher",
+    "maint_notifications_config",
+    "parser_class",
+    "redis_connect_func",
+    "retry",
+    "retry_on_error",
+    "ssl_ocsp_context",
+];
+
+pub(super) fn is_host_object(kwarg: &str) -> bool {
+    HOST_OBJECTS.contains(&kwarg)
+}
+
 pub(super) fn setting(kwarg: &str) -> Option<&'static Setting> {
     SETTINGS.iter().find(|setting| setting.kwarg == kwarg)
 }

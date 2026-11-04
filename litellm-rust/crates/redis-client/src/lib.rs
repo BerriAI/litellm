@@ -14,7 +14,7 @@ pub use config::{Credentials, DEFAULT_TIMEOUT, RedisConfig, Timeouts};
 pub use error::{ConnectError, Error};
 pub use events::{CallEvent, FailureKind, Operation, Outcome, RedisEvents};
 pub use litellm_redis_types::{
-    ClusterEndpoint, ClusterNode, Endpoint, HostEndpoint, SentinelEndpoint, TlsOptions,
+    Cluster, Node, RedisUrl, Sentinel, Standalone, StaticAuth, Target, TlsOptions,
 };
 pub use namespace::Namespace;
 pub use pipeline::Pipeline;

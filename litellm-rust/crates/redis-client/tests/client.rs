@@ -11,9 +11,9 @@ use rstest::rstest;
 use litellm_circuit_breaker::{Breaker, Config, State};
 
 use litellm_redis_client::{
-    Amount, CallEvent, Credentials, DEFAULT_TIMEOUT, Endpoint, Error, Expiry, FailureKind,
-    HostEndpoint, Namespace, Operation, Outcome, RedisClient, RedisConfig, RedisEvents, Script,
-    Timeouts, TlsOptions, Ttl,
+    Amount, CallEvent, Credentials, DEFAULT_TIMEOUT, Error, Expiry, FailureKind, Namespace,
+    Operation, Outcome, RedisClient, RedisConfig, RedisEvents, RedisUrl, Script, Standalone,
+    Target, Timeouts, Ttl,
 };
 use litellm_secret_value::SecretValue;
 use support::{KEEP, connect, connect_guarded, connections, endpoint};
@@ -223,7 +223,7 @@ async fn outage_events_report_the_failure_kind(
     let server = RedisDeployment::start(topology).await.unwrap();
     let recorded = Arc::new(Recorded::default());
     let client = RedisClient::new(RedisConfig {
-        endpoint: endpoint(&server),
+        target: endpoint(&server),
         namespace: Namespace::default(),
         timeouts: Timeouts::new(Duration::from_millis(300), None),
         breaker: None,
@@ -277,7 +277,7 @@ async fn every_call_reports_its_operation_and_outcome(
     let server = RedisDeployment::start(topology).await.unwrap();
     let recorded = Arc::new(Recorded::default());
     let client = RedisClient::new(RedisConfig {
-        endpoint: endpoint(&server),
+        target: endpoint(&server),
         credentials: Credentials::NONE,
         namespace: Namespace::default(),
         timeouts: Timeouts::default(),
@@ -735,9 +735,9 @@ async fn an_open_breaker_fails_every_pipeline_op_without_sending(
 async fn a_host_endpoint_connects_to_its_database() {
     let server = RedisServer::start().await.unwrap();
     let port = server.url().rsplit(':').next().unwrap().parse().unwrap();
-    let connect = |endpoint| {
+    let connect = |target| {
         RedisClient::new(RedisConfig {
-            endpoint,
+            target,
             credentials: Credentials::NONE,
             namespace: Namespace::default(),
             timeouts: Timeouts::default(),
@@ -745,11 +745,13 @@ async fn a_host_endpoint_connects_to_its_database() {
             events: None,
         })
     };
-    let url = |url: String| Endpoint::Url {
-        url: SecretValue::new(url),
-        tls: TlsOptions::verified(),
+    let url = |url: String| {
+        Target::Url(RedisUrl {
+            url: SecretValue::new(url),
+            tls: None,
+        })
     };
-    let in_db_3 = connect(Endpoint::Host(HostEndpoint {
+    let in_db_3 = connect(Target::Standalone(Standalone {
         host: "127.0.0.1".to_owned(),
         port,
         tls: None,

@@ -1,15 +1,15 @@
 use rstest::rstest;
 
-use litellm_redis_client::{Credentials, Endpoint, SentinelEndpoint, TlsOptions};
+use litellm_redis_client::{Credentials, RedisUrl, Sentinel, StaticAuth, Target, TlsOptions};
 use litellm_secret_value::SecretValue;
 
 #[rstest]
-#[case::url(format!("{:?}", Endpoint::Url { url: SecretValue::new("redis://user:credential-value@cache:6379/0"), tls: TlsOptions::verified() }))]
+#[case::url(format!("{:?}", Target::Url(RedisUrl { url: SecretValue::new("redis://user:credential-value@cache:6379/0"), tls: None })))]
 #[case::static_password(format!("{:?}", Credentials { username: None, password: Some(SecretValue::new("credential-value")) }))]
-#[case::sentinel_password(format!("{:?}", Endpoint::Sentinel(SentinelEndpoint {
-    sentinels: Vec::new(),
+#[case::sentinel_password(format!("{:?}", Target::Sentinel(Sentinel {
+    monitors: Vec::new(),
     service_name: "primary".to_owned(),
-    sentinel_password: Some(SecretValue::new("credential-value")),
+    monitor_auth: Some(StaticAuth { username: None, password: Some(SecretValue::new("credential-value")) }),
     tls: None,
     db: 0,
 })))]
@@ -47,7 +47,7 @@ async fn ping_over_tls(
         check_hostname,
     };
     let client = litellm_redis_client::RedisClient::new(litellm_redis_client::RedisConfig {
-        endpoint: Endpoint::Host(litellm_redis_client::HostEndpoint {
+        target: Target::Standalone(litellm_redis_client::Standalone {
             host: host.to_owned(),
             port: server.port(),
             tls: Some(tls),
@@ -123,7 +123,7 @@ fn a_missing_tls_file_names_the_path() {
     };
 
     let error = litellm_redis_client::RedisClient::new(litellm_redis_client::RedisConfig {
-        endpoint: Endpoint::Host(litellm_redis_client::HostEndpoint {
+        target: Target::Standalone(litellm_redis_client::Standalone {
             host: "127.0.0.1".to_owned(),
             port: 6379,
             tls: Some(tls),

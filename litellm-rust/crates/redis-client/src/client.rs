@@ -30,7 +30,7 @@ pub enum Ttl {
 impl RedisClient {
     pub fn new(config: RedisConfig) -> Result<Self, ConnectError> {
         Ok(Self {
-            connection: Connection::new(&config.endpoint, &config.credentials, config.timeouts)?,
+            connection: Connection::new(&config.target, &config.credentials, config.timeouts)?,
             namespace: config.namespace,
             breaker: config.breaker,
             events: config.events,

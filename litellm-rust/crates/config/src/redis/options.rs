@@ -1,7 +1,11 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use litellm_core_utils::settings::Lookup;
 use litellm_python_compat::{BigInt, number};
+use litellm_redis_types::Passthrough;
 use litellm_secret_value::SecretValue;
 
 use super::{
@@ -70,12 +74,49 @@ pub(super) struct TlsInput {
     pub(super) check_hostname: Option<Entry>,
 }
 
+/// The settings the resolver does not model, split the way a host reattaches them.
+pub(super) struct Unmodeled {
+    pub(super) passthrough: Passthrough,
+    pub(super) host_objects: BTreeSet<String>,
+    pub(super) ignored: Vec<String>,
+}
+
+impl Unmodeled {
+    fn read(kwargs: &Kwargs) -> Result<Self, RedisError> {
+        let unmodeled = || {
+            kwargs
+                .iter()
+                .filter(|(key, _)| handling(key) != Some(Handling::Read))
+        };
+        let (objects, plain): (Vec<_>, Vec<_>) =
+            unmodeled().partition(|(key, _)| keys::is_host_object(key));
+        let passthrough = plain
+            .into_iter()
+            .map(|(key, entry)| {
+                serde_json::to_value(&entry.value)
+                    .map(|value| (key.clone(), value))
+                    .map_err(|_| RedisError::NotPlainData {
+                        setting: entry.source.clone(),
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            passthrough: Passthrough::new(passthrough),
+            host_objects: objects.into_iter().map(|(key, _)| key.clone()).collect(),
+            ignored: unmodeled()
+                .filter(|(key, _)| handling(key) == Some(Handling::Warn))
+                .map(|(_, entry)| entry.source.clone())
+                .collect(),
+        })
+    }
+}
+
 impl Options {
-    /// The typed settings and where each accepted-but-ignored one came from.
+    /// The typed settings and the ones the resolver leaves to the host.
     pub(super) fn read(
         kwargs: Kwargs,
         lookup: &dyn Lookup,
-    ) -> Result<(Self, Vec<String>), RedisError> {
+    ) -> Result<(Self, Unmodeled), RedisError> {
         if let Some((_, entry)) = kwargs
             .iter()
             .find(|(key, _)| handling(key) == Some(Handling::Reject))
@@ -84,11 +125,7 @@ impl Options {
                 setting: entry.source.clone(),
             });
         }
-        let ignored = kwargs
-            .iter()
-            .filter(|(key, _)| handling(key) == Some(Handling::Warn))
-            .map(|(_, entry)| entry.source.clone())
-            .collect();
+        let unmodeled = Unmodeled::read(&kwargs)?;
         let get = |key: &str| {
             kwargs
                 .get(key)
@@ -139,7 +176,7 @@ impl Options {
             socket_timeout: get("socket_timeout"),
             socket_connect_timeout: get("socket_connect_timeout"),
         };
-        Ok((options, ignored))
+        Ok((options, unmodeled))
     }
 }
 

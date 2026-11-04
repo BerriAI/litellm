@@ -3,21 +3,26 @@ use std::{collections::HashMap, time::Duration};
 use litellm_config::{RedisSettings, SecretSnapshot};
 use litellm_redis_connect::{Error, connect};
 use litellm_redis_testing::{RedisSentinel, RedisServer, RedisTlsServer, SERVICE_NAME, eventually};
-use litellm_redis_types::ResolvedRedis;
+use litellm_redis_types::{ProviderHandle, Resolution};
 use rstest::rstest;
 
-fn resolved(kwargs: serde_json::Value, environment: &[(&str, &str)]) -> ResolvedRedis {
+// python-bridge hands a credential_provider object over as a handle, so these tests do the same
+fn resolved(kwargs: serde_json::Value, environment: &[(&str, &str)]) -> Resolution {
+    let kwargs_name_a_provider = kwargs.get("credential_provider").is_some();
     let settings: RedisSettings = serde_json::from_value(kwargs).unwrap();
     let environment: HashMap<&str, &str> = environment.iter().copied().collect();
     let lookup = |name: &str| environment.get(name).map(|value| (*value).to_owned());
     let configured = settings.coordination().unwrap();
+    let configured = match kwargs_name_a_provider {
+        true => configured.with_credential_provider(ProviderHandle::new(1)),
+        false => configured,
+    };
     configured
         .resolve(
             &SecretSnapshot::read(configured.secret_names(), &lookup),
             &lookup,
         )
         .unwrap()
-        .redis
 }
 
 fn port(url: &str) -> u16 {

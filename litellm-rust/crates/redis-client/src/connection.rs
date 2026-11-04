@@ -17,7 +17,7 @@ use redis::{
 };
 
 use crate::{
-    ClusterEndpoint, ConnectError, Credentials, Endpoint, SentinelEndpoint, Timeouts,
+    Cluster, ConnectError, Credentials, Sentinel, Target, Timeouts,
     config::{self, addr},
     error::Deployment,
 };
@@ -39,16 +39,16 @@ pub(crate) enum Connection {
 
 impl Connection {
     pub(crate) fn new(
-        endpoint: &Endpoint,
+        target: &Target,
         credentials: &Credentials,
         timeouts: Timeouts,
     ) -> Result<Self, ConnectError> {
-        match endpoint {
-            Endpoint::Url { .. } | Endpoint::Host(_) => {
-                Self::standalone(config::connection_info(endpoint, credentials)?, timeouts)
+        match target {
+            Target::Url(_) | Target::Standalone(_) => {
+                Self::standalone(config::connection_info(target, credentials)?, timeouts)
             }
-            Endpoint::Cluster(cluster) => Self::cluster(cluster, credentials, timeouts),
-            Endpoint::Sentinel(sentinel) => Ok(Self::Sentinel(SentinelConnection::new(
+            Target::Cluster(cluster) => Self::cluster(cluster, credentials, timeouts),
+            Target::Sentinel(sentinel) => Ok(Self::Sentinel(SentinelConnection::new(
                 sentinel,
                 credentials,
                 timeouts,
@@ -74,7 +74,7 @@ impl Connection {
     }
 
     fn cluster(
-        endpoint: &ClusterEndpoint,
+        endpoint: &Cluster,
         credentials: &Credentials,
         timeouts: Timeouts,
     ) -> Result<Self, ConnectError> {
@@ -155,7 +155,7 @@ struct SentinelState {
     discovery: tokio::sync::Mutex<SentinelClient>,
     current: Mutex<Option<(u64, MultiplexedConnection)>>,
     generations: AtomicU64,
-    endpoint: SentinelEndpoint,
+    endpoint: Sentinel,
     credentials: Credentials,
     config: AsyncConnectionConfig,
     connect_timeout: Duration,
@@ -163,12 +163,12 @@ struct SentinelState {
 
 impl SentinelConnection {
     fn new(
-        endpoint: &SentinelEndpoint,
+        endpoint: &Sentinel,
         credentials: &Credentials,
         timeouts: Timeouts,
     ) -> Result<Self, ConnectError> {
         let sentinels = endpoint
-            .sentinels
+            .monitors
             .iter()
             .map(|node| addr(&node.host, node.port, endpoint.tls.as_ref()));
         let builder = SentinelClientBuilder::new(
@@ -176,12 +176,17 @@ impl SentinelConnection {
             &endpoint.service_name,
             SentinelServerType::Master,
         )?;
-        let builder = match (&endpoint.sentinel_password, &credentials.username) {
-            (Some(password), Some(username)) => builder
-                .set_client_to_sentinel_username(username.expose())
-                .set_client_to_sentinel_password(password.expose()),
-            (Some(password), _) => builder.set_client_to_sentinel_password(password.expose()),
-            (None, _) => builder,
+        let (username, password) = match &endpoint.monitor_auth {
+            Some(auth) => (auth.username.as_ref(), auth.password.as_ref()),
+            None => (None, None),
+        };
+        let builder = match username {
+            Some(username) => builder.set_client_to_sentinel_username(username.expose()),
+            None => builder,
+        };
+        let builder = match password {
+            Some(password) => builder.set_client_to_sentinel_password(password.expose()),
+            None => builder,
         };
         let builder = match &endpoint.tls {
             Some(tls) => builder
@@ -248,7 +253,7 @@ impl SentinelConnection {
                 )));
             }
         };
-        let endpoint = Endpoint::Host(crate::HostEndpoint {
+        let endpoint = Target::Standalone(crate::Standalone {
             host: host.to_owned(),
             port,
             tls: self.0.endpoint.tls.clone(),
@@ -342,7 +347,7 @@ impl ConnectionLike for SentinelConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ClusterNode;
+    use crate::Node;
     use litellm_redis_testing::{RedisSentinel, SERVICE_NAME};
 
     #[rstest::rstest]
@@ -350,13 +355,13 @@ mod tests {
     async fn a_late_failure_does_not_discard_the_reconnected_sentinel_master() {
         let server = RedisSentinel::start().await.unwrap();
         let (host, port) = server.sentinel();
-        let endpoint = SentinelEndpoint {
-            sentinels: vec![ClusterNode {
+        let endpoint = Sentinel {
+            monitors: vec![Node {
                 host: host.to_owned(),
                 port,
             }],
             service_name: SERVICE_NAME.to_owned(),
-            sentinel_password: None,
+            monitor_auth: None,
             tls: None,
             db: 0,
         };
