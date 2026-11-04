@@ -20,7 +20,11 @@ from litellm.constants import (
 )
 from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.common_utils.anthropic_error_payload import proxy_error_type, route_error_content
-from litellm.proxy.middleware.request_size_limit_middleware import MaxRequestSizeGetter, send_request_too_large
+from litellm.proxy.middleware.request_size_limit_middleware import (
+    MaxRequestSizeGetter,
+    effective_max_request_size_mb,
+    send_request_too_large,
+)
 
 RFC_9659_ZSTD_WINDOW_LOG_MAX: Final = 23
 GZIP_MAGIC: Final = b"\x1f\x8b"
@@ -337,6 +341,7 @@ class RequestBodyDecompressionMiddleware:
         max_decompression_ratio: int = MAX_REQUEST_BODY_DECOMPRESSION_RATIO,
         max_decoded_bodies_in_flight_mb: float = MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB,
         codecs: Mapping[str, Codec] = AVAILABLE_CODECS,
+        route_max_request_size_mb: Mapping[tuple[str, str], float] | None = None,
     ) -> None:
         self.app = app
         self.get_max_request_size_mb: Final = get_max_request_size_mb
@@ -344,6 +349,7 @@ class RequestBodyDecompressionMiddleware:
         self.max_decompression_ratio: Final = max_decompression_ratio
         self.budget: Final = _DecodedBodyBudget(int(max_decoded_bodies_in_flight_mb * 1024 * 1024))
         self.codecs: Final = codecs
+        self.route_max_request_size_mb: Final = MappingProxyType(dict(route_max_request_size_mb or {}))
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         coding: Final = _coding_for(scope)
@@ -378,7 +384,10 @@ class RequestBodyDecompressionMiddleware:
     async def _decode_then_call(
         self, scope: Scope, receive: Receive, send: Send, codec: Codec, prefix: _Prefix
     ) -> None:
-        max_mb: Final = _effective_max_mb(self.max_decompressed_body_size_mb, self.get_max_request_size_mb())
+        request_max_mb: Final = effective_max_request_size_mb(
+            scope, self.get_max_request_size_mb(), self.route_max_request_size_mb
+        )
+        max_mb: Final = _effective_max_mb(self.max_decompressed_body_size_mb, request_max_mb)
         limits: Final = _Limits(max_mb=max_mb, max_ratio=self.max_decompression_ratio)
         match await _receive_body(scope, receive, prefix, limits.max_bytes):
             case _Body(data=data):

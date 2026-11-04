@@ -12,9 +12,9 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import CopyButton from "@/components/shared/CopyButton";
+import { UserReference } from "@/components/shared/UserReference";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -190,7 +190,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
               {accessGroup.created_by && (
                 <>
                   <span>{t("accessGroups.detail.by")}</span>
-                  <DefaultProxyAdminTag userId={accessGroup.created_by} />
+                  <UserReference userId={accessGroup.created_by} />
                 </>
               )}
             </dd>
@@ -200,7 +200,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
               {accessGroup.updated_by && (
                 <>
                   <span>{t("accessGroups.detail.by")}</span>
-                  <DefaultProxyAdminTag userId={accessGroup.updated_by} />
+                  <UserReference userId={accessGroup.updated_by} />
                 </>
               )}
             </dd>

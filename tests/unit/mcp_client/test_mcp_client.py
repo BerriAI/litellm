@@ -3,6 +3,7 @@ import base64
 import importlib
 import json
 import os
+import queue
 import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -74,6 +75,7 @@ from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import StaticHeade
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from tests._support.clock_loops import AutojumpClockLoop, ManualClockLoop
+from tests._support.mcp_count_tool_upstream import count_tool_upstream, methods_received
 
 _JSONRPC_MESSAGE_ADAPTER: Final = TypeAdapter(JSONRPCMessage)
 
@@ -5250,3 +5252,55 @@ async def test_notification_callback_keeps_stream_errors_separate_from_protocol_
             await _receive_session_message(failure, stream_error=stream_error, on_notification=receiver)
     assert stream_error.result() is first
     receiver.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_skipping_client_never_asks_the_upstream_for_its_tools() -> None:
+    methods_seen: Final[queue.SimpleQueue[str]] = queue.SimpleQueue()
+    client: Final = _MockTransportClient(
+        count_tool_upstream({"n": 1}, methods_seen),
+        server_url="https://upstream.example/mcp",
+        transport_type=MCPTransport.http,
+        skip_tool_output_validation=True,
+    )
+
+    result: Final = await client.call_tool(CallToolRequestParams(name="count", arguments={}))
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is False
+    assert "tools/list" not in methods_received(methods_seen)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skip_validation", "rejected"), [(False, True), (True, False)], ids=["validating", "skipping"]
+)
+async def test_invalid_structured_output_is_rejected_unless_validation_is_skipped(
+    skip_validation: bool, rejected: bool
+) -> None:
+    client: Final = _MockTransportClient(
+        count_tool_upstream({"n": "not-an-integer"}, queue.SimpleQueue()),
+        server_url="https://upstream.example/mcp",
+        transport_type=MCPTransport.http,
+        skip_tool_output_validation=skip_validation,
+    )
+
+    result: Final = await client.call_tool(CallToolRequestParams(name="count", arguments={}))
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is rejected
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_validation_passes_the_upstreams_result_through_unchanged() -> None:
+    client: Final = _MockTransportClient(
+        count_tool_upstream({"n": "not-an-integer"}, queue.SimpleQueue()),
+        server_url="https://upstream.example/mcp",
+        transport_type=MCPTransport.http,
+        skip_tool_output_validation=True,
+    )
+
+    result: Final = await client.call_tool(CallToolRequestParams(name="count", arguments={}))
+
+    assert isinstance(result, CallToolResult)
+    assert result.structured_content == {"n": "not-an-integer"}

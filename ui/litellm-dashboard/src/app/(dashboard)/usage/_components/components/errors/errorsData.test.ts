@@ -225,6 +225,7 @@ describe("statusCodeLabel", () => {
     [401, "Unauthorized"],
     [429, "Rate Limited"],
     [503, "Service Unavailable"],
+    [529, "Overloaded"],
     [418, "Client Error"],
     [599, "Server Error"],
   ] as const)("labels status %s", (code, label) => {

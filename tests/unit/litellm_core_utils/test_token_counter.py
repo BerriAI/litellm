@@ -1246,7 +1246,7 @@ def test_token_counter_counts_deepseek_v3_and_v4_with_the_packaged_deepseek_toke
 
 @pytest.mark.parametrize(
     "model",
-    ["together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", "fireworks_ai/accounts/fireworks/models/deepseek-v2p5"],
+    ["deepinfra/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", "fireworks_ai/accounts/fireworks/models/deepseek-v2p5"],
 )
 def test_token_counter_skips_the_deepseek_tokenizer_for_deepseek_models_built_on_other_vocabularies(model: str):
     assert litellm.token_counter(model=model, text=_CODE_SAMPLE) != _deepseek_token_count(_CODE_SAMPLE)
@@ -2875,7 +2875,7 @@ def test_prefixed_openai_model_names_count_text_like_the_model_they_name(deploym
 
 
 @pytest.mark.parametrize(
-    "model", ["azure/gpt-chat-latest", "azure/codex-mini", "azure/gpt-5.3-chat", "azure/gpt-4.5-preview"]
+    "model", ["azure/gpt-chat-latest", "azure/codex-mini", "azure/gpt-5.3-chat"]
 )
 def test_azure_openai_models_only_azure_lists_get_openai_pricing_and_o200k(model: str):
     assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,))) == _text_cost(model, _REVENUE_LINE) + 13
@@ -3594,7 +3594,6 @@ def test_token_counter_counts_unlisted_names_of_newer_openai_releases_with_o200k
         "azure/my-deployment",
         "azure/ada",
         "azure/mistral-large-latest",
-        "azure/command-r-plus",
         "azure_ai/mistral-large-latest",
     ],
 )

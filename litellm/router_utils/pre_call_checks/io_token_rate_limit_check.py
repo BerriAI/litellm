@@ -20,6 +20,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import token_counter
@@ -28,6 +29,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.internal_call_metadata import (
     IO_TOKEN_RESERVATION_KEYS,
     ITPM_CACHE_KEY,
@@ -40,6 +42,8 @@ from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.router import RouterCacheEnum, RouterErrors
 from litellm.utils import get_utc_datetime
+
+_MODEL_INFO_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -227,8 +231,20 @@ def _deployment_output_cap(request_kwargs: Mapping[str, object] | None, deployme
     )
 
 
-def _default_otpm_reservation(model_name: str, otpm_limit: int) -> int:
-    model_max: Final = _model_max_output_tokens(model_name) if model_name else None
+def _default_otpm_reservation(deployment: Mapping[str, object], model_name: str, otpm_limit: int) -> int:
+    model_info: Final[object] = deployment.get("model_info")
+    configured_model_max: Final = (
+        coerce_token_limit(_MODEL_INFO_ADAPTER.validate_python(model_info).get("max_output_tokens"))
+        if isinstance(model_info, Mapping)
+        else None
+    )
+    model_max: Final = (
+        max(0, configured_model_max)
+        if configured_model_max is not None
+        else _model_max_output_tokens(model_name)
+        if model_name
+        else None
+    )
     share_of_limit: Final = max(1, int(otpm_limit * NO_MAX_TOKENS_TPM_RESERVATION_FRACTION))
     return min(4096 if model_max is None else model_max, share_of_limit)
 
@@ -242,7 +258,7 @@ def _otpm_reservation(
     from_request: Final = _explicit_max_tokens(request_kwargs)
     if from_request is not None:
         return from_request
-    default: Final = _default_otpm_reservation(model_name, otpm_limit)
+    default: Final = _default_otpm_reservation(deployment, model_name, otpm_limit)
     from_deployment: Final = _deployment_output_cap(request_kwargs, deployment)
     return default if from_deployment is None else min(from_deployment, default)
 
