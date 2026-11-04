@@ -4428,7 +4428,11 @@ def register_model(
         _registrations: Final = _REGISTRATIONS.validate_python(loaded_model_cost)
         for _registered_key, _registered_value in _registrations.items():
             _runtime_registered_model_cost[_registered_key] = update_dictionary(
-                dict(without_price_variants_of(_runtime_registered_model_cost.get(_registered_key, {}), _registered_value)),
+                dict(
+                    without_price_variants_of(
+                        _runtime_registered_model_cost.get(_registered_key, {}), _registered_value
+                    )
+                ),
                 _registered_value,
             )
             _runtime_registration_order[_registered_key] = next(_REGISTRATION_TICKS)
