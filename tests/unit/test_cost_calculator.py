@@ -8318,7 +8318,7 @@ def test_cost_openai_prompt_caching():
     "model",
     [
         "cohere/rerank-english-v3.0",
-        "azure_ai/cohere-rerank-v3-english",
+        "azure_ai/cohere-rerank-v4.0-pro",
     ],
 )
 def test_completion_cost_azure_ai_rerank(model):
@@ -9371,7 +9371,7 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
 @pytest.mark.parametrize(
     "response_model, custom_llm_provider",
     [
-        ("azure_ai/Meta-Llama-3.1-70B-Instruct", "azure_ai"),
+        ("azure_ai/Llama-3.3-70B-Instruct", "azure_ai"),
         ("anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
     ],
 )
@@ -9431,7 +9431,7 @@ def test_select_model_name_for_cost_calc():
         "completion_response": ModelResponse(
             id="127f24aed4984b4c9a4c5e32ad3752f3",
             created=1734406048,
-            model="azure_ai/mistral-large",
+            model="azure_ai/mistral-large-latest",
             object="chat.completion",
             system_fingerprint=None,
             choices=[
@@ -9460,7 +9460,7 @@ def test_select_model_name_for_cost_calc():
     }
 
     return_model = select_model_name_for_cost_calc(**args)
-    assert return_model == "azure_ai/mistral-large"
+    assert return_model == "azure_ai/mistral-large-latest"
 
 
 def test_cost_calculator_with_base_model():

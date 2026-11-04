@@ -419,7 +419,7 @@ class _LoginDeployment:
 _LOGIN_DEPLOYMENTS: Final = (
     _LoginDeployment("github_copilot", f"github_copilot/{_CODEX}", None),
     _LoginDeployment("chatgpt", f"chatgpt/{_CODEX}", None),
-    _LoginDeployment("azure_ai-foundry-host", "azure_ai/deepseek-v3", "synthetic-azure-key"),
+    _LoginDeployment("azure_ai-foundry-host", "azure_ai/deepseek-v3.2", "synthetic-azure-key"),
 )
 
 

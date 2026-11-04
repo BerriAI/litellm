@@ -66,10 +66,6 @@ mod _native {
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
-            "NativeCacheHandle",
-            py.get_type::<crate::cache::NativeCacheHandle>(),
-        )?;
-        dict.set_item(
             "_SecretManagerRuntime",
             py.get_type::<crate::secrets::runtime::NativeSecretManager>(),
         )
@@ -92,7 +88,6 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let mut expected = vec![
-                "NativeCacheHandle",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",

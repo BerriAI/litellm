@@ -4,11 +4,13 @@ from fastapi import Depends
 
 from litellm.models.deployment_warning import DeploymentWarningIgnoreStore
 from litellm.models.gateway_activity import GatewayActivityStore
+from litellm.models.plugin_upload import PluginUploadStore
 from litellm.models.user_banner import UserBannerStore
 from litellm.models.verification_token import KeyRevocationStore
 from litellm.proxy.deps.database import DatabaseDep
 from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
 from litellm.repositories.gateway_activity_repository import GatewayActivityRepository
+from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
@@ -45,3 +47,10 @@ async def get_verification_token_repository(database: DatabaseDep) -> KeyRevocat
 VerificationTokenRepositoryDep: TypeAlias = Annotated[
     KeyRevocationStore | None, Depends(get_verification_token_repository)
 ]
+
+
+async def get_plugin_upload_repository(database: DatabaseDep) -> PluginUploadStore | None:
+    return None if database is None else PluginUploadRepository(database.prisma)
+
+
+PluginUploadRepositoryDep: TypeAlias = Annotated[PluginUploadStore | None, Depends(get_plugin_upload_repository)]

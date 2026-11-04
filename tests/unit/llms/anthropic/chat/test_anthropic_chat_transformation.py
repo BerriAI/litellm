@@ -2631,6 +2631,46 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
         assert config_claude37["max_tokens"] == 64000
 
 
+def test_transform_request_uses_deployment_max_output_tokens_before_catalog() -> None:
+    model: Final = "claude-sonnet-4-6"
+    catalog_max_output_tokens: Final = litellm.get_model_info(model)["max_output_tokens"]
+    config: Final = AnthropicConfig()
+
+    configured: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={"model_info": {"max_output_tokens": 987}},
+        headers={},
+    )
+    catalog_default: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    non_mapping_model_info: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={"model_info": "invalid"},
+        headers={},
+    )
+    requested: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 654},
+        litellm_params={"model_info": {"max_output_tokens": 987}},
+        headers={},
+    )
+
+    assert configured["max_tokens"] == 987
+    assert catalog_default["max_tokens"] == catalog_max_output_tokens
+    assert non_mapping_model_info["max_tokens"] == catalog_max_output_tokens
+    assert requested["max_tokens"] == 654
+
+
 def test_get_config_without_model_uses_fallback():
     """
     Test that get_config without model parameter uses 128000 fallback.
@@ -4477,7 +4517,9 @@ def test_transform_request_carries_prompt_cache_breakpoint_to_cache_control():
     ],
 )
 def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(marker, expected_block):
-    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": marker}]}]
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": marker}]}
+    ]
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
         _anthropic_body(copy.deepcopy(messages))
@@ -4488,7 +4530,12 @@ def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(mar
 
 def test_transform_request_names_the_marker_ttl_rule_for_a_ttl_only_claude_takes():
     messages: Final = [
-        {"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}]}
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}
+            ],
+        }
     ]
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="optional ttl of '30m' or '12h'"):
@@ -10249,7 +10296,9 @@ def test_chat_response_without_input_transformations_adds_no_key() -> None:
 def test_json_mode_chat_response_keeps_input_transformations() -> None:
     completion_response: Final = {
         **_input_transformations_response(),
-        "content": [{"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": 42}}],
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": 42}}
+        ],
         "stop_reason": "tool_use",
     }
     result: Final = AnthropicConfig().transform_response(
@@ -10689,7 +10738,9 @@ def test_chat_transform_request_never_blames_a_numeric_assistant_tool_call_id_fo
                 {
                     "role": "assistant",
                     "content": None,
-                    "tool_calls": [{"id": 5, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+                    "tool_calls": [
+                        {"id": 5, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                    ],
                 },
                 {"role": "tool", "tool_call_id": "5", "content": "rain"},
             ],
@@ -10726,9 +10777,15 @@ def test_chat_transform_request_names_no_field_for_a_failure_outside_roles_and_t
 
 def _five_cache_hint_conversation() -> list[dict[str, object]]:
     return [
-        {"role": "system", "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}],
+        },
         {"role": "user", "content": [{"type": "text", "text": "turn 1", "cache_control": {"type": "ephemeral"}}]},
-        {"role": "assistant", "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}],
+        },
         {"role": "user", "content": [{"type": "text", "text": "turn 2", "cache_control": {"type": "ephemeral"}}]},
         {"role": "assistant", "content": "answer 2"},
         {"role": "user", "content": [{"type": "text", "text": "turn 3", "cache_control": {"type": "ephemeral"}}]},
