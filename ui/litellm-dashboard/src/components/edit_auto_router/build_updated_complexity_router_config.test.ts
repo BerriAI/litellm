@@ -47,6 +47,29 @@ const hydratedState: KeywordMatchingState = {
   matchThreshold: 0.72,
 };
 
+describe("output token policy edits", () => {
+  it.each([undefined, true, false, "clamp"] as const)("preserves and edits stored mode %s", (mode) => {
+    const stored = {
+      ...STORED,
+      ...(mode !== undefined && { max_tokens_from_tier_model: mode }),
+      tier_model_configs: { SIMPLE: [{ model_name: "gpt-4o-mini", litellm_params: { max_tokens: 700 } }] },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(hydrated.max_tokens_from_tier_model).toBe(mode);
+    const unchanged = buildUpdatedComplexityRouterConfig(stored, { ...hydrated, return_raw_model_name: true });
+    expect(unchanged.max_tokens_from_tier_model).toBe(mode);
+    expect("max_tokens_from_tier_model" in unchanged).toBe(mode !== undefined);
+    for (const nextMode of [true, false, "clamp"] as const) {
+      const saved = buildUpdatedComplexityRouterConfig(stored, {
+        ...hydrated,
+        max_tokens_from_tier_model: nextMode,
+      });
+      expect(saved.max_tokens_from_tier_model).toBe(nextMode === true && mode !== true ? undefined : nextMode);
+      expect(saved.tier_model_configs).toEqual(stored.tier_model_configs);
+    }
+  });
+});
+
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
   it.each([undefined, false, true])("preserves cache settings through edit and save: %s", (enabled) => {
     const stored = {

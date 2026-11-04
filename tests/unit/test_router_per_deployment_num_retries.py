@@ -6,12 +6,79 @@ GitHub Issue: #18968 - Per-deployment max_retries/num_retries in litellm_params 
 import httpx
 import pytest
 import pytest_asyncio
-from unittest.mock import patch
+from queue import SimpleQueue
+from typing import Final, Literal
+from unittest.mock import AsyncMock, patch
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import Router
 from litellm.types.router import RetryPolicy
 from litellm.integrations.custom_logger import CustomLogger
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize("source", ("deployment", "default", "request"))
+@pytest.mark.parametrize(("sdk_retries", "router_retries"), ((0, 0), (0, 1), (5, 1)))
+async def test_routed_images_do_not_multiply_sdk_and_router_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    source: Literal["deployment", "default", "request"],
+    sdk_retries: int,
+    router_retries: int,
+) -> None:
+    requests: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put(request)
+        assert request.url.path == "/v1/images/generations"
+        body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
+        assert body == {"model": "gpt-image-1-mini", "prompt": "a red circle"}
+        return httpx.Response(
+            503,
+            headers={"retry-after": "0"},
+            json={"error": {"message": "scripted unavailable", "type": "server_error"}},
+        )
+
+    transport: Final = httpx.MockTransport(respond)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with httpx.Client(transport=transport) as sync_session:
+        async with httpx.AsyncClient(transport=transport) as async_session:
+            monkeypatch.setattr(litellm, "client_session", sync_session)
+            monkeypatch.setattr(litellm, "aclient_session", async_session)
+            monkeypatch.setattr(litellm, "callbacks", [])
+            monkeypatch.setattr(litellm, "success_callback", [])
+            monkeypatch.setattr(litellm, "failure_callback", [])
+            monkeypatch.setattr(litellm, "num_retries", None)
+            router: Final = Router(
+                model_list=[
+                    {
+                        "model_name": "image-retries",
+                        "litellm_params": {
+                            "model": "openai/gpt-image-1-mini",
+                            "api_key": "synthetic-image-key",
+                            "api_base": "https://router-image.test/v1",
+                            **({"max_retries": sdk_retries} if source == "deployment" else {}),
+                        },
+                    }
+                ],
+                default_litellm_params={"max_retries": sdk_retries} if source == "default" else {},
+                num_retries=router_retries,
+                disable_cooldowns=True,
+            )
+            call_params: Final = {"max_retries": sdk_retries} if source == "request" else {}
+            try:
+                with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+                    if is_async:
+                        with pytest.raises(litellm.ServiceUnavailableError):
+                            await router.aimage_generation(model="image-retries", prompt="a red circle", **call_params)
+                    else:
+                        with pytest.raises(litellm.ServiceUnavailableError):
+                            router.image_generation(model="image-retries", prompt="a red circle", **call_params)
+            finally:
+                litellm.in_memory_llm_clients_cache.flush_cache()
+    assert requests.qsize() == router_retries + 1
 
 
 class TestPerDeploymentNumRetries:

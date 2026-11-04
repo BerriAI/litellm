@@ -165,6 +165,44 @@ def test_explicit_v1_api_base_keeps_responses_api_version_selection(
 
 
 @pytest.mark.serial
+@pytest.mark.parametrize(
+    ("api_base", "api_version", "expected_url"),
+    [
+        (
+            "https://x.openai.azure.com",
+            "2025-04-01-preview",
+            "https://x.openai.azure.com/openai/v1/responses/compact",
+        ),
+        (
+            "https://x.openai.azure.com",
+            "preview",
+            "https://x.openai.azure.com/openai/v1/responses/compact?api-version=preview",
+        ),
+        (
+            "https://gw.example.com/foundry/openai/openai/v1?tenant=example",
+            "v1",
+            "https://gw.example.com/foundry/openai/openai/v1/responses/compact?tenant=example&api-version=v1",
+        ),
+    ],
+)
+def test_compact_reaches_the_v1_route_and_drops_only_a_dated_api_version(
+    api_base: str, api_version: str, expected_url: str
+) -> None:
+    config: Final = AzureOpenAIResponsesAPIConfig()
+    responses_url: Final = config.get_complete_url(api_base=api_base, litellm_params={"api_version": api_version})
+
+    url, _ = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={},
+        api_base=responses_url,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert url == expected_url
+
+
 def test_response_id_path_requests_encode_response_id():
     config = AzureOpenAIResponsesAPIConfig()
     api_base = (

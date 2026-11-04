@@ -34,11 +34,11 @@ pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error>
 /// Python's `GenericLiteLLMParams(**kwargs)`.
 pub fn litellm_params(fields: Map<String, Value>) -> Result<LitellmParams, Error> {
     serde_json::from_value(Value::Object(fields))
-        .map_err(|err| Error::InvalidRequest(ErrorDetail::invalid("litellm params", err)))
+        .map_err(|err| Error::invalid_request(ErrorDetail::invalid("litellm params", err)))
 }
 
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(ErrorDetail::invalid("Anthropic messages request", err))
+    Error::invalid_request(ErrorDetail::invalid("Anthropic messages request", err))
 }
 
 pub type MessagesCallResponse =

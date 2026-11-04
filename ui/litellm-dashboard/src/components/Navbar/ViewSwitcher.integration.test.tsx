@@ -3,26 +3,31 @@ import userEvent from "@testing-library/user-event";
 
 import { renderWithProviders, screen, testQueryClient, within } from "@/../tests/test-utils";
 import { PluginModeProvider, type Plugin } from "@/contexts/PluginModeContext";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { setServerRootPath } from "@/lib/serverRootPath";
 
 import ViewSwitcher from "./ViewSwitcher";
 
-const { state, getUiSettingsMock } = vi.hoisted(() => ({
+const { state, getUiSettingsMock, getUiConfigMock } = vi.hoisted(() => ({
   state: { pathname: "/ui/", plugins: [] as Plugin[] },
   getUiSettingsMock: vi.fn(),
+  getUiConfigMock: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ usePathname: () => state.pathname }));
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "",
   getUiSettings: getUiSettingsMock,
+  getUiConfig: getUiConfigMock,
 }));
 
 function renderSwitcher() {
   return renderWithProviders(
-    <PluginModeProvider accessToken="test-session">
-      <ViewSwitcher />
-    </PluginModeProvider>,
+    <TerminologyProvider>
+      <PluginModeProvider accessToken="test-session">
+        <ViewSwitcher />
+      </PluginModeProvider>
+    </TerminologyProvider>,
   );
 }
 
@@ -36,6 +41,7 @@ describe("ViewSwitcher", () => {
     setServerRootPath("/");
     localStorage.clear();
     getUiSettingsMock.mockResolvedValue({ values: { enable_chat_ui: false } });
+    getUiConfigMock.mockResolvedValue({ use_si_terminology: false });
     Object.defineProperty(window, "location", {
       configurable: true,
       value: { href: "http://localhost:3000/ui/", origin: "http://localhost:3000", assign: assignSpy },
@@ -70,6 +76,16 @@ describe("ViewSwitcher", () => {
     expect(chat).toHaveAttribute("aria-disabled", "true");
     expect(within(chat).queryByRole("img")).not.toBeInTheDocument();
     expect(assignSpy).not.toHaveBeenCalled();
+  });
+
+  it("should name the gateway SI Gateway when the proxy asks for SI terminology", async () => {
+    getUiConfigMock.mockResolvedValue({ use_si_terminology: true });
+    const user = userEvent.setup();
+    renderSwitcher();
+
+    await user.click(await screen.findByRole("button", { name: "Switch workspace, current: SI Gateway" }));
+    expect(await screen.findByRole("menuitem", { name: "SI Gateway" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "AI Gateway" })).not.toBeInTheDocument();
   });
 
   it("should show the active plugin and switch plugin modes within the gateway", async () => {
@@ -146,7 +162,7 @@ describe("ViewSwitcher", () => {
   );
 
   it.each(["/ui/moyai", "/ui/moyai/sessions/one"])(
-    "should show Moyai's icon at %s and let users switch to Chat",
+    "should identify Moyai at %s and let users switch to Chat",
     async (pathname) => {
       state.pathname = pathname;
       getUiSettingsMock.mockResolvedValue({ values: { enable_chat_ui: true } });
@@ -154,7 +170,7 @@ describe("ViewSwitcher", () => {
       renderSwitcher();
 
       const trigger = screen.getByRole("button", { name: "Switch workspace, current: Moyai" });
-      expect(within(trigger).getByAltText("")).toHaveAttribute("src", expect.stringContaining("moyai-head.svg"));
+      expect(trigger).toHaveTextContent("Moyai");
       await user.click(trigger);
       await user.click(await screen.findByRole("menuitem", { name: "Chat Chat UI for using LLMs, MCPs, Agents" }));
       expect(assignSpy).toHaveBeenCalledWith("/ui/chat");

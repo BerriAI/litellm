@@ -2,6 +2,7 @@
 
 import { Search, X } from "lucide-react";
 import { z } from "zod";
+import { Kbd } from "@/components/ui/kbd";
 import { storageKey } from "@/lib/storage";
 import type { PaletteScope } from "./utils";
 import { useCommandPalette } from "./CommandPaletteProvider";
@@ -26,9 +27,7 @@ export function CommandPaletteHint({ scope, onDismiss }: CommandPaletteHintProps
       <button type="button" className="flex items-center gap-1.5 hover:text-foreground" onClick={() => setOpen(true)}>
         <Search className="size-3.5" aria-hidden="true" />
         <span>Press</span>
-        <kbd className="rounded-sm border border-border border-b-2 bg-muted px-[3px] font-mono text-xs text-muted-foreground">
-          {shortcut}
-        </kbd>
+        <Kbd>{shortcut}</Kbd>
         <span>{scope === "keys" ? "to search keys" : "to search or jump to a page"}</span>
       </button>
       <button

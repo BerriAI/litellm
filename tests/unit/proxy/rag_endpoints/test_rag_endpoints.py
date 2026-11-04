@@ -1671,6 +1671,62 @@ def test_rag_query_rejects_caller_embedding_selection_params(client_internal_use
     assert blocked_key in str(response.json())
 
 
+@pytest.mark.parametrize(
+    ("provider", "expected_status", "expected_searches"),
+    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
+)
+def test_rag_query_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
+    client_internal_user, provider, expected_status, expected_searches
+):
+    """
+    Regression: retrieval_config must not pick the index an OpenSearch store searches,
+    while other providers keep ignoring the key as they did before OpenSearch support.
+    """
+    import litellm
+    from litellm import Router
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    store = {
+        "vector_store_id": "kb",
+        "custom_llm_provider": provider,
+        "litellm_params": {"vector_store_id": "kb", "custom_llm_provider": provider},
+    }
+    registry = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.return_value = store
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "hi"},
+            }
+        ]
+    )
+
+    with (
+        patch("litellm.vector_stores.asearch", new=fake_search),  # test-quality-ok: the search boundary under test
+        patch.object(litellm, "vector_store_registry", registry),  # test-quality-ok: seeds the store under test
+        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: mock-response router for completion
+        patch(  # test-quality-ok: store access is not under test, so the request reaches the search boundary
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {"vector_store_id": "kb", "opensearch_index_name": "another-teams-index"},
+            },
+        )
+
+    assert response.status_code == expected_status, response.json()
+    assert fake_search.await_count == expected_searches
+
+
 EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 INGEST_REQUEST = '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
 

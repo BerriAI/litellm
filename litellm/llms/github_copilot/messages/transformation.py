@@ -3,7 +3,7 @@ from typing import Final, cast  # noqa: TID251  # narrows untyped request dicts 
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.url_utils import ensure_api_route
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 

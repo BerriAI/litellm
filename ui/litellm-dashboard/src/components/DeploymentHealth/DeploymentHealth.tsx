@@ -28,6 +28,7 @@ export const DeploymentHealthIcon = ({ handle }: { handle: DeploymentHealthHandl
   if (!canView) return null;
 
   const active = activeWarnings(data?.warnings ?? []);
+  if (active.length === 0) return null;
   const hasCritical = active.some((warning) => warning.severity === "critical");
 
   return (
@@ -46,6 +47,26 @@ export const DeploymentHealthIcon = ({ handle }: { handle: DeploymentHealthHandl
           {active.length}
         </Badge>
       ) : null}
+    </SheetTrigger>
+  );
+};
+
+export const DeploymentHealthLink = ({ handle }: { handle: DeploymentHealthHandle }) => {
+  const { canView } = useDeploymentHealthAccess();
+  if (!canView) return null;
+  return (
+    <SheetTrigger
+      handle={handle}
+      render={
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start gap-2 text-xs font-normal text-muted-foreground"
+        />
+      }
+    >
+      <Shield className="size-4" aria-hidden />
+      Deployment health
     </SheetTrigger>
   );
 };

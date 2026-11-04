@@ -32,7 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     chat_completion_tools_for,
     is_flat_responses_tool,
 )
-from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 KIMI_K3_REPO: Final = "moonshotai/Kimi-K3"
@@ -455,9 +455,7 @@ def _converse_request(
     if not all(_text_only(message) for message in messages):
         return None
     try:
-        chat_tools: Final = tuple(
-            chat_tool for tool in tools or () for chat_tool in _as_converse_input(tool)
-        )  # comprehension-ok: flattens each tool's translation
+        chat_tools: Final = tuple(chain.from_iterable(_as_converse_input(tool) for tool in tools or ()))
         return _ConverseRequest.model_validate(
             litellm.AmazonConverseConfig().transform_request(
                 model=model,
