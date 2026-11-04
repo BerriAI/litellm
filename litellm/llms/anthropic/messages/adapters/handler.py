@@ -735,30 +735,47 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
     @staticmethod
     def _uses_responses_bridge(completion_kwargs: _CompletionKwargs) -> bool:
-        from litellm.responses.bridge_check import responses_api_bridge_check, str_keyed_mapping
+        from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+        from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
+        from litellm.responses.bridge_check import (
+            bridge_reasoning_effort,
+            responses_api_bridge_check,
+            str_keyed_mapping,
+        )
 
         model: Final = completion_kwargs.get("model")
         if not isinstance(model, str):
             return False
-        provider: Final = completion_kwargs.get("custom_llm_provider")
-        api_base: Final = completion_kwargs.get("api_base")
-        try:
-            local_model, resolved_provider, _, resolved_api_base = litellm.utils.get_llm_provider(
-                model=model,
-                custom_llm_provider=provider if isinstance(provider, str) else None,
-                api_base=api_base if isinstance(api_base, str) else None,
-            )
-        except (ValueError, litellm.BadRequestError):
-            return False
+        provider: Final = (
+            provider_arg if isinstance(provider_arg := completion_kwargs.get("custom_llm_provider"), str) else None
+        )
+        api_base: Final = base_arg if isinstance(base_arg := completion_kwargs.get("api_base"), str) else None
+        # Resolving chatgpt/ or github_copilot/ runs their OAuth device flow; a routing
+        # question only needs the declared provider.
+        declared: Final = declared_authenticating_provider(model, provider)
+        if declared is not None:
+            local_model, resolved_provider, resolved_api_base = model.removeprefix(f"{declared}/"), declared, api_base
+        else:
+            try:
+                local_model, resolved_provider, _, resolved_api_base = litellm.utils.get_llm_provider(
+                    model=model, custom_llm_provider=provider, api_base=api_base
+                )
+            except (ValueError, litellm.BadRequestError):
+                return False
         tools: Final = completion_kwargs.get("tools")
         web_search: Final = completion_kwargs.get("web_search_options")
+        # Same effort and summary inputs as the completion router, so nested extra_body
+        # values that route the request to the Responses API keep its encrypted history.
         effort: Final = completion_kwargs.get("reasoning_effort")
         model_info, _ = responses_api_bridge_check(
             model=local_model,
             custom_llm_provider=resolved_provider,
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
             web_search_options=cast(OpenAIWebSearchOptions, web_search) if isinstance(web_search, dict) else None,
-            reasoning_effort=effort if isinstance(effort, str) else str_keyed_mapping(effort),
+            reasoning_effort=bridge_reasoning_effort(
+                effort if isinstance(effort, str) else str_keyed_mapping(effort), completion_kwargs.get("extra_body")
+            ),
+            reasoning_summary=peek_reasoning_summary_aliases(completion_kwargs),
             api_base=resolved_api_base,
             deployment_model_info=str_keyed_mapping(completion_kwargs.get("model_info")),
         )

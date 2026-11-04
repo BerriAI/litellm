@@ -1979,6 +1979,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
         self._structured_output: Final = structured_output
         self._first_message_item_done: bool = False
+        self._streamed_reasoning_ids: set[str] = set()  # mutable-ok: per-stream accumulator state
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -2321,7 +2322,35 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         )
         if self._structured_output and _is_message_item_done(chunk):
             self._first_message_item_done = True
-        return self._with_served_service_tier(self._with_stream_scoped_id(translated))
+        return self._with_served_service_tier(
+            self._with_stream_scoped_id(self._with_reasoning_in_output_order(chunk, translated))
+        )
+
+    def _with_reasoning_in_output_order(
+        self, chunk: Mapping[str, object], translated: "ModelResponseStream"
+    ) -> "ModelResponseStream":
+        """Emit each reasoning item when it completes, ahead of the tool calls that follow it, and
+        drop it from the terminal chunk so stream builders still collect it exactly once. Clients
+        that need reasoning before its tool call (Anthropic thinking blocks) can then order them."""
+        if not translated.choices:
+            return translated
+        delta: Final = translated.choices[0].delta
+        if _responses_event_type(chunk) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
+            reasoning_item: Final = _reasoning_item_from_output_item(chunk.get("item"))
+            if reasoning_item is not None:
+                self._streamed_reasoning_ids.add(reasoning_item["id"])
+                setattr(delta, "reasoning_items", _as_chat_reasoning_items((reasoning_item,)))  # noqa: B010
+                # Keep the turn's content as the terminal chunk would leave it (null on the OpenAI route).
+                delta.content = None if self._replays_openai_history else ""
+            return translated
+        if not self._streamed_reasoning_ids:
+            return translated
+        terminal_items: Final = getattr(delta, "reasoning_items", None)
+        if not terminal_items:
+            return translated
+        remaining: Final = [item for item in terminal_items if item.get("id") not in self._streamed_reasoning_ids]
+        setattr(delta, "reasoning_items", remaining or None)  # noqa: B010  # Delta drops unset optional fields
+        return translated
 
     def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:
         """Under a structured response_format the first message item is the whole answer, so

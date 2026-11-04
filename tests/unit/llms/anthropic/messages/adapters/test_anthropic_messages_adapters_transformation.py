@@ -73,6 +73,7 @@ def test_responses_reasoning_round_trips_through_anthropic_tool_turn(
                 },
             }
         ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
     )
     result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
     assert result["content"][0] == (

@@ -1392,7 +1392,7 @@ class LiteLLMAnthropicMessagesAdapter:
             new_content.extend(dict(_COMPACTION_BLOCK.validate_python(block)) for block in compaction_blocks)
             reasoning_blocks: Final = tuple(
                 block
-                for item in (choice.message.reasoning_items or ())
+                for item in (getattr(choice.message, "reasoning_items", None) or ())
                 if (
                     block := LiteLLMAnthropicToResponsesAPIAdapter._thinking_block_from_reasoning_item(
                         item.get("summary", ()), item.get("encrypted_content")

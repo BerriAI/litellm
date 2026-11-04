@@ -469,7 +469,7 @@ class _CombinedChunkSplitter:
         choice: Final = chunk.choices[0]
         blocks: Final = tuple(
             block
-            for item in (choice.delta.reasoning_items or ())
+            for item in (getattr(choice.delta, "reasoning_items", None) or ())
             if (
                 block := LiteLLMAnthropicToResponsesAPIAdapter._thinking_block_from_reasoning_item(
                     (), item.get("encrypted_content")
