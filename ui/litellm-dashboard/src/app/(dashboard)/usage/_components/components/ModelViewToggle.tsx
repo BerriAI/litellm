@@ -1,8 +1,11 @@
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
+
 export type ModelViewType = "groups" | "individual";
 
-const MODEL_VIEW_OPTIONS: readonly { value: ModelViewType; label: string }[] = [
-  { value: "groups", label: "Public Model Name" },
-  { value: "individual", label: "Litellm Model Name" },
+const MODEL_VIEW_OPTIONS: readonly { value: ModelViewType; label: ParseKeys }[] = [
+  { value: "groups", label: "usage.modelViewToggle.publicModelName" },
+  { value: "individual", label: "usage.modelViewToggle.litellmModelName" },
 ];
 
 interface ModelViewToggleProps {
@@ -11,6 +14,7 @@ interface ModelViewToggleProps {
 }
 
 export default function ModelViewToggle({ value, onChange }: ModelViewToggleProps) {
+  const { t } = useTranslation();
   return (
     <div className="flex bg-muted rounded-lg p-1">
       {MODEL_VIEW_OPTIONS.map((option) => (
@@ -21,7 +25,7 @@ export default function ModelViewToggle({ value, onChange }: ModelViewToggleProp
           }`}
           onClick={() => onChange(option.value)}
         >
-          {option.label}
+          {t(option.label)}
         </button>
       ))}
     </div>
