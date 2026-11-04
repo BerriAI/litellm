@@ -2503,16 +2503,24 @@ class CustomStreamWrapper:
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
-            self.completion_stream = self.make_call(client=litellm.module_level_client)
-            self._stream_iter = self.completion_stream.__iter__()
+            try:
+                self.completion_stream = self.make_call(client=litellm.module_level_client)
+                self._stream_iter = self.completion_stream.__iter__()
+            except Exception as e:
+                self.close()
+                raise self._map_stream_exception(e) from e
 
         return self.completion_stream
 
     async def fetch_stream(self):
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
-            self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
-            self._stream_iter = self.completion_stream.__aiter__()
+            try:
+                self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
+                self._stream_iter = self.completion_stream.__aiter__()
+            except Exception as e:
+                await self.aclose()
+                raise self._map_stream_exception(e) from e
 
         return self.completion_stream
 
@@ -2833,12 +2841,15 @@ class CustomStreamWrapper:
             self._emitted_disqualifying_content = True
 
     def _map_stream_exception(self, original_exception: Exception) -> Exception:
-        return exception_type(
-            model=self.model,
-            custom_llm_provider=self.custom_llm_provider,
-            original_exception=original_exception,
-            extra_kwargs=with_deployment_api_base(self.logging_obj.model_call_details.get("litellm_params")),
-        )
+        try:
+            return exception_type(
+                model=self.model,
+                custom_llm_provider=self.custom_llm_provider,
+                original_exception=original_exception,
+                extra_kwargs=with_deployment_api_base(self.logging_obj.model_call_details.get("litellm_params")),
+            )
+        except Exception as e:
+            return e
 
     def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
         """

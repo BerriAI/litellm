@@ -9421,12 +9421,16 @@ class PythonCore(DeprecatedRouterMembers):
             and not no_fallback_group_explained
             and not nested_fallback_hop
         ):
-            original_exception.message += format_fallback_outcome_message(
+            outcome_msg: Final = format_fallback_outcome_message(
                 model_group,
                 attempted_fallback_group,
                 fallback_failure_exception_str,
                 skipped=fallback_walk.skipped,
             )
+            if isinstance(original_exception.message, str):
+                original_exception.message += outcome_msg
+            elif isinstance(original_exception.message, bytes):
+                original_exception.message += outcome_msg.encode("utf-8", errors="replace")
 
         raise original_exception
 

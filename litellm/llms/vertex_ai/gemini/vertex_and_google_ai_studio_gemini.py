@@ -3367,8 +3367,13 @@ def make_sync_call(
             timeout=timeout,
         )
     except httpx.HTTPStatusError as e:
+        exception_string: Final = str(e.response.read())
         known_cached_contents.forget_rejected(request_body.get("cachedContent"), e.response.status_code)
-        raise
+        raise VertexAIError(
+            status_code=e.response.status_code,
+            message=VertexGeminiConfig().translate_exception_str(exception_string),
+            headers=e.response.headers,
+        )
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
