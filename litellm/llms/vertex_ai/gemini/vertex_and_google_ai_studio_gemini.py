@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import lru_cache, partial
-from itertools import chain
+from itertools import chain, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, Union, cast, get_args
 
@@ -649,10 +649,9 @@ def _names_each_tool_declares(candidates: tuple[JsonValue, ...]) -> tuple[tuple[
         tuple(filter(None, map(declared_function_name, _as_declared(tool, declarable, top_level_names))))
         for tool in candidates
     )
-    return tuple(
-        tuple(name for name in names if name not in frozenset(chain.from_iterable(declared[:index])))
-        for index, names in enumerate(declared)
-    )
+    owned_names: Final = chain.from_iterable(zip(repeat(index), names) for index, names in enumerate(declared))
+    first_owner: Final = {name: index for index, name in reversed(tuple(owned_names))}
+    return tuple(tuple(name for name in names if first_owner[name] == index) for index, names in enumerate(declared))
 
 
 def _qualified_names_of(
@@ -676,7 +675,7 @@ def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
         None,
     )
     if named is not None:
-        return named or (name,)
+        return named
     qualified: Final = chain.from_iterable(
         _qualified_names_of(name, tool, declarable, declared) for tool, declared in declared_by_tool
     )
@@ -954,7 +953,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return supported_params
 
-    def map_tool_choice_values(self, model: str, tool_choice: str | dict, tools: JsonValue = None) -> ToolConfig | None:
+    def map_tool_choice_values(
+        self, model: str, tool_choice: str | dict, tools: JsonValue = None, drop_params: bool = False
+    ) -> ToolConfig | None:
         if tool_choice == "none":
             return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="NONE"))
         elif tool_choice == "required":
@@ -964,10 +965,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif isinstance(tool_choice, dict):
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             name: Final = tool_choice.get("function", {}).get("name", "")
-            return ToolConfig(
-                functionCallingConfig=FunctionCallingConfig(
-                    mode="ANY", allowed_function_names=list(_forced_function_names(name, tools))
+            forced: Final = _forced_function_names(name, tools)
+            if forced:
+                return ToolConfig(
+                    functionCallingConfig=FunctionCallingConfig(mode="ANY", allowed_function_names=list(forced))
                 )
+            if drops_unsupported_params(drop_params):
+                return None
+            raise litellm.utils.UnsupportedParamsError(
+                message=f"VertexAI can't force tool_choice '{name}', since none of that namespace's members can be sent to Gemini as a function. Name one of its functions instead, or set `litellm.drop_params = True` to drop tool_choice.",
+                status_code=400,
             )
         else:
             raise litellm.utils.UnsupportedParamsError(
@@ -1898,6 +1905,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     model=model,
                     tool_choice=value,
                     tools=[*_listed(non_default_params.get("tools")), *_listed(non_default_params.get("functions"))],
+                    drop_params=drop_params,
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value

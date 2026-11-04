@@ -2027,6 +2027,47 @@ def test_vertex_ai_tool_choice_forces_only_functions_gemini_is_sent(
     assert set(allowed_function_names) <= set(declared)
 
 
+@pytest.mark.parametrize(
+    ("forced_name", "tools"),
+    [
+        (
+            "weather",
+            [
+                {"type": "namespace", "name": "weather", "tools": [{"type": "function", "name": "lookup"}]},
+                {"type": "function", "function": {"name": "lookup"}},
+                {"type": "function", "function": {"name": "weather__lookup"}},
+            ],
+        ),
+        (
+            "ops__exec",
+            [
+                {"type": "namespace", "name": "ops", "tools": [{"type": "function", "name": "exec"}]},
+                {"type": "namespace", "name": "ops__exec", "tools": [{"type": "function", "name": "status"}]},
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "status"}},
+                {"type": "function", "function": {"name": "ops__exec__status"}},
+            ],
+        ),
+    ],
+    ids=["its_members_lose_to_functions", "another_namespace_generates_its_name"],
+)
+def test_vertex_ai_tool_choice_naming_a_namespace_gemini_gets_no_member_of(
+    forced_name: str, tools: list[dict[str, object]]
+) -> None:
+    params = {"tools": tools, "tool_choice": {"type": "function", "function": {"name": forced_name}}}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"tool_choice '{forced_name}'"):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params=params, optional_params={}, model="gemini-3.8-flash", drop_params=False
+        )
+    dropped = VertexGeminiConfig().map_openai_params(
+        non_default_params=params, optional_params={}, model="gemini-3.8-flash", drop_params=True
+    )
+
+    assert "tool_choice" not in dropped
+    assert dropped["tools"][0]["function_declarations"]
+
+
 def test_vertex_ai_map_tool_with_anyof():
     """
     Related issue: https://github.com/BerriAI/litellm/issues/11164
