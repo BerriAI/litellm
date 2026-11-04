@@ -14,6 +14,8 @@ from litellm._logging import verbose_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.llm_judge import (
+    attached_auth,
+    caller_team_for,
     default_router_provider,
     extract_text_from_content,
     judge_acompletion,
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.guardrails import Guardrail, LitellmParams
     from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.utils import StandardLoggingEvalInformation
 
 JudgeInputType = Literal["request", "response"]
@@ -237,6 +240,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         messages: Sequence[JudgeMessage],
         text_under_review: str,
         input_type: JudgeInputType = "response",
+        auth: "UserAPIKeyAuth | None" = None,
     ) -> dict[str, object]:
         judge_messages: Final[list[AllMessageValues]] = [
             {"role": "system", "content": JUDGE_SYSTEM_PROMPTS[input_type]},
@@ -245,13 +249,19 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 "content": _build_judge_prompt(self.criteria, messages, text_under_review, input_type),
             },
         ]
+        router: Final = self._router_provider()
+        team_id: Final = caller_team_for(router, self.judge_model, auth)
+        judge_metadata: Final[Mapping[str, str]] = MappingProxyType(
+            {**_JUDGE_CALL_METADATA, **({} if team_id is None else {"user_api_key_team_id": team_id})}
+        )
         response: Final = await judge_acompletion(
-            self._router_provider(),
+            router,
             self.judge_model,
             judge_messages,
+            team_id=team_id,
             response_format={"type": "json_object"},
             temperature=0,
-            metadata=dict(_JUDGE_CALL_METADATA),
+            metadata=dict(judge_metadata),
         )
         raw: Final = response.choices[0].message.content or "{}"
         return _parse_judge_verdict(raw)
@@ -278,9 +288,10 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             messages: Final[Sequence[JudgeMessage]] = (
                 inputs.get("structured_messages") or request_data.get("messages") or []
             )
+            auth: Final = attached_auth(request_data)
 
             try:
-                judge_result = await self._run_judge(messages, text_under_review, input_type)
+                judge_result = await self._run_judge(messages, text_under_review, input_type, auth)
             except Exception as judge_err:
                 verbose_logger.warning(
                     "llm_as_a_judge guardrail: judge call failed, failing open. Error: %s", judge_err
