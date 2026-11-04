@@ -3800,6 +3800,7 @@
     },
     "azure/ada": {
         "deprecation_date": "2028-02-09",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_token": 1.1e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 8191,
