@@ -1824,6 +1824,76 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert request_data["guardrail_choice_index"] == 7
 
     @pytest.mark.asyncio
+    async def test_a_one_choice_round_keeps_the_shape_it_always_had(self) -> None:
+        """One choice has nothing to keep apart, so a sampled round still sends only its text."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class RecordingGuardrail(CustomGuardrail):
+            seen: list[tuple[object, object]] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen.append((inputs.get("tool_calls"), request_data.get("response")))
+                return inputs
+
+        RecordingGuardrail.seen = []
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=0,
+            delta=Delta(content="looking", tool_calls=[
+                {"index": 0, "id": "call_0", "type": "function",
+                 "function": {"name": "weather", "arguments": '{"city": "Paris"}'}},
+            ]),
+        )])]
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=RecordingGuardrail(guardrail_name="one-choice"),
+            litellm_logging_obj=None,
+            request_data={"model": "gpt-4"},
+            stream_transform_sink=StreamTransformSink(),
+        )
+        assert RecordingGuardrail.seen == [(None, None)]
+
+    @pytest.mark.asyncio
+    async def test_a_parallel_round_still_inspects_each_choice(self) -> None:
+        """More than one choice is what buys the per-choice rounds, so those keep their context."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class RecordingGuardrail(CustomGuardrail):
+            seen: list[tuple[object, object]] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen.append((inputs.get("tool_calls"), request_data.get("guardrail_choice_index")))
+                return inputs
+
+        RecordingGuardrail.seen = []
+        chunks: Final = [ModelResponseStream(choices=[
+            StreamingChoices(
+                index=index,
+                delta=Delta(content="looking", tool_calls=[
+                    {"index": 0, "id": f"call_{index}", "type": "function",
+                     "function": {"name": "weather", "arguments": '{"city": "Paris"}'}},
+                ]),
+            )
+            for index in (0, 1)
+        ])]
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=RecordingGuardrail(guardrail_name="parallel"),
+            litellm_logging_obj=None,
+            request_data={"model": "gpt-4"},
+            stream_transform_sink=StreamTransformSink(),
+        )
+        assert [index for _, index in RecordingGuardrail.seen] == [0, 1]
+        assert all(calls for calls, _ in RecordingGuardrail.seen)
+
+    @pytest.mark.asyncio
     async def test_a_transform_round_leaves_the_callers_request_data_as_it_found_it(self) -> None:
         """The round owns these keys only while it runs; what it leaves behind is read by later hooks."""
         from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink

@@ -919,6 +919,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         user_api_key_dict: "UserAPIKeyAuth | None",
         request_data: dict[str, object] | None,
         sink: StreamTransformSink,
+        inspecting_one_choice: bool = False,
     ) -> None:
         """Run the guardrail over the raw accumulated text and report the
         guardrailed text plus requested holdback per choice on ``sink``.
@@ -956,8 +957,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self.merge_user_api_key_metadata_into_request(resolved_request_data, user_api_key_dict)
         try:
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
-            if self._stream_carries_tool_calls(responses_so_far):
-                stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+            stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+            inspects_tool_calls: Final = (
+                inspecting_one_choice or stream_ended or self._streamed_choice_count(responses_so_far) > 1
+            ) and self._stream_carries_tool_calls(responses_so_far)
+            if inspects_tool_calls:
                 tool_arguments_complete: Final = self._streamed_tool_arguments_are_complete(responses_so_far)
                 assembled: Final = (
                     None
@@ -1002,6 +1006,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                     user_api_key_dict=user_api_key_dict,
                                     request_data=resolved_request_data,
                                     sink=choice_sink,
+                                    inspecting_one_choice=True,
                                 )
                             except UndeliverableStreamRewrite as exc:
                                 if transform_undeliverable is None:
@@ -1116,6 +1121,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             for chunk in responses_so_far
             for choice in _stream_chunk_choices(chunk)
             for tool_call in _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
+        )
+
+    @staticmethod
+    def _streamed_choice_count(responses_so_far: Sequence[object]) -> int:
+        """How many distinct choices the stream has carried so far."""
+        return len(
+            frozenset(
+                stream_item_field(choice, "index") or 0
+                for choice in chain.from_iterable(_stream_chunk_choices(chunk) for chunk in responses_so_far)
+            )
         )
 
     @staticmethod
