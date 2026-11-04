@@ -2,9 +2,14 @@
 and the two antipattern boundaries: http.* is never promoted, and the full
 metadata blob is never promoted (only the bounded allowlist)."""
 
+import json
+
 import pytest
 
 pytest.importorskip("opentelemetry")
+
+from opentelemetry import baggage  # noqa: E402
+from opentelemetry.context import attach, detach  # noqa: E402
 
 from litellm.integrations.otel import (  # noqa: E402
     HTTP,
@@ -15,6 +20,12 @@ from litellm.integrations.otel import (  # noqa: E402
 )
 from litellm.integrations.otel.emitter import SpanEmitter  # noqa: E402
 from litellm.integrations.otel.model.baggage import BAGGAGE_PROMOTED_KEYS  # noqa: E402
+from litellm.integrations.otel.model.metadata import (  # noqa: E402
+    caller_user_id,
+    caller_user_id_in_call,
+    request_user_id,
+    usable_user_id,
+)
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
     LLMCallSpanData,
@@ -256,34 +267,19 @@ def test_baggage_processor_allowlist_can_be_widened():
     assert LiteLLM.TEAM_ALIAS not in span.attributes
 
 
-def test_user_id_not_promoted_by_default_and_promoted_for_mixpanel(monkeypatch):
+def test_the_mixpanel_preset_never_promotes_user_id_through_baggage(monkeypatch):
     monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token")
     from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
 
     payload = _payload()
     payload["end_user"] = "user_123"
     data = LLMCallSpanData.from_standard_logging_payload(payload)
-
-    default_bag = promoted_baggage(data.identity, data.request_model, BAGGAGE_PROMOTED_KEYS)
-    assert "user.id" not in default_bag
-
     mp_cfg = mixpanel_preset(config_overrides=OpenTelemetryV2Config(exporter="in_memory"))
-    engine, exporter = _engine_and_exporter(mp_cfg)
-    mp_bag = promoted_baggage(data.identity, data.request_model, tuple(mp_cfg.baggage_promoted_keys))
-    assert mp_bag["user.id"] == "user_123"
 
-    ctx = ctx_mod.set_request_baggage(mp_bag)
-    root = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions", ctx)
-    root_ctx = ctx_mod.context_from_span(root, ctx)
-    engine.emit(SpanRole.LLM_CALL, data, parent_context=root_ctx)
-    engine.emit(SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx)
-    engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), root_ctx)
-    root.end()
-
-    spans = exporter.get_finished_spans()
-    assert len(spans) == 4
-    for span in spans:
-        assert span.attributes.get("user.id") == "user_123"
+    assert "user.id" not in mp_cfg.baggage_promoted_keys
+    assert "user.id" not in promoted_baggage(
+        data.identity, data.request_model, (*mp_cfg.baggage_promoted_keys, "user.id")
+    )
 
 
 def test_user_id_precedence_and_key_owner_exclusion():
@@ -298,3 +294,88 @@ def test_user_id_precedence_and_key_owner_exclusion():
     key_owner_only_payload["metadata"]["user_api_key_user_id"] = "from-key-owner"
     key_owner_only_data = LLMCallSpanData.from_standard_logging_payload(key_owner_only_payload)
     assert key_owner_only_data.identity.user_id is None
+
+
+@pytest.mark.parametrize(
+    "unusable",
+    ["", "   ", True, False, None, ["list"], {"a": 1}, "x" * 1025],
+    ids=["empty", "whitespace", "true", "false", "null", "list", "mapping", "oversized"],
+)
+def test_an_unusable_named_id_gives_way_to_the_next_source(unusable):
+    payload = _payload()
+    payload["end_user"] = "from-end-user"
+    payload["metadata"]["requester_metadata"] = {"user.id": unusable}
+    assert LLMCallSpanData.from_standard_logging_payload(payload).identity.user_id == "from-end-user"
+    assert caller_user_id({"user.id": unusable, "user_id": "the-next-field"}) == "the-next-field"
+
+
+def test_a_control_character_is_not_part_of_an_id():
+    assert usable_user_id("a\nb=c") is None
+    assert usable_user_id("usuario né") == "usuario né"
+
+
+def test_the_id_in_baggage_is_read_from_the_current_context():
+    token = attach(baggage.set_baggage("user.id", "in-baggage"))
+    try:
+        assert ctx_mod.inbound_user_id() == "in-baggage"
+    finally:
+        detach(token)
+    assert ctx_mod.inbound_user_id() is None
+    unusable = attach(baggage.set_baggage("user.id", "a\nb"))
+    try:
+        assert ctx_mod.inbound_user_id() is None
+    finally:
+        detach(unusable)
+
+
+def test_a_numeric_id_and_surrounding_space_are_kept_as_the_callers_id():
+    assert caller_user_id({"user.id": 12345}) == "12345"
+    assert caller_user_id({"user.id": " padded "}) == "padded"
+
+
+def test_named_id_precedence_between_fields_and_sources():
+    assert caller_user_id({"trace_user_id": "t", "user_id": "u", "user.id": "dot"}) == "dot"
+    assert caller_user_id({"trace_user_id": "t", "user_id": "u"}) == "u"
+    assert caller_user_id({"trace_user_id": "t"}) == "t"
+    assert caller_user_id({"user": {"id": "nested"}}) == "nested"
+    assert caller_user_id({"user": "not-a-mapping"}) is None
+    assert caller_user_id({"user.id": "top", "requester_metadata": {"user.id": "requester"}}) == "requester"
+    assert caller_user_id({"user_id": "top", "requester_metadata": {"user.id": "requester"}}) == "requester"
+    assert caller_user_id({"user.id": "top", "requester_metadata": {"user_id": "requester"}}) == "top"
+    assert caller_user_id({"user_id": "metadata"}, {"user.id": "litellm-metadata"}) == "litellm-metadata"
+    assert caller_user_id("not-a-mapping", None, {"user_id": "found"}) == "found"
+
+
+def test_the_id_at_the_auth_boundary_reads_encoded_metadata_and_falls_back_to_the_end_user():
+    assert request_user_id(None, {"metadata": {"user.id": "plain"}}) == "plain"
+    assert request_user_id(None, {"metadata": json.dumps({"user.id": "encoded"})}) == "encoded"
+    assert request_user_id(None, {"litellm_metadata": {"user.id": "litellm"}}) == "litellm"
+    assert request_user_id("end-user", {"metadata": {"user.id": "named"}}) == "named"
+    assert request_user_id("end-user", {"metadata": "not json"}) == "end-user"
+    assert request_user_id("end-user", {}) == "end-user"
+    assert request_user_id(None, {"metadata": {"session": "s"}}) is None
+    assert request_user_id("   ", {}) is None
+    assert request_user_id("end-user", {}, "in-baggage") == "in-baggage"
+    assert request_user_id("end-user", {"metadata": {"user.id": "named"}}, "in-baggage") == "named"
+
+
+def test_the_call_event_reads_the_named_id_from_either_metadata_and_the_payload_uses_it():
+    def event_id(params):
+        return caller_user_id_in_call({"litellm_params": params})
+
+    assert event_id({"metadata": {"user.id": "from-metadata"}}) == "from-metadata"
+    assert event_id({"litellm_metadata": {"user.id": "from-litellm-metadata"}}) == "from-litellm-metadata"
+    assert event_id({"metadata": None}) is None
+    assert caller_user_id_in_call({"litellm_params": None}) is None
+
+    payload = _payload()
+    payload["end_user"] = "from-end-user"
+    assert LLMCallSpanData.from_standard_logging_payload(payload, named_user_id="named").identity.user_id == "named"
+
+
+def test_the_openai_user_param_is_the_last_resort_and_leaves_the_end_user_alone():
+    payload = _payload()
+    payload["model_parameters"] = {"user": "from-param"}
+    identity = LLMCallSpanData.from_standard_logging_payload(payload).identity
+    assert identity.user_id == "from-param"
+    assert not identity.end_user

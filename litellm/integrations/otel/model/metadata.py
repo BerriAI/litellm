@@ -39,6 +39,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
@@ -52,6 +53,7 @@ from litellm.constants import (
 from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation, resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.utils import InternalCallOrigin
 
 if TYPE_CHECKING:
@@ -71,14 +73,9 @@ IDENTITY_METADATA_FIELDS: Final = (
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
-_USER_ID_METADATA_KEYS: Final[tuple[str, ...]] = (
-    "requester_metadata.user.id",
-    "user.id",
-    "requester_metadata.user_id",
-    "user_id",
-    "requester_metadata.trace_user_id",
-    "trace_user_id",
-)
+_USER_ID_METADATA_FIELDS: Final[tuple[str, ...]] = ("user.id", "user_id", "trace_user_id")
+_MAX_USER_ID_LENGTH: Final = 1024
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def allowlisted_metadata(metadata: Mapping[str, str], metadata_keys: tuple[str, ...]) -> Mapping[str, str]:
@@ -108,20 +105,13 @@ class RequestIdentity:
     provider_model: str | None = None
     request_route: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
-
-    @property
-    def user_id(self) -> str | None:
-        return (
-            next((value for key in _USER_ID_METADATA_KEYS if (value := self.metadata.get(key))), None)
-            or self.end_user
-            or self.metadata.get("user_api_key_end_user_id")
-        )
+    user_id: str | None = None
 
     @classmethod
     def from_payload(
         cls,
         payload: StandardLoggingPayload,
-        request_metadata: Mapping[str, str] = MappingProxyType({}),
+        named_user_id: str | None = None,
     ) -> RequestIdentity:
         """Parse caller identity out of a closed request's payload metadata.
 
@@ -130,9 +120,9 @@ class RequestIdentity:
         model, not just the user-facing one.
         """
         raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
-        payload_view: Final = as_str_mapping(payload)
-        params: Final = as_str_mapping(payload_view.get("model_parameters")) if payload_view is not None else None
-        metadata: Final = MappingProxyType({**request_metadata, **dict(flatten_metadata(raw_meta))})
+        metadata: Final = MappingProxyType(dict(flatten_metadata(raw_meta)))
+        end_user: Final = as_str(payload.get("end_user")) or as_str(raw_meta.get("user_api_key_end_user_id"))
+        params: Final = _as_mapping(cast(Mapping[str, object], payload).get("model_parameters"))  # cast-ok: TypedDict
         return cls(
             call_id=as_str(payload.get("litellm_call_id")) or as_str(payload.get("id")),
             # StandardLoggingMetadata's canonical key is ``user_api_key_team_id``;
@@ -142,14 +132,16 @@ class RequestIdentity:
             team_alias=as_str(raw_meta.get("user_api_key_team_alias")) or as_str(raw_meta.get("team_alias")),
             team_metadata=_team_metadata_dict(raw_meta.get("user_api_key_team_metadata")),
             key_hash=as_str(raw_meta.get("user_api_key_hash")),
-            end_user=(
-                as_str(payload.get("end_user"))
-                or as_str(raw_meta.get("user_api_key_end_user_id"))
-                or (as_str(params.get("user")) if params is not None else None)
-            ),
+            end_user=end_user,
             provider_model=resolve_provider_model(payload),
             request_route=as_str(raw_meta.get("user_api_key_request_route")),
             metadata=metadata,
+            user_id=(
+                named_user_id
+                or caller_user_id(raw_meta)
+                or usable_user_id(end_user)
+                or usable_user_id(params.get("user"))
+            ),
         )
 
     @classmethod
@@ -217,7 +209,7 @@ class RequestContext:
     def from_standard_logging_payload(
         cls,
         payload: StandardLoggingPayload,
-        request_metadata: Mapping[str, str] = MappingProxyType({}),
+        named_user_id: str | None = None,
     ) -> RequestContext:
         raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
         hidden: Final = cast(Mapping[str, object], payload.get("hidden_params") or {})
@@ -233,7 +225,7 @@ class RequestContext:
             model_group=model_group,
             model_id=as_str(payload.get("model_id")) or _model_info_id(raw_meta.get("model_info")),
             api_base=as_str(payload.get("api_base")) or as_str(hidden.get("api_base")),
-            identity=RequestIdentity.from_payload(payload, request_metadata=request_metadata),
+            identity=RequestIdentity.from_payload(payload, named_user_id=named_user_id),
         )
 
 
@@ -301,7 +293,7 @@ class LLMCallEvent:
     completion_start_seconds: float | None
     trace: TraceControls
     session_id: str | None
-    user_id_metadata: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    caller_user_id: str | None = None
 
     @property
     def reached_a_provider(self) -> bool:
@@ -331,19 +323,64 @@ class LLMCallEvent:
             completion_start_seconds=_epoch_seconds(kwargs.get("completion_start_time")),
             trace=trace,
             session_id=caller_session_id(kwargs, trace),
-            user_id_metadata=caller_user_id_metadata(kwargs),
+            caller_user_id=caller_user_id_in_call(kwargs),
         )
 
 
-def caller_user_id_metadata(kwargs: Mapping[str, object]) -> Mapping[str, str]:
-    params: Final = as_str_mapping(kwargs.get("litellm_params"))
-    if params is None:
-        return MappingProxyType({})
-    bodies: Final = (
-        *(flatten_metadata(meta) if (meta := as_str_mapping(params.get("metadata"))) is not None else ()),
-        *(flatten_metadata(lm_meta) if (lm_meta := as_str_mapping(params.get("litellm_metadata"))) is not None else ()),
+def _as_mapping(value: object) -> Mapping[str, object]:
+    return (
+        cast(Mapping[str, object], value)  # cast-ok: isinstance cannot type the mapping's items
+        if isinstance(value, Mapping)
+        else _NO_METADATA
     )
-    return MappingProxyType({key: value for key, value in bodies if key in _USER_ID_METADATA_KEYS})
+
+
+def caller_user_id_in_call(kwargs: Mapping[str, object]) -> str | None:
+    params: Final = _as_mapping(kwargs.get("litellm_params"))
+    return caller_user_id(params.get("metadata"), params.get("litellm_metadata"))
+
+
+def usable_user_id(value: object) -> str | None:
+    """``value`` as a ``user.id``, or ``None`` when it could not name a user."""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    text: Final = str(value).strip()
+    return text if 0 < len(text) <= _MAX_USER_ID_LENGTH and text.isprintable() else None
+
+
+def _user_id_field(metadata: Mapping[str, object], field_name: str) -> str | None:
+    named: Final = usable_user_id(metadata.get(field_name))
+    if named is not None or field_name != "user.id":
+        return named
+    return usable_user_id(_as_mapping(metadata.get("user")).get("id"))
+
+
+def _named_user_ids(scopes: tuple[Mapping[str, object], ...]) -> Iterator[str]:
+    for field_name in _USER_ID_METADATA_FIELDS:
+        for scope in scopes:
+            named = _user_id_field(scope, field_name)
+            if named is not None:
+                yield named
+
+
+def _caller_scopes(metadata: Mapping[str, object]) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    return (_as_mapping(metadata.get(REQUESTER_METADATA_KEY)), metadata)
+
+
+def caller_user_id(*sources: object) -> str | None:
+    """The id a caller named in its metadata, by key lookup so the cost never grows with the metadata's size."""
+    scopes: Final = tuple(chain.from_iterable(_caller_scopes(_as_mapping(source)) for source in sources))
+    return next(_named_user_ids(scopes), None)
+
+
+def request_user_id(end_user_id: object, body: Mapping[str, object], inbound_user_id: str | None = None) -> str | None:
+    """A request's ``user.id`` at the auth boundary, which reads the metadata as the caller sent it, JSON-encoded on a
+    multipart or ``extra_body`` request. ``inbound_user_id`` is the id in the request's W3C Baggage."""
+    metadata_sources: Final = tuple(
+        safe_json_loads(value) if isinstance(value, str) else value
+        for value in (body.get("metadata"), body.get("litellm_metadata"))
+    )
+    return caller_user_id(*metadata_sources) or inbound_user_id or usable_user_id(end_user_id)
 
 
 def _epoch_seconds(value: object) -> float | None:

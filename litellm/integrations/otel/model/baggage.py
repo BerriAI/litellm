@@ -19,7 +19,7 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.integrations.otel.model.metadata import RequestIdentity, allowlisted_metadata
-from litellm.integrations.otel.model.semconv import GenAI, LiteLLM, User
+from litellm.integrations.otel.model.semconv import GenAI, LiteLLM
 
 # Attribute key -> value extractor over (identity, request_model,
 # team_metadata_keys). The single definition of what may be promoted and under
@@ -33,7 +33,6 @@ _PROMOTABLE: Final[dict[str, Callable[[RequestIdentity, str | None, tuple[str, .
     ),
     LiteLLM.KEY_HASH: lambda identity, model, team_metadata_keys: identity.key_hash,
     LiteLLM.END_USER: lambda identity, model, team_metadata_keys: identity.end_user,
-    User.ID: lambda identity, model, team_metadata_keys: identity.user_id,
     GenAI.REQUEST_MODEL: lambda identity, model, team_metadata_keys: model,
     LiteLLM.PROVIDER_MODEL: lambda identity, model, team_metadata_keys: identity.provider_model,
 }

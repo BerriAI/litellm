@@ -992,8 +992,8 @@ def test_langfuse_root_trace_attributes_derive_the_name_only_when_the_caller_gav
 def test_mixpanel_mapper_stamps_user_id_and_omits_when_absent():
     from litellm.integrations.otel.model.payloads import MCPToolCallSpanData
 
-    with_end_user = _llm_call(identity=RequestIdentity(call_id="c1", end_user="user_123"))
-    assert MixpanelMapper().map(with_end_user) == {"user.id": "user_123"}
+    with_named_user = _llm_call(identity=RequestIdentity(call_id="c1", user_id="user_123"))
+    assert MixpanelMapper().map(with_named_user) == {"user.id": "user_123"}
 
     with_trace_user = _llm_call(trace=TraceControls(user_id="trace_user_456"))
     assert MixpanelMapper().map(with_trace_user) == {"user.id": "trace_user_456"}
@@ -1010,9 +1010,9 @@ def test_mixpanel_mapper_stamps_user_id_and_omits_when_absent():
         result_json=None,
         error=None,
         response_cost=None,
-        identity=RequestIdentity(call_id="c2", end_user="mcp_user"),
+        identity=RequestIdentity(call_id="c2", user_id="mcp_user"),
     )
-    assert MixpanelMapper().map(mcp_span) == {"user.id": "mcp_user"}
+    assert MixpanelMapper().map(mcp_span) == {}
     assert MixpanelMapper().map(_llm_call()) == {}
 
     from litellm.integrations.otel.model.metadata import LLMCallEvent
@@ -1023,5 +1023,5 @@ def test_mixpanel_mapper_stamps_user_id_and_omits_when_absent():
             "standard_logging_object": {"id": "c3", "model": "gpt-4o", "metadata": {}},
         }
     )
-    assert sdk_event.user_id_metadata == {"user.id": "sdk_user_789"}
-    assert LLMCallEvent.from_dict({}).user_id_metadata == {}
+    assert sdk_event.caller_user_id == "sdk_user_789"
+    assert LLMCallEvent.from_dict({}).caller_user_id is None

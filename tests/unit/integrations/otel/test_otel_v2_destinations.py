@@ -14,8 +14,9 @@ from types import MappingProxyType
 from typing import Final
 
 import pytest
+from opentelemetry import baggage
 from opentelemetry import trace as trace_api
-from opentelemetry.context import Context
+from opentelemetry.context import Context, attach
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -60,7 +61,9 @@ from litellm.integrations.otel.plumbing import providers as otel_providers
 from litellm.integrations.otel.plumbing.context import (
     destination_backends,
     request_destinations,
+    request_user_id,
     set_request_destinations,
+    set_request_user_id,
 )
 from litellm.integrations.otel.plumbing.providers import (
     TenantFanOutSpanProcessor,
@@ -5886,3 +5889,205 @@ def test_mixpanel_destination_resolves_endpoint_and_basic_auth():
     assert destination.endpoint == "https://ingestion-eu.mixpanel.com/v1/ai/otel/traces"
     assert destination.headers["Authorization"] == f"Basic {b64encode(b'team-tok:').decode()}"
     assert destination.callback_name == "mixpanel"
+
+
+class TestMixpanelGetsTheCallersId:
+    """Mixpanel drops a span without ``user.id``, and no other backend asked for it."""
+
+    MIXPANEL: Final = OtelDestination(
+        endpoint="https://ingestion-eu.mixpanel.com/v1/ai/otel/traces",
+        headers={"Authorization": "Basic dGVhbTo="},
+        callback_name="mixpanel",
+    )
+    ARIZE: Final = OtelDestination(endpoint="https://arize.local/v1/traces", callback_name="arize")
+
+    @staticmethod
+    def _fan_out(
+        langfuse_mapped: bool = False,
+    ) -> tuple[TracerProvider, InMemorySpanExporter, InMemorySpanExporter]:
+        mixpanel_exporter, other_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider: Final = TracerProvider()
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda destination: SimpleSpanProcessor(
+                    mixpanel_exporter if destination.callback_name == "mixpanel" else other_exporter
+                ),
+                langfuse_mapped=langfuse_mapped,
+            )
+        )
+        return provider, mixpanel_exporter, other_exporter
+
+    @staticmethod
+    def _operator(monkeypatch: pytest.MonkeyPatch) -> tuple[TracerProvider, dict[object, InMemorySpanExporter]]:
+        exporters: dict[object, InMemorySpanExporter] = {}  # mutable-ok: filled as specs build
+        kind: Final = "lit10367_mixpanel"
+        monkeypatch.setitem(
+            otel_providers._EXPORTER_FACTORIES,
+            kind,
+            lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()),
+        )
+        config: Final = OpenTelemetryV2Config(
+            mapper_names=["genai", "mixpanel"],
+            exporters=[ExporterSpec(kind=kind, owner=owner) for owner in (ExporterOwner.MIXPANEL, None)],
+        )
+        return build_tracer_provider(config, use_simple_processor=True), exporters
+
+    @staticmethod
+    def _request(
+        provider: TracerProvider,
+        destinations: tuple[OtelDestination, ...] = (),
+        user_id: str | None = "caller-1",
+        model_call_attributes: Mapping[str, str] = MappingProxyType({"gen_ai.operation.name": "chat"}),
+    ) -> None:
+        def run() -> None:
+            set_request_destinations(destinations)
+            set_request_user_id(user_id)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                with tracer.start_as_current_span("chat gpt-4o") as span:
+                    span.set_attributes(dict(model_call_attributes))
+            get_tracer(provider, "instrumentation").start_span("redis").end()
+
+        in_fresh_context(run)
+
+    def test_a_mixpanel_destination_gets_the_id_on_every_span_and_a_second_destination_on_none(self) -> None:
+        provider, mixpanel, other = self._fan_out()
+
+        self._request(provider, (self.MIXPANEL, self.ARIZE))
+
+        assert {name: span.attributes.get("user.id") for name, span in by_name(mixpanel).items()} == {
+            "POST /v1/chat/completions": "caller-1",
+            "chat gpt-4o": "caller-1",
+            "redis": "caller-1",
+        }
+        assert [span.name for span in other.get_finished_spans() if "user.id" in span.attributes] == []
+        assert len(other.get_finished_spans()) == 3
+
+    def test_the_id_the_mapper_wrote_survives_the_langfuse_strip_only_for_mixpanel(self) -> None:
+        provider, mixpanel, other = self._fan_out()
+
+        self._request(
+            provider,
+            (self.MIXPANEL, self.ARIZE),
+            user_id=None,
+            model_call_attributes={"gen_ai.operation.name": "chat", "user.id": "from-mapper", "session.id": "s"},
+        )
+
+        assert by_name(mixpanel)["chat gpt-4o"].attributes.get("user.id") == "from-mapper"
+        assert "session.id" not in by_name(mixpanel)["chat gpt-4o"].attributes
+        assert "user.id" not in by_name(other)["chat gpt-4o"].attributes
+
+    def test_the_id_the_mapper_wrote_wins_over_the_id_read_at_auth(self) -> None:
+        provider, mixpanel, _ = self._fan_out()
+
+        self._request(
+            provider,
+            (self.MIXPANEL,),
+            model_call_attributes={"gen_ai.operation.name": "chat", "user.id": "from-mapper"},
+        )
+
+        assert by_name(mixpanel)["chat gpt-4o"].attributes.get("user.id") == "from-mapper"
+        assert by_name(mixpanel)["POST /v1/chat/completions"].attributes.get("user.id") == "caller-1"
+
+    def test_a_request_without_an_id_adds_nothing(self) -> None:
+        provider, mixpanel, _ = self._fan_out()
+
+        self._request(provider, (self.MIXPANEL,), user_id=None)
+
+        assert [span.name for span in mixpanel.get_finished_spans() if "user.id" in span.attributes] == []
+        assert len(mixpanel.get_finished_spans()) == 3
+
+    def test_a_held_tree_released_on_another_requests_task_keeps_its_own_id(self) -> None:
+        provider, mixpanel, _ = self._fan_out()
+        sampled: Final = self.MIXPANEL.model_copy(update={"success_sampling_rate": 1.0})
+
+        def run() -> None:
+            set_request_destinations((sampled,))
+            tracer = get_tracer(provider, "litellm")
+            for index in range(otel_providers._MAX_PENDING_TREES + 1):
+                set_request_user_id(f"caller-{index}")
+                root = tracer.start_span(f"POST {index}", context=trace_api.Context())
+                tracer.start_span(f"chat {index}", context=trace_api.set_span_in_context(root)).end()
+
+        in_fresh_context(run)
+
+        assert [(span.name, span.attributes.get("user.id")) for span in mixpanel.get_finished_spans()] == [
+            ("chat 0", "caller-0")
+        ]
+
+    def test_the_operators_project_gets_the_id_on_every_span_and_a_collector_beside_it_on_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        provider, exporters = self._operator(monkeypatch)
+
+        self._request(
+            provider, model_call_attributes={"gen_ai.operation.name": "chat", "user.id": "caller-1", "session.id": "s"}
+        )
+
+        assert {
+            name: span.attributes.get("user.id") for name, span in by_name(exporters[ExporterOwner.MIXPANEL]).items()
+        } == {
+            "POST /v1/chat/completions": "caller-1",
+            "chat gpt-4o": "caller-1",
+            "redis": "caller-1",
+        }
+        assert "session.id" not in by_name(exporters[ExporterOwner.MIXPANEL])["chat gpt-4o"].attributes
+        assert [span.name for span in exporters[None].get_finished_spans() if "user.id" in span.attributes] == []
+        assert len(exporters[None].get_finished_spans()) == 3
+
+    def test_the_operators_project_keeps_the_mapped_id_when_auth_never_read_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        provider, exporters = self._operator(monkeypatch)
+
+        self._request(
+            provider, user_id=None, model_call_attributes={"gen_ai.operation.name": "chat", "user.id": "from-mapper"}
+        )
+
+        assert by_name(exporters[ExporterOwner.MIXPANEL])["chat gpt-4o"].attributes.get("user.id") == "from-mapper"
+        assert "user.id" not in by_name(exporters[None])["chat gpt-4o"].attributes
+
+    def test_auth_names_the_caller_for_the_request_and_a_failure_never_breaks_auth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi import Request
+
+        from litellm.proxy.auth.user_api_key_auth import _seed_request_user_id
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+
+        def request_with(headers: tuple[tuple[bytes, bytes], ...] = ()) -> Request:
+            return Request(scope={"type": "http", "headers": list(headers)})
+
+        def seeded(end_user_id: str | None, body: object) -> str | None:
+            def run() -> str | None:
+                _seed_request_user_id(UserAPIKeyAuth(end_user_id=end_user_id), body, request_with())
+                return request_user_id()
+
+            return in_fresh_context(run)
+
+        def seeded_from_header() -> str | None:
+            _seed_request_user_id(
+                UserAPIKeyAuth(), {}, request_with(((b"x-litellm-customer-id", b"from-header"),))
+            )
+            return request_user_id()
+
+        assert seeded(None, {"metadata": {"user.id": "named"}}) == "named"
+        assert seeded("end-user", {}) == "end-user"
+        assert seeded(None, {"user": "from-body"}) == "from-body"
+        assert in_fresh_context(seeded_from_header) == "from-header"
+        assert seeded(None, {}) is None
+        assert seeded("end-user", None) is None
+
+        def seeded_under_baggage() -> str | None:
+            attach(baggage.set_baggage("user.id", "in-baggage"))
+            _seed_request_user_id(UserAPIKeyAuth(end_user_id="end-user"), {}, request_with())
+            return request_user_id()
+
+        assert in_fresh_context(seeded_under_baggage) == "in-baggage"
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "false")
+        is_otel_v2_enabled.cache_clear()
+        assert seeded("end-user", {}) is None
+        is_otel_v2_enabled.cache_clear()

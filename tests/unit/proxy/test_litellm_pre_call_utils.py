@@ -8970,6 +8970,33 @@ def test_vertex_sends_exactly_one_authorization_header():
 
 
 @pytest.mark.asyncio
+async def test_mixpanel_vars_under_another_callback_never_reach_the_trusted_field():
+    key_with_langfuse_callback = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {"langfuse_public_key": "pk", "mixpanel_project_token": "tok"},
+                }
+            ]
+        },
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hello"}]},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key_with_langfuse_callback,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"langfuse_public_key": "pk"}
+
+
+@pytest.mark.asyncio
 async def test_newrelic_team_callback_vars_reach_trusted_field():
     """A key with a newrelic team callback stamps its vars into the proxy-owned
     trusted field, and a caller-supplied newrelic_api_key in the body is

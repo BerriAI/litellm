@@ -300,7 +300,7 @@ def test_mixpanel_preset_reads_token_and_defaults_to_us(monkeypatch):
     assert spec.requires_headers is True
     assert "genai" in cfg.mapper_names
     assert "mixpanel" in cfg.mapper_names
-    assert "user.id" in cfg.baggage_promoted_keys
+    assert "user.id" not in cfg.baggage_promoted_keys
 
 
 def test_mixpanel_preset_region_and_endpoint_override(monkeypatch):
@@ -334,3 +334,33 @@ def test_mixpanel_preset_without_token_is_header_gated(monkeypatch):
     spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
     assert spec.headers is None
     assert spec.requires_headers is True
+
+
+def test_mixpanel_without_a_token_or_collector_stays_on_v2_and_exports_nowhere(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.litellm_core_utils.litellm_logging import _exports_nowhere, _maybe_construct_otel_v2
+
+    monkeypatch.delenv("MIXPANEL_PROJECT_TOKEN", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER", raising=False)
+    monkeypatch.delenv("OTEL_ENDPOINT", raising=False)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        logger = _maybe_construct_otel_v2("mixpanel", [])
+    finally:
+        is_otel_v2_enabled.cache_clear()
+    assert isinstance(logger, OpenTelemetryV2)
+    assert logger.callback_name == "mixpanel"
+    assert _exports_nowhere(logger.config)
+
+
+def test_mixpanel_with_a_token_keeps_the_operators_collector_beside_its_own_exporter(monkeypatch):
+    from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
+
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token")
+    collector = ExporterSpec(kind="otlp_http", endpoint="http://collector.local")
+    cfg = mixpanel_preset(config_overrides=OpenTelemetryV2Config(exporters=[collector]))
+    assert [spec.owner for spec in cfg.exporters] == [None, ExporterOwner.MIXPANEL]
+    assert "user.id" not in cfg.baggage_promoted_keys

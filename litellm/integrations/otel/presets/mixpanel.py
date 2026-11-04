@@ -12,8 +12,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.model.semconv import User
-from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.integrations.otel.presets.utils import credential_gated_exporters, ensure_mappers
 from litellm.types.utils import StandardCallbackDynamicParams
 
 MIXPANEL_PROJECT_TOKEN_ENV: Final = "MIXPANEL_PROJECT_TOKEN"
@@ -66,19 +65,25 @@ def mixpanel_preset(
     base: Final = config_overrides or OpenTelemetryV2Config()
     token: Final = (settings.project_token or "").strip() or None
     endpoint: Final = (settings.endpoint or "").strip() or _resolve_region_endpoint(settings.region)
-    spec: Final = ExporterSpec(
-        kind="otlp_http",
-        endpoint=endpoint,
-        headers=(f"Authorization={mixpanel_authorization_header(token)}" if token else None),
-        owner=ExporterOwner.MIXPANEL,
-        requires_headers=True,
+    exporters: Final = (
+        (
+            *base.exporters,
+            ExporterSpec(
+                kind="otlp_http",
+                endpoint=endpoint,
+                headers=f"Authorization={mixpanel_authorization_header(token)}",
+                owner=ExporterOwner.MIXPANEL,
+                requires_headers=True,
+            ),
+        )
+        if token
+        else credential_gated_exporters(base.exporters, ExporterOwner.MIXPANEL)
     )
     return base.model_copy(
         update=MappingProxyType(
             {
-                "exporters": (*base.exporters, spec),
+                "exporters": exporters,
                 "mapper_names": ensure_mappers(base.mapper_names, "genai", "mixpanel"),
-                "baggage_promoted_keys": ensure_mappers(base.baggage_promoted_keys, User.ID),
             }
         )
     )
@@ -93,5 +98,8 @@ def mixpanel_dynamic_headers(
     return {"Authorization": mixpanel_authorization_header(token)}
 
 
-def mixpanel_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str:
+def mixpanel_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | None:
+    """The region endpoint of the project ``params`` name, or ``None`` to keep the operator's own endpoint."""
+    if not (params.get("mixpanel_project_token") or "").strip():
+        return None
     return _resolve_region_endpoint(params.get("mixpanel_region"))

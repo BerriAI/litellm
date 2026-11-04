@@ -6,7 +6,7 @@ per-integration checks here.
 """
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
 
@@ -16,6 +16,10 @@ _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _MIXPANEL_CALLBACK: Final = "mixpanel"
 _MIXPANEL_VAR_PREFIX: Final = "mixpanel_"
+_MIXPANEL_VARS: Final = frozenset({"mixpanel_project_token", "mixpanel_region"})
+CALLBACK_VARS_REDACTED: Final = "***REDACTED***"
+_UNSENDABLE_MIXPANEL_TOKENS: Final = frozenset({"None", CALLBACK_VARS_REDACTED})
+_MIXPANEL_NEEDS_OTEL_V2: Final = "Per-team Mixpanel routing requires the proxy to run with LITELLM_OTEL_V2=true."
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
 _LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
 _ARIZE_CALLBACK: Final = "arize"
@@ -28,6 +32,9 @@ _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
 def callback_config_error(
     callback_name: str | None, callback_vars: Mapping[str, str] | None, callback_type: str | None = None
 ) -> str | None:
+    mixpanel_v2_error: Final = _mixpanel_v2_error(callback_name)
+    if mixpanel_v2_error is not None:
+        return mixpanel_v2_error
     if not callback_vars:
         return None
     arize_error: Final = _arize_sampling_rate_error(callback_name, callback_vars) or _arize_otlp_protocol_error(
@@ -151,7 +158,6 @@ _VAR_FAMILIES: Final[Mapping[str, str]] = MappingProxyType(
         "mixpanel_": "Mixpanel",
         "newrelic_": "New Relic",
         "posthog_": "PostHog",
-        "signoz_": "SigNoz",
         "wandb_": "Weights & Biases",
         "weave_": "Weights & Biases",
     }
@@ -312,6 +318,29 @@ def stored_callback_entries(logging_entries: object) -> tuple[tuple[str | None, 
     return tuple((_entry_callback_name(entry), _entry_callback_vars(entry)) for entry in entries)
 
 
+def _mixpanel_callback_vars(metadata: Mapping[str, object]) -> Iterator[Mapping[str, str]]:
+    yield from (
+        _entry_callback_vars(entry)
+        for entry in _object_sequence(metadata.get("logging")) or ()
+        if _entry_callback_name(entry) == _MIXPANEL_CALLBACK
+    )
+    settings_vars: Final = _entry_callback_vars(metadata.get("callback_settings"))
+    if any(key.startswith(_MIXPANEL_VAR_PREFIX) for key in settings_vars):
+        yield settings_vars
+
+
+def mixpanel_logging_metadata_error(metadata: Mapping[str, object] | None) -> str | None:
+    """Validate only the Mixpanel settings of a team's metadata, for writers that leave other callbacks unchecked."""
+    return next(
+        (
+            error
+            for callback_vars in _mixpanel_callback_vars(metadata or MappingProxyType({}))
+            if (error := callback_config_error(_MIXPANEL_CALLBACK, callback_vars)) is not None
+        ),
+        None,
+    )
+
+
 def _object_sequence(value: object) -> Sequence[object] | None:
     return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else None
 
@@ -453,15 +482,20 @@ def _newrelic_config_error(callback_vars: Mapping[str, str]) -> str | None:
     return None
 
 
+def _mixpanel_v2_error(callback_name: str | None) -> str | None:
+    if callback_name != _MIXPANEL_CALLBACK:
+        return None
+
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    return None if is_otel_v2_enabled() else _MIXPANEL_NEEDS_OTEL_V2
+
+
 def _mixpanel_config_error(callback_vars: Mapping[str, str]) -> str | None:
     if not any(key.startswith(_MIXPANEL_VAR_PREFIX) for key in callback_vars):
         return None
 
-    from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.integrations.otel.presets.mixpanel import MIXPANEL_OTLP_ENDPOINT_BY_REGION
-
-    if not is_otel_v2_enabled():
-        return "Per-team Mixpanel routing requires the proxy to run with LITELLM_OTEL_V2=true."
 
     region: Final = callback_vars.get("mixpanel_region")
     if region is not None and region.strip().lower() not in MIXPANEL_OTLP_ENDPOINT_BY_REGION:
@@ -471,6 +505,9 @@ def _mixpanel_config_error(callback_vars: Mapping[str, str]) -> str | None:
         )
 
     token: Final = callback_vars.get("mixpanel_project_token")
-    if region is not None and (not token or not token.strip() or token == "None"):
-        return "mixpanel_region requires mixpanel_project_token; the region rides the team's own project token."
-    return None
+    if not token or not token.strip() or token in _UNSENDABLE_MIXPANEL_TOKENS:
+        return "mixpanel_project_token must be the project's own token, sent in full on every create or update."
+    unknown: Final = tuple(
+        key for key in callback_vars if key.startswith(_MIXPANEL_VAR_PREFIX) and key not in _MIXPANEL_VARS
+    )
+    return f"Unknown Mixpanel callback variable {unknown[0]!r}." if unknown else None

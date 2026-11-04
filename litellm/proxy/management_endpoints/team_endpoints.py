@@ -131,6 +131,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_shared,
     publish_auth_cache_invalidation,
 )
+from litellm.proxy.common_utils.callback_config_validation import mixpanel_logging_metadata_error
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
@@ -1709,6 +1710,9 @@ async def new_team(
     ```
     """
     try:
+        _raise_on_unsendable_mixpanel_callback(
+            data.metadata  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        )
         from litellm.proxy.management_helpers.audit_logs import (
             get_audit_log_changed_by,
             is_audit_logging_enabled,
@@ -2135,6 +2139,12 @@ async def _create_team_update_audit_log(
     )
 
 
+def _raise_on_unsendable_mixpanel_callback(metadata: Mapping[str, object] | None) -> None:
+    error: Final = mixpanel_logging_metadata_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
+
+
 async def _update_model_table(
     data: UpdateTeamRequest,
     model_id: int | None,
@@ -2483,6 +2493,9 @@ async def update_team(
     ```
     """
     try:
+        _raise_on_unsendable_mixpanel_callback(
+            data.metadata  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        )
         from litellm.proxy.management_helpers.audit_logs import is_audit_logging_enabled
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,

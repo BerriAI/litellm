@@ -55,6 +55,7 @@ from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
     active_phase,
     active_phase_span,
+    inbound_user_id,
     is_recordable_span,
     mcp_message_transport_span,
     post_response_root,
@@ -601,7 +602,7 @@ class OpenTelemetryV2(CustomLogger):
             trace=call.trace,
             session_id=call.session_id,
             metadata_keys=tuple(self.config.baggage_metadata_keys),
-            request_metadata=call.user_id_metadata,
+            named_user_id=call.caller_user_id or inbound_user_id(),
             operation=call.operation,
         )
         end_time_ns: Final = to_ns(end_time)

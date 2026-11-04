@@ -67,11 +67,13 @@ from litellm.integrations.otel.model.semconv import (
     LiteLLM,
     LiteLLMError,
     Server,
+    User,
 )
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 from litellm.integrations.otel.plumbing.context import (
     request_destinations,
     request_traces_excluded,
+    request_user_id,
     suppressed_backends,
 )
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
@@ -486,25 +488,45 @@ class _CountedSpanView(_SpanView):
         return self._dropped_counts[2]
 
 
+_LLM_CALL_ATTRIBUTES_BUT_USER_ID: Final = LangfuseMapper.LLM_CALL_ATTRIBUTES - {User.ID}
+
+
 def _is_litellm_span(span: ReadableSpan) -> bool:
     """Whether LiteLLM's own tracer wrote ``span``, rather than application or instrumentation code."""
     scope: Final = span.instrumentation_scope
     return scope is not None and scope.name == LITELLM_TRACER_NAME
 
 
-def without_destination_langfuse_attributes(span: ReadableSpan, langfuse_mapped: bool) -> ReadableSpan:
+def with_request_user_id(span: ReadableSpan) -> ReadableSpan:
+    """``span`` carrying the id the request's caller named, for a backend that drops a span without one.
+
+    Called as the span ends, on the request's own task. A held span must already have
+    been through here, since a tree can be released on another request's task.
+    """
+    user_id: Final = request_user_id()
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    if user_id is None or User.ID in attributes:
+        return span
+    return _CountedSpanView(span, MappingProxyType({**attributes, User.ID: user_id}))
+
+
+def without_destination_langfuse_attributes(
+    span: ReadableSpan, langfuse_mapped: bool, keeps_user_id: bool = False
+) -> ReadableSpan:
     """``span`` without the Langfuse attributes only a Langfuse destination asked for.
 
     That is the request metadata the Langfuse mapper writes and, on a model call written by
     a logger whose own mappers leave the Langfuse vocabulary out (``langfuse_mapped`` off),
     every Langfuse attribute, since that logger wrote them for a key's or team's Langfuse
     destination alone. Only LiteLLM's own spans lose them: any other span keeps every key
-    its own code set.
+    its own code set. ``keeps_user_id`` spares ``user.id``, which Mixpanel reads too.
     """
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     dropped: Final = (
         LANGFUSE_REQUEST_METADATA_ATTRIBUTES
         if langfuse_mapped or not is_llm_call_span(span)
+        else _LLM_CALL_ATTRIBUTES_BUT_USER_ID
+        if keeps_user_id
         else LangfuseMapper.LLM_CALL_ATTRIBUTES
     )
     if not (_is_litellm_span(span) and any(key in dropped for key in attributes)):
@@ -690,7 +712,9 @@ def _for_destination(
     source: Final = (
         span
         if destination.callback_name == ExporterOwner.LANGFUSE_OTEL
-        else without_destination_langfuse_attributes(span, langfuse_mapped)
+        else without_destination_langfuse_attributes(
+            span, langfuse_mapped, keeps_user_id=destination.callback_name == ExporterOwner.MIXPANEL
+        )
     )
     attributes: Final = source.attributes or _NO_ATTRIBUTES
     database: Final = _is_database_span(attributes)
@@ -794,10 +818,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 )
             ):
                 continue
+            view = with_request_user_id(span) if destination.callback_name == ExporterOwner.MIXPANEL else span
             if not _is_sampled(destination):
-                self._forward(span, destination)
+                self._forward(view, destination)
                 continue
-            for held_span, held_destination in self._route(request, span, destination, failed):
+            for held_span, held_destination in self._route(request, view, destination, failed):
                 self._forward(held_span, held_destination)
         for held_span, held_destination in self._settle(request, span, failed):
             self._forward(held_span, held_destination)
@@ -1217,15 +1242,37 @@ class _DestinationLangfuseAttributeFilter(SpanProcessor):
     """Strip the Langfuse attributes only a Langfuse destination asked for from LiteLLM's own spans before ``inner``
     exports them."""
 
-    def __init__(self, inner: SpanProcessor, langfuse_mapped: bool) -> None:
+    def __init__(self, inner: SpanProcessor, langfuse_mapped: bool, keeps_user_id: bool = False) -> None:
         self._inner: Final = inner
         self._langfuse_mapped: Final = langfuse_mapped
+        self._keeps_user_id: Final = keeps_user_id
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         self._inner.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
-        self._inner.on_end(without_destination_langfuse_attributes(span, self._langfuse_mapped))
+        self._inner.on_end(
+            without_destination_langfuse_attributes(span, self._langfuse_mapped, keeps_user_id=self._keeps_user_id)
+        )
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
+class _RequestUserIdStamp(SpanProcessor):
+    """Give every span the id the request's caller named before ``inner`` exports it."""
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self._inner: Final = inner
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self._inner.on_end(with_request_user_id(span))
 
     def shutdown(self) -> None:
         self._inner.shutdown()
@@ -1515,10 +1562,12 @@ def _spec_processor(
         _exporter_from_spec(spec),
         (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
     )
+    labels_user_id: Final = spec.owner is ExporterOwner.MIXPANEL
+    labeled: Final = _RequestUserIdStamp(exporting) if labels_user_id else exporting
     scoped: Final = (
-        _DestinationLangfuseAttributeFilter(exporting, langfuse_mapped)
+        _DestinationLangfuseAttributeFilter(labeled, langfuse_mapped, keeps_user_id=labels_user_id)
         if strip_destination_langfuse_attributes
-        else exporting
+        else labeled
     )
     return _MessageContentFilter(scoped) if strip_message_content else scoped
 

@@ -464,7 +464,7 @@ class LLMCallSpanData:
         session_id: str | None = None,
         *,
         metadata_keys: tuple[str, ...] = (),
-        request_metadata: Mapping[str, str] = MappingProxyType({}),
+        named_user_id: str | None = None,
         operation: GenAIOperation | None = None,
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
@@ -472,7 +472,7 @@ class LLMCallSpanData:
         # The single parse of the request's metadata — the request-vs-provider
         # model split, the response model, api base, and identity all come from
         # here rather than being re-derived from the raw payload dicts.
-        context: Final = RequestContext.from_standard_logging_payload(payload, request_metadata=request_metadata)
+        context: Final = RequestContext.from_standard_logging_payload(payload, named_user_id=named_user_id)
         metadata: Final = payload.get("metadata")
         decision: Final = metadata["routing_decision"] if metadata and "routing_decision" in metadata else None
         promoted_metadata: Final = allowlisted_metadata(context.identity.metadata, metadata_keys)

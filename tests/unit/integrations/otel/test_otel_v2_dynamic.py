@@ -751,6 +751,8 @@ def test_mixpanel_dynamic_headers_and_endpoint_routing(monkeypatch, caplog):
         "Authorization": expected_auth
     }
     assert dynamic_otlp_headers("mixpanel", {}) is None
+    assert dynamic_otlp_endpoint("mixpanel", {"langsmith_project": "another-callback"}) is None
+    assert dynamic_otlp_endpoint("mixpanel", {"mixpanel_project_token": "   ", "mixpanel_region": "eu"}) is None
 
     monkeypatch.setenv("MIXPANEL_REGION", "eu")
     assert (

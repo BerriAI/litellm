@@ -4311,6 +4311,31 @@ def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Reque
         verbose_proxy_logger.debug("OTel V2: tenant destination resolution failed: %s", exc)
 
 
+def _seed_request_user_id(
+    user_api_key_dict: UserAPIKeyAuth, request_data: Mapping[str, object], request: Request
+) -> None:
+    """Name the caller for the spans a backend that drops an unlabeled span receives.
+
+    Called inside the ``auth`` phase span so that span carries the id too. Best-effort:
+    trace labels must never fail auth.
+    """
+    try:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.integrations.otel.model.metadata import request_user_id
+        from litellm.integrations.otel.plumbing.context import inbound_user_id, set_request_user_id
+
+        if is_otel_v2_enabled():
+            headers: Final = cast(  # cast-ok: the helper returns an unparameterized dict
+                Mapping[str, object], safe_get_request_headers(request)
+            )
+            end_user_id: Final = user_api_key_dict.end_user_id or get_end_user_id_from_request_body(
+                request_data, headers
+            )
+            set_request_user_id(request_user_id(end_user_id, request_data, inbound_user_id()))
+    except Exception as exc:  # noqa: BLE001  # telemetry labels are best-effort and must never break authentication
+        verbose_proxy_logger.debug("OTel V2: request user id resolution failed: %s", exc)
+
+
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
@@ -4368,6 +4393,11 @@ async def user_api_key_auth(
             safe_get_request_headers(request), user_api_key_auth_obj
         )
         _seed_request_destinations(user_api_key_auth_obj, request)
+        _seed_request_user_id(
+            user_api_key_auth_obj,
+            cast(Mapping[str, object], request_data),  # cast-ok: request bodies are dynamically typed
+            request,
+        )
 
         # A body that never parsed is authenticated (so the trace carries identity
         # and this ``auth`` span) but not authorized: there is no model to check it
