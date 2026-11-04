@@ -270,31 +270,6 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
     )
 
 
-def test_is_chunk_non_empty_with_refusal(
-    initialized_custom_stream_wrapper: CustomStreamWrapper,
-):
-    """Unit test if non-empty when the delta carries only a refusal"""
-    chunk: Final = {
-        "id": "chatcmpl-abc",
-        "object": "chat.completion.chunk",
-        "created": 1700000000,
-        "model": "m",
-        "choices": [
-            {
-                "index": 0,
-                "delta": {"refusal": "I can't help"},
-                "logprobs": None,
-                "finish_reason": None,
-            }
-        ],
-    }
-    assert initialized_custom_stream_wrapper.is_chunk_non_empty(
-        completion_obj=MagicMock(),
-        model_response=ModelResponseStream(**chunk),
-        response_obj=MagicMock(),
-    )
-
-
 def test_is_chunk_non_empty_with_annotations(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -1668,6 +1643,75 @@ async def test_stream_with_null_choices_chunk_finishes_normally(
 
     streamed_choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
     assert "".join(choice.delta.content or "" for choice in streamed_choices) == "hi"
+    assert [choice.finish_reason for choice in streamed_choices if choice.finish_reason] == ["stop"]
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+async def test_stream_with_refusal_only_chunks_delivers_refusal(
+    async_stream: bool, transport: str, logging_obj: Logging
+) -> None:
+    refusal_pieces: Final = ("I'm", " sorry", ", but", " I can't", " help", " with", " that", ".")
+    deltas: Final = (
+        ({"role": "assistant", "content": None, "refusal": ""}, None),
+        *(({"refusal": piece}, None) for piece in refusal_pieces),
+        ({}, "stop"),
+    )
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-refusal",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+                }
+            )
+            + "\n\n"
+            for delta, finish_reason in deltas
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
+    )
+
+    try:
+        chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    streamed_choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
+    assert "".join(getattr(choice.delta, "refusal", None) or "" for choice in streamed_choices) == "".join(
+        refusal_pieces
+    )
     assert [choice.finish_reason for choice in streamed_choices if choice.finish_reason] == ["stop"]
 
 
