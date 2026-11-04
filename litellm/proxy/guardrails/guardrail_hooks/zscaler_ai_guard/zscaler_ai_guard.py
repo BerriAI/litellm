@@ -14,6 +14,9 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_last_user_message,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -218,15 +221,14 @@ class ZscalerAIGuard(CustomGuardrail):
             zscaler_ai_guard_result = None
             direction: Final = "OUT" if input_type == "response" else "IN"
             verbose_proxy_logger.debug("direction: %s", direction)
-            # Concatenate all texts and send to Zscaler AI Guard
-            if texts:
-                concatenated_text: Final = " ".join(texts)
+            content: Final = self._content_to_scan(inputs, input_type)
+            if content:
                 zscaler_ai_guard_result = await self.make_zscaler_ai_guard_api_call(
                     zscaler_ai_guard_url=self.zscaler_ai_guard_url,
                     api_key=self.api_key,
                     policy_id=policy_id,
                     direction=direction,
-                    content=concatenated_text,
+                    content=content,
                     user=user_for_payload,
                     **kwargs,
                 )
@@ -243,6 +245,28 @@ class ZscalerAIGuard(CustomGuardrail):
 
         verbose_proxy_logger.debug("ZscalerAIGuard: Successfully applied guardrail.")
         return inputs
+
+    @staticmethod
+    def _content_to_scan(
+        inputs: GenericGuardrailAPIInputs,
+        input_type: Literal["request", "response"],
+    ) -> str | None:
+        """
+        Pick the text sent to Zscaler AI Guard.
+
+        A request (IN) is scanned by its last turn only, and only when that turn is the user's:
+        the trailing run of user messages in `structured_messages`. Earlier turns were scanned when
+        they were sent, the system prompt is the operator's own, and a request that ends on an
+        assistant or tool message carries no new user input, so it is not scanned at all.
+
+        A response (OUT), or a request whose route supplies no `structured_messages`, falls back
+        to every extracted text joined with spaces.
+        """
+        structured_messages: Final = inputs.get("structured_messages")
+        if input_type == "request" and structured_messages:
+            return get_last_user_message(list(structured_messages))
+        texts: Final = inputs.get("texts", [])
+        return " ".join(texts) if texts else None
 
     def extract_blocking_info(self, response):
         """
