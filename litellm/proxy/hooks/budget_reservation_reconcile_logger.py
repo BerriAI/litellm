@@ -63,7 +63,17 @@ class BudgetReservationReconcileLogger(CustomLogger):
                 budget_reservation=budget_reservation,
                 actual_cost=actual_cost,
             )
-        except Exception:  # noqa: BLE001  # a counter backend failure must still release the reservation
+        except Exception:  # noqa: BLE001  # counter failure: refund only when no known spend
+            if actual_cost > 0:
+                # No Prisma ledger on this path. Releasing to 0.0 / finalizing would
+                # permanently refund completed work and block retry; leave the
+                # reservation open so settlement can retry and budgets fail closed.
+                verbose_proxy_logger.exception(
+                    "Failed to reconcile budget reservation without a database logger; "
+                    "retaining known spend %s for retry",
+                    actual_cost,
+                )
+                return
             verbose_proxy_logger.exception(
                 "Failed to reconcile budget reservation without a database logger; releasing instead"
             )
