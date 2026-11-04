@@ -4662,3 +4662,35 @@ def test_pricing_provider_fills_unset_rates_from_that_providers_catalog_row() ->
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.get_model_info.cache_clear()
+
+
+def test_a_map_adopted_while_a_router_registers_its_deployments_keeps_its_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refresh ``import litellm`` starts adopts in its own thread, often while the proxy is building its router"""
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+    from litellm.router_python_core import PythonCore
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    fetched: Final = {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
+    adoption: Final = threading.Thread(target=adopt_model_cost_map, args=(fetched,))
+    register: Final = PythonCore._register_deployment_in_model_cost
+
+    def register_then_race_an_adoption(**kwargs: object) -> None:
+        register(**kwargs)
+        if not adoption.is_alive() and adoption.ident is None:
+            adoption.start()
+            adoption.join(timeout=2)
+
+    monkeypatch.setattr(PythonCore, "_register_deployment_in_model_cost", staticmethod(register_then_race_an_adoption))
+    Router(
+        model_list=[
+            {
+                "model_name": "racing-alias",
+                "litellm_params": {"model": "hosted_vllm/not-in-the-catalog"},
+                "model_info": {"id": "racing-alias-id", "max_input_tokens": 4321},
+            }
+        ],
+    )
+    adoption.join(timeout=10)
+
+    assert litellm.model_cost is fetched
+    assert litellm.model_cost["racing-alias-id"]["max_input_tokens"] == 4321

@@ -535,17 +535,23 @@ def _finalize_loaded_model_cost_map(loaded: ModelCostMapReloaded) -> ModelCostMa
     return replace(loaded, model_cost_map=finalized)
 
 
+MODEL_COST_ADOPTION_LOCK: Final = threading.RLock()
+"""Held while a map is adopted and while a router registers its deployments and joins the replay, so an adoption in
+another thread never lands between the two and drops that router's rows"""
+
+
 def adopt_model_cost_map(
     new_model_cost_map: dict,  # mutable-ok: public API preserves the mutable cost-map contract
 ) -> int:
     import litellm
     from litellm import utils
 
-    litellm.model_cost = new_model_cost_map
-    utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
-    litellm.add_known_models(model_cost_map=new_model_cost_map)
-    fetched_model_count: Final = len(new_model_cost_map) if new_model_cost_map else 0
-    utils.reapply_runtime_model_cost_registrations()
+    with MODEL_COST_ADOPTION_LOCK:
+        litellm.model_cost = new_model_cost_map
+        utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
+        litellm.add_known_models(model_cost_map=new_model_cost_map)
+        fetched_model_count: Final = len(new_model_cost_map) if new_model_cost_map else 0
+        utils.reapply_runtime_model_cost_registrations()
     return fetched_model_count
 
 
