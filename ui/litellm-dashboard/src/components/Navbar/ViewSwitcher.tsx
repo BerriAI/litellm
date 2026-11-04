@@ -119,17 +119,14 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
     disabled: !chatEnabled,
     label: (
       <div className="flex w-full items-center justify-between gap-6 py-0.5">
-        <span className="flex items-center gap-2">
-          <WorkspaceIcon workspace={CHAT} />
-          <span className="flex max-w-[220px] flex-col">
-            <span className="font-medium">Chat</span>{" "}
-            <span className="text-xs leading-snug text-muted-foreground">Chat UI for using LLMs, MCPs, Agents</span>{" "}
-            {!chatEnabled && (
-              <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
-                Admins can enable in Settings
-              </span>
-            )}
-          </span>
+        <span className="flex max-w-[220px] flex-col">
+          <span className="font-medium">Chat</span>{" "}
+          <span className="text-xs leading-snug text-muted-foreground">Chat UI for using LLMs, MCPs, Agents</span>{" "}
+          {!chatEnabled && (
+            <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
+              Admins can enable in Settings
+            </span>
+          )}
         </span>
         {isChatRoute && <Check className="size-4 text-info" />}
       </div>
@@ -142,10 +139,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       key: e.key,
       label: (
         <div className="flex w-full items-center justify-between gap-6 py-0.5">
-          <span className="flex items-center gap-2">
-            <WorkspaceIcon workspace={GATEWAY} />
-            <span className="font-medium">{e.label}</span>
-          </span>
+          <span className="font-medium">{e.label}</span>
           {!isStandaloneRoute && e.key === mode && <Check className="size-4 text-info" />}
         </div>
       ),
@@ -156,12 +150,9 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       key: MOYAI,
       label: (
         <div className="flex w-full items-center justify-between gap-6 py-0.5">
-          <span className="flex items-center gap-2">
-            <WorkspaceIcon workspace={MOYAI} />
-            <span className="flex flex-col">
-              <span className="font-medium">Moyai</span>{" "}
-              <span className="text-xs leading-snug text-muted-foreground">Cloud Coding Agent</span>
-            </span>
+          <span className="flex flex-col">
+            <span className="font-medium">Moyai</span>{" "}
+            <span className="text-xs leading-snug text-muted-foreground">Cloud Coding Agent</span>
           </span>
           {isMoyaiRoute && <Check className="size-4 text-info" />}
         </div>
