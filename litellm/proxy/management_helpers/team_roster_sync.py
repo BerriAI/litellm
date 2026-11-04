@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
@@ -9,8 +10,9 @@ from typing import TYPE_CHECKING, Final
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
+import litellm
 from litellm._uuid import uuid
-from litellm.proxy._types import LiteLLM_TeamTable, Member, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, Member, NewTeamRequest, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     await_inflight_team_membership_load,
     delete_cache_team_object,
@@ -50,6 +52,32 @@ if TYPE_CHECKING:
 
 ROSTER_TX_TIMEOUT: Final = timedelta(seconds=60)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+def new_team_request_with_defaults(
+    team_id: str,
+    team_alias: str | None,
+    members_with_roles: Sequence[Member],
+    metadata: Mapping[str, object] | None = None,
+) -> NewTeamRequest:
+    default_params: Final = litellm.default_team_params
+    defaults: Final[Mapping[str, object]] = (
+        deepcopy(default_params)
+        if isinstance(default_params, dict)
+        else default_params.model_dump(exclude_none=True)
+        if default_params is not None
+        else {}
+    )
+    default_metadata: Final = defaults.get("metadata")
+    return NewTeamRequest.model_validate(
+        {
+            **defaults,
+            "team_id": team_id,
+            "team_alias": team_alias,
+            "members_with_roles": members_with_roles,
+            "metadata": {**(default_metadata if isinstance(default_metadata, dict) else {}), **(metadata or {})},
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
