@@ -426,6 +426,8 @@ export const MCP_REACHABLE_DESCRIPTION = "Server responded. Authentication and t
 
 export interface MCPServer {
   server_id: string;
+  /** Whether the server is active. Absent on older backends; treat undefined as enabled. */
+  enabled?: boolean;
   is_config?: boolean;
   server_name?: string | null;
   alias?: string | null;
