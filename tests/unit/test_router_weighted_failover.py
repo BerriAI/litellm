@@ -1021,14 +1021,7 @@ async def test_failover_reaches_healthy_sibling_when_affinity_pins_failed_deploy
     assert after_a_recovers._hidden_params["model_id"] == "A"
 
 
-# ---------------------------------------------------------------------------
-# Every endpoint's attempt stamps the failed deployment, so weighted failover
-# covers more than chat completions
-# ---------------------------------------------------------------------------
-
-
 def _two_deployment_router(model: str) -> Router:
-    """Deployment A (always picked first) fails, deployment B answers."""
     return Router(
         model_list=[
             {
@@ -1064,8 +1057,6 @@ _ENDPOINTS: Final = [
 async def test_weighted_failover_moves_every_endpoint_to_another_deployment(
     monkeypatch: pytest.MonkeyPatch, endpoint: str, model: str, arguments: dict[str, object]
 ) -> None:
-    """A failed attempt on any endpoint names its deployment, so weighted failover re-picks
-    within the group instead of raising (#27980 only stamped completions and generic calls)."""
     keys_called: list[object] = []
     answer: Final = object()
 
@@ -1082,6 +1073,45 @@ async def test_weighted_failover_moves_every_endpoint_to_another_deployment(
 
     assert response is answer
     assert keys_called == ["bad", "good"]
+
+
+@pytest.mark.asyncio
+async def test_weighted_failover_skips_the_failed_deployment_for_clientside_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api_bases_called: list[object] = []
+    answer: Final = object()
+
+    async def provider(**kwargs: object) -> object:
+        api_bases_called.append(kwargs.get("api_base"))
+        if kwargs.get("api_base") == "http://a":
+            raise litellm.InternalServerError(message="A is down", llm_provider="openai", model="m")
+        return answer
+
+    monkeypatch.setattr(litellm, "aembedding", provider)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_base": "http://a", "weight": 1},
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_base": "http://b", "weight": 0},
+                "model_info": {"id": "B"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        num_retries=0,
+        disable_cooldowns=True,
+        enable_weighted_failover=True,
+    )
+
+    response: Final = await router.aembedding(model="test-model", input=["hi"], api_key="tenant-key")
+
+    assert response is answer
+    assert api_bases_called == ["http://a", "http://b"]
 
 
 @pytest.mark.parametrize(

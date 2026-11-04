@@ -5169,13 +5169,17 @@ class PythonCore(DeprecatedRouterMembers):
         # _update_kwargs_with_deployment and stamped into kwargs["model_info"]; stamping
         # the static shared deployment's id instead would let one tenant's bad credentials
         # cool down the deployment every other tenant sharing this config relies on.
+        if getattr(exception, "failed_deployment_id", None):
+            return
         effective_model_info: Final = kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
         self._set_failed_deployment_id_on_exception(exception, MappingProxyType({"model_info": effective_model_info}))
+        configured_deployment_id: Final = _MODEL_INFO_ADAPTER.validate_python(effective_model_info).get(
+            "original_model_id"
+        )
+        if isinstance(configured_deployment_id, str) and configured_deployment_id:
+            exception.failed_configured_deployment_id = configured_deployment_id  # pyright: ignore[reportAttributeAccessIssue]  # rebind-ok: the exception carries the failure to _maybe_run_weighted_failover
 
     def _stamp_failed_attempt(self, exception: Exception, kwargs: Mapping[str, object], *, picked: bool) -> None:
-        """An attempt's exception handler: once it picked a deployment, stamp that deployment (the
-        ``model_info`` ``_update_kwargs_with_deployment`` put on ``kwargs``) as ``failed_deployment_id``,
-        which weighted failover reads. A failed pick stamps nothing."""
         if picked:
             self._stamp_failed_deployment_id_with_effective_model_info(exception, MappingProxyType({}), kwargs)
 
@@ -7996,7 +8000,6 @@ class PythonCore(DeprecatedRouterMembers):
         Returns:
             VectorStoreCreateResponse
         """
-        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             # If model is None, use the factory function approach (direct SDK call)
             if model is None:
@@ -8009,7 +8012,7 @@ class PythonCore(DeprecatedRouterMembers):
             from litellm.vector_stores import acreate as avector_store_create_sdk
 
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment = await self._core_async_get_available_deployment(  # rebind-ok: set on success, see pre-init
+            deployment: Final = await self._core_async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": "vector-store-api-fake-text"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -8058,9 +8061,6 @@ class PythonCore(DeprecatedRouterMembers):
             )
             if model is not None:
                 self.fail_calls[model] += 1
-            self._stamp_failed_attempt(
-                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
-            )
             raise e
 
     def _override_vector_store_methods_for_router(self):
@@ -9070,8 +9070,9 @@ class PythonCore(DeprecatedRouterMembers):
             kwargs[metadata_variable_name] = meta
         if not isinstance(meta, dict):
             return None
+        configured_failed_id: Final[str | None] = getattr(exception, "failed_configured_deployment_id", None)
         prev_excluded: Final = set(meta.get("_failover_excluded_ids") or [])
-        excluded: Final = prev_excluded | {failed_id}
+        excluded: Final = prev_excluded | {configured_failed_id or failed_id}
 
         all_ids: Final = {
             (d.get("model_info") or {}).get("id")
