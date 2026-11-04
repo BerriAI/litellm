@@ -11549,7 +11549,7 @@ async def test_bedrock_strict_tools_limit_rejection_is_not_sent_again_when_no_to
     assert len(sent) == 1
 
 
-def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch):
+def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch: pytest.MonkeyPatch) -> None:
     """A caller-supplied OpenAI client sends the request to its own base_url, so billing must use that
     host and not an env-configured FedRAMP or regional base."""
     import openai
