@@ -363,16 +363,23 @@ def _upsert_params(
     )
 
 
-def _transaction_reads(transaction: _UpsertTransaction) -> tuple[_ExistingKeysQuery, _SeedTotalsQuery]:
-    """Reads made inside an enclosing transaction share its connection, so they cannot wait on it."""
-
-    async def existing_keys(query: LiteralString, *args: object) -> Sequence[_ExistingKeyRow]:
+def _existing_keys_in(transaction: _UpsertTransaction) -> _ExistingKeysQuery:
+    async def query_raw(query: LiteralString, *args: object) -> Sequence[_ExistingKeyRow]:
         return _EXISTING_KEY_ROWS.validate_python(await transaction.query_raw(query, *args))
 
-    async def seed_totals(query: LiteralString, *args: object) -> Sequence[_SeedTotalsRow]:
+    return query_raw
+
+
+def _seed_totals_in(transaction: _UpsertTransaction) -> _SeedTotalsQuery:
+    async def query_raw(query: LiteralString, *args: object) -> Sequence[_SeedTotalsRow]:
         return _SEED_TOTALS_ROWS.validate_python(await transaction.query_raw(query, *args))
 
-    return existing_keys, seed_totals
+    return query_raw
+
+
+def _transaction_reads(transaction: _UpsertTransaction) -> tuple[_ExistingKeysQuery, _SeedTotalsQuery]:
+    """Reads made inside an enclosing transaction share its connection, so they cannot wait on it."""
+    return _existing_keys_in(transaction), _seed_totals_in(transaction)
 
 
 async def commit_window_spend_updates(
