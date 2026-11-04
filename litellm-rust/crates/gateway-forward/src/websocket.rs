@@ -31,12 +31,9 @@ pub(crate) fn take_handshake(
 
 pub(crate) async fn switch(
     connections: &Connections,
-    downstream: Option<OnUpgrade>,
+    downstream: OnUpgrade,
     mut response: Response<Incoming>,
 ) -> Result<Response, Rejection> {
-    let Some(downstream) = downstream else {
-        return Err(Rejection::UnrequestedUpgrade);
-    };
     if !rewrite::is_websocket_handshake(response.headers()) {
         return Err(Rejection::UnrequestedUpgrade);
     }

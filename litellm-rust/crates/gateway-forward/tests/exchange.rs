@@ -91,6 +91,84 @@ async fn forwards_the_request_as_the_client_sent_it_minus_hop_headers() {
 }
 
 #[rstest]
+#[case::host("HoSt", "public.example")]
+#[case::length("Content-Length", "7")]
+#[case::authorization("AUTHORIZATION", "Bearer test")]
+#[case::cookie("Cookie", "session=test")]
+#[case::api_key("X-Api-Key", "test")]
+#[case::azure_key("Api-Key", "test")]
+#[case::litellm_key("Litellm-Api-Key", "test")]
+#[case::forwarded("Forwarded", "for=192.0.2.1;proto=https")]
+#[case::forwarded_for("X-Forwarded-For", "192.0.2.1")]
+#[case::forwarded_proto("X-Forwarded-Proto", "https")]
+#[case::forwarded_host("X-Forwarded-Host", "public.example")]
+#[case::content_type("Content-Type", "application/octet-stream")]
+#[case::content_encoding("Content-Encoding", "identity")]
+#[tokio::test]
+async fn connection_cannot_remove_end_to_end_headers(#[case] name: &str, #[case] value: &str) {
+    let (upstream, mut received) = recording(ok).await;
+    let gateway = Gateway::start(upstream).await;
+    let mut raw = gateway.connect().await;
+    let host = if name.eq_ignore_ascii_case("host") {
+        ""
+    } else {
+        "host: public.example\r\n"
+    };
+    let length = if name.eq_ignore_ascii_case("content-length") {
+        ""
+    } else {
+        "content-length: 7\r\n"
+    };
+    raw.send(format!(
+        "POST / HTTP/1.1\r\n{host}{length}{name}: {value}\r\nconnection: x-remove\r\nconnection: {name}, keep-alive\r\nx-remove: remove\r\n\r\npayload"
+    )).await;
+    assert_eq!(
+        within(raw.response_head()).await.unwrap().status,
+        StatusCode::OK
+    );
+    let request = within(received.recv()).await.unwrap();
+    assert_eq!(request.headers[name], value);
+    assert_eq!(request.body, "payload");
+    assert!(!request.headers.contains_key("connection"));
+    assert!(!request.headers.contains_key("x-remove"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn connection_cannot_remove_response_credentials_or_representation_metadata() {
+    let (upstream, _received) = recording(|| {
+        Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("connection", "Content-Length, Set-Cookie, WWW-Authenticate, Authentication-Info, Content-Type, Content-Encoding, x-remove")
+            .header("content-length", "2")
+            .header("set-cookie", "session=; Max-Age=0")
+            .header("www-authenticate", "Bearer")
+            .header("authentication-info", "nextnonce=test")
+            .header("content-type", "text/plain")
+            .header("content-encoding", "identity")
+            .header("x-remove", "remove")
+            .body(Body::from("ok"))
+            .unwrap()
+    }).await;
+    let gateway = Gateway::start(upstream).await;
+    let mut raw = gateway.connect().await;
+    raw.send("GET / HTTP/1.1\r\nhost: x\r\n\r\n").await;
+    let head = within(raw.response_head()).await.unwrap();
+    assert_eq!(head.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(head.content_length(), Some(2));
+    assert_eq!(head.header("set-cookie"), Some(&b"session=; Max-Age=0"[..]));
+    assert_eq!(head.header("www-authenticate"), Some(&b"Bearer"[..]));
+    assert_eq!(
+        head.header("authentication-info"),
+        Some(&b"nextnonce=test"[..])
+    );
+    assert_eq!(head.header("content-type"), Some(&b"text/plain"[..]));
+    assert_eq!(head.header("content-encoding"), Some(&b"identity"[..]));
+    assert_eq!(head.header("x-remove"), None);
+    assert_eq!(raw.body(2).await, b"ok");
+}
+
+#[rstest]
 #[case::get("GET")]
 #[case::post("POST")]
 #[case::put("PUT")]

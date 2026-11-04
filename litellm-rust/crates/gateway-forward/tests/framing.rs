@@ -80,7 +80,10 @@ async fn a_request_framed_two_ways_reaches_python_framed_by_transfer_encoding_an
         Some(&b"chunked"[..])
     );
     assert_eq!(upload.body, b"hello");
-    assert!(received.try_recv().is_err(), "python ran the smuggled request");
+    assert!(
+        received.try_recv().is_err(),
+        "python ran the smuggled request"
+    );
 }
 
 #[rstest]

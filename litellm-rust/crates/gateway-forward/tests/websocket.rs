@@ -158,7 +158,13 @@ async fn open(gateway: &Gateway, handshake: String) -> (TcpStream, Head) {
 #[rstest]
 #[tokio::test]
 async fn relays_messages_both_ways(
-    #[values("Upgrade", "keep-alive, Upgrade", "upgrade")] connection: &'static str,
+    #[values(
+        "Upgrade",
+        "keep-alive, Upgrade",
+        "upgrade",
+        "Upgrade, Sec-WebSocket-Key, Sec-WebSocket-Version"
+    )]
+    connection: &'static str,
     #[values(
         Message::text("hello"),
         Message::binary(vec![0, 1, 2]),

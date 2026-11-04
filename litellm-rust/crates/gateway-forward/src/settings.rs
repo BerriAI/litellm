@@ -47,6 +47,7 @@ struct Environment {
 
 /// Everything forward mode runs with. The Python supervisor resolves each value from the settings
 /// Python actually runs with, so none of them is guessed or defaulted here.
+/// Setting `LITELLM_FORWARD_UPSTREAM` requires every other `LITELLM_FORWARD_*` setting below.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub upstream: Upstream,

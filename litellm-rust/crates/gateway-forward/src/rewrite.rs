@@ -125,6 +125,7 @@ fn strip_hop_by_hop(headers: &mut HeaderMap) {
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(','))
         .filter_map(|name| header::HeaderName::from_bytes(name.trim().as_bytes()).ok())
+        .filter(|name| !must_forward(name))
         .collect();
     for name in named {
         headers.remove(name);
@@ -132,6 +133,25 @@ fn strip_hop_by_hop(headers: &mut HeaderMap) {
     for name in HOP_BY_HOP {
         headers.remove(name);
     }
+}
+
+fn must_forward(name: &header::HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "host"
+            | "authorization"
+            | "cookie"
+            | "set-cookie"
+            | "www-authenticate"
+            | "authentication-info"
+            | "api-key"
+            | "x-api-key"
+            | "litellm-api-key"
+            | "forwarded"
+            | PEER_HEADER
+    ) || name.as_str().starts_with("content-")
+        || name.as_str().starts_with("x-forwarded-")
+        || name.as_str().starts_with("sec-websocket-")
 }
 
 // Stripping drops the handshake's Connection and Upgrade, so each hop gets them back.

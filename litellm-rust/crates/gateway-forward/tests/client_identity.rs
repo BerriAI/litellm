@@ -16,20 +16,26 @@ fn ok() -> Response {
 }
 
 #[rstest]
+#[case::ordinary("")]
+#[case::connection_nominated(
+    "connection: X-Forwarded-For, X-Forwarded-Proto, Forwarded, X-Litellm-Rust-Peer\r\n"
+)]
 #[tokio::test]
-async fn python_sees_forwarding_headers_untouched_and_the_tcp_peer_rust_saw() {
+async fn python_sees_forwarding_headers_untouched_and_the_tcp_peer_rust_saw(
+    #[case] connection: &str,
+) {
     let (upstream, mut received) = recording(ok).await;
     let gateway = Gateway::start(upstream).await;
     let mut raw = gateway.connect().await;
-    raw.send(
+    raw.send(format!(
         "GET /sso/callback HTTP/1.1\r\n\
          host: public.example\r\n\
          x-forwarded-for: 192.0.2.1\r\n\
          x-forwarded-for: 192.0.2.2\r\n\
          x-forwarded-proto: https\r\n\
          forwarded: for=192.0.2.1;proto=https\r\n\
-         x-litellm-rust-peer: 10.1.2.3:1\r\n\r\n",
-    )
+         x-litellm-rust-peer: 10.1.2.3:1\r\n{connection}\r\n",
+    ))
     .await;
     assert_eq!(
         within(raw.response_head()).await.unwrap().status,

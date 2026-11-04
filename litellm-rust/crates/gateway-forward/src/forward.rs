@@ -87,25 +87,46 @@ impl Forward {
         client: ClientSocket,
         mut request: Request,
     ) -> Result<Response, Rejection> {
-        let downstream = websocket::take_handshake(&self.connections, &mut request)?;
-        let request =
-            rewrite::upstream_request(request, &self.upstream, client, downstream.is_some())?;
-        let response = self.client.request(request);
-        let response = match downstream {
-            Some(_) => self
-                .connections
-                .until_closed(response)
-                .await
-                .ok_or(Rejection::ShuttingDown)?,
-            None => response.await,
+        if let Some(downstream) = websocket::take_handshake(&self.connections, &mut request)? {
+            return self.forward_websocket(client, request, downstream).await;
         }
-        .map_err(Rejection::from_upstream)?;
+        let request = rewrite::upstream_request(request, &self.upstream, client, false)?;
+        let response = self
+            .client
+            .request(request)
+            .await
+            .map_err(Rejection::from_upstream)?;
+        http_response(response)
+    }
+
+    async fn forward_websocket(
+        &self,
+        client: ClientSocket,
+        request: Request,
+        downstream: hyper::upgrade::OnUpgrade,
+    ) -> Result<Response, Rejection> {
+        let request = rewrite::upstream_request(request, &self.upstream, client, true)?;
+        let response = self
+            .connections
+            .until_closed(self.client.request(request))
+            .await
+            .ok_or(Rejection::ShuttingDown)?
+            .map_err(Rejection::from_upstream)?;
         if response.status() == StatusCode::SWITCHING_PROTOCOLS {
             return websocket::switch(&self.connections, downstream, response).await;
         }
-        Ok(rewrite::downstream_response(response)
-            .map(|body| Body::new(Relayed { body, failed: None })))
+        http_response(response)
     }
+}
+
+fn http_response(response: Response<Incoming>) -> Result<Response, Rejection> {
+    if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+        return Err(Rejection::UnrequestedUpgrade);
+    }
+    Ok(
+        rewrite::downstream_response(response)
+            .map(|body| Body::new(Relayed { body, failed: None })),
+    )
 }
 
 /// Python's response body on its way to the client.
