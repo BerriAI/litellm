@@ -167,6 +167,7 @@ from litellm.proxy._types import (
     TransformRequestBody,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.callback_config_validation import is_named_callback_definition
 from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
@@ -5904,6 +5905,9 @@ def _configured_db_callbacks(litellm_settings: Mapping[str, object], setting_key
     return tuple((setting_key, callback) for callback in callbacks if isinstance(callback, str))
 
 
+_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -6300,7 +6304,21 @@ class ProxyConfig:
             for key, value in config.items()
         }
 
+    def _resolved_callback_setting(self, definition: object, depth: int, max_depth: int) -> object:
+        if is_named_callback_definition(definition) or not isinstance(definition, dict):
+            return definition
+        return _SETTINGS_ADAPTER.validate_python(
+            self._check_for_os_environ_vars(
+                config=_SETTINGS_ADAPTER.validate_python(definition), depth=depth, max_depth=max_depth
+            )
+        )
+
     def _resolved_config_value(self, key: str, value: object, depth: int, max_depth: int) -> object:
+        if key == "callback_settings" and depth == 0 and isinstance(value, dict):
+            return {
+                name: self._resolved_callback_setting(definition, depth=depth + 2, max_depth=max_depth)
+                for name, definition in _SETTINGS_ADAPTER.validate_python(value).items()
+            }
         if isinstance(value, dict):
             return self._check_for_os_environ_vars(config=value, depth=depth + 1, max_depth=max_depth)
         if isinstance(value, list):
@@ -6336,10 +6354,11 @@ class ProxyConfig:
         if litellm.secret_manager_client is not None:
             return
 
-        general_settings: Final = config.get("general_settings")
-        if not isinstance(general_settings, dict):
+        raw_general_settings: Final = config.get("general_settings")
+        if not isinstance(raw_general_settings, dict):
             return
 
+        general_settings: Final = _SETTINGS_ADAPTER.validate_python(raw_general_settings)
         raw_system: Final = general_settings.get("key_management_system")
         key_management_system: Final = (
             get_secret(raw_system)

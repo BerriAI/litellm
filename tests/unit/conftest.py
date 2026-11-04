@@ -492,3 +492,12 @@ def pytest_sessionfinish() -> None:
         _close_handler_if_needed(getattr(litellm, name, None))
     _run_coroutine_if_needed(close_litellm_async_clients())
     enable_socket()
+
+
+@pytest.fixture(autouse=True)
+def _flush_callback_settings_secret_cache():
+    from litellm.proxy.common_utils.callback_utils import _SECRET_CACHE
+
+    _SECRET_CACHE.flush_cache()
+    yield
+    _SECRET_CACHE.flush_cache()

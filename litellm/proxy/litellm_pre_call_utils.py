@@ -80,6 +80,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
+    resolve_named_callback,
     strip_callback_config,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -1241,6 +1242,23 @@ def get_validated_callback_metadata(item: dict, *, source: str) -> AddTeamCallba
         return None
 
 
+def get_resolved_key_callback_metadata(item: Mapping[str, object], *, source: str) -> AddTeamCallback | None:
+    """A key-level entry, with a ``callback_settings`` reference swapped for the backend it names."""
+    callback: Final = get_validated_callback_metadata(item=dict(item), source=source)
+    if callback is None:
+        return None
+    try:
+        return resolve_named_callback(callback)
+    except (PydanticValidationError, ValueError) as e:
+        verbose_proxy_logger.warning(
+            "Ignoring %s callback metadata naming callback_settings.%s: %s",
+            source,
+            _sanitize_for_log(callback.callback_name),
+            _sanitize_for_log(str(e)),
+        )
+        return None
+
+
 _get_validated_callback_metadata: Final = get_validated_callback_metadata
 
 
@@ -1277,7 +1295,7 @@ def get_dynamic_logging_metadata(
     #########################################################################################
     if key_dynamic_logging_settings is not None:
         for item in key_dynamic_logging_settings:
-            callback = get_validated_callback_metadata(item=item, source="key-level")
+            callback = get_resolved_key_callback_metadata(item=item, source="key-level")
             if callback is None:
                 continue
             callback_settings_obj = convert_key_logging_metadata_to_callback(
@@ -1444,7 +1462,7 @@ def resolve_tenant_otel_destinations(
     callbacks: Final = tuple(
         callback
         for item in entries
-        if (callback := get_validated_callback_metadata(item=item, source="otel-destination")) is not None
+        if (callback := _destination_callback(item, key_level=key_entries is not None)) is not None
         if callback.callback_name.lower() not in disabled
     )
     return tuple(
@@ -1454,6 +1472,12 @@ def resolve_tenant_otel_destinations(
         )
         if (destination := _tenant_destination(name, callbacks, _tenant_service_name(user_api_key_dict))) is not None
     )
+
+
+def _destination_callback(item: Mapping[str, object], *, key_level: bool) -> AddTeamCallback | None:
+    if key_level:
+        return get_resolved_key_callback_metadata(item=item, source="otel-destination")
+    return get_validated_callback_metadata(item=dict(item), source="otel-destination")
 
 
 def _tenant_destination(

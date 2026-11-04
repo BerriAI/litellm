@@ -67,10 +67,15 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
     publish_auth_cache_invalidation,
 )
-from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
+from litellm.proxy.common_utils.callback_config_validation import (
+    logging_metadata_config_error,
+    named_callback_definition,
+    stored_callback_entries,
+)
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     encrypt_callback_vars,
+    named_callback_resolution_error,
 )
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
@@ -929,6 +934,47 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
         raise HTTPException(status_code=400, detail={"error": error})
 
 
+def raise_on_unauthorized_callback_reference(
+    metadata: Mapping[str, object] | None, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    """Only a proxy admin may point a key at a ``callback_settings`` definition.
+
+    The definition carries the operator's secret-manager references, so a key that
+    names it must not be writable by the team admins and members who can otherwise
+    edit key metadata, and must not override the values the definition sets.
+    """
+    references: Final = tuple(
+        (callback_name, callback_vars, definition)
+        for callback_name, callback_vars in stored_callback_entries((metadata or {}).get("logging"))
+        if callback_name is not None and (definition := named_callback_definition(callback_name)) is not None
+    )
+    if not references:
+        return
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only a proxy admin can point a key at a callback_settings definition"},
+        )
+    overridden: Final = next(
+        (error for reference in references if (error := _overridden_definition_var_error(reference)) is not None),
+        None,
+    )
+    if overridden is not None:
+        raise HTTPException(status_code=400, detail={"error": overridden})
+
+
+def _overridden_definition_var_error(
+    reference: tuple[str, Mapping[str, str], Mapping[str, object]],
+) -> str | None:
+    callback_name, callback_vars, definition = reference
+    variable_name: Final = next((name for name in callback_vars if name in definition), None)
+    if variable_name is None:
+        return None
+    return (
+        f"callback_vars.{variable_name} is set by callback_settings.{callback_name} and cannot be overridden on the key"
+    )
+
+
 def common_key_access_checks(
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -961,6 +1007,7 @@ def common_key_access_checks(
         llm_router=llm_router,
         premium_user=premium_user,
     )
+    raise_on_unauthorized_callback_reference(data.metadata, user_api_key_dict)
     return True
 
 
@@ -6462,6 +6509,7 @@ def _check_regenerate_guardrail_opt_out(
         user_api_key_dict,
         existing_metadata=existing_metadata,
     )
+    raise_on_unauthorized_callback_reference(data.metadata, user_api_key_dict)
 
 
 @router.post(
@@ -8347,10 +8395,16 @@ async def key_health(
 
         # Check if logging is configured in metadata
         if key_metadata and "logging" in key_metadata:
-            logging_statuses: Final = await test_key_logging(
-                user_api_key_dict=user_api_key_dict,
-                request=request,
-                key_logging=decrypt_callback_vars(key_metadata)["logging"],
+            key_logging: Final = decrypt_callback_vars(key_metadata)["logging"]
+            resolution_error: Final = named_callback_resolution_error(key_logging)
+            logging_statuses: Final = (
+                await test_key_logging(user_api_key_dict=user_api_key_dict, request=request, key_logging=key_logging)
+                if resolution_error is None
+                else LoggingCallbackStatus(
+                    callbacks=[name for name, _ in stored_callback_entries(key_logging) if name is not None],
+                    status="unhealthy",
+                    details=resolution_error,
+                )
             )
             health_status["logging_callbacks"] = logging_statuses
 

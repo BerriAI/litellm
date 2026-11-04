@@ -1,19 +1,21 @@
 import copy
 import json
 import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, Protocol, TypeAlias
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
+    CALLBACK_SETTINGS_SECRET_CACHE_TTL_SECONDS,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
@@ -27,7 +29,8 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
+from litellm.proxy._types import AddTeamCallback, CommonProxyErrors, LiteLLMPromptInjectionParams
+from litellm.proxy.common_utils.callback_config_validation import named_callback_definition
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -796,3 +799,122 @@ def _decrypt_or_passthrough(key: str, value: object) -> object:
     inner: Final = value[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
     decrypted: Final = decrypt_value_helper(value=inner, key=key, exception_type="debug", return_original_value=False)
     return decrypted if decrypted is not None else value
+
+
+_STRING_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
+_SECRET_VALUE: Final[TypeAdapter[str | bool | None]] = TypeAdapter(str | bool | None)
+_SECRET_REFERENCE_PREFIX: Final = "os.environ/"
+
+
+class _SecretCache(Protocol):
+    def get_cache(self, key: str) -> object: ...
+    def set_cache(self, key: str, value: object) -> None: ...
+    def flush_cache(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedSecret:
+    """Wraps the value so ``InMemoryCache.get_cache`` cannot json-decode a numeric or boolean-looking string."""
+
+    value: str | bool
+
+
+_SECRET_CACHE: Final = InMemoryCache(max_size_in_memory=256, default_ttl=CALLBACK_SETTINGS_SECRET_CACHE_TTL_SECONDS)
+
+
+def _secret_cache() -> _SecretCache:
+    return _SECRET_CACHE
+
+
+def resolve_named_callback(callback: AddTeamCallback) -> AddTeamCallback:
+    """Swap a reference to a ``callback_settings`` definition for the backend it names.
+
+    The definition's values go through the secret manager on every call, so a rotated
+    secret is picked up by the next request. The key keeps only the reference name
+    and may add values the definition does not set.
+    """
+    definition: Final = named_callback_definition(callback.callback_name)
+    if definition is None:
+        return callback
+    backend: Final = str(definition["callback_type"])
+    callback_vars: Final = {
+        **{
+            key: _resolved_definition_value(callback.callback_name, key, value)
+            for key, value in definition.items()
+            if key != "callback_type"
+        },
+        **callback.callback_vars,
+    }
+    try:
+        return AddTeamCallback(callback_name=backend, callback_type=callback.callback_type, callback_vars=callback_vars)
+    except (ValidationError, ValueError):
+        rejected: Final = ", ".join(_rejected_callback_vars(backend, callback_vars))
+        raise ValueError(
+            f"callback_settings.{callback.callback_name} sets {rejected} to a value the {backend} callback rejects"
+        ) from None
+
+
+def _rejected_callback_vars(backend: str, callback_vars: Mapping[str, str]) -> tuple[str, ...]:
+    return tuple(key for key, value in callback_vars.items() if not _accepts_callback_var(backend, key, value))
+
+
+def _accepts_callback_var(backend: str, key: str, value: str) -> bool:
+    try:
+        AddTeamCallback(callback_name=backend, callback_vars={key: value})
+    except (ValidationError, ValueError):
+        return False
+    return True
+
+
+def named_callback_resolution_error(entries: object) -> str | None:
+    """Why a key's ``callback_settings`` references cannot be resolved right now, or None."""
+    items: Final = (
+        _OBJECT_SEQUENCE.validate_python(entries)
+        if isinstance(entries, Sequence) and not isinstance(entries, (str, bytes))
+        else ()
+    )
+    return next((error for item in items if (error := _reference_resolution_error(item)) is not None), None)
+
+
+def _reference_resolution_error(item: object) -> str | None:
+    if not isinstance(item, Mapping):
+        return None
+    entry: Final = _STRING_KEYED_MAPPING.validate_python(item)
+    callback_name: Final = entry.get("callback_name")
+    if not isinstance(callback_name, str) or named_callback_definition(callback_name) is None:
+        return None
+    try:
+        resolve_named_callback(AddTeamCallback.model_validate(entry))
+    except (ValidationError, ValueError) as e:
+        return str(e)
+    return None
+
+
+def _resolved_definition_value(definition_name: str, key: str, value: object) -> str:
+    if value is None:
+        raise ValueError(f"callback_settings.{definition_name}.{key} is not set")
+    raw: Final = value if isinstance(value, str) else str(value)
+    if not raw.startswith(_SECRET_REFERENCE_PREFIX):
+        return raw
+    secret: Final = _secret_manager_value(raw)
+    if secret is None:
+        raise ValueError(f"callback_settings.{definition_name}.{key} could not be resolved from the secret manager")
+    return secret if isinstance(secret, str) else str(secret).lower()
+
+
+def _secret_manager_value(reference: str) -> str | bool | None:
+    """One secret-manager read per reference per TTL per worker, so a slow manager does not stall every request.
+
+    Misses are not cached, so a secret created after the first read is picked up on the next request.
+    """
+    cache: Final = _secret_cache() if CALLBACK_SETTINGS_SECRET_CACHE_TTL_SECONDS > 0 else None
+    cached: Final = cache.get_cache(reference) if cache is not None else None
+    if isinstance(cached, _CachedSecret):
+        return cached.value
+    secret: Final = _SECRET_VALUE.validate_python(get_secret(reference, default_value=reference))
+    if secret is None or secret in ("", reference):
+        return None
+    if cache is not None:
+        cache.set_cache(reference, _CachedSecret(secret))
+    return secret

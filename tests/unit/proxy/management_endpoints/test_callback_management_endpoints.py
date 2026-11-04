@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-from typing import cast
+from typing import Final, cast
 
 from fastapi import FastAPI
 
@@ -51,9 +51,7 @@ class TestCallbackManagementEndpoints:
         client = TestClient(app)
 
         # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list", headers={"Authorization": "Bearer sk-9876"}
-        )
+        response = client.get("/callbacks/list", headers={"Authorization": "Bearer sk-9876"})
 
         # Verify response
         assert response.status_code == 200
@@ -86,9 +84,7 @@ class TestCallbackManagementEndpoints:
         litellm._async_success_callback.append("langfuse")
 
         # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list", headers={"Authorization": "Bearer sk-9876"}
-        )
+        response = client.get("/callbacks/list", headers={"Authorization": "Bearer sk-9876"})
 
         # Verify response
         assert response.status_code == 200
@@ -117,9 +113,7 @@ class TestCallbackManagementEndpoints:
         litellm.callbacks.append("datadog")
 
         # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list", headers={"Authorization": "Bearer sk-9876"}
-        )
+        response = client.get("/callbacks/list", headers={"Authorization": "Bearer sk-9876"})
 
         # Verify response
         assert response.status_code == 200
@@ -133,10 +127,7 @@ class TestCallbackManagementEndpoints:
         # The categorization logic should deduplicate properly
         assert len([cb for cb in response_data["success"] if cb == "datadog"]) <= 1
         assert len([cb for cb in response_data["failure"] if cb == "datadog"]) <= 1
-        assert (
-            len([cb for cb in response_data["success_and_failure"] if cb == "datadog"])
-            <= 1
-        )
+        assert len([cb for cb in response_data["success_and_failure"] if cb == "datadog"]) <= 1
 
         # Verify the response structure is correct
         assert isinstance(response_data["success"], list)
@@ -154,9 +145,7 @@ class TestCallbackManagementEndpoints:
         litellm.callbacks.append("prometheus")
 
         # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list", headers={"Authorization": "Bearer sk-9876"}
-        )
+        response = client.get("/callbacks/list", headers={"Authorization": "Bearer sk-9876"})
 
         # Verify response
         assert response.status_code == 200
@@ -168,24 +157,16 @@ class TestCallbackManagementEndpoints:
         proxy_internal_callbacks = ["_PROXY_VirtualKeyModelMaxBudgetLimiter"]
 
         response_data["success_and_failure"] = [
-            cb
-            for cb in response_data["success_and_failure"]
-            if cb not in proxy_internal_callbacks
+            cb for cb in response_data["success_and_failure"] if cb not in proxy_internal_callbacks
         ]
 
         # Verify callbacks are properly categorized
-        assert (
-            "prometheus" in response_data["success_and_failure"]
-        )  # callbacks list items go to success_and_failure
+        assert "prometheus" in response_data["success_and_failure"]  # callbacks list items go to success_and_failure
         assert "langfuse" in response_data["success"]
         assert "datadog" in response_data["failure"]
 
         # Verify no duplicates
-        all_callbacks = (
-            response_data["success"]
-            + response_data["failure"]
-            + response_data["success_and_failure"]
-        )
+        all_callbacks = response_data["success"] + response_data["failure"] + response_data["success_and_failure"]
         assert len(set(all_callbacks)) == len(all_callbacks)
 
     def test_alist_callbacks_empty_response_structure(self):
@@ -194,9 +175,7 @@ class TestCallbackManagementEndpoints:
         client = TestClient(app)
 
         # Make request to list callbacks endpoint
-        response = client.get(
-            "/callbacks/list", headers={"Authorization": "Bearer sk-9876"}
-        )
+        response = client.get("/callbacks/list", headers={"Authorization": "Bearer sk-9876"})
 
         # Verify response structure
         assert response.status_code == 200
@@ -214,9 +193,7 @@ class TestCallbackManagementEndpoints:
         client = TestClient(app)
 
         # Make request to get callback configs endpoint
-        response = client.get(
-            "/callbacks/configs", headers={"Authorization": "Bearer sk-9876"}
-        )
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-9876"})
 
         # Verify response
         assert response.status_code == 200
@@ -243,12 +220,9 @@ class TestCallbackManagementEndpoints:
 
         # Check if at least one callback has detailed parameter configuration
         has_detailed_params = any(
-            config.get("dynamic_params") and len(config.get("dynamic_params", {})) > 0
-            for config in response_data
+            config.get("dynamic_params") and len(config.get("dynamic_params", {})) > 0 for config in response_data
         )
-        assert (
-            has_detailed_params
-        ), "Expected at least one callback to have detailed parameter configuration"
+        assert has_detailed_params, "Expected at least one callback to have detailed parameter configuration"
 
         galileo_config = next(
             (config for config in response_data if config.get("id") == "galileo"),
@@ -479,5 +453,102 @@ class TestNewRelicKeyLoggingValidation:
                 )
                 is None
             )
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+
+_ARIZE_REFERENCE_SETTINGS: Final = {
+    "arize_space_a": {
+        "callback_type": "arize",
+        "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY",
+        "arize_space_id": "os.environ/LIT10061_ARIZE_SPACE_ID",
+    }
+}
+
+
+class TestCallbackReferenceKeyWrites:
+    @staticmethod
+    def _metadata(callback_name, **callback_vars):
+        return {
+            "logging": [{"callback_name": callback_name, "callback_type": "success", "callback_vars": callback_vars}]
+        }
+
+    @pytest.mark.parametrize("role", ["internal_user", "team", None])
+    def test_only_a_proxy_admin_can_point_a_key_at_a_definition(self, monkeypatch, role):
+        from fastapi import HTTPException
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_unauthorized_callback_reference,
+        )
+
+        monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+        with pytest.raises(HTTPException) as exc:
+            raise_on_unauthorized_callback_reference(self._metadata("arize_space_a"), UserAPIKeyAuth(user_role=role))
+        assert exc.value.status_code == 403
+        assert "callback_settings" in str(exc.value.detail)
+
+    def test_a_proxy_admin_can_point_a_key_at_a_definition_and_add_its_own_values(self, monkeypatch):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_unauthorized_callback_reference,
+        )
+
+        monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+        assert (
+            raise_on_unauthorized_callback_reference(
+                self._metadata("arize_space_a", turn_off_message_logging="true"),
+                UserAPIKeyAuth(user_role="proxy_admin"),
+            )
+            is None
+        )
+
+    def test_a_key_cannot_override_a_value_its_definition_sets(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_unauthorized_callback_reference,
+        )
+
+        monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+        with pytest.raises(HTTPException) as exc:
+            raise_on_unauthorized_callback_reference(
+                self._metadata("arize_space_a", arize_api_key="inline-key"), UserAPIKeyAuth(user_role="proxy_admin")
+            )
+        assert exc.value.status_code == 400
+        assert "arize_api_key" in str(exc.value.detail)
+
+    def test_an_inline_callback_entry_is_not_gated(self, monkeypatch):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_unauthorized_callback_reference,
+        )
+
+        monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+        assert (
+            raise_on_unauthorized_callback_reference(
+                self._metadata("arize", arize_api_key="inline-key", arize_space_id="space-b"),
+                UserAPIKeyAuth(user_role="internal_user"),
+            )
+            is None
+        )
+        assert raise_on_unauthorized_callback_reference(None, UserAPIKeyAuth(user_role="internal_user")) is None
+
+    def test_a_proxy_admin_can_add_a_backend_option_to_a_reference(self, monkeypatch):
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_invalid_key_logging_config,
+            raise_on_unauthorized_callback_reference,
+        )
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+        metadata: Final = self._metadata("arize_space_a", excluded_services="postgres")
+        try:
+            assert raise_on_invalid_key_logging_config(metadata) is None
+            assert raise_on_unauthorized_callback_reference(metadata, UserAPIKeyAuth(user_role="proxy_admin")) is None
         finally:
             is_otel_v2_enabled.cache_clear()

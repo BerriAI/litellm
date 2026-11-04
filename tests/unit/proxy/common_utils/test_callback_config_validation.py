@@ -3,6 +3,7 @@ from typing import Final
 
 import pytest
 
+import litellm
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
     conflicting_callback_var_error,
@@ -499,3 +500,70 @@ def test_key_logging_entries_compare_excluded_services_by_parsed_value(
 def test_a_failure_only_entry_rejects_excluded_services() -> None:
     error: Final = callback_config_error("langfuse_otel", {"excluded_services": "redis"}, "failure")
     assert error is not None and "excluded_services" in error and "success_and_failure" in error
+
+
+class TestCallbackReferenceEntries:
+    @staticmethod
+    def _entry(callback_name: str, **callback_vars: str) -> dict[str, object]:
+        return {
+            "logging": [{"callback_name": callback_name, "callback_type": "success", "callback_vars": callback_vars}]
+        }
+
+    @pytest.fixture
+    def otel_v2_on(self, monkeypatch) -> Iterator[None]:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        is_otel_v2_enabled.cache_clear()
+        monkeypatch.setattr(
+            litellm,
+            "callback_settings",
+            {
+                "arize_space_a": {
+                    "callback_type": "arize",
+                    "arize_api_key": "os.environ/A",
+                    "arize_space_id": "s",
+                    "capture_message_content": "no_content",
+                },
+                "langfuse_team_b": {
+                    "callback_type": "langfuse",
+                    "langfuse_public_key": "pk",
+                    "langfuse_secret_key": "sk",
+                },
+            },
+        )
+        try:
+            yield
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_a_reference_accepts_the_options_its_backend_supports(self, otel_v2_on):
+        assert logging_metadata_config_error(self._entry("arize_space_a", excluded_services="postgres,redis")) is None
+        assert logging_metadata_config_error(self._entry("arize_space_a", arize_otlp_protocol="grpc")) is None
+
+    def test_a_reference_rejects_the_options_its_backend_does_not_support(self, otel_v2_on):
+        error: Final = logging_metadata_config_error(self._entry("langfuse_team_b", excluded_services="postgres"))
+
+        assert error is not None and "excluded_services" in error and "'langfuse'" in error
+
+    def test_an_inline_entry_cannot_contradict_the_content_setting_its_reference_inherits(self, otel_v2_on):
+        reference: Final = {"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}
+        inline: Final = {
+            "callback_name": "arize",
+            "callback_type": "success",
+            "callback_vars": {"capture_message_content": "span_only"},
+        }
+
+        error: Final = logging_metadata_config_error({"logging": [reference, inline]})
+
+        assert error is not None and "capture_message_content" in error
+
+    def test_an_inline_entry_may_repeat_the_content_setting_its_reference_inherits(self, otel_v2_on):
+        reference: Final = {"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}
+        inline: Final = {
+            "callback_name": "arize",
+            "callback_type": "success",
+            "callback_vars": {"capture_message_content": "no_content"},
+        }
+
+        assert logging_metadata_config_error({"logging": [reference, inline]}) is None

@@ -111,7 +111,8 @@ class TestGetMetadataVariableName:
         assert get_metadata_variable_name(request) == "litellm_metadata"
 
     @pytest.mark.parametrize(
-        "path", ["/v1beta/interactions", "/interactions", "/v1beta/interactions/v1_abc123", "/interactions/v1_abc123/cancel"]
+        "path",
+        ["/v1beta/interactions", "/interactions", "/v1beta/interactions/v1_abc123", "/interactions/v1_abc123/cancel"],
     )
     def test_returns_litellm_metadata_for_interactions_routes(self, path):
         request = self._make_request(path)
@@ -807,7 +808,9 @@ async def test_interactions_spend_logs_metadata_survives_the_router_metadata_buc
 
     # The router then adds its deployment fields to the same bucket, and the spend log
     # resolves that bucket.
-    data["litellm_metadata"].update({"model_group": "gemini-3.1-flash-lite", "deployment": "gemini/gemini-3.1-flash-lite"})
+    data["litellm_metadata"].update(
+        {"model_group": "gemini-3.1-flash-lite", "deployment": "gemini/gemini-3.1-flash-lite"}
+    )
     resolved = get_litellm_metadata_from_kwargs(
         {"litellm_params": {"metadata": data.get("metadata") or {}, "litellm_metadata": data["litellm_metadata"]}}
     )
@@ -2949,6 +2952,103 @@ def test_get_dynamic_logging_metadata_ignores_env_reference_from_key_metadata(
     assert result is None
 
 
+_ARIZE_REFERENCE_SETTINGS: Final = {
+    "arize_space_a": {
+        "callback_type": "arize",
+        "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY",
+        "arize_space_id": "os.environ/LIT10061_ARIZE_SPACE_ID",
+        "excluded_services": "postgres,redis",
+    }
+}
+
+
+def _key_auth_referencing(callback_name: str, **callback_vars: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="test-key",
+        team_id="team-a",
+        metadata={
+            "logging": [{"callback_name": callback_name, "callback_type": "success", "callback_vars": callback_vars}]
+        },
+        team_metadata={},
+    )
+
+
+def test_key_callback_reference_picks_up_a_rotated_secret_once_the_cache_ttl_passes(monkeypatch):
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.proxy.common_utils import callback_utils
+
+    now: Final = [1_000.0]
+    monkeypatch.setattr(callback_utils, "_SECRET_CACHE", InMemoryCache(default_ttl=60, clock=lambda: now[0]))
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "first-key")
+    monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+
+    first: Final = get_dynamic_logging_metadata(
+        user_api_key_dict=_key_auth_referencing("arize_space_a"), proxy_config=MagicMock()
+    )
+    monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "rotated-key")
+    within_ttl: Final = get_dynamic_logging_metadata(
+        user_api_key_dict=_key_auth_referencing("arize_space_a"), proxy_config=MagicMock()
+    )
+    now[0] += 61
+    after_ttl: Final = get_dynamic_logging_metadata(
+        user_api_key_dict=_key_auth_referencing("arize_space_a"), proxy_config=MagicMock()
+    )
+
+    assert first is not None and within_ttl is not None and after_ttl is not None
+    assert first.success_callback == ["arize"]
+    assert first.callback_vars == {"arize_api_key": "first-key", "arize_space_id": "space-a"}
+    assert within_ttl.callback_vars["arize_api_key"] == "first-key"
+    assert after_ttl.callback_vars["arize_api_key"] == "rotated-key"
+
+
+def test_key_callback_reference_keeps_the_values_the_key_adds(monkeypatch):
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "first-key")
+    monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+
+    result: Final = get_dynamic_logging_metadata(
+        user_api_key_dict=_key_auth_referencing("arize_space_a", turn_off_message_logging="true"),
+        proxy_config=MagicMock(),
+    )
+
+    assert result is not None
+    assert result.callback_vars["turn_off_message_logging"] == "true"
+    assert result.callback_vars["arize_api_key"] == "first-key"
+
+
+def test_key_callback_reference_with_an_unreadable_secret_logs_nowhere(monkeypatch):
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    monkeypatch.delenv("LIT10061_ARIZE_API_KEY", raising=False)
+    monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+
+    result: Final = get_dynamic_logging_metadata(
+        user_api_key_dict=_key_auth_referencing("arize_space_a"), proxy_config=MagicMock()
+    )
+
+    assert result is None
+
+
+def test_team_callback_reference_is_not_resolved(monkeypatch):
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "first-key")
+    monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="test-key",
+        team_id="team-a",
+        metadata={},
+        team_metadata={
+            "logging": [{"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}]
+        },
+    )
+
+    result: Final = get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
+
+    assert result is not None
+    assert result.success_callback == ["arize_space_a"]
+    assert "arize_api_key" not in result.callback_vars
+
+
 def test_get_num_retries_from_request():
     """
     Test LiteLLMProxyRequestSetup._get_num_retries_from_request method
@@ -3758,53 +3858,87 @@ async def test_spend_log_caller_session_stays_out_of_requester_metadata(monkeypa
     "surface,headers,body,child_id,trace_id",
     [
         (
-            "chat/completions", {"X-Session-Id": "child-01"}, {"metadata": {"session_id": "body-001"}},
-            "child-01", "parent-01",
+            "chat/completions",
+            {"X-Session-Id": "child-01"},
+            {"metadata": {"session_id": "body-001"}},
+            "child-01",
+            "parent-01",
         ),
         ("responses", {"x-vendor-session-id": "child-01"}, {}, "child-01", "parent-01"),
         ("messages", {"session-id": "child-01", "user-agent": "codex_cli_rs/1.0"}, {}, "child-01", "parent-01"),
         ("chat/completions", {"x-litellm-session-id": "short", "x-session-id": "child-01"}, {}, "short", "short"),
         ("responses", {"x-litellm-trace-id": "trace-01", "x-session-id": "child-01"}, {}, "child-01", "trace-01"),
         (
-            "messages", {"x-litellm-trace-id": "trace-01", "x-litellm-session-id": "child-01"},
-            {}, "child-01", "trace-01",
+            "messages",
+            {"x-litellm-trace-id": "trace-01", "x-litellm-session-id": "child-01"},
+            {},
+            "child-01",
+            "trace-01",
         ),
         ("responses", {}, {"metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
         ("messages", {}, {"litellm_metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
         ("chat/completions", {}, {"litellm_metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
         ("messages", {"baggage": "session.id=child-01"}, {}, "child-01", "parent-01"),
         (
-            "responses", {"baggage": "session.id=child-01"}, {"metadata": {"session_id": "body-001"}},
-            "body-001", "parent-01",
+            "responses",
+            {"baggage": "session.id=child-01"},
+            {"metadata": {"session_id": "body-001"}},
+            "body-001",
+            "parent-01",
         ),
         (
-            "chat/completions", {}, {"litellm_session_id": "root-001", "metadata": {"session_id": "body-001"}},
-            "root-001", "parent-01",
+            "chat/completions",
+            {},
+            {"litellm_session_id": "root-001", "metadata": {"session_id": "body-001"}},
+            "root-001",
+            "parent-01",
         ),
         (
-            "responses", {}, {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": "active-1"}},
-            "active-1", "parent-01",
+            "responses",
+            {},
+            {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": "active-1"}},
+            "active-1",
+            "parent-01",
         ),
         (
-            "chat/completions", {},
+            "chat/completions",
+            {},
             {"metadata": {"session_id": "active-1"}, "litellm_metadata": {"session_id": "body-001"}},
-            "active-1", "parent-01",
+            "active-1",
+            "parent-01",
         ),
         (
-            "chat/completions", {}, {"metadata": {"session_id": ""}, "litellm_metadata": {"session_id": "body-001"}},
-            None, "parent-01",
+            "chat/completions",
+            {},
+            {"metadata": {"session_id": ""}, "litellm_metadata": {"session_id": "body-001"}},
+            None,
+            "parent-01",
         ),
         (
-            "messages", {}, {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": ""}},
-            None, "parent-01",
+            "messages",
+            {},
+            {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": ""}},
+            None,
+            "parent-01",
         ),
         (
-            "messages", {}, {"litellm_session_id": "root-001", "litellm_metadata": {"session_id": "active-1"},
-            "metadata": {"session_id": "body-001", "user_id": "user_abc_account__session_anthro-1"}},
-            "anthro-1", "parent-01",
+            "messages",
+            {},
+            {
+                "litellm_session_id": "root-001",
+                "litellm_metadata": {"session_id": "active-1"},
+                "metadata": {"session_id": "body-001", "user_id": "user_abc_account__session_anthro-1"},
+            },
+            "anthro-1",
+            "parent-01",
         ),
-        ("messages", {"x-session-id": "child-01"}, {"metadata": {"user_id": {"session_id": "body-001"}}},
-         "child-01", "parent-01"),
+        (
+            "messages",
+            {"x-session-id": "child-01"},
+            {"metadata": {"user_id": {"session_id": "body-001"}}},
+            "child-01",
+            "parent-01",
+        ),
         ("chat/completions", {}, {}, None, "parent-01"),
         ("responses", {"x-session-id": "bad"}, {}, None, "parent-01"),
         ("messages", {}, {"metadata": {"session_id": 123}}, None, "parent-01"),
@@ -4346,9 +4480,7 @@ def _bedrock_passthrough_data(
         ),
     ],
 )
-def test_bedrock_request_metadata_thread_id_becomes_session_id(
-    headers: dict[str, str], client_body: dict[str, object]
-):
+def test_bedrock_request_metadata_thread_id_becomes_session_id(headers: dict[str, str], client_body: dict[str, object]):
     sent_body: Final = copy.deepcopy(client_body)
     data: Final = _bedrock_passthrough_data(client_body)
 
@@ -4428,7 +4560,9 @@ def test_bedrock_request_metadata_without_usable_session_id_sets_no_session(
 @pytest.mark.parametrize(
     ("body_tags", "header_tags", "expected"),
     [
-        pytest.param({"team": "search"}, {"threadId": "thread-abc-123"}, "thread-abc-123", id="body_without_session_key"),
+        pytest.param(
+            {"team": "search"}, {"threadId": "thread-abc-123"}, "thread-abc-123", id="body_without_session_key"
+        ),
         pytest.param({"sessionId": "body-session"}, {"sessionId": "header-session"}, "body-session", id="body_wins"),
     ],
 )
@@ -11226,9 +11360,7 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(
-        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
-    )
+    load = AsyncMock(return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}})
     monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
@@ -11282,9 +11414,7 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(
-        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
-    )
+    load = AsyncMock(return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}})
     monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[

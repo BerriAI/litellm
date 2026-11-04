@@ -50,6 +50,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/litellm_core_utils/prompt_templates/factory.py",
         "litellm/litellm_core_utils/prompt_templates/image_handling.py",
         "litellm/litellm_core_utils/specialty_caches/dynamic_logging_cache.py",
+        "litellm/proxy/common_utils/callback_utils.py",
         "litellm/litellm_core_utils/specialty_caches/service_trace_id_cache.py",
         "litellm/llms/azure/common_utils.py",
         "litellm/llms/bedrock/base_aws_llm.py",

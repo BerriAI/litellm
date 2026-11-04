@@ -24240,3 +24240,28 @@ async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypa
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
+
+
+@pytest.mark.asyncio
+async def test_key_health_reports_a_callback_settings_secret_it_cannot_read(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import key_health
+
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"arize_space_b": {"callback_type": "arize", "arize_api_key": "os.environ/LIT10061_UNSET_ARIZE_API_KEY"}},
+    )
+    monkeypatch.delenv("LIT10061_UNSET_ARIZE_API_KEY", raising=False)
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-test",
+        metadata={"logging": [{"callback_name": "arize_space_b", "callback_type": "success", "callback_vars": {}}]},
+    )
+
+    health = await key_health(request=MagicMock(), user_api_key_dict=user_api_key_dict)
+
+    assert health["key"] == "unhealthy"
+    assert health["logging_callbacks"]["callbacks"] == ["arize_space_b"]
+    assert "callback_settings.arize_space_b.arize_api_key" in str(health["logging_callbacks"]["details"])

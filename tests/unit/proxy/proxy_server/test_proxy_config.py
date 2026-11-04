@@ -1597,6 +1597,34 @@ def test_ProxyConfig__check_for_os_environ_vars_substitutes(monkeypatch):
     assert out == {"a": "secret-value", "b": 2, "nested": {"c": "secret-value"}}
 
 
+def test_ProxyConfig__check_for_os_environ_vars_keeps_named_callback_definitions_as_references(monkeypatch):
+    monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "boot-time-value")
+    monkeypatch.setenv("LIT10061_SINK_TOKEN", "sink-token")
+    pc = ProxyConfig()
+    cfg = {
+        "callback_settings": {
+            "arize_space_a": {"callback_type": "arize", "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY"},
+            "audit_sink": {
+                "callback_type": "generic_api",
+                "endpoint": "https://sink.local",
+                "headers": {"Authorization": "os.environ/LIT10061_SINK_TOKEN"},
+            },
+            "otel": {"message_logging": False},
+        },
+        "general_settings": {"master_key": "os.environ/LIT10061_ARIZE_API_KEY"},
+    }
+
+    out = pc._check_for_os_environ_vars(cfg)
+
+    assert out["callback_settings"]["arize_space_a"] == {
+        "callback_type": "arize",
+        "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY",
+    }
+    assert out["callback_settings"]["audit_sink"]["headers"] == {"Authorization": "sink-token"}
+    assert out["callback_settings"]["otel"] == {"message_logging": False}
+    assert out["general_settings"]["master_key"] == "boot-time-value"
+
+
 def test_ProxyConfig__check_for_os_environ_vars_missing_env_returns_none(monkeypatch):
     monkeypatch.delenv("NONEXISTENT_TEST_VAR_X", raising=False)
     pc = ProxyConfig()

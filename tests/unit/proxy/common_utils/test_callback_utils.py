@@ -11,7 +11,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.constants import MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import AddTeamCallback, UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     _serialize_scan_metadata_header,
     add_guardrail_scan_id,
@@ -21,8 +21,10 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
     initialize_callbacks_on_proxy,
+    named_callback_resolution_error,
     normalize_callback_names,
     process_callback,
+    resolve_named_callback,
     sanitize_openai_provider_metadata,
     strip_callback_config,
 )
@@ -167,9 +169,7 @@ def test_add_policy_to_applied_policies_header_uses_litellm_metadata_bucket():
         "litellm_metadata": {},
     }
 
-    add_policy_to_applied_policies_header(
-        request_data=request_data, policy_name="global-baseline"
-    )
+    add_policy_to_applied_policies_header(request_data=request_data, policy_name="global-baseline")
 
     assert request_data["litellm_metadata"]["applied_policies"] == ["global-baseline"]
     assert "applied_policies" not in request_data.get("metadata", {})
@@ -324,9 +324,7 @@ def test_initialize_callbacks_on_proxy_instantiates_compression_interception(
         lambda litellm_settings, callback_specific_params: dummy_callback,
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         initialize_callbacks_on_proxy(
@@ -379,20 +377,11 @@ def test_encrypt_callback_vars_round_trip(monkeypatch):
     enc_vars = encrypted["logging"][0]["callback_vars"]
     assert enc_vars["langfuse_secret_key"] != "sk-lf-secret"
     assert enc_vars["langfuse_public_key"] != "pk-lf-public"
-    assert (
-        encrypted["callback_settings"]["callback_vars"]["langsmith_api_key"]
-        != "ls-api-key"
-    )
+    assert encrypted["callback_settings"]["callback_vars"]["langsmith_api_key"] != "ls-api-key"
 
     decrypted = decrypt_callback_vars(encrypted)
-    assert (
-        decrypted["logging"][0]["callback_vars"]
-        == original["logging"][0]["callback_vars"]
-    )
-    assert (
-        decrypted["callback_settings"]["callback_vars"]
-        == original["callback_settings"]["callback_vars"]
-    )
+    assert decrypted["logging"][0]["callback_vars"] == original["logging"][0]["callback_vars"]
+    assert decrypted["callback_settings"]["callback_vars"] == original["callback_settings"]["callback_vars"]
 
 
 def test_encrypt_callback_vars_is_idempotent(monkeypatch):
@@ -415,10 +404,7 @@ def test_decrypt_callback_vars_passes_through_legacy_plaintext(monkeypatch):
     plaintext = _sample_metadata()
     decrypted = decrypt_callback_vars(plaintext)
     # legacy rows decrypt-fail and fall through unchanged
-    assert (
-        decrypted["logging"][0]["callback_vars"]["langfuse_secret_key"]
-        == "sk-lf-secret"
-    )
+    assert decrypted["logging"][0]["callback_vars"]["langfuse_secret_key"] == "sk-lf-secret"
 
 
 def test_callback_vars_helpers_handle_edge_shapes(monkeypatch):
@@ -519,9 +505,7 @@ def test_initialize_callbacks_on_proxy_lakera_ignores_non_dict_callback_settings
         SimpleNamespace(prisma_client=None),
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         # A non-dict value must be ignored (init_params stays {}), not **-unpacked.
@@ -539,9 +523,7 @@ def test_initialize_callbacks_on_proxy_lakera_ignores_non_dict_callback_settings
 
 
 @pytest.mark.parametrize("bad_root", [None, True])
-def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
-    monkeypatch, bad_root
-):
+def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(monkeypatch, bad_root):
     """Regression: a blank `callback_settings:` key in YAML loads as None (and
     `callback_settings: true` as a bool); load_config forwards that value
     verbatim as callback_specific_params. Membership tests like
@@ -558,9 +540,7 @@ def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
         CompressionInterceptionLogger,
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         initialize_callbacks_on_proxy(
@@ -570,9 +550,7 @@ def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
             litellm_settings={},
             callback_specific_params=bad_root,
         )
-        assert any(
-            isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks
-        )
+        assert any(isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks)
     finally:
         litellm.callbacks = original_callbacks
 
@@ -624,7 +602,7 @@ def test_strip_callback_config_passes_through_non_dicts(value):
 
 _PROBE_MODULE_NAME = "custom_callback_probe"
 
-_PROBE_MODULE_SOURCE = '''
+_PROBE_MODULE_SOURCE = """
 from litellm.integrations.custom_logger import CustomLogger
 
 
@@ -645,7 +623,7 @@ def log_event_fn(kwargs, response_obj, start_time, end_time):
 NOT_A_CALLBACK = "some-plain-string"
 
 proxy_handler_instance = FloorMaxTokens()
-'''
+"""
 
 
 @pytest.fixture
@@ -659,9 +637,7 @@ def probe_config_path(tmp_path):
     """
     (tmp_path / f"{_PROBE_MODULE_NAME}.py").write_text(_PROBE_MODULE_SOURCE)
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else litellm.callbacks
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else litellm.callbacks
     litellm.callbacks = []
     ProxyLogging._callback_capabilities_cache.clear()
     try:
@@ -687,7 +663,7 @@ def test_initialize_callbacks_on_proxy_rejects_class_valued_entry(probe_config_p
     silently never run the hook. Config load must fail instead."""
     entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
 
-    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
+    with pytest.raises(ValueError, match="litellm_settings\\.callbacks entry") as exc_info:
         _load_callbacks([entry], probe_config_path)
 
     message = str(exc_info.value)
@@ -705,12 +681,10 @@ def test_initialize_callbacks_on_proxy_rejects_class_valued_entry(probe_config_p
         ("NOT_A_CALLBACK", "str 'some-plain-string'"),
     ],
 )
-def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
-    probe_config_path, attribute, expected_fragment
-):
+def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(probe_config_path, attribute, expected_fragment):
     entry = f"{_PROBE_MODULE_NAME}.{attribute}"
 
-    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
+    with pytest.raises(ValueError, match="litellm_settings\\.callbacks entry") as exc_info:
         _load_callbacks([entry], probe_config_path)
 
     message = str(exc_info.value)
@@ -722,7 +696,7 @@ def test_initialize_callbacks_on_proxy_rejects_non_dispatchable_values(
 def test_initialize_callbacks_on_proxy_rejects_class_valued_non_list_value(probe_config_path):
     entry = f"{_PROBE_MODULE_NAME}.FloorMaxTokens"
 
-    with pytest.raises(ValueError, match='litellm_settings\\.callbacks entry') as exc_info:
+    with pytest.raises(ValueError, match="litellm_settings\\.callbacks entry") as exc_info:
         _load_callbacks(entry, probe_config_path)
 
     assert entry in str(exc_info.value)
@@ -775,3 +749,158 @@ def test_initialize_callbacks_on_proxy_accepts_instance_non_list_value(probe_con
 
     assert len(litellm.callbacks) == 1
     assert isinstance(litellm.callbacks[0], CustomLogger)
+
+
+_ARIZE_REFERENCE_SETTINGS: Final = {
+    "arize_space_a": {
+        "callback_type": "arize",
+        "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY",
+        "arize_space_id": "os.environ/LIT10061_ARIZE_SPACE_ID",
+    },
+    "otel": {"message_logging": False},
+    "audit_sink": {"callback_type": "generic_api", "endpoint": "https://sink.local", "headers": {}},
+}
+_REFERENCE_ENTRY: Final = {"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}
+
+
+def test_named_callback_resolution_error_names_the_secret_it_could_not_read(monkeypatch):
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    monkeypatch.delenv("LIT10061_ARIZE_API_KEY", raising=False)
+    monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+
+    error: Final = named_callback_resolution_error([_REFERENCE_ENTRY])
+
+    assert error is not None
+    assert "callback_settings.arize_space_a.arize_api_key" in error
+    assert "space-a" not in error
+
+
+def test_named_callback_resolution_error_is_none_once_every_secret_reads(monkeypatch):
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "key")
+    monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+
+    assert named_callback_resolution_error([_REFERENCE_ENTRY]) is None
+    assert named_callback_resolution_error("not-a-list") is None
+
+
+@pytest.mark.parametrize("callback_name", ["otel", "audit_sink", "arize"])
+def test_callback_settings_without_a_backend_are_not_references(monkeypatch, callback_name):
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    callback: Final = AddTeamCallback(callback_name=callback_name, callback_vars={})
+
+    assert resolve_named_callback(callback) is callback
+
+
+def test_literal_definition_values_never_reach_the_secret_manager(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "arize_space_a": {
+                "callback_type": "arize",
+                "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY",
+                "arize_space_id": "space-literal",
+            }
+        },
+    )
+    looked_up: Final[list[str]] = []
+
+    def fake_get_secret(secret_name, default_value=None):
+        looked_up.append(secret_name)
+        return "key-from-manager"
+
+    monkeypatch.setattr("litellm.proxy.common_utils.callback_utils.get_secret", fake_get_secret)
+
+    resolved: Final = resolve_named_callback(AddTeamCallback(callback_name="arize_space_a", callback_vars={}))
+
+    assert looked_up == ["os.environ/LIT10061_ARIZE_API_KEY"]
+    assert resolved.callback_vars == {"arize_api_key": "key-from-manager", "arize_space_id": "space-literal"}
+
+
+def test_a_definition_value_the_backend_rejects_is_reported_by_field_without_its_values(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "arize_space_a": {
+                "callback_type": "arize",
+                "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY",
+                "arize_space_id": "os.environ/LIT10061_ARIZE_SPACE_ID",
+                "arize_otlp_protocol": "carrier-pigeon",
+            }
+        },
+    )
+    monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "super-secret-key")
+    monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+
+    error: Final = named_callback_resolution_error([_REFERENCE_ENTRY])
+
+    assert error is not None
+    assert "callback_settings.arize_space_a" in error and "arize_otlp_protocol" in error
+    assert "super-secret-key" not in error and "space-a" not in error and "carrier-pigeon" not in error
+
+
+@pytest.mark.parametrize(("env_value", "expected"), [("false", "false"), ("true", "true"), ("0", "0")])
+def test_a_definition_secret_that_reads_as_a_boolean_or_falsy_value_is_kept(monkeypatch, env_value, expected):
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "arize_space_a": {
+                "callback_type": "arize",
+                "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY",
+                "arize_space_id": "os.environ/LIT10061_ARIZE_SPACE_ID",
+                "turn_off_message_logging": "os.environ/LIT10061_TURN_OFF_MESSAGE_LOGGING",
+            }
+        },
+    )
+    monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "key")
+    monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+    monkeypatch.setenv("LIT10061_TURN_OFF_MESSAGE_LOGGING", env_value)
+
+    resolved: Final = resolve_named_callback(AddTeamCallback(callback_name="arize_space_a", callback_vars={}))
+
+    assert resolved.callback_vars["turn_off_message_logging"] == expected
+    assert named_callback_resolution_error([_REFERENCE_ENTRY]) is None
+
+
+def test_a_secret_manager_read_is_reused_within_the_ttl_and_a_miss_is_not_cached(monkeypatch):
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    reads: Final[list[str]] = []
+
+    def fake_get_secret(secret_name, default_value=None):
+        reads.append(secret_name)
+        return "key" if secret_name.endswith("API_KEY") else default_value
+
+    monkeypatch.setattr("litellm.proxy.common_utils.callback_utils.get_secret", fake_get_secret)
+
+    first_error: Final = named_callback_resolution_error([_REFERENCE_ENTRY])
+    second_error: Final = named_callback_resolution_error([_REFERENCE_ENTRY])
+
+    assert first_error is not None and second_error is not None
+    assert "callback_settings.arize_space_a.arize_space_id" in first_error
+    assert reads == [
+        "os.environ/LIT10061_ARIZE_API_KEY",
+        "os.environ/LIT10061_ARIZE_SPACE_ID",
+        "os.environ/LIT10061_ARIZE_SPACE_ID",
+    ], "the api key read is served from the cache, the missing space id is read again"
+
+
+@pytest.mark.parametrize("space_id", ["12345", "0", "1.5", "true", "[1]"])
+def test_a_cached_secret_keeps_its_string_value_on_later_reads(monkeypatch, space_id):
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    reads: Final[list[str]] = []
+
+    def fake_get_secret(secret_name, default_value=None):
+        reads.append(secret_name)
+        return space_id if secret_name.endswith("SPACE_ID") else "key"
+
+    monkeypatch.setattr("litellm.proxy.common_utils.callback_utils.get_secret", fake_get_secret)
+    reference: Final = AddTeamCallback(callback_name="arize_space_a", callback_vars={})
+
+    first: Final = resolve_named_callback(reference).callback_vars["arize_space_id"]
+    second: Final = resolve_named_callback(reference).callback_vars["arize_space_id"]
+
+    assert (first, second) == (space_id, space_id)
+    assert reads.count("os.environ/LIT10061_ARIZE_SPACE_ID") == 1, "the second read must come from the cache"

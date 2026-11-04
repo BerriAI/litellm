@@ -3950,6 +3950,67 @@ class TestCallbackTypeFilter:
         assert resolve_tenant_otel_destinations(self._auth("failure")) == ()
 
 
+class TestCallbackSettingsReference:
+    """A key that names a ``callback_settings`` definition exports to the backend that
+    definition configures, with its secrets read from the secret manager, while a
+    sibling key on the same team without the reference exports nowhere."""
+
+    _SETTINGS: Final = {
+        "arize_space_a": {
+            "callback_type": "arize",
+            "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY",
+            "arize_space_id": "os.environ/LIT10061_ARIZE_SPACE_ID",
+            "excluded_services": "postgres,redis",
+        }
+    }
+
+    @pytest.fixture(autouse=True)
+    def _v2_on_with_definition(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setattr(litellm, "callback_settings", self._SETTINGS)
+        monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "space-a-key")
+        monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+        is_otel_v2_enabled.cache_clear()
+        yield
+        is_otel_v2_enabled.cache_clear()
+
+    @staticmethod
+    def _team_key(metadata: dict) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(team_id="team-a", metadata=metadata, team_metadata={})
+
+    def test_the_referencing_key_exports_to_the_definitions_backend(self):
+        auth = self._team_key(
+            {"logging": [{"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}]}
+        )
+
+        (destination,) = resolve_tenant_otel_destinations(auth)
+
+        assert destination.callback_name == "arize"
+        assert destination.headers["api_key"] == "space-a-key"
+        assert destination.headers["arize-space-id"] == "space-a"
+        assert destination.excluded_db_systems == frozenset({"postgresql", "redis"})
+
+    def test_a_sibling_key_on_the_same_team_exports_nowhere(self):
+        assert resolve_tenant_otel_destinations(self._team_key({})) == ()
+        assert resolve_tenant_otel_destinations(self._team_key({"logging": []})) == ()
+
+    def test_disabling_the_backend_on_the_key_drops_the_referenced_destination(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "premium_user", True)
+        monkeypatch.setattr(litellm, "allow_dynamic_callback_disabling", True)
+        auth = UserAPIKeyAuth(
+            team_id="team-a",
+            metadata={
+                "logging": [{"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}],
+                "litellm_disabled_callbacks": ["arize"],
+            },
+            team_metadata={},
+        )
+
+        assert resolve_tenant_otel_destinations(auth) == ()
+
+
 class TestTenantConfigAgreement:
     """The destination resolver and ``convert_key_logging_metadata_to_callback`` read
     the same stored config, so they must not read it two different ways."""
