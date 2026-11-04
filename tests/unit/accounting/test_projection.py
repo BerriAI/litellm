@@ -429,3 +429,25 @@ def test_guardrail_usage_is_dated_in_utc() -> None:
     assert [dict(item.key)["date"] for item in projected if item.table == "LiteLLM_DailyGuardrailUsageUnits"] == [
         "2026-11-03"
     ]
+
+
+def test_tag_too_long_for_the_daily_index_still_charges_every_other_entity() -> None:
+    oversized: Final = "x" * 16384
+    row: Final[Mapping[str, object]] = {
+        "request_id": "oversized-tag",
+        "startTime": _NOW,
+        "api_key": "key",
+        "user": "user",
+        "team_id": "team",
+        "model": "unpriced-projection-test",
+        "model_group": "group",
+        "custom_llm_provider": "openai",
+        "request_tags": json.dumps([oversized, "normal"]),
+        "spend": 0.5,
+        "metadata": {"accounting_entities": {"api_key": "key", "user": "user", "team_id": "team"}},
+    }
+    contributions: Final = project(row)
+    daily_tag_ids: Final = {dict(item.key)["tag"] for item in contributions if item.table == "LiteLLM_DailyTagSpend"}
+    charged_tables: Final = {item.table for item in contributions}
+    assert daily_tag_ids == {"normal"}
+    assert {"LiteLLM_VerificationToken", "LiteLLM_TeamTable", "LiteLLM_DailyUserSpend"} <= charged_tables

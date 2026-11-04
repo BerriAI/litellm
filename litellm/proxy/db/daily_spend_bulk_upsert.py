@@ -56,6 +56,12 @@ _ENTITY_INPUT_KEYS: Final[Mapping[DailySpendEntity, str]] = MappingProxyType(
     }
 )
 _TAGS: Final = TypeAdapter(tuple[object, ...])
+# Postgres refuses a btree entry over ~2.7 KB, so a longer tag would fail the whole daily upsert.
+_MAX_DAILY_TAG_BYTES: Final = 1024
+
+
+def _fits_daily_index(tag: str) -> bool:
+    return len(tag.encode("utf-8", "surrogatepass")) <= _MAX_DAILY_TAG_BYTES
 
 
 def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEntity) -> tuple[str | None, ...]:
@@ -67,7 +73,7 @@ def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEnti
         if value is None:
             return ()
         tags: Final = _TAGS.validate_json(value) if isinstance(value, str) else _TAGS.validate_python(value)
-        return tuple(dict.fromkeys(tag for tag in tags if isinstance(tag, str)))
+        return tuple(dict.fromkeys(tag for tag in tags if isinstance(tag, str) and _fits_daily_index(tag)))
     if value is None:
         return (None,) if entity == "user" else ()
     if not isinstance(value, str) or (entity == "end_user" and not value):
