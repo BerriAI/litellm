@@ -3352,6 +3352,8 @@ async def test_user_info_v2_internal_user_cannot_query_other(mocker):
 
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
 
+    mock_prisma_client.db.litellm_organizationmembership.find_many = mocker.AsyncMock(return_value=[])
+
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
@@ -3454,6 +3456,40 @@ async def test_user_info_v2_nonexistent_user_returns_404(mocker):
 
     assert exc_info.value.code == "404"
     assert "nonexistent-user-id" in str(exc_info.value.message)
+
+
+@pytest.mark.parametrize(
+    ("find_unique", "expected_code", "logs_traceback"),
+    [
+        (AsyncMock(return_value=None), "404", False),
+        (AsyncMock(side_effect=RuntimeError("db down")), "500", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_user_info_v2_logs_traceback_only_for_server_errors(
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+    find_unique: AsyncMock,
+    expected_code: str,
+    logs_traceback: bool,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    prisma: Final = mocker.MagicMock()
+    prisma.db.litellm_usertable.find_unique = find_unique
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            request=mocker.MagicMock(spec=Request),
+            user_id="some-user",
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.code == expected_code
+    assert any(record.exc_info for record in caplog.records) is logs_traceback
 
 
 @pytest.mark.asyncio
@@ -3674,6 +3710,8 @@ async def test_user_info_v2_team_admin_cannot_query_non_team_member(mocker):
 
     mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(side_effect=mock_find_many_teams)
 
+    mock_prisma_client.db.litellm_organizationmembership.find_many = mocker.AsyncMock(return_value=[])
+
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     mock_request = mocker.MagicMock(spec=Request)
@@ -3685,6 +3723,80 @@ async def test_user_info_v2_team_admin_cannot_query_non_team_member(mocker):
             request=mock_request,
             user_id="non-member-user",
             user_api_key_dict=team_admin_key,
+        )
+
+    assert exc_info.value.code == "404"
+
+
+_ORG_MEMBERSHIPS: Final = (
+    SimpleNamespace(user_id="org-admin-user", organization_id="org-a", user_role="org_admin"),
+    SimpleNamespace(user_id="org-admin-user", organization_id="org-c", user_role="internal_user"),
+    SimpleNamespace(user_id="member-of-a", organization_id="org-a", user_role="internal_user"),
+    SimpleNamespace(user_id="member-of-b", organization_id="org-b", user_role="internal_user"),
+    SimpleNamespace(user_id="member-of-c", organization_id="org-c", user_role="internal_user"),
+)
+
+
+def _membership_matches(membership: SimpleNamespace, where: Mapping[str, object]) -> bool:
+    return membership.user_id == where["user_id"] and (
+        "user_role" not in where or membership.user_role == where["user_role"]
+    )
+
+
+def _org_admin_prisma(mocker: MockerFixture) -> MagicMock:
+    def user_row(user_id: str) -> MagicMock:
+        row: Final = mocker.MagicMock()
+        row.teams = []
+        row.model_dump.return_value = {"user_id": user_id, "user_email": f"{user_id}@example.com", "teams": []}
+        return row
+
+    async def find_unique(**kwargs: dict[str, str]) -> MagicMock | None:
+        user_id: Final = kwargs["where"]["user_id"]
+        return user_row(user_id) if user_id in {m.user_id for m in _ORG_MEMBERSHIPS} else None
+
+    async def find_many(**kwargs: Mapping[str, object]) -> list[SimpleNamespace]:
+        return [m for m in _ORG_MEMBERSHIPS if _membership_matches(m, kwargs["where"])]
+
+    prisma: Final = mocker.MagicMock()
+    prisma.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=find_unique)
+    prisma.db.litellm_organizationmembership.find_many = mocker.AsyncMock(side_effect=find_many)
+    return prisma
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_org_admin_can_query_member_of_their_org(mocker: MockerFixture) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", _org_admin_prisma(mocker))
+
+    response: Final = await user_info_v2(
+        request=mocker.MagicMock(spec=Request),
+        user_id="member-of-a",
+        user_api_key_dict=UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+
+    assert response.user_id == "member-of-a"
+    assert response.user_email == "member-of-a@example.com"
+
+
+@pytest.mark.parametrize("target_user_id", ["member-of-b", "member-of-c"])
+@pytest.mark.asyncio
+async def test_user_info_v2_org_admin_cannot_query_user_outside_their_admin_orgs(
+    mocker: MockerFixture, target_user_id: str
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", _org_admin_prisma(mocker))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            request=mocker.MagicMock(spec=Request),
+            user_id=target_user_id,
+            user_api_key_dict=UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER),
         )
 
     assert exc_info.value.code == "404"

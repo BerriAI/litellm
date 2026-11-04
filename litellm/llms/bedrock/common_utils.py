@@ -1559,22 +1559,63 @@ def bedrock_model_accepts_cache_points(
 def bedrock_declared_cache_point_support(model: str, model_info: Mapping[str, object] | None = None) -> bool | None:
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
+    explicit_marker_support: Final = _explicit_cache_point_support(model, model_info)
+    if explicit_marker_support is not None:
+        return explicit_marker_support
+    return _mapped_prompt_caching_support(model, model_info)
+
+
+def bedrock_model_known_to_accept_cache_points(
+    model: str, deployment_model: str | None = None, model_info: Mapping[str, object] | None = None
+) -> bool:
+    """Like ``bedrock_model_accepts_cache_points``, but only for the Claude and Nova families Bedrock documents
+    as taking cache checkpoints, unless the entry sets ``supports_prompt_cache_breakpoint``: an OpenAI
+    ``prompt_cache_breakpoint`` reaches every model of a mixed fleet, not only the ones a client marked for
+    Bedrock caching, and other families price implicit cache reads yet may reject the cachePoint field."""
+    deployment_declared: Final = (
+        None if deployment_model is None else _declared_marker_support(deployment_model, model_info)
+    )
+    declared: Final = (
+        deployment_declared if deployment_declared is not None else _declared_marker_support(model, model_info)
+    )
+    return declared is True
+
+
+def _declared_marker_support(model: str, model_info: Mapping[str, object] | None) -> bool | None:
+    if _OPENAI_FAMILY_MODEL_RE.search(model):
+        return False
+    explicit_marker_support: Final = _explicit_cache_point_support(model, model_info)
+    if explicit_marker_support is not None:
+        return explicit_marker_support
+    mapped: Final = _mapped_prompt_caching_support(model, model_info)
+    if not _documents_cache_checkpoints(model):
+        return None if mapped is None else False
+    return mapped is not False
+
+
+def _documents_cache_checkpoints(model: str) -> bool:
+    return _is_claude(model) or get_bedrock_base_model(model).startswith("amazon.nova")
+
+
+def _explicit_cache_point_support(model: str, model_info: Mapping[str, object] | None) -> bool | None:
     deployment_flag: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
     if deployment_flag is not None:
         return deployment_flag is True
     catalog_entry: Final = _catalog_entry_reader(model_info)
-    map_keys: Final = (model, get_bedrock_base_model(model))
     registered_keys: Final = tuple(f"bedrock/{route}{model}" for route in ("", "converse/", "converse_like/"))
-    explicit_marker_support: Final = next(
+    return next(
         (
             entry.get("supports_prompt_cache_breakpoint") is True
-            for key in (*registered_keys, *map_keys)
+            for key in (*registered_keys, model, get_bedrock_base_model(model))
             if (entry := catalog_entry(key)) is not None and entry.get("supports_prompt_cache_breakpoint") is not None
         ),
         None,
     )
-    if explicit_marker_support is not None:
-        return explicit_marker_support
+
+
+def _mapped_prompt_caching_support(model: str, model_info: Mapping[str, object] | None) -> bool | None:
+    catalog_entry: Final = _catalog_entry_reader(model_info)
+    map_keys: Final = (model, get_bedrock_base_model(model))
     if not any(catalog_entry(key) is not None for key in map_keys):
         return None
     deployment_caching: Final = None if model_info is None else lax_bool(model_info.get("supports_prompt_caching"))

@@ -23,6 +23,11 @@ from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
 )
+from litellm.integrations.anthropic_cache_control_hook import (
+    MAX_CACHE_CONTROL_BLOCKS,
+    AnthropicCacheControlHook,
+    configured_injection_points,
+)
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     drops_unsupported_params,
@@ -131,6 +136,7 @@ from ..common_utils import (
     bedrock_capability_model,
     bedrock_converse_supports_parallel_tool_use_config,
     bedrock_model_accepts_cache_points,
+    bedrock_model_known_to_accept_cache_points,
     bedrock_reasoning_effort_disabled,
     bedrock_rejects_stop_sequences,
     get_anthropic_beta_from_headers,
@@ -204,6 +210,11 @@ def _has_native_text_format(output_config: object) -> bool:
         return False
 
 
+def _cache_mark_kept(block: Mapping[str, object], keeps_cache_marks: bool) -> Mapping[str, object]:
+    cache_control: Final = block.get("cache_control")
+    return {"cache_control": cache_control} if keeps_cache_marks and cache_control is not None else {}
+
+
 class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
@@ -243,7 +254,7 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _convert_consecutive_user_messages_to_guarded_text(
-        messages: list[AllMessageValues], optional_params: dict
+        messages: list[AllMessageValues], optional_params: dict, keeps_cache_marks: bool = False
     ) -> list[AllMessageValues]:
         """
         Convert consecutive user messages at the end to guarded_text type if guardrailConfig is present
@@ -281,7 +292,11 @@ class AmazonConverseConfig(BaseConfig):
                 new_content = []
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "text":
-                        new_item = {"type": "guarded_text", "text": item["text"]}
+                        new_item = {
+                            "type": "guarded_text",
+                            "text": item["text"],
+                            **_cache_mark_kept(_JSON_OBJECT.validate_python(item), keeps_cache_marks),
+                        }
                         new_content.append(new_item)
                     else:
                         new_content.append(item)
@@ -289,7 +304,13 @@ class AmazonConverseConfig(BaseConfig):
                 messages_copy[user_message_index]["content"] = new_content
             elif isinstance(content, str):
                 # If content is a string, convert it to guarded_text
-                messages_copy[user_message_index]["content"] = [{"type": "guarded_text", "text": content}]
+                messages_copy[user_message_index]["content"] = [
+                    {
+                        "type": "guarded_text",
+                        "text": content,
+                        **_cache_mark_kept(_JSON_OBJECT.validate_python(user_message), keeps_cache_marks),
+                    }
+                ]
 
         return messages_copy
 
@@ -1595,6 +1616,74 @@ class AmazonConverseConfig(BaseConfig):
             return ChatCompletionTextObject(type="text", text=text)
         return ChatCompletionTextObject(type="text", text=text, cache_control=cache_control)
 
+    def _messages_with_cache_marks(
+        self,
+        messages: Sequence[AllMessageValues],
+        model: str,
+        deployment_model: str,
+        drop_params: bool,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        model_info: Mapping[str, object] | None,
+    ) -> Sequence[AllMessageValues]:
+        if not bedrock_model_known_to_accept_cache_points(model, deployment_model, model_info):
+            return messages
+        markable: Final = (
+            AnthropicCacheControlHook.prompt_cache_breakpoints_dropped_from_tool_results(messages, drop_params, model)
+            if "nova" in model.lower()
+            else messages
+        )
+        return AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
+            markable,
+            drop_params,
+            AnthropicCacheControlHook.count_converse_cache_points,
+            lambda: self._tool_cache_points_on_the_wire(
+                model, deployment_model, optional_params, litellm_params, model_info
+            ),
+        )
+
+    def _tool_cache_points_on_the_wire(
+        self,
+        model: str,
+        deployment_model: str,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        model_info: Mapping[str, object] | None,
+    ) -> int:
+        tools: Final = optional_params.get("tools")
+        bedrock_tools, _ = self._process_tools_and_beta(
+            tools if isinstance(tools, list) else [], model, None, {}, litellm_params, deployment_model, model_info
+        )
+        injects_tool_config_point: Final = bool(bedrock_tools) and any(
+            point.get("location") == "tool_config"
+            for point in configured_injection_points(optional_params.get("cache_control_injection_points"))
+        )
+        return sum(1 for tool in bedrock_tools if "cachePoint" in tool) + int(injects_tool_config_point)
+
+    def _guarded_text_keeps_cache_marks(
+        self,
+        messages: Sequence[AllMessageValues],
+        system_content_blocks: Sequence[SystemContentBlock],
+        model: str,
+        deployment_model: str,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        model_info: Mapping[str, object] | None,
+    ) -> bool:
+        if "guardrailConfig" not in optional_params or not bedrock_model_known_to_accept_cache_points(
+            model, deployment_model, model_info
+        ):
+            return False
+        message_cache_points: Final = sum(map(AnthropicCacheControlHook.count_converse_cache_points, messages))
+        if message_cache_points == 0:
+            return False
+        cache_points: Final = (
+            sum(1 for block in system_content_blocks if "cachePoint" in block)
+            + message_cache_points
+            + self._tool_cache_points_on_the_wire(model, deployment_model, optional_params, litellm_params, model_info)
+        )
+        return cache_points <= MAX_CACHE_CONTROL_BLOCKS
+
     def _transform_system_message(
         self,
         messages: list[AllMessageValues],
@@ -2152,22 +2241,27 @@ class AmazonConverseConfig(BaseConfig):
 
         return data
 
-    @staticmethod
     def _claude_messages_within_cache_control_cap(
+        self,
         messages: Sequence[AllMessageValues],
         capability_model: str,
+        deployment_model: str,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
+        model_info: Mapping[str, object] | None,
     ) -> Sequence[AllMessageValues]:
         if not drops_unsupported_params(litellm_params.get("drop_params")) or "claude" not in capability_model.lower():
             return messages
         from litellm.integrations.anthropic_cache_control_hook import (
-            messages_within_cache_control_cap,
+            messages_within_reserved_cache_control_cap,
             tool_message_with_single_cache_mark,
         )
 
-        return messages_within_cache_control_cap(
-            tuple(map(tool_message_with_single_cache_mark, messages)), optional_params.get("tools")
+        return messages_within_reserved_cache_control_cap(
+            tuple(map(tool_message_with_single_cache_mark, messages)),
+            self._tool_cache_points_on_the_wire(
+                capability_model, deployment_model, optional_params, litellm_params, model_info
+            ),
         )
 
     async def _async_transform_request(
@@ -2183,10 +2277,20 @@ class AmazonConverseConfig(BaseConfig):
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
         model_info: Final = routed_model_info(litellm_params.get("model_info"))
+        json_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
+        marked_messages: Final = self._messages_with_cache_marks(
+            messages,
+            capability_model,
+            model,
+            drops_unsupported_params(litellm_params.get("drop_params")),
+            json_optional_params,
+            litellm_params,
+            model_info,
+        )
         messages, system_content_blocks = self._transform_system_message(
             list(
                 self._claude_messages_within_cache_control_cap(
-                    messages, capability_model, _JSON_OBJECT.validate_python(optional_params), litellm_params
+                    marked_messages, capability_model, model, json_optional_params, litellm_params, model_info
                 )
             ),
             model=capability_model,
@@ -2195,8 +2299,19 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
+        guard_input: Final = self._handle_orphaned_tool_blocks(messages, optional_params)
         messages = self._convert_consecutive_user_messages_to_guarded_text(
-            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+            guard_input,
+            optional_params,
+            keeps_cache_marks=self._guarded_text_keeps_cache_marks(
+                guard_input,
+                system_content_blocks,
+                capability_model,
+                model,
+                json_optional_params,
+                litellm_params,
+                model_info,
+            ),
         )
         ## TRANSFORMATION ##
 
@@ -2276,10 +2391,20 @@ class AmazonConverseConfig(BaseConfig):
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
         model_info: Final = routed_model_info(litellm_params.get("model_info"))
+        json_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
+        marked_messages: Final = self._messages_with_cache_marks(
+            messages,
+            capability_model,
+            model,
+            drops_unsupported_params(litellm_params.get("drop_params")),
+            json_optional_params,
+            litellm_params,
+            model_info,
+        )
         messages, system_content_blocks = self._transform_system_message(
             list(
                 self._claude_messages_within_cache_control_cap(
-                    messages, capability_model, _JSON_OBJECT.validate_python(optional_params), litellm_params
+                    marked_messages, capability_model, model, json_optional_params, litellm_params, model_info
                 )
             ),
             model=capability_model,
@@ -2288,8 +2413,19 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
+        guard_input: Final = self._handle_orphaned_tool_blocks(messages, optional_params)
         messages = self._convert_consecutive_user_messages_to_guarded_text(
-            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+            guard_input,
+            optional_params,
+            keeps_cache_marks=self._guarded_text_keeps_cache_marks(
+                guard_input,
+                system_content_blocks,
+                capability_model,
+                model,
+                json_optional_params,
+                litellm_params,
+                model_info,
+            ),
         )
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(

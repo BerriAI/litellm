@@ -71,7 +71,7 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
-import { AriaUsageComposer, AriaUsageTrigger } from "@/components/liteadmin/LiteAdmin";
+import { AriaUsageTrigger } from "@/components/liteadmin/LiteAdmin";
 import { allowedUsageOptions, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 import UserRecordLink from "./UserRecordLink";
 import {
@@ -489,7 +489,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           </div>
         </div>
       </header>
-      <AriaUsageComposer />
       {aggregatedFailed && (
         <ErrorState title="Failed to load spend data" message={aggregatedError} onRetry={reloadAggregated} />
       )}
