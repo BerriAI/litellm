@@ -23,6 +23,7 @@ import litellm
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.anthropic.messages.responses_adapters.transformation import RESPONSES_INCLUDE_ENCRYPTED_REASONING
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import Router
@@ -1442,18 +1443,20 @@ def _replayed_encrypted_reasoning(body: Mapping[str, object]) -> tuple[object, .
 
 _AZURE_RESPONSES: Final = "/openai/v1/responses"
 _AZURE_CHAT: Final = "/openai/v1/chat/completions"
+_REPLAYED: Final = ("qa-opaque-reasoning",)
+_INCLUDE: Final = [RESPONSES_INCLUDE_ENCRYPTED_REASONING]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 @pytest.mark.parametrize(
-    "model, model_info, expected_path, expected_replay",
+    "model, model_info, expected_path, expected_replay, expected_include",
     [
-        ("azure/responses/qa-deployment", None, _AZURE_RESPONSES, ("qa-opaque-reasoning",)),
-        ("azure/qa-deployment", {"id": "pinned-id", "mode": "responses"}, _AZURE_RESPONSES, ("qa-opaque-reasoning",)),
-        ("azure/qa-responses-row", None, _AZURE_RESPONSES, ("qa-opaque-reasoning",)),
-        ("azure/qa-responses-row", {"id": "pinned-id", "mode": "chat"}, _AZURE_CHAT, ()),
-        ("azure/qa-deployment", None, _AZURE_CHAT, ()),
+        ("azure/responses/qa-deployment", None, _AZURE_RESPONSES, _REPLAYED, _INCLUDE),
+        ("azure/qa-deployment", {"id": "pinned-id", "mode": "responses"}, _AZURE_RESPONSES, _REPLAYED, _INCLUDE),
+        ("azure/qa-responses-row", None, _AZURE_RESPONSES, _REPLAYED, _INCLUDE),
+        ("azure/qa-responses-row", {"id": "pinned-id", "mode": "chat"}, _AZURE_CHAT, (), None),
+        ("azure/qa-deployment", None, _AZURE_CHAT, (), None),
     ],
     ids=["responses_prefix", "responses_pin", "responses_row", "chat_pin_on_responses_row", "chat_deployment"],
 )
@@ -1463,12 +1466,10 @@ async def test_azure_responses_deployments_replay_encrypted_reasoning(
     model_info: dict[str, str] | None,
     expected_path: str,
     expected_replay: tuple[str, ...],
+    expected_include: list[str] | None,
     stream: bool,
 ) -> None:
     from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
-    from litellm.llms.anthropic.messages.responses_adapters.transformation import (
-        RESPONSES_INCLUDE_ENCRYPTED_REASONING,
-    )
 
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     litellm.model_cost["azure/qa-responses-row"] = {
@@ -1513,9 +1514,7 @@ async def test_azure_responses_deployments_replay_encrypted_reasoning(
     bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
     assert {call.request.url.path for call in upstream.calls} == {expected_path}
     assert {_replayed_encrypted_reasoning(body) for body in bodies} == {expected_replay}
-    assert all(
-        body.get("include") == ([RESPONSES_INCLUDE_ENCRYPTED_REASONING] if expected_replay else None) for body in bodies
-    )
+    assert all(body.get("include") == expected_include for body in bodies)
 
 
 @pytest.mark.asyncio
