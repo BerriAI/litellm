@@ -12,21 +12,13 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.skill_upload_archiv
 )
 
 MANIFEST: Final = b"---\nname: skill\ndescription: Notes\n---\nRead guide.md"
-FIXED_ZIP_TIME: Final = (2026, 1, 1, 0, 0, 0)
-
-
-def _file_entry(name: str, compression: int) -> zipfile.ZipInfo:
-    entry: Final = zipfile.ZipInfo(name, date_time=FIXED_ZIP_TIME)
-    entry.compress_type = compression
-    entry.external_attr = 0o600 << 16
-    return entry
 
 
 def _zip(files: tuple[tuple[str | zipfile.ZipInfo, bytes], ...], compression: int = zipfile.ZIP_DEFLATED) -> bytes:
     buffer: Final = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=compression) as archive:
         for name, content in files:
-            archive.writestr(name if isinstance(name, zipfile.ZipInfo) else _file_entry(name, compression), content)
+            archive.writestr(name, content)
     return buffer.getvalue()
 
 
