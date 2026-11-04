@@ -17,6 +17,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.types.utils import CallTypes
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
 SELECTION_RESERVATION_TTL_SECONDS: Final = 30.0
@@ -97,7 +98,8 @@ def _routed_deployment_id(metadata: _Metadata | None) -> str | int | None:
 
 
 def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
-    if is_batch_retrieve_call_type(kwargs.get("call_type")):
+    call_type: Final = kwargs.get("call_type")
+    if is_batch_retrieve_call_type(call_type) or call_type == CallTypes.arealtime.value:
         return None
     try:
         call: Final = _CALL_KWARGS.validate_python(kwargs)

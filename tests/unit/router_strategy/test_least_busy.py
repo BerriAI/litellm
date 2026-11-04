@@ -30,7 +30,7 @@ from litellm.router_strategy.least_busy import (
     picks_reserve,
     release_unstarted_picks,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import CallTypes, ModelResponse
 
 GROUP: Final = "least-busy-group"
 DEPLOYMENT_A: Final[dict[str, object]] = {"model_info": {"id": "dep-a"}}
@@ -164,6 +164,18 @@ def test_a_request_routed_through_litellm_metadata_counts_while_in_flight() -> N
     calling_worker.log_success_event(_routed_through_litellm_metadata("dep-a"), None, None, None)
 
     assert calling_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+def test_a_closed_realtime_session_leaves_its_deployment_idle() -> None:
+    shared: Final = SharedRedisCounters()
+    worker: Final = _worker(shared)
+    session_event: Final = {**_routed_through_litellm_metadata("dep-a"), "call_type": CallTypes.arealtime.value}
+
+    for _ in range(5):
+        worker.log_pre_api_call(model="m", messages=[], kwargs=session_event)
+    worker.log_success_event(session_event, None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
 
 
 def test_the_handler_never_pushes_a_counters_ttl_forward() -> None:
