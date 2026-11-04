@@ -2936,17 +2936,80 @@ class TestToolTransformation:
         """The Agents SDK echoes a deferred top-level call with namespace == name. The provider
         was given the bare tool name, so the outbound chat tool_call must not become
         "get_reporting_categories__get_reporting_categories"."""
-        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
-            function_call={
-                "type": "function_call",
-                "name": "get_reporting_categories",
-                "namespace": "get_reporting_categories",
-                "call_id": "call_3",
-                "arguments": '{"market": "KR-MFDS"}',
-            }
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "type": "function_call",
+                    "name": "get_reporting_categories",
+                    "namespace": "get_reporting_categories",
+                    "call_id": "call_3",
+                    "arguments": '{"market": "KR-MFDS"}',
+                }
+            ],
+            responses_api_request={
+                "tools": [{"type": "function", "name": "get_reporting_categories", "defer_loading": True}]
+            },
         )
 
-        assert messages[0]["tool_calls"][0]["function"]["name"] == "get_reporting_categories"
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["get_reporting_categories"]
+
+    def test_function_call_echo_from_namespace_with_member_of_same_name_keeps_qualified_name(self):
+        """A namespace "search" with a member "search" is advertised as the chat tool
+        "search__search" and comes back as name == namespace == "search". Its echo must
+        still join, or the provider gets a call to a tool it was never given."""
+        tools = [
+            {
+                "type": "namespace",
+                "name": "search",
+                "description": "Search tools",
+                "tools": [{"type": "function", "name": "search", "defer_loading": True}],
+            }
+        ]
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "type": "function_call",
+                    "name": "search",
+                    "namespace": "search",
+                    "call_id": "call_4",
+                    "arguments": "{}",
+                }
+            ],
+            responses_api_request={"tools": tools},
+        )
+
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["search__search"]
+        assert LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools) == frozenset()
+
+    def test_deferred_top_level_name_shared_with_self_named_namespace_member_stays_qualified(self):
+        """When a deferred top-level "search" and a namespace "search" with a member "search"
+        are both in the request, namespace == name cannot tell them apart. Neither direction
+        uses that shape for the top-level tool, so the namespace member keeps its round trip."""
+        tools = [
+            {"type": "function", "name": "search", "defer_loading": True},
+            {"type": "function", "name": "lookup", "defer_loading": True},
+            {
+                "type": "namespace",
+                "name": "search",
+                "description": "Search tools",
+                "tools": [{"type": "function", "name": "search"}],
+            },
+        ]
+
+        assert LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools) == frozenset({"lookup"})
+        assert dict(LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)) == {
+            "search__search": ("search", "search"),
+            "lookup": ("lookup", "lookup"),
+        }
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {"type": "function_call", "name": "search", "namespace": "search", "call_id": "c5", "arguments": "{}"},
+                {"type": "function_call", "name": "lookup", "namespace": "lookup", "call_id": "c6", "arguments": "{}"},
+            ],
+            responses_api_request={"tools": tools},
+        )
+
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["search__search", "lookup"]
 
     def test_custom_tool_call_echo_keeps_short_name(self):
         """Custom tools stay advertised under their short name, so a namespace on
