@@ -50,6 +50,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.credential_hydration import (
+    decrypted_credential,
     hydrate_named_credential_authoritative,
     named_credential_wif_fields,
     stored_credential_provider,
