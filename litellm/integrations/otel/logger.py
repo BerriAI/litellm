@@ -29,6 +29,10 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
+from litellm.integrations.otel.genai_context import (
+    get_active_genai_context_data,
+    publish_to_genai_context,
+)
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.model.baggage import promoted_baggage
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config, excluded_db_systems_from
@@ -51,7 +55,7 @@ from litellm.integrations.otel.model.payloads import (
 )
 from litellm.integrations.otel.model.semconv import Error
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
-from litellm.integrations.otel.model.utils import to_ns
+from litellm.integrations.otel.model.utils import as_str, to_ns
 from litellm.integrations.otel.plumbing.context import (
     active_phase,
     active_phase_span,
@@ -169,17 +173,19 @@ class _LLMCallSpan:
     under it, and must be released exactly once when the carrier is removed.
     """
 
-    __slots__ = ("provider", "span", "start_time_ns")
+    __slots__ = ("outer_ctx_data", "provider", "span", "start_time_ns")
 
     def __init__(
         self,
         span: "Span | None",
         start_time_ns: int | None,
         provider: "TracerProvider | None" = None,
+        outer_ctx_data: "object | None" = None,
     ) -> None:
         self.span = span
         self.start_time_ns = start_time_ns
         self.provider = provider
+        self.outer_ctx_data = outer_ctx_data
 
 
 def _llm_call_parent_context(call: LLMCallEvent) -> Context:
@@ -332,6 +338,17 @@ class OpenTelemetryV2(CustomLogger):
         # Do not route on the deferred path: creating or LRU-touching a tenant
         # provider here would evict idle ones even though close re-routes.
         parent_context: Final = _llm_call_parent_context(call)
+        outer_ctx_data: Final = get_active_genai_context_data(
+            call.operation,
+            call_type=as_str(kwargs.get("call_type")),
+            context=parent_context,
+        )
+        if outer_ctx_data is not None:
+            self._store_open_call(
+                call_id,
+                _LLMCallSpan(span=None, start_time_ns=start_time_ns, outer_ctx_data=outer_ctx_data),
+            )
+            return
         if not is_recordable_span(get_current_span(parent_context)):
             self._store_open_call(call_id, _LLMCallSpan(span=None, start_time_ns=start_time_ns))
             return
@@ -368,8 +385,9 @@ class OpenTelemetryV2(CustomLogger):
             return
         if self._emit_mcp_list_tools(kwargs, start_time, end_time):
             return
-        self._close_llm_call(kwargs, start_time, end_time)
-        self._record_metrics(kwargs, response_obj, start_time, end_time)
+        _, suppressed = self._close_llm_call_with_suppression(kwargs, start_time, end_time)
+        if not suppressed:
+            self._record_metrics(kwargs, response_obj, start_time, end_time)
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time) -> None:
         """Record the GenAI metrics for a successful LLM call."""
@@ -416,8 +434,9 @@ class OpenTelemetryV2(CustomLogger):
             return
         if self._emit_mcp_list_tools(kwargs, start_time, end_time):
             return
-        self._close_llm_call(kwargs, start_time, end_time)
-        self._record_failure_metrics(kwargs, start_time, end_time)
+        _, suppressed = self._close_llm_call_with_suppression(kwargs, start_time, end_time)
+        if not suppressed:
+            self._record_failure_metrics(kwargs, start_time, end_time)
 
     def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
         """Seed authenticated request-identity Baggage onto ``context`` so the Baggage
@@ -526,17 +545,25 @@ class OpenTelemetryV2(CustomLogger):
         start_time: datetime | float | None,
         end_time: datetime | float | None,
     ) -> Span | None:
-        """Finish the LLM-call span opened at ``pre_call`` (or create it deferred).
+        """Finish the LLM-call span opened at ``pre_call`` (or create it deferred)."""
+        span, _ = self._close_llm_call_with_suppression(kwargs, start_time, end_time)
+        return span
 
-        No carrier for this call id means ``pre_call`` never ran — the request was
-        rejected at the gate or blocked by a pre-call guardrail before any upstream
-        call — so there is nothing to record and no phantom span.
-        """
+    def _close_llm_call_with_suppression(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> tuple[Span | None, bool]:
+        """Finish the LLM-call span opened at ``pre_call`` (or create it deferred),
+        returning ``(span, suppressed)`` where ``suppressed`` is True when an outer
+        GenAI instrumentation owned the operation."""
         call: Final = LLMCallEvent.from_dict(kwargs)
         call_id: Final = call.call_id
         # ``pop`` is the dedup: this method runs from both the success and failure
         # paths, and whichever fires first removes the carrier and closes the span.
         carrier: Final = self._open_llm_calls.pop(call_id, None) if call_id else None
+        outer_ctx_data: Final = self._resolve_outer_genai_context(carrier, call, kwargs)
         # A missing carrier does not always mean nothing happened: a team/key-scoped
         # logger is a success/failure callback only, so ``pre_call`` never reaches it
         # and no carrier exists. The payload plus the request-level provider-handoff
@@ -544,14 +571,36 @@ class OpenTelemetryV2(CustomLogger):
         # gate rejection carries ``is_no_upstream_call`` and gets no span. A cache
         # hit never hands off to a provider, so ``cache_hit`` substitutes for the
         # upstream stamp, since the payload proves the call completed.
-        if carrier is None and not call.reached_a_provider:
-            return None
+        if carrier is None and not call.reached_a_provider and outer_ctx_data is None:
+            return None, False
         try:
-            return self._finish_carrier(carrier, call, start_time, end_time)
+            span = self._finish_carrier(
+                carrier,
+                call,
+                start_time,
+                end_time,
+                kwargs=kwargs,
+                outer_ctx_data=outer_ctx_data,
+            )
+            return span, outer_ctx_data is not None
         finally:
             # After the span has ended, so a release-triggered provider shutdown
             # force-flushes it out rather than racing its enqueue.
             self._release_carrier(carrier)
+
+    def _resolve_outer_genai_context(
+        self,
+        carrier: "_LLMCallSpan | None",
+        call: LLMCallEvent,
+        kwargs: Mapping[str, object],
+    ) -> object | None:
+        if carrier is not None and carrier.outer_ctx_data is not None:
+            return carrier.outer_ctx_data
+        return get_active_genai_context_data(
+            call.operation,
+            call_type=as_str(kwargs.get("call_type")),
+            context=_llm_call_parent_context(call),
+        )
 
     def _store_open_call(self, call_id: str, carrier: _LLMCallSpan) -> None:
         """Remember an in-flight LLM call, evicting the oldest if over budget.
@@ -579,6 +628,9 @@ class OpenTelemetryV2(CustomLogger):
         call: LLMCallEvent,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
+        *,
+        kwargs: Mapping[str, object] | None = None,
+        outer_ctx_data: object | None = None,
     ) -> Span | None:
         payload: Final = call.payload
         call_id: Final = call.call_id
@@ -603,6 +655,22 @@ class OpenTelemetryV2(CustomLogger):
             metadata_keys=tuple(self.config.baggage_metadata_keys),
             operation=call.operation,
         )
+        if outer_ctx_data is not None:
+            if self._emitter._seen(call_id, SpanRole.LLM_CALL):
+                return None
+            mapped: Final = self._emitter.map_attributes(data)
+            metric_attrs: Final = (
+                self._metrics_recorder.bounded_attributes_for_context(kwargs)
+                if self._metrics_recorder is not None and kwargs is not None
+                else None
+            )
+            publish_to_genai_context(
+                outer_ctx_data,  # type: ignore[arg-type]
+                data,
+                mapped,
+                metric_attrs,
+            )
+            return None
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
             # Born at the boundary: stamp attributes from the typed payload, set
