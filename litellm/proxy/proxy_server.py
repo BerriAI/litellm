@@ -4913,12 +4913,8 @@ async def _run_background_health_check():
                 sorted(scoped_model_groups),
             )
         model_count_enabled = len(_llm_model_list)
-        models_to_probe = [
-            m for m in _llm_model_list if not should_skip_model_health_probe(m, health_check_interval)
-        ]
-        skipped_models = [
-            m for m in _llm_model_list if should_skip_model_health_probe(m, health_check_interval)
-        ]
+        models_to_probe = [m for m in _llm_model_list if not should_skip_model_health_probe(m, health_check_interval)]
+        skipped_models = [m for m in _llm_model_list if should_skip_model_health_probe(m, health_check_interval)]
         if skipped_models:
             verbose_proxy_logger.debug(
                 "background_health_check_cycle_skipped_active_models cycle_id=%s skipped_count=%d",
@@ -4955,10 +4951,7 @@ async def _run_background_health_check():
         details_bool = health_check_details if health_check_details is not None else True
         _hc_filter = health_check_filter_kwargs_from_general_settings(general_settings)
 
-        skipped_healthy_endpoints = [
-            _synthesize_skipped_healthy_endpoint(m, details_bool)
-            for m in skipped_models
-        ]
+        skipped_healthy_endpoints = [_synthesize_skipped_healthy_endpoint(m, details_bool) for m in skipped_models]
 
         if models_to_probe:
             if shared_health_manager is not None:
