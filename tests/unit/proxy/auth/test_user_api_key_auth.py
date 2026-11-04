@@ -2203,7 +2203,7 @@ async def test_websocket_inference_is_denied_when_a_required_baggage_mapping_is_
             {
                 "request_tag_mappings": [
                     {"key": "region", "tag_prefix": "region:"},
-                    {"key": "entrypoint", "tag_prefix": "usecase:", "required": True},
+                    {"key": "service", "tag_prefix": "app:", "required": True},
                 ]
             },
         ),
@@ -2227,7 +2227,7 @@ async def test_websocket_invalid_key_is_rejected_before_the_required_baggage_map
     with (
         patch.dict(
             litellm.proxy.proxy_server.general_settings,
-            {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "required": True}]},
+            {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:", "required": True}]},
         ),
         patch(
             "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
@@ -2248,7 +2248,7 @@ async def test_websocket_inference_is_allowed_when_no_baggage_mapping_is_require
     with (
         patch.dict(
             litellm.proxy.proxy_server.general_settings,
-            {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "require_budgeted_tag": True}]},
+            {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:", "require_budgeted_tag": True}]},
         ),
         patch(
             "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", new=AsyncMock(return_value=authorized)
@@ -2273,8 +2273,8 @@ async def _auth_then_serve_chat(monkeypatch, general_settings, body, headers):
         model_list=[
             {
                 "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-4o", "tags": ["usecase:a"], "mock_response": "hi"},
-                "model_info": {"id": "usecase-deployment"},
+                "litellm_params": {"model": "gpt-4o", "tags": ["app:a"], "mock_response": "hi"},
+                "model_info": {"id": "app-deployment"},
             },
             {
                 "model_name": "gpt-4",
@@ -2321,30 +2321,30 @@ async def test_auth_header_tag_merge_keeps_json_string_metadata_tags_routable(mo
     body = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "hi"}],
-        "metadata": json.dumps({"tags": ["usecase:a"]}),
+        "metadata": json.dumps({"tags": ["app:a"]}),
     }
     cached_body, served_by = await _auth_then_serve_chat(
         monkeypatch, general_settings, body, [(b"x-litellm-tags", b"other"), (b"baggage", b"region=sg")]
     )
-    assert served_by == "usecase-deployment"
-    assert cached_body["metadata"] == {"tags": ["usecase:a", "other"]}
+    assert served_by == "app-deployment"
+    assert cached_body["metadata"] == {"tags": ["app:a", "other"]}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_metadata", ["run-123", 42, ["x"]])
 @pytest.mark.parametrize(
     "baggage",
-    [[], [(b"baggage", b"region=sg")], [(b"baggage", b"entrypoint=a")]],
+    [[], [(b"baggage", b"region=sg")], [(b"baggage", b"service=a")]],
     ids=["no_baggage", "unmapped_baggage", "mapped_baggage"],
 )
 async def test_non_object_metadata_is_served_like_unset_mappings_whatever_the_baggage_maps(
     monkeypatch, client_metadata, baggage
 ):
     body = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "metadata": client_metadata}
-    headers = [(b"x-litellm-tags", b"usecase:a"), *baggage]
+    headers = [(b"x-litellm-tags", b"app:a"), *baggage]
     unset = await _auth_then_serve_chat(monkeypatch, {}, body, headers)
     mapped = await _auth_then_serve_chat(
-        monkeypatch, {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]}, body, headers
+        monkeypatch, {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:"}]}, body, headers
     )
     assert mapped == unset
-    assert mapped[1] == "usecase-deployment"
+    assert mapped[1] == "app-deployment"

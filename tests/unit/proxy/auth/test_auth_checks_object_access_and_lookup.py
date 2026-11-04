@@ -4023,11 +4023,11 @@ async def test_common_checks_rejects_a_spent_mapped_tag_whatever_non_list_tags_t
 
     async def fake_find_many(**kwargs):
         if "where" not in kwargs:
-            return [_tag_registry_row("usecase:spent")]
+            return [_tag_registry_row("app:spent")]
         return [_tag_db_row(name, max_budget=1.0) for name in kwargs["where"]["tag_name"]["in"]]
 
     async def spent_tag_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
-        return 1.5 if counter_key == "spend:tag:usecase:spent" else fallback_spend
+        return 1.5 if counter_key == "spend:tag:app:spent" else fallback_spend
 
     async def receive():
         return {
@@ -4047,7 +4047,7 @@ async def test_common_checks_rejects_a_spent_mapped_tag_whatever_non_list_tags_t
             "scheme": "http",
             "server": ("localhost", 4000),
             "query_string": b"",
-            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=spent")],
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"service=spent")],
         },
         receive,
     )
@@ -4055,7 +4055,7 @@ async def test_common_checks_rejects_a_spent_mapped_tag_whatever_non_list_tags_t
     await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
         request,
         request_body,
-        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:"}]},
         None,
         MagicMock(),
     )
@@ -4077,7 +4077,7 @@ async def test_common_checks_rejects_a_spent_mapped_tag_whatever_non_list_tags_t
             valid_token=UserAPIKeyAuth(token="test-token", metadata=key_metadata),
             request=request,
         )
-    assert exc_info.value.entity_id == "usecase:spent"
+    assert exc_info.value.entity_id == "app:spent"
 
 
 @pytest.mark.asyncio
@@ -11789,8 +11789,8 @@ def _client_tag_request(client_tags, baggage):
         {
             "type": "http",
             "headers": [
-                *([(b"baggage", b"entrypoint=a")] if baggage else []),
-                *([(b"x-litellm-tags", b"usecase:a")] if client_tags == "header" else []),
+                *([(b"baggage", b"service=a")] if baggage else []),
+                *([(b"x-litellm-tags", b"app:a")] if client_tags == "header" else []),
             ],
         }
     )
@@ -11814,7 +11814,7 @@ def _client_tag_rejection(route, data, request):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/messages", "/v1/responses"])
-@pytest.mark.parametrize("client_tags", [None, [], ["usecase:a"], '{"tags":["usecase:a"]}', "header"])
+@pytest.mark.parametrize("client_tags", [None, [], ["app:a"], '{"tags":["app:a"]}', "header"])
 @pytest.mark.parametrize("client_slot", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("baggage", [True, False])
 async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_it(
@@ -11833,7 +11833,7 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
     await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
         mapped_request,
         mapped,
-        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:"}]},
         None,
         MagicMock(),
     )
@@ -11843,19 +11843,19 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
         route, unmapped, unmapped_request
     )
     if client_tags is None and baggage:
-        assert "usecase:a" in mapped["metadata" if "chat/completions" in route else "litellm_metadata"]["tags"]
+        assert "app:a" in mapped["metadata" if "chat/completions" in route else "litellm_metadata"]["tags"]
 
 
 @pytest.mark.asyncio
 async def test_baggage_mapping_still_rejects_client_metadata_tags():
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    request = _client_tag_request(["usecase:b"], baggage=True)
-    data = {"metadata": {"tags": ["usecase:b"]}}
+    request = _client_tag_request(["app:b"], baggage=True)
+    data = {"metadata": {"tags": ["app:b"]}}
     await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
         request,
         data,
-        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:"}]},
         None,
         MagicMock(),
     )
