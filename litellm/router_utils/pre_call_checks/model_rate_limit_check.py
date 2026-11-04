@@ -134,7 +134,7 @@ class ModelRateLimitingCheck(CustomLogger):
     this check actively enforces those limits across ALL routing strategies.
     """
 
-    def __init__(self, dual_cache: DualCache, clock: Callable[[], datetime] = get_utc_datetime):
+    def __init__(self, dual_cache: DualCache, clock: Callable[[], datetime] = get_utc_datetime) -> None:
         self.dual_cache = dual_cache
         self.clock = clock
         # model_ids already warned about itpm/otpm + tpm/rpm on the same deployment,
