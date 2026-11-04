@@ -1360,7 +1360,7 @@ async def update_sso_settings(
         if isinstance(environment_variables_param, Mapping)
         else MappingProxyType({})
     )
-    stored_values: Final = {k: v for k, v in (before_sso_data or {}).items() if v is not None}
+    stored_values: Final = {k: v for k, v in (before_sso_data or {}).items() if v is not None and v != ""}
     fallback_values: Final = {**legacy_env_values, **stored_values}
     submitted: Final = sso_config.model_dump(include=sso_config.model_fields_set)
     sso_data: Final = {
