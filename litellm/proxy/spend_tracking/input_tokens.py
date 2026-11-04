@@ -49,8 +49,16 @@ TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
 _OPENAI_PREFIX: Final = "openai/"
 
-_INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
-
+_INPUT_SIZE_FIELDS: Final = (
+    "messages",
+    "prompt",
+    "input",
+    "query",
+    "documents",
+    "contents",
+    "systemInstruction",
+    "system_instruction",
+)
 
 def _approximate_input_size(request_body: Mapping[str, object]) -> int:
     """Length of the request's input text, a cheap stand-in for tokenizing cost.
@@ -220,12 +228,16 @@ def _served_by_openai(deployment: object) -> bool:
         return False
     return served_provider == "openai"
 
-def _extract_gemini_text(request_body: dict) -> str:
-    """Extracts all text from Gemini's native 'contents' and 'systemInstruction' schema."""
+def _extract_gemini_text(request_body: dict) -> str | None:
+    """
+    Extracts text from Gemini's native 'contents' and 'systemInstruction'/'system_instruction'.
+    Handles text parts, functionCall, functionResponse, and tool schemas.
+    Returns None for unsupported multimodal shapes to preserve conservative fallback.
+    """
     texts: list[str] = []
 
-    # 1. System Instruction text
-    sys_inst = request_body.get("systemInstruction")
+    # 1. System instruction (support both camelCase and snake_case)
+    sys_inst = request_body.get("systemInstruction") or request_body.get("system_instruction")
     if isinstance(sys_inst, dict):
         parts = sys_inst.get("parts")
         if isinstance(parts, list):
@@ -233,7 +245,15 @@ def _extract_gemini_text(request_body: dict) -> str:
                 if isinstance(part, dict) and isinstance(part.get("text"), str):
                     texts.append(part["text"])
 
-    # 2. Contents text
+    # 2. Tool schemas accounting
+    tools = request_body.get("tools")
+    if tools:
+        try:
+            texts.append(json.dumps(tools))
+        except Exception:
+            pass
+
+    # 3. Contents & Parts
     contents = request_body.get("contents")
     if isinstance(contents, list):
         for item in contents:
@@ -241,14 +261,29 @@ def _extract_gemini_text(request_body: dict) -> str:
                 parts = item.get("parts")
                 if isinstance(parts, list):
                     for part in parts:
-                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        if not isinstance(part, dict):
+                            continue
+                        if isinstance(part.get("text"), str):
                             texts.append(part["text"])
+                        elif "functionResponse" in part:
+                            try:
+                                texts.append(json.dumps(part["functionResponse"]))
+                            except Exception:
+                                pass
+                        elif "functionCall" in part:
+                            try:
+                                texts.append(json.dumps(part["functionCall"]))
+                            except Exception:
+                                pass
+                        elif "inlineData" in part or "fileData" in part:
+                            return None
             elif isinstance(item, str):
                 texts.append(item)
     elif isinstance(contents, str):
         texts.append(contents)
 
-    return " ".join(texts)
+    combined = " ".join(texts).strip()
+    return combined if combined else None
 
 def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
     try:
@@ -263,7 +298,10 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
             except ValueError:
                 return _count_text_tokens(model=model, text=request_body.get("messages"))
         if "contents" in request_body:
-            return _count_text_tokens(model=model, text=_extract_gemini_text(request_body))
+            gemini_text = _extract_gemini_text(request_body)
+            if gemini_text is not None:
+                return _count_text_tokens(model=model, text=gemini_text)
+            return None
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
