@@ -248,8 +248,7 @@ vi.mock("@/components/EntityUsageExport", () => ({
 }));
 
 vi.mock("@/components/liteadmin/LiteAdmin", () => ({
-  AriaUsageTrigger: () => <button aria-label="Open Aria Agent">Aria</button>,
-  AriaUsageComposer: () => <section aria-label="Ask Aria Agent">Shared Aria composer</section>,
+  AriaUsageTrigger: () => <a href="/aria">Ask Aria</a>,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
@@ -1451,19 +1450,19 @@ describe("UsagePage", () => {
   });
 
   describe("Aria Agent", () => {
-    it("should render the shared Aria prompt and entry point in global view", async () => {
+    it("offers a link to Aria without a second composer in global view", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByRole("button", { name: "Open Aria Agent" })).toBeInTheDocument();
-      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
+      expect(screen.getByRole("link", { name: "Ask Aria" })).toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "Ask Aria Agent" })).not.toBeInTheDocument();
       expect(screen.queryByText("Ask AI")).not.toBeInTheDocument();
     });
 
-    it("should keep the shared Aria prompt available in entity usage views", async () => {
+    it("does not embed a second Aria composer in entity usage views", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
@@ -1475,8 +1474,8 @@ describe("UsagePage", () => {
       });
 
       expect(await screen.findByText("Entity Usage")).toBeInTheDocument();
-      expect(screen.getAllByRole("region", { name: "Ask Aria Agent" })).toHaveLength(1);
-      expect(screen.getByRole("region", { name: "Ask Aria Agent" })).toBeVisible();
+      expect(screen.queryByPlaceholderText(/Ask Aria/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "Ask Aria Agent" })).not.toBeInTheDocument();
     });
   });
 
