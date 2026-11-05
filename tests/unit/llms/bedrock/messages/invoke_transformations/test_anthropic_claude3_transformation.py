@@ -3270,6 +3270,14 @@ MESSAGES_OPEN_OBJECT_SCHEMA: Final = {
     "type": "object",
     "properties": {"counts": {"type": "object", "additionalProperties": {"type": "integer"}}},
 }
+MESSAGES_KEYWORDS_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "count": {"type": "integer", "minimum": 1},
+        "ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
+    },
+    "required": ["count", "ids"],
+}
 
 
 @pytest.mark.parametrize(
@@ -3288,9 +3296,11 @@ def test_bedrock_messages_schema_native_output_cannot_hold_is_inlined_on_a_bedro
 
 
 @pytest.mark.parametrize(
-    "schema", [MESSAGES_TREE_SCHEMA, MESSAGES_OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"]
+    "schema",
+    [MESSAGES_TREE_SCHEMA, MESSAGES_OPEN_OBJECT_SCHEMA, MESSAGES_KEYWORDS_SCHEMA],
+    ids=["recursive", "open-object", "keywords"],
 )
-def test_bedrock_messages_schema_native_output_cannot_hold_is_forwarded_on_a_legacy_native_profile(
+def test_bedrock_messages_forwards_the_callers_schema_unchanged_on_a_legacy_native_profile(
     set_native_structured_output, schema
 ):
     model: Final = "us.anthropic.claude-sonnet-4-6"

@@ -755,9 +755,7 @@ def test_native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_obj
 
 
 @pytest.mark.parametrize("route", ["converse", "invoke"])
-def test_open_object_schema_takes_the_json_tool_on_a_native_model_and_keeps_the_dict_open(
-    gateway: Gateway, route: str
-) -> None:
+def test_open_object_schema_stays_native_on_a_model_native_on_every_request(gateway: Gateway, route: str) -> None:
     marker, marker_hex = _marker()
     with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire, route, _SONNET)
@@ -767,9 +765,10 @@ def test_open_object_schema_takes_the_json_tool_on_a_native_model_and_keeps_the_
         assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
         _, body = _one_call(wire, marker_hex)
         invoke: Final = route == "invoke"
-        assert _native_schema(body, invoke) is None, body
-        tool_schema: Final = _tools(body, invoke)[_JSON_TOOL]
-        assert object_value(tool_schema["properties"])["counts"] == _OPEN_COUNTS, tool_schema
+        schema: Final = _native_schema(body, invoke)
+        assert schema is not None, body
+        assert object_value(schema["properties"]).keys() == {"store", "counts"}, schema
+        assert _JSON_TOOL not in _tools(body, invoke), body
 
 
 def test_thinking_with_a_caller_tool_on_a_bedrock_native_model_sends_only_the_callers_tool(gateway: Gateway) -> None:

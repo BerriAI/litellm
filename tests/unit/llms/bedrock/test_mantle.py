@@ -7,6 +7,7 @@ association via `aws_bedrock_project_id`.
 """
 
 import json
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -391,25 +392,25 @@ def test_mantle_messages_validate_environment_without_project_id():
     assert _MANTLE_WORKSPACE_HEADER not in headers
 
 
-_MANTLE_CONFIGS = pytest.mark.parametrize(
+_MANTLE_CONFIGS: Final = pytest.mark.parametrize(
     "config", [AmazonMantleConfig(), BedrockMantleClaudeChatConfig()], ids=["bedrock_mantle_route", "mantle_provider"]
 )
-_MANTLE_MODEL = "anthropic.claude-opus-4-8"
-_CLOSED_RESPONSE_FORMAT = {
+_MANTLE_MODEL: Final = "anthropic.claude-opus-4-8"
+_CLOSED_RESPONSE_FORMAT: Final = {
     "type": "json_schema",
     "json_schema": {
         "name": "out",
         "schema": {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
     },
 }
-_OPEN_RESPONSE_FORMAT = {
+_OPEN_RESPONSE_FORMAT: Final = {
     "type": "json_schema",
     "json_schema": {
         "name": "out",
         "schema": {"type": "object", "properties": {"counts": {"type": "object", "additionalProperties": True}}},
     },
 }
-_LOOKUP_TOOL = {
+_LOOKUP_TOOL: Final = {
     "type": "function",
     "function": {"name": "lookup", "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}},
 }
@@ -419,7 +420,7 @@ _LOOKUP_TOOL = {
 def test_mantle_opt_in_model_keeps_the_json_tool_when_thinking_is_requested(set_native_structured_output, config):
     set_native_structured_output(_MANTLE_MODEL, "bedrock")
 
-    result = config.map_openai_params(
+    result: Final = config.map_openai_params(
         non_default_params={"response_format": _CLOSED_RESPONSE_FORMAT, "thinking": {"type": "adaptive"}},
         optional_params={},
         model=_MANTLE_MODEL,
@@ -436,7 +437,7 @@ def test_mantle_model_native_on_every_request_stays_native_beside_the_callers_to
 ):
     set_native_structured_output(_MANTLE_MODEL, "legacy")
 
-    result = config.map_openai_params(
+    result: Final = config.map_openai_params(
         non_default_params={"response_format": _OPEN_RESPONSE_FORMAT, "tools": [_LOOKUP_TOOL]},
         optional_params={},
         model=_MANTLE_MODEL,

@@ -346,3 +346,32 @@ def test_converse_profile_override_records_cost_without_changing_response_model(
         + CONVERSE_RESPONSE["usage"]["outputTokens"] * prices["output_cost_per_token"]
     )
 
+
+_INVALID_REQUEST_BODY: Final = b'{"message":"The request is invalid."}'
+
+
+@pytest.mark.parametrize(
+    ("status_code", "error_class"),
+    [(400, litellm.BadRequestError), (429, litellm.RateLimitError), (503, litellm.ServiceUnavailableError)],
+)
+def test_sync_converse_stream_error_keeps_the_status_class_and_raw_body(
+    status_code: int, error_class: type[Exception]
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, content=_INVALID_REQUEST_BODY)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        with pytest.raises(error_class) as raised:
+            litellm.completion(
+                model="bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                num_retries=0,
+                aws_access_key_id="test-key",
+                aws_secret_access_key="test-secret",
+                aws_region_name="us-east-1",
+                client=HTTPHandler(client=transport),
+            )
+
+    assert raised.value.status_code == status_code
+    assert repr(_INVALID_REQUEST_BODY) in raised.value.message

@@ -1451,27 +1451,13 @@ def _native_deployment(gateway: Gateway, scenario: Scenario, api_base: str, prov
             raise AssertionError(provider)
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
-def test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open(
-    gateway: Gateway, provider: str
-) -> None:
-    marker, marker_hex = _marker("values")
-    with wire_server(_peer) as wire, gateway.scenario() as scenario:
-        model: Final = _native_deployment(gateway, scenario, wire.url, provider, _FORCED_TOOL_NATIVE_MODEL)
-        response: Final = gateway.request(
-            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_VALUES_RESPONSE_FORMAT)
-        )
-        assert _chat_content(response) == _tool_input("values", marker_hex), response.text
-        sent: Final = _one_delivery(wire, marker_hex)
-        assert not _structured(sent.body), sent.body
-        assert _json_tool_schema(sent)["properties"] == _VALUES_SCHEMA["properties"], sent.body
-
-
 @pytest.mark.parametrize(
     ("provider", "backend", "extra"),
     [
         ("anthropic", _NATIVE_MODEL, {}),
         ("vertex_ai", _NATIVE_MODEL, {}),
+        ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {}),
+        ("azure_ai", _FORCED_TOOL_NATIVE_MODEL, {}),
         ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"thinking": {"type": "adaptive"}}),
         ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"tools": [_USER_TOOL_SPEC]}),
         ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"reasoning_effort": "none"}),
@@ -1480,13 +1466,15 @@ def test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_ke
     ids=[
         "forced_tool_refused-anthropic",
         "forced_tool_refused-vertex_ai",
+        "plain-anthropic",
+        "plain-azure_ai",
         "thinking",
         "caller_tools",
         "effort_none-anthropic",
         "effort_none-azure_ai",
     ],
 )
-def test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced(
+def test_open_object_schema_keeps_native_output_on_a_native_model(
     gateway: Gateway, provider: str, backend: str, extra: dict[str, JsonValue]
 ) -> None:
     marker, marker_hex = _marker("values")

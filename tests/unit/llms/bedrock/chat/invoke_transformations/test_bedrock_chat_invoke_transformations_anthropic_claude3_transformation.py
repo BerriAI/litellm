@@ -633,22 +633,22 @@ DEFINITIONS_REF_SCHEMA: Final = {
 def test_model_native_on_every_request_sends_every_schema_natively_without_the_json_tool(
     set_native_structured_output, schema, request_params
 ):
-    model = "us.anthropic.claude-opus-4-8"
+    model: Final = "us.anthropic.claude-opus-4-8"
     set_native_structured_output(model, "legacy")
 
-    result = _invoke_params_for_schema(model, schema, request_params)
+    result: Final = _invoke_params_for_schema(model, schema, request_params)
 
     assert result["output_format"]["type"] == "json_schema"
     assert "json_tool_call" not in [tool["name"] for tool in result.get("tools", [])]
 
 
 def test_definitions_ref_reaches_a_model_native_on_every_request_inlined(set_native_structured_output):
-    model = "us.anthropic.claude-opus-4-8"
+    model: Final = "us.anthropic.claude-opus-4-8"
     set_native_structured_output(model, "legacy")
 
-    result = _invoke_params_for_schema(model, DEFINITIONS_REF_SCHEMA, {})
+    result: Final = _invoke_params_for_schema(model, DEFINITIONS_REF_SCHEMA, {})
 
-    sent = result["output_format"]["schema"]
+    sent: Final = result["output_format"]["schema"]
     assert sent["properties"]["home"]["properties"]["city"] == {"type": "string"}
     assert "$ref" not in json.dumps(sent)
 
@@ -657,10 +657,10 @@ def test_definitions_ref_reaches_a_model_native_on_every_request_inlined(set_nat
 def test_open_object_schema_stays_native_beside_the_callers_tools_on_a_model_native_on_every_request(
     set_native_structured_output, thinking_params
 ):
-    model = "us.anthropic.claude-opus-4-8"
+    model: Final = "us.anthropic.claude-opus-4-8"
     set_native_structured_output(model, "legacy")
 
-    result = _invoke_params_for_schema(model, OPEN_OBJECT_SCHEMA, {**thinking_params, "tools": [LOOKUP_TOOL]})
+    result: Final = _invoke_params_for_schema(model, OPEN_OBJECT_SCHEMA, {**thinking_params, "tools": [LOOKUP_TOOL]})
 
     assert "tool_choice" not in result
     assert [tool["name"] for tool in result["tools"]] == ["lookup"]
@@ -670,10 +670,10 @@ def test_open_object_schema_stays_native_beside_the_callers_tools_on_a_model_nat
 def test_open_object_schema_keeps_the_json_tool_beside_the_callers_tools_on_an_opt_in_model(
     set_native_structured_output,
 ):
-    model = "us.anthropic.claude-opus-4-8"
+    model: Final = "us.anthropic.claude-opus-4-8"
     set_native_structured_output(model, "bedrock")
 
-    result = _invoke_params_for_schema(
+    result: Final = _invoke_params_for_schema(
         model, OPEN_OBJECT_SCHEMA, {"thinking": {"type": "adaptive"}, "tools": [LOOKUP_TOOL]}
     )
 
