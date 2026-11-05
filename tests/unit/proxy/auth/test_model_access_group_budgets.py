@@ -8,7 +8,8 @@ unioned rather than ranked.
 """
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from typing import NoReturn
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -64,18 +65,6 @@ class _ExplodingPrismaClient:
 
     def __getattr__(self, name: str) -> object:
         raise AssertionError(f"unexpected database access: {name}")
-
-
-class _CountingRouter(Router):
-    """Counts access-group lookups, so a test can prove the registry gate skipped them."""
-
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.access_group_lookups = 0
-
-    def get_model_access_groups(self, *args, **kwargs):
-        self.access_group_lookups += 1
-        return super().get_model_access_groups(*args, **kwargs)
 
 
 async def _cache(
@@ -233,14 +222,17 @@ async def test_group_without_a_budget_is_not_attributed():
 
 
 @pytest.mark.asyncio
-async def test_empty_registry_skips_the_access_group_matching_entirely():
-    router = _CountingRouter(model_list=MODEL_LIST)
+@pytest.mark.usefixtures("python_router_core")  # the Rust core keeps this lookup on its host registry
+async def test_empty_registry_skips_the_access_group_matching_entirely(monkeypatch: pytest.MonkeyPatch):
+    router = Router(model_list=MODEL_LIST)
+    access_group_lookups = MagicMock(wraps=router._core_get_model_access_groups)
+    monkeypatch.setattr(router, "_core_get_model_access_groups", access_group_lookups)
 
     assert await _matched(key_models=["tier-a"], cache=await _cache(budgeted_groups=()), llm_router=router) == ()
-    assert router.access_group_lookups == 0
+    assert access_group_lookups.call_count == 0
 
     assert await _matched(key_models=["tier-a"], llm_router=router) == ("tier-a",)
-    assert router.access_group_lookups == 1
+    assert access_group_lookups.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -262,22 +254,24 @@ async def test_stamp_records_the_matched_groups_on_the_auth_object():
     assert valid_token.matched_model_access_groups == ["tier-a", "tier-b"]
 
 
-class _BrokenRouter(Router):
-    def get_model_access_groups(self, *args, **kwargs):
-        raise RuntimeError("access group store unavailable")
+def _broken_access_group_lookup(*args: object, **kwargs: object) -> NoReturn:
+    raise RuntimeError("access group store unavailable")
 
 
 @pytest.mark.asyncio
-async def test_stamp_does_not_break_auth_when_the_access_group_lookup_fails():
+@pytest.mark.usefixtures("python_router_core")  # the Rust core keeps this lookup on its host registry
+async def test_stamp_does_not_break_auth_when_the_access_group_lookup_fails(monkeypatch: pytest.MonkeyPatch):
     cache = await _cache()
     valid_token = UserAPIKeyAuth(api_key="hashed", models=["tier-a"], team_id=TEAM_ID, user_id=USER_ID)
+    router = Router(model_list=MODEL_LIST)
+    monkeypatch.setattr(router, "_core_get_model_access_groups", _broken_access_group_lookup)
 
     await stamp_matched_model_access_groups(
         model="gpt-4o",
         valid_token=valid_token,
         team_object=None,
         project_object=None,
-        llm_router=_BrokenRouter(model_list=MODEL_LIST),
+        llm_router=router,
         prisma_client=_ExplodingPrismaClient(),
         user_api_key_cache=cache,
         proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),

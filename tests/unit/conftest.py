@@ -252,6 +252,12 @@ def socket_tempdir(socket_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return socket_dir
 
 
+@pytest.fixture
+def python_router_core(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``Router`` on ``PythonCore``, for a test that patches a member the Rust core never reads."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
+
+
 @pytest.fixture(autouse=True, scope="session")
 def bundled_tiktoken_cache() -> None:
     importlib.import_module("litellm.litellm_core_utils.default_encoding")

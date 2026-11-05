@@ -254,6 +254,57 @@ def test_agent_entra_values_resolve_os_environ_references(monkeypatch):
     assert get_azure_ai_agent_entra_token({"azure_ad_token": "os.environ/FOUNDRY_AGENT_AD_TOKEN"}) == "token-from-env"
 
 
+_AGENT_APP_CLIENT_ID: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+_AGENT_CREDENTIALS: Final = {
+    "service_principal": (
+        "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id",
+        {"tenant_id": "tenant", "client_id": _AGENT_APP_CLIENT_ID, "client_secret": "wrong-secret"},
+    ),
+    "username_password": (
+        "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
+        {"client_id": _AGENT_APP_CLIENT_ID, "azure_username": "agent@example.com", "azure_password": "wrong"},
+    ),
+}
+
+
+def _raising(error: Exception):
+    def token() -> str:
+        raise error
+
+    return token
+
+
+@pytest.mark.parametrize(("token_fetch", "agent_params"), _AGENT_CREDENTIALS.values(), ids=_AGENT_CREDENTIALS.keys())
+def test_agent_entra_rejection_raises_401_with_only_the_aadsts_reason(token_fetch, agent_params):
+    from azure.core.exceptions import ClientAuthenticationError
+
+    rejection: Final = ClientAuthenticationError(
+        message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being sent "
+        f"in the request is the client secret value, for a secret added to app '{_AGENT_APP_CLIENT_ID}'."
+    )
+
+    with patch(token_fetch, return_value=_raising(rejection)):  # test-quality-ok: stands in for the Entra token endpoint answering a wrong credential, the shape azure-identity raises
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            get_azure_ai_agent_entra_token(agent_params)
+
+    assert excinfo.value.status_code == 401
+    assert "AADSTS7000215" in str(excinfo.value)
+    assert _AGENT_APP_CLIENT_ID not in str(excinfo.value)
+
+
+def test_agent_entra_endpoint_unreachable_is_not_an_auth_error():
+    from azure.core.exceptions import ClientAuthenticationError
+
+    unreachable: Final = ClientAuthenticationError(message="Authentication failed: Connection refused")
+    token_fetch, agent_params = _AGENT_CREDENTIALS["service_principal"]
+
+    with patch(token_fetch, return_value=_raising(unreachable)):  # test-quality-ok: stands in for an unreachable Entra token endpoint, the shape azure-identity raises
+        with pytest.raises(ClientAuthenticationError) as excinfo:
+            get_azure_ai_agent_entra_token(agent_params)
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+
+
 def test_agent_entra_token_failure_names_the_credential_fields():
     with pytest.raises(ValueError, match="client_secret"):
         get_azure_ai_agent_entra_token({"azure_scope": "https://ai.azure.com/.default"})

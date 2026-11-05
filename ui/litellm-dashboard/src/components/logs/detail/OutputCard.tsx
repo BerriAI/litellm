@@ -4,6 +4,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { COLOR_BORDER } from "./constants";
 import { ParsedMessage } from "./prettyMessagesTypes";
@@ -18,11 +19,12 @@ interface OutputCardProps {
 
 export function OutputCard({ message, completionTokens, outputCost }: OutputCardProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const { t } = useTranslation();
 
   const handleCopy = () => {
     if (!message) return;
 
-    void copyToClipboard(message.content || "", "Output copied");
+    void copyToClipboard(message.content || "", t("logs.detail.outputCard.copied"));
   };
 
   return (
@@ -44,7 +46,7 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
           {message ? (
             <SimpleMessageBlock label="ASSISTANT" content={message.content} toolCalls={message.toolCalls} />
           ) : (
-            <span className="text-[13px] text-muted-foreground italic">No response data available</span>
+            <span className="text-[13px] text-muted-foreground italic">{t("logs.detail.outputCard.noResponse")}</span>
           )}
         </div>
       </div>
