@@ -115,6 +115,10 @@ pub(crate) enum CacheOp {
     /// the key is created.
     #[strum(serialize = "increment")]
     Increment,
+    /// `async_increment_count(key, value, ttl)`: add a whole number as Redis `INCRBY` does,
+    /// answered with the new count. The TTL applies when the key is created.
+    #[strum(serialize = "increment_count")]
+    IncrementCount,
     /// `async_increment_usage(keys, value, ttl)`: `value` is one amount per key, added as
     /// `_increment_deployment_usage` adds them. Answered with `None`.
     #[strum(serialize = "increment_usage")]
@@ -134,7 +138,7 @@ pub(crate) enum CacheOutcome {
     Value(Option<Value>),
     /// `batch_get`: one entry per key.
     Values(Vec<Option<Value>>),
-    /// `increment`: the counter after the increment.
+    /// `increment` and `increment_count`: the counter after the increment.
     Number(f64),
     /// `set`, `delete` and `increment_usage`.
     Stored,
@@ -147,7 +151,10 @@ impl CacheOutcome {
             (self, op),
             (Self::Value(_), CacheOp::Get)
                 | (Self::Values(_), CacheOp::BatchGet)
-                | (Self::Number(_), CacheOp::Increment)
+                | (
+                    Self::Number(_),
+                    CacheOp::Increment | CacheOp::IncrementCount
+                )
                 | (
                     Self::Stored,
                     CacheOp::Set | CacheOp::Delete | CacheOp::IncrementUsage
@@ -616,6 +623,21 @@ impl RouterCache for StepCache {
             unreachable!("{CHECKED}");
         };
         Ok(next)
+    }
+
+    async fn async_increment_count(
+        &self,
+        key: &str,
+        amount: i64,
+        ttl: Option<Duration>,
+    ) -> Result<i64, litellm_cache::Error> {
+        let value = Some(Value::from(amount));
+        let CacheOutcome::Number(next) =
+            cache_step(CacheOp::IncrementCount, Some(key), None, value, ttl).await
+        else {
+            unreachable!("{CHECKED}");
+        };
+        Ok(next.round() as i64)
     }
 
     async fn async_batch_get_cache(
@@ -1201,7 +1223,7 @@ mod tests {
                     self.entries.insert(key, value.clone().unwrap());
                     CacheOutcome::Stored
                 }
-                CacheOp::Increment => {
+                CacheOp::Increment | CacheOp::IncrementCount => {
                     let current = self.entries.get(&key).and_then(Value::as_f64);
                     let next =
                         current.unwrap_or(0.0) + value.as_ref().and_then(Value::as_f64).unwrap();

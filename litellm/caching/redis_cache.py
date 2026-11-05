@@ -1529,6 +1529,63 @@ class RedisCache(BaseCache):
             raise e
 
     @_redis_circuit_breaker_guard
+    async def async_increment_count(
+        self,
+        key: str,
+        value: int,
+        ttl: float | None = None,
+        parent_otel_span: Span | None = None,
+    ) -> int:
+        """INCRBY, for counters that hold whole numbers (the router's allowed-fails counts), so the key
+        stays an integer the way the sync ``increment_cache`` leaves it. The TTL is set only when the key
+        has none."""
+        _redis_client: Final = self.init_async_client()
+        start_time: Final = time.time()
+        _used_ttl: Final = self.get_ttl(ttl=ttl)
+        key = self.check_and_fix_namespace(key=key)
+        try:
+            async with _redis_client.pipeline(transaction=False) as pipe:
+                pipe.incrby(name=key, amount=value)
+                pipe.ttl(key)
+                result, current_ttl = await pipe.execute()
+            if _used_ttl is not None and current_ttl == -1:
+                await _redis_client.expire(key, _used_ttl)
+            end_time = time.time()
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=end_time - start_time,
+                    call_type="async_increment_count",
+                    caller=_get_call_stack_info(),
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=parent_otel_span,
+                )
+            )
+            return int(result)
+        except Exception as e:
+            end_time = time.time()
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="async_increment_count",
+                    caller=_get_call_stack_info(),
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=parent_otel_span,
+                )
+            )
+            log_redis_failure(
+                verbose_logger,
+                logging.ERROR,
+                "LiteLLM Redis Caching: async_increment_count() - Got exception from REDIS",
+                e,
+            )
+            raise
+
+    @_redis_circuit_breaker_guard
     async def async_set_max(
         self,
         key: str,

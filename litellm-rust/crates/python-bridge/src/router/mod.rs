@@ -1329,12 +1329,14 @@ fn cache_outcome(op: CacheOp, outcome: Option<Bound<'_, PyAny>>) -> PyResult<Cac
             let values: Vec<Option<Value>> = from_py_argument(&outcome)?;
             Ok(CacheOutcome::Values(values.into_iter().map(json).collect()))
         }
-        CacheOp::Increment => outcome
+        CacheOp::Increment | CacheOp::IncrementCount => outcome
             .filter(|outcome| !outcome.is_instance_of::<PyBool>())
             .and_then(|outcome| outcome.extract::<f64>().ok())
             .map(CacheOutcome::Number)
             .ok_or_else(|| {
-                PyValueError::new_err("an `increment` cache outcome must be the new int or float")
+                PyValueError::new_err(format!(
+                    "an `{op}` cache outcome must be the new int or float"
+                ))
             }),
         CacheOp::Set | CacheOp::Delete | CacheOp::IncrementUsage => match outcome {
             None => Ok(CacheOutcome::Stored),
@@ -1983,7 +1985,7 @@ def answer_cache(step):
     if op == "set":
         store[key] = step["value"]
         return None
-    if op == "increment":
+    if op in ("increment", "increment_count"):
         store[key] = store.get(key, 0) + step["value"]
         return store[key]
     if op == "delete":

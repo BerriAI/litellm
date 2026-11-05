@@ -1697,3 +1697,64 @@ async def test_async_set_cache_pipeline_does_not_format_cached_values_for_loggin
 
     assert _FormatCountingStr.format_calls == 0
     assert pipe.sets == [("k1", '"embedding"', timedelta(seconds=60))]
+
+
+class _CountingRedis:
+    """A Redis client holding integer counters, recording each command its pipelines and calls send."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, int] = {}
+        self.ttls: dict[str, int] = {}
+        self.commands: list[tuple[str, str, int | None]] = []
+
+    def pipeline(self, transaction: bool = True) -> "_CountingPipeline":
+        return _CountingPipeline(self)
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        self.commands.append(("expire", key, seconds))
+        self.ttls[key] = seconds
+        return True
+
+
+class _CountingPipeline:
+    def __init__(self, client: _CountingRedis) -> None:
+        self.client = client
+        self.queued: list[tuple[str, str, int | None]] = []
+
+    async def __aenter__(self) -> "_CountingPipeline":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    def incrby(self, name: str, amount: int) -> None:
+        self.queued.append(("incrby", name, amount))
+
+    def ttl(self, name: str) -> None:
+        self.queued.append(("ttl", name, None))
+
+    async def execute(self) -> list[int]:
+        results: Final[list[int]] = []
+        for command, key, amount in self.queued:
+            self.client.commands.append((command, key, amount))
+            if command == "incrby":
+                self.client.values[key] = self.client.values.get(key, 0) + cast(int, amount)
+                results.append(self.client.values[key])
+            else:
+                results.append(self.client.ttls.get(key, -1))
+        return results
+
+
+@pytest.mark.asyncio
+async def test_async_increment_count_uses_incrby_and_sets_the_ttl_only_on_a_new_key(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache()
+    client: Final = _CountingRedis()
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        first: Final = await redis_cache.async_increment_count("deployment:d1:allowed_fails", 1, ttl=60.0)
+        second: Final = await redis_cache.async_increment_count("deployment:d1:allowed_fails", 1, ttl=60.0)
+
+    assert (first, second) == (1, 2)
+    assert all(type(count) is int for count in (first, second))
+    assert [command for command, _, _ in client.commands] == ["incrby", "ttl", "expire", "incrby", "ttl"]
+    assert client.ttls == {"deployment:d1:allowed_fails": 60}

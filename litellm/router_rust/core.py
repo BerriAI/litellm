@@ -3569,6 +3569,12 @@ class RustCore(
                     else await counter.async_increment_cache(key, by, local_only=local, ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # see above
                 )
                 return by if total is None else total
+            case "increment_count":
+                # The allowed-fails counters: INCRBY, so the key holds an integer as the Python
+                # router's increment_cache left it.
+                count: Final = _count(step.get("value"))
+                counted: Final = await self._store_for(key).async_increment_count(key, count, local_only=local, ttl=ttl)
+                return count if counted is None else counted
             case "increment_usage":
                 await self._increment_usage(_as_list(step.get("keys")), _as_list(step.get("value")), ttl)
                 return None
@@ -3623,6 +3629,9 @@ class RustCore(
                     if ttl is None
                     else counter.increment_cache(key, by, local_only=local, ttl=ttl)  # pyright: ignore[reportUnknownMemberType, reportArgumentType]  # see above
                 )
+            case "increment_count":
+                whole: Final = _count(step.get("value"))
+                return self._store_for(key).increment_cache(key, whole, local_only=local, ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # DualCache's writes are untyped
             case "increment_usage":
                 keys: Final = _as_list(step.get("keys"))
                 amounts: Final = _as_list(step.get("value"))
@@ -3996,6 +4005,10 @@ def _ttl(step: Mapping[str, object]) -> float | None:
 
 def _amount(value: object) -> float | int:
     return value if isinstance(value, int | float) and not isinstance(value, bool) else 1
+
+
+def _count(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 1
 
 
 # The plans whose kwargs carry `original_generic_function`, which the fallback cooldown reads.

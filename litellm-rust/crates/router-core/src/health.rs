@@ -532,9 +532,9 @@ impl Health {
     ) -> Result<bool, Error> {
         let fails = self
             .cache
-            .async_increment(&allowed_fails_key(id, suffix), 1.0, Some(ttl))
+            .async_increment_count(&allowed_fails_key(id, suffix), 1, Some(ttl))
             .await?;
-        Ok(fails > allowed)
+        Ok(fails as f64 > allowed)
     }
 
     /// Count a success, and the tokens and request against the deployment's per-minute usage

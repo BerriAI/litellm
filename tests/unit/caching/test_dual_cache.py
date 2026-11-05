@@ -1025,3 +1025,30 @@ async def test_async_batch_reads_of_missing_keys_hit_redis_once_per_expiry_windo
     dual_cache.last_redis_batch_access_time.update({key: time.time() - 61 for key in keys})
     await dual_cache.async_batch_get_cache(keys)
     assert redis_cache.async_batch_get_cache.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_async_increment_count_counts_in_memory_and_on_redis_as_whole_numbers():
+    redis_cache: Final = MagicMock()
+    redis_cache.async_increment_count = AsyncMock(return_value=3)
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+
+    count: Final = await dual_cache.async_increment_count("deployment:d1:allowed_fails", 1, ttl=60.0)
+
+    assert count == 3
+    assert dual_cache.in_memory_cache is not None
+    assert dual_cache.in_memory_cache.get_cache("deployment:d1:allowed_fails") == 1
+    redis_cache.async_increment_count.assert_awaited_once_with(
+        "deployment:d1:allowed_fails", 1, ttl=60.0, parent_otel_span=None
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_increment_count_falls_back_to_the_in_memory_count_when_redis_fails():
+    redis_cache: Final = MagicMock()
+    redis_cache.async_increment_count = AsyncMock(side_effect=ConnectionError("redis down"))
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+
+    assert await dual_cache.async_increment_count("deployment:d1:allowed_fails", 1, ttl=60.0) == 1
+    assert await dual_cache.async_increment_count("deployment:d1:allowed_fails", 1, local_only=True) == 2
+    redis_cache.async_increment_count.assert_awaited_once()

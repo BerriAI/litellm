@@ -33,6 +33,20 @@ pub trait RouterCache: Send + Sync {
         ttl: Option<Duration>,
     ) -> Result<f64, Error>;
 
+    /// Add a whole `amount` to the counter at `key` and return the new count, as Redis `INCRBY`
+    /// does. The allowed-fails counters use it, so their keys hold integers as the Python
+    /// router's `increment_cache` wrote them. The TTL applies when the key is created.
+    async fn async_increment_count(
+        &self,
+        key: &str,
+        amount: i64,
+        ttl: Option<Duration>,
+    ) -> Result<i64, Error> {
+        self.async_increment(key, amount as f64, ttl)
+            .await
+            .map(|count| count.round() as i64)
+    }
+
     async fn async_batch_get_cache(&self, keys: &[String]) -> Result<Vec<Option<Value>>, Error>;
 
     async fn async_delete_cache(&self, key: &str) -> Result<(), Error>;

@@ -401,13 +401,14 @@ class _PreRouteStep(_Step):
 
 # One RouterCache op against the router's DualCache. `key` is set for every op but `batch_get`,
 # and `increment_usage`, which set `keys`; `value` is the JSON to store (`set`), the amount
-# (`increment`) or one amount per key (`increment_usage`); `ttl` is in seconds; `local` reads or
-# writes this worker's in-memory tier only. Outcomes: get -> the JSON value or None; batch_get ->
-# one JSON value or None per key, in order; increment -> the new int or float; set, delete and
+# (`increment`), the whole amount (`increment_count`, added as Redis INCRBY adds it) or one amount
+# per key (`increment_usage`); `ttl` is in seconds; `local` reads or writes this worker's in-memory
+# tier only. Outcomes: get -> the JSON value or None; batch_get -> one JSON value or None per key,
+# in order; increment -> the new int or float; increment_count -> the new int; set, delete and
 # increment_usage -> None.
 class _CacheStep(_Step):
     kind: Literal["cache"]
-    op: Literal["get", "set", "increment", "increment_usage", "batch_get", "delete"]
+    op: Literal["get", "set", "increment", "increment_count", "increment_usage", "batch_get", "delete"]
     key: str | None
     keys: list[str] | None
     value: JsonValue
