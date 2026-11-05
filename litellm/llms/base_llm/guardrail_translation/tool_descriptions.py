@@ -2,96 +2,43 @@ from __future__ import annotations
 
 import copy
 import functools
-import itertools
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final, TypeAlias, TypeVar
 
 from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows JSON in place without copying it
 
-DescriptionPath: TypeAlias = tuple[str | int, ...]
-_Located: TypeAlias = tuple[DescriptionPath, JsonValue]
+from litellm.proxy.mcp_server.utils import JSONLeafPath, json_string_leaves
+
+DescriptionPath: TypeAlias = JSONLeafPath
 
 _TOOLS: Final = TypeAdapter(list[JsonValue])
 _Tool = TypeVar("_Tool")  # rebind-ok: a TypeVar is declared by plain assignment
 
-_TOOL_SCHEMA_KEYS: Final = ("parameters", "input_schema")
-_SUBSCHEMA_KEYWORDS: Final = (
-    "items",
-    "additionalItems",
-    "unevaluatedItems",
-    "contains",
-    "additionalProperties",
-    "unevaluatedProperties",
-    "propertyNames",
-    "not",
-    "if",
-    "then",
-    "else",
-)
-_SUBSCHEMA_LIST_KEYWORDS: Final = ("items", "prefixItems", "anyOf", "oneOf", "allOf")
-_SUBSCHEMA_MAP_KEYWORDS: Final = (
-    "properties",
-    "patternProperties",
-    "$defs",
-    "definitions",
-    "dependentSchemas",
-    "dependencies",
+_SCHEMA_VALUE_KEYWORDS: Final = frozenset({"default", "examples", "enum", "const"})
+_NAMED_SUBSCHEMA_MAPS: Final = frozenset(
+    {"properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"}
 )
 
 
-def tool_description_entries(tools: Sequence[JsonValue]) -> tuple[tuple[DescriptionPath, str], ...]:
-    holders: Final = tuple(
-        itertools.chain.from_iterable(_tool_holders(tool, (index,)) for index, tool in enumerate(tools))
+def _inside_schema_value(path: DescriptionPath) -> bool:
+    return any(
+        key in _SCHEMA_VALUE_KEYWORDS and (index == 0 or path[index - 1] not in _NAMED_SUBSCHEMA_MAPS)
+        for index, key in enumerate(path)
     )
+
+
+def tool_description_entries(tools: Sequence[JsonValue]) -> tuple[tuple[DescriptionPath, str], ...] | None:
+    """Every ``description`` string in ``tools``, or None when they are nested too deeply to read."""
+    leaves: Final = json_string_leaves(list(tools))
+    if leaves is None:
+        return None
     return tuple(
-        itertools.chain(
-            itertools.chain.from_iterable(_own_description(holder, path) for path, holder in holders),
-            itertools.chain.from_iterable(_own_description(schema, path) for path, schema in _schemas(holders)),
-        )
+        (path, text)
+        for path, text in leaves
+        if path and path[-1] == "description" and text.strip() and not _inside_schema_value(path[:-1])
     )
-
-
-def _tool_holders(tool: JsonValue, path: DescriptionPath) -> Iterator[tuple[DescriptionPath, Mapping[str, JsonValue]]]:
-    if not isinstance(tool, dict):
-        return
-    yield path, tool
-    if isinstance(function := tool.get("function"), dict):
-        yield (*path, "function"), function
-
-
-def _schemas(
-    holders: Sequence[tuple[DescriptionPath, Mapping[str, JsonValue]]],
-) -> Iterator[tuple[DescriptionPath, Mapping[str, JsonValue]]]:
-    roots: Final = itertools.chain.from_iterable(
-        (((*path, key), holder.get(key)) for key in _TOOL_SCHEMA_KEYS) for path, holder in holders
-    )
-    pending: Final[list[_Located]] = list(roots)  # mutable-ok: work stack keeps the schema walk non-recursive
-    while pending:
-        path, schema = pending.pop()
-        if isinstance(schema, dict):
-            yield path, schema
-            pending.extend(_subschemas(schema, path))
-
-
-def _subschemas(schema: Mapping[str, JsonValue], path: DescriptionPath) -> Iterator[tuple[DescriptionPath, JsonValue]]:
-    for key in _SUBSCHEMA_KEYWORDS:
-        yield (*path, key), schema.get(key)
-    for key in _SUBSCHEMA_LIST_KEYWORDS:
-        if isinstance(children := schema.get(key), list):
-            for index, child in enumerate(children):
-                yield (*path, key, index), child
-    for key in _SUBSCHEMA_MAP_KEYWORDS:
-        if isinstance(named := schema.get(key), dict):
-            for name, child in named.items():
-                yield (*path, key, name), child
-
-
-def _own_description(node: Mapping[str, JsonValue], path: DescriptionPath) -> Iterator[tuple[DescriptionPath, str]]:
-    description: Final = node.get("description")
-    if isinstance(description, str) and description.strip():
-        yield (*path, "description"), description
 
 
 def _is_object(
@@ -125,32 +72,38 @@ def with_replaced_descriptions(
     return rewritten
 
 
+def _unscannable(guardrail_name: str | None) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={
+            "error": "tool_descriptions_unscannable",
+            "message": (
+                f"Guardrail '{guardrail_name}' has scan_tool_descriptions_as_text on, but tools[] is not "
+                "plain JSON or is nested too deeply to read, so the request was rejected rather than sent "
+                "with unscanned tool descriptions"
+            ),
+        },
+    )
+
+
 async def scanned_tool_descriptions(
     tools: Sequence[_Tool],
     scan_text: Callable[[str], Awaitable[str]],
     guardrail_name: str | None,
 ) -> list[_Tool] | None:  # mutable-ok: GenericGuardrailAPIInputs.tools is declared as a list
-    """Run ``scan_text`` over every tool and schema ``description`` in OpenAI-format ``tools``.
+    """Run ``scan_text`` over every ``description`` string in ``tools``, skipping schema values like ``default``.
 
     Returns the tools with changed descriptions written back at their original paths,
     or None when nothing changed. ``scan_text`` blocks by raising.
     """
     try:
-        validated: Final = _TOOLS.validate_python(tools)
+        entries: Final = tool_description_entries(_TOOLS.validate_python(tools))
     except ValidationError as error:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "tool_descriptions_unscannable",
-                "message": (
-                    f"Guardrail '{guardrail_name}' has scan_tool_descriptions_as_text on, but tools[] is not "
-                    "plain JSON or is nested too deeply to read, so the request was rejected rather than sent "
-                    "with unscanned tool descriptions"
-                ),
-            },
-        ) from error
+        raise _unscannable(guardrail_name) from error
+    if entries is None:
+        raise _unscannable(guardrail_name)
     replacements: Final[dict[DescriptionPath, str]] = {}  # mutable-ok: filled one scan at a time
-    for path, text in tool_description_entries(validated):
+    for path, text in entries:
         scanned = await scan_text(text)
         if scanned != text:
             replacements[path] = scanned

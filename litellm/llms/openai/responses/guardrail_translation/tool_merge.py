@@ -70,19 +70,41 @@ def _function_fields(tool: Tool) -> Tool:
     return function if function is not None else MappingProxyType({})
 
 
-def _member_description(key: str, value: object, prefix: str, suffix: str) -> object:
+def _member_description(key: str, value: object, prefixes: Sequence[str], suffix: str) -> object:
     if key != "description" or not isinstance(value, str):
         return value
-    return value.replace(prefix, "", 1).replace(suffix, "", 1)
+    prefix: Final = next((prefix for prefix in prefixes if value.startswith(prefix)), "")
+    return value.removeprefix(prefix).replace(suffix, "", 1)
 
 
-def _rebuilt_member(member: Tool, flattened: Tool, guardrailed: Tool, namespace_description: str) -> Tool:
+def _namespace_prefix(namespace_description: str) -> str:
+    return f"{namespace_description}{NAMESPACE_DESCRIPTION_SEPARATOR}" if namespace_description else ""
+
+
+def _guardrailed_namespace_description(namespace_description: str, guardrailed_members: Iterable[Tool]) -> str:
+    """The namespace description as the guardrail returned it inside its flattened members' descriptions."""
+    if not namespace_description:
+        return namespace_description
+    parts: Final = namespace_description.count(NAMESPACE_DESCRIPTION_SEPARATOR) + 1
+    descriptions: Final = (_function_fields(member).get("description") for member in guardrailed_members)
+    return next(
+        (
+            NAMESPACE_DESCRIPTION_SEPARATOR.join(description.split(NAMESPACE_DESCRIPTION_SEPARATOR)[:parts])
+            for description in descriptions
+            if isinstance(description, str)
+            and not description.startswith(_namespace_prefix(namespace_description))
+            and description.count(NAMESPACE_DESCRIPTION_SEPARATOR) >= parts
+        ),
+        namespace_description,
+    )
+
+
+def _rebuilt_member(member: Tool, flattened: Tool, guardrailed: Tool, prefixes: Sequence[str]) -> Tool:
     flattened_function: Final = _function_fields(flattened)
-    prefix: Final = f"{namespace_description}{NAMESPACE_DESCRIPTION_SEPARATOR}" if namespace_description else ""
     suffix: Final = custom_tool_grammar_suffix(member.get("format")) if member.get("type") == "custom" else ""
     changed_function: Final = MappingProxyType(
         {
-            key: _member_description(key, value, prefix, suffix)
+            key: _member_description(key, value, prefixes, suffix)
             for key, value in _function_fields(guardrailed).items()
             if flattened_function.get(key) != value
         }
@@ -102,14 +124,14 @@ def _rebuilt_flattened_members(
     flattened_group: Sequence[Tool],
     group_keys: Sequence[IndexedKey],
     guardrailed_by_key: Mapping[IndexedKey, Tool],
-    namespace_description: str,
+    prefixes: Sequence[str],
 ) -> tuple[Tool | None, ...]:
     return tuple(
         None
         if key not in guardrailed_by_key
         else member
         if guardrailed_by_key[key] == flattened
-        else _rebuilt_member(member, flattened, guardrailed_by_key[key], namespace_description)
+        else _rebuilt_member(member, flattened, guardrailed_by_key[key], prefixes)
         for member, flattened, key in zip(flattened_members, flattened_group, group_keys)
     )
 
@@ -122,13 +144,17 @@ def _rebuilt_namespace(
     guardrailed_by_key: Mapping[IndexedKey, Tool],
 ) -> tuple[Tool, ...]:
     namespace_description: Final = str(original.get("description") or "")
+    guardrailed_description: Final = _guardrailed_namespace_description(
+        namespace_description, (guardrailed_by_key[key] for key in group_keys if key in guardrailed_by_key)
+    )
+    prefixes: Final = (_namespace_prefix(namespace_description), _namespace_prefix(guardrailed_description))
     rebuilt_flattened: Final = iter(
         _rebuilt_flattened_members(
             tuple(member for member in members if _has_chat_tool(member)),
             flattened_group,
             group_keys,
             guardrailed_by_key,
-            namespace_description,
+            prefixes,
         )
     )
     rebuilt_members: Final = tuple(
@@ -138,7 +164,10 @@ def _rebuilt_namespace(
     )
     if not rebuilt_members:
         return ()
-    return ({**original, "tools": list(rebuilt_members)},)
+    description_update: Final = (
+        {"description": guardrailed_description} if guardrailed_description != namespace_description else {}
+    )
+    return ({**original, **description_update, "tools": list(rebuilt_members)},)
 
 
 def _merged_original(

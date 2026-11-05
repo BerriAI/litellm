@@ -53,6 +53,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    guardrail_scans_tool_descriptions,
     list_field,
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
@@ -887,7 +888,11 @@ class AnthropicMessagesHandler(BaseTranslation):
         pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        if (
+            texts_to_check
+            or tool_calls_to_check
+            or (tools_to_check and guardrail_scans_tool_descriptions(guardrail_to_apply))
+        ):
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check

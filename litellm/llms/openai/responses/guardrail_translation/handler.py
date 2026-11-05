@@ -63,6 +63,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    guardrail_scans_tool_descriptions,
     list_field,
     merge_guardrailed_scoped_messages,
     role_out_of_guardrail_scope,
@@ -810,7 +811,9 @@ class OpenAIResponsesHandler(BaseTranslation):
             skip_tool=skip_tool,
             scan_only=scan_only,
         )
-        if not extracted.inputs.get("texts"):
+        if not extracted.inputs.get("texts") and not (
+            extracted.inputs.get("tools") and guardrail_scans_tool_descriptions(guardrail_to_apply)
+        ):
             return data
         if scoped_structured_messages:
             extracted.inputs["structured_messages"] = scoped_structured_messages

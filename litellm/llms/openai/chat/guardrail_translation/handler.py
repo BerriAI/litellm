@@ -39,6 +39,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    guardrail_scans_tool_descriptions,
     list_field,
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
@@ -139,8 +140,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 scan_only_tool_results=scan_only_tool_results,
             )
 
+        tools: Final = data.get("tools")
         # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        if (
+            texts_to_check
+            or tool_calls_to_check
+            or (
+                isinstance(tools, list)
+                and tools
+                and not scan_only_tool_results
+                and guardrail_scans_tool_descriptions(guardrail_to_apply)
+            )
+        ):
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
@@ -156,7 +167,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if structured_messages:
                 inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
             # Pass tools (function definitions) to the guardrail
-            tools: Final = data.get("tools")
             if isinstance(tools, list) and tools and not scan_only_tool_results:
                 inputs["tools"] = tools
             # Include model information if available

@@ -3364,6 +3364,28 @@ _TOOL_DEFINITION_REQUESTS: Final = (
         id="responses_namespace",
     ),
     pytest.param(
+        CallTypes.aresponses.value,
+        {
+            "input": "weather in Paris?",
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "weather",
+                    "description": _POISONED_DESCRIPTION,
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "get_weather",
+                            "description": "Gets the weather.",
+                            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                        }
+                    ],
+                }
+            ],
+        },
+        id="responses_namespace_description",
+    ),
+    pytest.param(
         CallTypes.anthropic_messages.value,
         {
             "max_tokens": 64,
@@ -3413,6 +3435,66 @@ _GEMINI_TOOL_DEFINITION_REQUESTS: Final = (
     ),
 )
 _TOOL_DESCRIPTION_SCAN_REQUESTS: Final = (*_TOOL_DEFINITION_REQUESTS, *_GEMINI_TOOL_DEFINITION_REQUESTS)
+
+
+_IMAGE_URL: Final = "https://example.com/paris.png"
+_POISONED_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "description": _POISONED_DESCRIPTION, "parameters": _WEATHER_SCHEMA},
+}
+_REQUESTS_WITHOUT_MESSAGE_TEXT: Final = (
+    pytest.param(
+        CallTypes.acompletion.value,
+        {
+            "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": _IMAGE_URL}}]}],
+            "tools": [_POISONED_FUNCTION_TOOL],
+        },
+        id="chat_completions_image_only",
+    ),
+    pytest.param(
+        CallTypes.aresponses.value,
+        {
+            "input": [{"role": "user", "content": [{"type": "input_image", "image_url": _IMAGE_URL}]}],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": _POISONED_DESCRIPTION,
+                    "parameters": _WEATHER_SCHEMA,
+                }
+            ],
+        },
+        id="responses_image_only",
+    ),
+    pytest.param(
+        CallTypes.anthropic_messages.value,
+        {
+            "max_tokens": 64,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "source": {"type": "url", "url": _IMAGE_URL}}],
+                }
+            ],
+            "tools": [{"name": "get_weather", "description": _POISONED_DESCRIPTION, "input_schema": _WEATHER_SCHEMA}],
+        },
+        id="anthropic_messages_image_only",
+    ),
+    pytest.param(
+        CallTypes.agenerate_content.value,
+        {
+            "contents": [{"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0K"}}]}],
+            "tools": [
+                {
+                    "functionDeclarations": [
+                        {"name": "get_weather", "description": _POISONED_DESCRIPTION, "parameters": _WEATHER_SCHEMA}
+                    ]
+                }
+            ],
+        },
+        id="gemini_generate_content_image_only",
+    ),
+)
 
 
 _MakeGuardrail: TypeAlias = Callable[..., CustomGuardrail]
@@ -3501,6 +3583,23 @@ async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_descr
     assert exc_info.value.status_code == 400
 
 
+@pytest.mark.usefixtures("_real_translation_mappings")
+@pytest.mark.parametrize("make_guardrail", _TEXT_GUARDRAILS)
+@pytest.mark.parametrize(("call_type", "body"), _REQUESTS_WITHOUT_MESSAGE_TEXT)
+@pytest.mark.asyncio
+async def test_pre_call_scans_tool_descriptions_on_requests_without_message_text(
+    monkeypatch: pytest.MonkeyPatch, make_guardrail: _MakeGuardrail, call_type: str, body: Mapping[str, object]
+) -> None:
+    async def blocked(scan: object) -> bool:
+        try:
+            await _pre_call(make_guardrail(monkeypatch, mask=False, scan=scan), call_type, body)
+        except HTTPException:
+            return True
+        return False
+
+    assert (await blocked(False), await blocked(True)) == (False, True)
+
+
 def _wrapped(inner: list[object], _: int) -> list[object]:
     return [inner]
 
@@ -3566,8 +3665,8 @@ async def test_pre_call_masks_tool_descriptions_without_touching_the_schema(
 
     # Compare description paths and text: the Anthropic and Responses tool round-trips (unchanged from main)
     # add defaults such as type="custom" and strict=False to every tool a guardrail hands back.
-    assert tool_description_entries(_JSON_TOOLS.validate_python(result["tools"])) == tool_description_entries(
-        _JSON_TOOLS.validate_python(_masked(body["tools"]))
+    assert dict(tool_description_entries(_JSON_TOOLS.validate_python(result["tools"])) or ()) == dict(
+        tool_description_entries(_JSON_TOOLS.validate_python(_masked(body["tools"]))) or ()
     )
     assert "IGNORE PRIOR INSTRUCTIONS" not in json.dumps(result["tools"])
 

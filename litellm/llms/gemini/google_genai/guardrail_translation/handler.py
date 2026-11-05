@@ -28,6 +28,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
+    guardrail_scans_tool_descriptions,
     unappliable_request_rewrite,
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
@@ -245,7 +246,10 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> object:
         text_parts: Final = _request_text_parts(data)
-        if not text_parts:
+        declarations: Final = (
+            () if effective_scan_only_tool_results_for_guardrail(guardrail_to_apply) else _request_declarations(data)  # pyright: ignore[reportUnknownArgumentType]  # data is typed as a bare dict by BaseTranslation
+        )
+        if not text_parts and not (declarations and guardrail_scans_tool_descriptions(guardrail_to_apply)):
             verbose_proxy_logger.debug("Google GenAI guardrail: no request text found, skipping")
             return data
         model: Final = data.get("model")
@@ -253,9 +257,6 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
             GenericGuardrailAPIInputs(texts=_texts_payload(_part_texts(text_parts)), model=model)
             if isinstance(model, str)
             else GenericGuardrailAPIInputs(texts=_texts_payload(_part_texts(text_parts)))
-        )
-        declarations: Final = (
-            () if effective_scan_only_tool_results_for_guardrail(guardrail_to_apply) else _request_declarations(data)  # pyright: ignore[reportUnknownArgumentType]  # data is typed as a bare dict by BaseTranslation
         )
         if declarations:
             inputs["tools"] = [declaration.tool for declaration in declarations]
