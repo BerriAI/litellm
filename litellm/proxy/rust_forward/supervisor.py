@@ -40,9 +40,7 @@ def startup_check(platform: Platform, server: PythonServer, binary: str | None) 
     if server.listener is not Listener.TCP:
         return StartupError(f"{ENV_NAME} does not support {server.listener.value} on the public port")
     if binary is None:
-        return StartupError(
-            f"{ENV_NAME} requires the litellm-gateway binary. Install litellm[proxy] in this environment"
-        )
+        return StartupError(f"{ENV_NAME} requires the litellm-gateway binary from the litellm-proxy package")
     return binary
 
 
@@ -314,16 +312,17 @@ def supervise(
     before_start: Callable[[], None] = _nothing_to_prepare,
     scripts_dir: str = sysconfig.get_path("scripts"),
     platform: Platform | None = None,
-) -> int:
+) -> int | StartupError:
     """Serve ``server``'s public port from Rust and run ``command`` behind it, or say why that cannot start.
 
-    ``before_start`` runs only once forwarding is known to be possible, so a refused start leaves nothing behind.
+    A refusal is returned for the caller to serve from Python alone, and ``before_start`` runs only once forwarding
+    is known to be possible, so a refused start leaves nothing behind.
     """
     chosen: Final = current_platform() if platform is None else platform
     checked: Final = startup_check(chosen, server, gateway_binary(chosen, scripts_dir))
     if isinstance(checked, StartupError):
-        sys.stderr.write(f"{checked.reason}\n")
-        return ExitCode.CHILD_FAILED
+        sys.stderr.write(f"{checked.reason}, so Python serves the public port without Rust forwarding\n")
+        return checked
     before_start()
     try:
         return asyncio.run(_supervise(chosen, checked, command, server))

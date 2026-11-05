@@ -1368,7 +1368,7 @@ def run_server(
     if isinstance(forward_mode, Supervisor) and not any(
         (version, validate_config, health, test, skip_server_startup, check_migrations_against_existing_data)
     ):
-        from litellm.proxy.rust_forward.supervisor import supervise
+        from litellm.proxy.rust_forward.supervisor import StartupError, supervise
 
         server: Final = ProxyInitializationHelpers.python_server(
             host,
@@ -1379,9 +1379,9 @@ def run_server(
             run_granian=run_granian,
             tls=any((ssl_keyfile_path, ssl_certfile_path, ciphers)),
         )
-        raise SystemExit(
-            supervise(server, (sys.executable, "-m", "litellm.proxy.proxy_cli", *sys.argv[1:]))
-        )
+        supervised: Final = supervise(server, (sys.executable, "-m", "litellm.proxy.proxy_cli", *sys.argv[1:]))
+        if not isinstance(supervised, StartupError):
+            raise SystemExit(supervised)
 
     args: Final = locals()
     try:

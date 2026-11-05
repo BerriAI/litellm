@@ -4303,23 +4303,51 @@ class TestRustForwardServer:
     @pytest.mark.parametrize(
         ("argv", "reason"),
         [
-            (["--ssl_keyfile_path", "unused"], "does not support TLS"),
-            (["--ssl_certfile_path", "unused"], "does not support TLS"),
-            (["--ciphers", "unused"], "does not support TLS"),
+            (["--ssl_keyfile_path", "unused"], "does not support TLS on the public port"),
+            (["--ssl_certfile_path", "unused"], "does not support TLS on the public port"),
+            (["--ciphers", "unused"], "does not support TLS on the public port"),
             (["--run_hypercorn"], "does not support Hypercorn"),
             (["--run_granian"], "does not support Granian"),
         ],
     )
-    def test_unsupported_servers_fail_before_starting_children(
-        self, argv: list[str], reason: str, monkeypatch: pytest.MonkeyPatch
+    def test_unsupported_servers_are_refused_before_starting_children(self, argv: list[str], reason: str) -> None:
+        from litellm.proxy.rust_forward.platform.posix import PosixPlatform
+        from litellm.proxy.rust_forward.supervisor import StartupError, startup_check
+
+        _, server = self._server(argv)
+        assert startup_check(PosixPlatform(), server, "gateway") == StartupError(f"LITELLM_RUST {reason}")
+
+    @patch("uvicorn.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    def test_a_refused_forwarding_start_serves_from_python_alone(
+        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
     ) -> None:
         from click.testing import CliRunner
 
-        monkeypatch.setenv("LITELLM_RUST", "true")
-        monkeypatch.delenv("_LITELLM_GATEWAY_FD", raising=False)
-        result: Final = CliRunner().invoke(run_server, argv)
-        assert result.exit_code == 1
-        assert f"LITELLM_RUST {reason}" in result.output
+        proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        environ: Final = {
+            **{k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "_LITELLM_GATEWAY_FD")},
+            "LITELLM_RUST": "true",
+        }
+        with (
+            patch.dict(os.environ, environ, clear=True),
+            patch.dict("sys.modules", {"proxy_server": proxy_module, "litellm.proxy.proxy_server": proxy_module}),
+        ):
+            result: Final = CliRunner().invoke(
+                run_server, ["--port", "45999", "--ssl_keyfile_path", "key.pem", "--ssl_certfile_path", "cert.pem"]
+            )
+        assert result.exit_code == 0, result.output
+        assert "LITELLM_RUST does not support TLS on the public port, so Python serves the public port" in result.output
+        mock_uvicorn_run.assert_called_once()
+        assert mock_uvicorn_run.call_args.kwargs["ssl_keyfile"] == "key.pem"
+        assert mock_uvicorn_run.call_args.kwargs["port"] == 45999
 
     @pytest.mark.parametrize(
         ("argv", "environ"),

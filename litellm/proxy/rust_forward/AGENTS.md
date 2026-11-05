@@ -4,7 +4,7 @@ With `LITELLM_RUST` on, the supervisor here runs the Rust gateway on the public 
 
 Every forwarding decision lives here. Entry points (`litellm/proxy/proxy_cli.py`, `gateway/launch.py`, `litellm_cli/main.py`) only translate between their own flags and this package:
 
-- In the supervisor they describe what they would serve with as a `server.PythonServer` and hand it to `supervisor.supervise`, which decides whether forwarding can start, what Rust and the Python child receive, and how to report a refusal
+- In the supervisor they describe what they would serve with as a `server.PythonServer` and hand it to `supervisor.supervise`, which decides whether forwarding can start and what Rust and the Python child receive. A refusal (no gateway binary, or a server or listener Rust cannot front) is reported and returned, and the entry point then serves from Python alone exactly as with `LITELLM_RUST` off
 - In the supervised child they merge `mode.uvicorn_options`, `mode.uvicorn_flags` or `mode.gunicorn_bind` and `mode.server_proxy_headers` into their server settings, and wrap the app with `peer.wrap` in their worker factory. These are identities when forwarding is off, so entry points never branch on it
 
 Every OS-specific operation lives behind `platform.Platform`, which `supervise` picks once with `platform.current_platform()`: the gateway binary name, how the private listener reaches Python, the spawn options, and how children are signalled and stopped. `PosixPlatform` hands Python an inherited socket (`mode.InheritedFd`). `WindowsPlatform` hands it an assigned loopback port (`mode.AssignedPort`), starts each child in its own process group and stops it with `CTRL_BREAK_EVENT`. The supervisor and `mode.py` never check the OS themselves

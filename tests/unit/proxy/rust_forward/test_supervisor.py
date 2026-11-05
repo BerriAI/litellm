@@ -120,8 +120,11 @@ def test_unsupported_servers_are_refused_before_anything_starts(
     assert startup_check(POSIX, server, "gateway") == StartupError(reason)
     prepared: Final[list[bool]] = []
     refused: Final = supervise(server, ("python",), before_start=lambda: prepared.append(True), platform=POSIX)
-    assert refused == ExitCode.CHILD_FAILED
-    assert (capsys.readouterr().err, prepared) == (f"{reason}\n", [])
+    assert refused == StartupError(reason)
+    assert (capsys.readouterr().err, prepared) == (
+        f"{reason}, so Python serves the public port without Rust forwarding\n",
+        [],
+    )
 
 
 @pytest.mark.parametrize("server", [Server.UVICORN, Server.GUNICORN])
@@ -136,9 +139,14 @@ def test_windows_forwards_uvicorn_and_refuses_gunicorn() -> None:
     )
 
 
-def test_missing_binary_gives_install_instruction() -> None:
-    assert startup_check(POSIX, _server(), None) == StartupError(
-        "LITELLM_RUST requires the litellm-gateway binary. Install litellm[proxy] in this environment"
+def test_missing_binary_is_refused_before_anything_starts(tmp_path: Path) -> None:
+    prepared: Final[list[bool]] = []
+    refused: Final = supervise(
+        _server(), ("python",), before_start=lambda: prepared.append(True), scripts_dir=str(tmp_path), platform=POSIX
+    )
+    assert (refused, prepared) == (
+        StartupError("LITELLM_RUST requires the litellm-gateway binary from the litellm-proxy package"),
+        [],
     )
 
 
