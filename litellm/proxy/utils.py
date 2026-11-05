@@ -986,11 +986,15 @@ def _iter_load_balanced_callbacks(
             for previous in callbacks[:index]
         ):
             return ()
+        deployments: Final = tuple(
+            entry for entry in settings.guardrail_list if entry["guardrail_name"] == callback.guardrail_name
+        )
+        if not any(entry.get("callback") is not None for entry in deployments):
+            raise ValueError(f"No callback found for guardrail: {callback.guardrail_name}")
         candidates: Final = tuple(
             entry
-            for entry in settings.guardrail_list
-            if entry["guardrail_name"] == callback.guardrail_name
-            and any(eligible(member) for member in _deployment_callbacks(entry))
+            for entry in deployments
+            if entry.get("callback") is not None and any(eligible(member) for member in _deployment_callbacks(entry))
         )
         if not candidates:
             return ()
@@ -3334,7 +3338,9 @@ class ProxyLogging:
                         data is not None
                         and cb.guardrail_name not in pipeline_managed
                         and cb.should_run_guardrail(
-                            data=data,
+                            data=raw_request_snapshot
+                            if cb.scan_raw_request and raw_request_snapshot is not None
+                            else data,
                             event_type=GuardrailEventHooks.pre_mcp_call
                             if call_type in MCP_GUARDRAIL_CALL_TYPES
                             else GuardrailEventHooks.pre_call,

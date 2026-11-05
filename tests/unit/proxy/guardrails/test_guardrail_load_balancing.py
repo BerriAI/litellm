@@ -39,6 +39,7 @@ class MockGuardrail(CustomGuardrail):
         default_on: bool = False,
         stream_scope: GuardrailStreamScope = "both",
         run_in_parallel: bool = False,
+        scan_raw_request: bool = False,
     ):
         super().__init__(
             guardrail_name=guardrail_name,
@@ -46,6 +47,7 @@ class MockGuardrail(CustomGuardrail):
             default_on=default_on,
             stream_scope=stream_scope,
             run_in_parallel=run_in_parallel,
+            scan_raw_request=scan_raw_request,
         )
         self.guardrail_id = guardrail_id
         self.calls = 0
@@ -94,6 +96,17 @@ class GuardrailActivator(CustomLogger):
         if self.action == "raise":
             raise ValueError("activation blocked")
         return {**data, "guardrails": ["dynamic-lb"]} if self.action == "enable" else data
+
+
+class GuardrailRemover(CustomLogger):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: Mapping[str, object],
+        call_type: CallTypesLiteral,
+    ) -> Mapping[str, object]:
+        return {key: value for key, value in data.items() if key != "guardrails"}
 
 
 @pytest.mark.asyncio
@@ -435,3 +448,81 @@ async def test_pre_call_load_balancing_observes_earlier_callback_activation(
             )
         assert sum(cb.calls for cb in replicas) == (request_index + 1 if action == "enable" else 0)
     assert all(cb.calls > 0 for cb in replicas) is (action == "enable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested", (False, True))
+@pytest.mark.parametrize("run_in_parallel", (False, True))
+async def test_raw_request_scans_survive_earlier_callback_removing_guardrail_names(
+    requested: bool, run_in_parallel: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    single: Final = MockGuardrail(
+        "single-raw",
+        "single",
+        event_hook=GuardrailEventHooks.pre_call,
+        scan_raw_request=True,
+        run_in_parallel=run_in_parallel,
+    )
+    replicas: Final = tuple(
+        MockGuardrail(
+            "balanced-raw",
+            region,
+            event_hook=GuardrailEventHooks.pre_call,
+            scan_raw_request=True,
+            run_in_parallel=run_in_parallel,
+        )
+        for region in ("east", "west")
+    )
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": cb.guardrail_name,
+                "id": cb.guardrail_id,
+                "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+            }
+            for cb in (single, *replicas)
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [GuardrailRemover(), single, *replicas])
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    await logging.pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        data={"model": "test", "messages": [], "guardrails": ["single-raw", "balanced-raw"] if requested else []},
+        call_type="completion",
+    )
+    assert single.calls == int(requested)
+    assert (sum(cb.calls for cb in replicas) > 0) is requested
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook", ("pre_call", "during_call", "post_call", "streaming", "iterator"))
+@pytest.mark.parametrize("healthy", (False, True))
+async def test_missing_callback_does_not_poison_healthy_replica(
+    hook: str, healthy: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    guardrail: Final = MockGuardrail("partial-lb", "healthy", default_on=True)
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {"guardrail_name": "partial-lb", "id": "missing", "litellm_params": {"guardrail": "custom", "weight": 0}},
+            {
+                "guardrail_name": "partial-lb",
+                "id": "healthy",
+                "callback": guardrail if healthy else None,
+                "litellm_params": {"guardrail": "custom", "weight": 1},
+            },
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    if healthy:
+        await _dispatch_scoped_hook(logging, hook)
+        assert guardrail.calls == 1
+    else:
+        with pytest.raises(ValueError, match="No callback found for guardrail: partial-lb"):
+            await _dispatch_scoped_hook(logging, hook)
+        assert guardrail.calls == 0
