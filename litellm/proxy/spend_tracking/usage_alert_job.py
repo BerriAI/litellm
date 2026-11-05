@@ -1,9 +1,9 @@
 """Once-daily evaluation, polled hourly by one database-elected worker."""
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time, timedelta, timezone
-from itertools import groupby, product
+from itertools import chain, groupby, product
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -22,6 +22,7 @@ from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.proxy.usage_alerts import (
     UsageAlert,
     UsageAlertChannel,
+    UsageAlertEvaluationStatus,
     UsageAlertMetric,
     UsageAlertNotification,
     UsageAlertObservation,
@@ -179,9 +180,9 @@ class UsageAlertJob:
     async def _rules(self) -> tuple[UsageAlertRule, ...]:
         pages: Final[list[UsageAlertRule]] = []  # mutable-ok: collect configuration pages
         offset = 0  # rebind-ok: configuration pagination cursor
-        while page := await self._store.list_enabled_rules(limit=100, offset=offset):
+        while page := await self._store.list_enabled_rules(limit=500, offset=offset):
             pages.extend(page)
-            if len(page) < 100:
+            if len(page) < 500:
                 return tuple(pages)
             offset += len(page)
         return tuple(pages)
@@ -192,7 +193,10 @@ class UsageAlertJob:
             self._defaults_registered = True
         target: Final = completed_day(now)
         rules: Final = await self._rules()
-        due: Final = tuple([rule for rule in rules if not await self._store.is_day_complete(rule, target)])
+        complete: Final[set[str]] = set()  # mutable-ok: batched completion lookup, bounded by configuration size
+        for offset in range(0, len(rules), 500):
+            complete.update(await self._store.completed_rule_ids(rules[offset : offset + 500], target))
+        due: Final = tuple(rule for rule in rules if rule.id not in complete)
         for scoped in (tuple(rule for rule in due if rule.scope_type == scope) for scope in _SCOPES):
             if scoped:
                 await self._scope(scoped, target, rules)
@@ -209,37 +213,71 @@ class UsageAlertJob:
             rule for rule in rules if coverage.after_grace and (rule.direction == "increase" or coverage.hours == 24)
         )
         suppressed: Final = {rule.id: _suppressed_entities(rule, enabled) for rule in eligible}
-        for rule in rules:
-            if rule not in eligible:
-                await self._store.record_evaluation_status(rule, target, "insufficient_coverage")
+        eligible_ids: Final = frozenset(rule.id for rule in eligible)
+        await self._record_evaluations(
+            tuple((rule, "insufficient_coverage") for rule in rules if rule.id not in eligible_ids),
+            target,
+            completed=False,
+        )
         if not eligible:
             return
+        by_entity: Final = {
+            entity: tuple(group)
+            for entity, group in groupby(
+                sorted(eligible, key=lambda rule: rule.scope_id or ""), lambda rule: rule.scope_id
+            )
+        }
         evaluated: Final[set[str]] = set()  # mutable-ok: at most one entry per configured rule across streaming pages
         async for rows in self._metrics.batches(scope, target, max(rule.baseline_days for rule in eligible)):
-            evaluated.update(await self._page(eligible, rows, target, enabled))
-        for rule in eligible:
-            await self._store.finish_day(rule, target)
-            await self._store.record_evaluation_status(
-                rule, target, "complete" if rule.id in evaluated or suppressed[rule.id] else "insufficient_history"
-            )
+            evaluated.update(await self._page(by_entity, rows, target, suppressed))
+        await self._record_evaluations(
+            tuple(
+                (rule, "complete" if rule.id in evaluated or suppressed[rule.id] else "insufficient_history")
+                for rule in eligible
+            ),
+            target,
+            completed=True,
+        )
+
+    async def _record_evaluations(
+        self,
+        evaluations: tuple[tuple[UsageAlertRule, UsageAlertEvaluationStatus], ...],
+        target: date,
+        *,
+        completed: bool,
+    ) -> None:
+        for offset in range(0, len(evaluations), 500):
+            await self._store.record_evaluations(evaluations[offset : offset + 500], target, completed=completed)
 
     async def _page(
         self,
-        rules: tuple[UsageAlertRule, ...],
+        rules: Mapping[str | None, tuple[UsageAlertRule, ...]],
         rows: tuple[DailyAlertMetrics, ...],
         target: date,
-        enabled: tuple[UsageAlertRule, ...],
+        suppressed: Mapping[str, frozenset[str | None]],
     ) -> tuple[str, ...]:
-        entities: Final = (
-            (None,) if rules[0].scope_type == "deployment" else tuple(dict.fromkeys(row.entity_id for row in rows))
-        )
-        active: Final = await self._store.breached_entities(tuple(rule.id for rule in rules), entities)
+        by_entity: Final = {entity: tuple(group) for entity, group in groupby(rows, lambda row: row.entity_id)}
+        applicable: Final = tuple(chain.from_iterable(rules.get(entity, ()) for entity in (None, *by_entity)))
+        if not applicable:
+            return ()
+        entities: Final = (None,) if applicable[0].scope_type == "deployment" else tuple(by_entity)
+        active: Final[dict[str, frozenset[str | None]]] = {}  # mutable-ok: bounded active results for this entity page
+        for offset in range(0, len(applicable), 500):
+            active.update(
+                await self._store.breached_entities(
+                    tuple(rule.id for rule in applicable[offset : offset + 500]), entities
+                )
+            )
         return tuple(
             [
                 rule.id
-                for rule in rules
+                for rule in applicable
                 if await self._rule_page(
-                    rule, rows, target, active.get(rule.id, frozenset()), _suppressed_entities(rule, enabled)
+                    rule,
+                    rows if rule.scope_id is None else by_entity[rule.scope_id],
+                    target,
+                    active.get(rule.id, frozenset()),
+                    suppressed[rule.id],
                 )
             ]
         )

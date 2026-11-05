@@ -558,6 +558,59 @@ class UsageAlertsRepository:
             self._checkpoint(rule, day),
         )
 
+    async def completed_rule_ids(self, rules: tuple[UsageAlertRule, ...], day: date) -> frozenset[str]:
+        if len(rules) > 500:
+            raise ValueError("A checkpoint batch must contain at most 500 rules")
+        rows: Final = TypeAdapter(tuple[_Identifier, ...]).validate_python(
+            await self.database.query_raw(
+                """SELECT input.rule_id AS id FROM jsonb_to_recordset($1::jsonb)
+                AS input(rule_id text, checkpoint_id text)
+                JOIN "LiteLLM_UsageAlertCheckpoint" c ON c.id=input.checkpoint_id WHERE c.completed""",
+                json.dumps(tuple({"rule_id": rule.id, "checkpoint_id": self._checkpoint(rule, day)} for rule in rules)),
+            )
+        )
+        return frozenset(row.id for row in rows)
+
+    async def record_evaluations(
+        self,
+        evaluations: tuple[tuple[UsageAlertRule, UsageAlertEvaluationStatus], ...],
+        day: date,
+        *,
+        completed: bool,
+    ) -> None:
+        if not evaluations:
+            return
+        if len(evaluations) > 500:
+            raise ValueError("An evaluation batch must contain at most 500 rules")
+        await self.database.query_raw(
+            """WITH input AS (
+                SELECT * FROM jsonb_to_recordset($1::jsonb)
+                AS i(rule_id text,checkpoint_id text,revision timestamptz,status text)
+            ), checkpoints AS (
+                INSERT INTO "LiteLLM_UsageAlertCheckpoint" (id,completed)
+                SELECT checkpoint_id,true FROM input WHERE $3::boolean
+                ON CONFLICT(id) DO NOTHING
+            ) UPDATE "LiteLLM_UsageAlertRule" r SET record=r.record || jsonb_build_object(
+                'last_evaluated_day',$2::text,'evaluation_status',input.status)
+            FROM input WHERE r.id=input.rule_id AND NOT r.deleted
+                AND (r.record->>'updated_at')::timestamptz=input.revision
+                AND (r.record->>'last_evaluated_day' IS DISTINCT FROM $2::text
+                    OR r.record->>'evaluation_status' IS DISTINCT FROM input.status) RETURNING r.id""",
+            json.dumps(
+                tuple(
+                    {
+                        "rule_id": rule.id,
+                        "checkpoint_id": self._checkpoint(rule, day),
+                        "revision": rule.updated_at.isoformat(),
+                        "status": status,
+                    }
+                    for rule, status in evaluations
+                )
+            ),
+            day.isoformat(),
+            completed,
+        )
+
     async def ensure_default_rules(self, rules: tuple[UsageAlertRuleInput, ...]) -> None:
         for rule in rules:
             await self._ensure_default_rule(rule)
