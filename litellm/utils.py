@@ -9670,6 +9670,8 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
     model: str = "",
+    *,
+    allow_interactions_tool_choice: bool = False,
 ) -> dict | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
@@ -9702,8 +9704,17 @@ def validate_chat_completion_tool_choice(
                 llm_provider="",
             )
 
+        is_allowed_tools_cfg: Final = (
+            allow_interactions_tool_choice
+            and len(tool_choice) == 1
+            and isinstance(tool_choice.get("allowed_tools"), dict)
+        )
         # Standard OpenAI format: {"type": "function", "function": {...}}
-        if tool_choice_type != "allowed_tools" and (tool_choice_type is None or tool_choice.get("function") is None):
+        if (
+            not is_allowed_tools_cfg
+            and tool_choice_type != "allowed_tools"
+            and (tool_choice_type is None or tool_choice.get("function") is None)
+        ):
             raise BadRequestError(
                 message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
                 model=model,

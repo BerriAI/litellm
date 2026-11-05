@@ -176,6 +176,7 @@ class Status1(Enum):
     incomplete = "incomplete"
     budget_exceeded = "budget_exceeded"
     queued = "queued"
+    requires_continuation = "requires_continuation"
 
 
 class InteractionStatusUpdate(LiteLLMBaseModel):
@@ -319,7 +320,9 @@ class ToolChoiceType(Enum):
 
 
 class ThinkingLevel(Enum):
+    minimal = "minimal"
     low = "low"
+    medium = "medium"
     high = "high"
 
 
@@ -343,6 +346,7 @@ class Status3(Enum):
     INCOMPLETE = "incomplete"
     BUDGET_EXCEEDED = "budget_exceeded"
     QUEUED = "queued"
+    REQUIRES_CONTINUATION = "requires_continuation"
 
 
 class ModelOption(RootModel[str]):

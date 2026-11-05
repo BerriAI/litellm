@@ -71,12 +71,20 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _TERMINAL_STATUSES: Final = frozenset(
-    {"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action"}
+    {
+        "completed",
+        "failed",
+        "cancelled",
+        "incomplete",
+        "budget_exceeded",
+        "requires_action",
+        "requires_continuation",
+    }
 )
 
 _POLLABLE_STATUSES: Final = frozenset({"in_progress", "queued"})
 
-_STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action"})
+_STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action", "requires_continuation"})
 
 SettlementOutcome: TypeAlias = Literal["billed", "released", "unsettled"]
 

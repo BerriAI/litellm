@@ -135,3 +135,19 @@ def chat_agentic_loop_hook(request: NativeCall) -> bool:
     return agentic_loop_hook(request) or overridden(
         "async_should_run_chat_completion_agentic_loop", call_callbacks(request)
     )
+
+
+def chat_interactions_api_bridge(request: NativeCall) -> bool:
+    """Python bridges Gemini and Vertex Gemini chat calls to the Interactions API when enabled."""
+    from litellm.responses.bridge_check import should_route_to_interactions_api
+
+    model, provider = _chat_provider(request)
+    if provider is None:
+        return False
+    return should_route_to_interactions_api(
+        model=model,
+        custom_llm_provider=provider,
+        optional_params=request.resolved,
+        litellm_params=request.resolved,
+        deployment_model_info=request.resolved.get("model_info"),
+    )

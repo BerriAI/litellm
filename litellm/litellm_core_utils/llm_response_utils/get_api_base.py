@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -18,10 +19,31 @@ def _api_base_without_login(provider: str) -> str | None:
     return None
 
 
-def _provider_default_api_base(model: str, custom_llm_provider: str | None, stream: bool) -> str | None:
+def _provider_default_api_base(
+    model: str,
+    custom_llm_provider: str | None,
+    stream: bool,
+    extra_params: object = None,
+    litellm_params: object = None,
+    deployment_model_info: object = None,
+) -> str | None:
     if custom_llm_provider == "gemini":
+        from litellm.litellm_core_utils.url_utils import ensure_api_route
+        from litellm.llms.gemini.common_utils import GeminiModelInfo
+        from litellm.responses.bridge_check import should_route_to_interactions_api
+
+        gemini_base: Final = GeminiModelInfo.get_api_base().removesuffix("?alt=sse")
+        if should_route_to_interactions_api(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            optional_params=extra_params,
+            litellm_params=litellm_params,
+            deployment_model_info=deployment_model_info,
+        ):
+            suffix: Final = "?alt=sse" if stream else ""
+            return f"{ensure_api_route(gemini_base, 'v1beta/interactions')}{suffix}"
         action: Final = "streamGenerateContent" if stream else "generateContent"
-        return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{action}"
+        return ensure_api_route(gemini_base, f"v1beta/models/{model}:{action}")
     if custom_llm_provider == "openai":
         return "https://api.openai.com"
     return None
@@ -89,25 +111,60 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
     if dynamic_api_base is not None:
         return dynamic_api_base
 
-    stream: Final[bool] = getattr(optional_params, "stream", False)
+    stream: Final[bool] = bool(
+        getattr(_optional_params, "stream", False) or (extra_params is not None and extra_params.get("stream") is True)
+    )
+    litellm_params_map: Final[Mapping[str, object]] = _optional_params.model_dump(exclude_none=True)
+    deployment_model_info: Final[object] = litellm_params_map.get("model_info")
+    raw_ai_project: Final = extra_params.get("vertex_ai_project") if extra_params is not None else None
+    raw_ai_location: Final = extra_params.get("vertex_ai_location") if extra_params is not None else None
+    vertex_project: Final = _optional_params.vertex_project or (
+        raw_ai_project if isinstance(raw_ai_project, str) and raw_ai_project else None
+    )
+    vertex_location: Final = _optional_params.vertex_location or (
+        raw_ai_location if isinstance(raw_ai_location, str) and raw_ai_location else None
+    )
 
-    if _optional_params.vertex_location is not None and _optional_params.vertex_project is not None:
+    if vertex_project is not None and "claude" not in model:
+        from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, validate_vertex_location
+        from litellm.responses.bridge_check import should_route_to_interactions_api
+
+        if should_route_to_interactions_api(
+            model=model,
+            custom_llm_provider=custom_llm_provider or "vertex_ai",
+            optional_params=extra_params,
+            litellm_params=litellm_params_map,
+            deployment_model_info=deployment_model_info,
+        ):
+            effective_location: Final = validate_vertex_location(vertex_location or "global")
+            vertex_host: Final = get_vertex_base_url(effective_location)
+            sse_suffix: Final = "?alt=sse" if stream else ""
+            return f"{vertex_host}/v1beta1/projects/{vertex_project}/locations/{effective_location}/interactions{sse_suffix}"
+
+    if vertex_location is not None and vertex_project is not None:
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
         from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
         if "claude" in model:
             _api_base = VertexBase.create_vertex_url(
-                vertex_location=_optional_params.vertex_location,
-                vertex_project=_optional_params.vertex_project,
+                vertex_location=vertex_location,
+                vertex_project=vertex_project,
                 model=model,
                 stream=stream,
                 partner=VertexPartnerProvider.claude,
             )
         else:
             if stream:
-                _api_base = f"{_optional_params.vertex_location}-aiplatform.googleapis.com/v1/projects/{_optional_params.vertex_project}/locations/{_optional_params.vertex_location}/publishers/google/models/{model}:streamGenerateContent"
+                _api_base = f"{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:streamGenerateContent"
             else:
-                _api_base = f"{_optional_params.vertex_location}-aiplatform.googleapis.com/v1/projects/{_optional_params.vertex_project}/locations/{_optional_params.vertex_location}/publishers/google/models/{model}:generateContent"
+                _api_base = f"{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent"
         return _api_base
 
-    return _provider_default_api_base(model, custom_llm_provider, stream)
+    return _provider_default_api_base(
+        model,
+        custom_llm_provider,
+        stream,
+        extra_params,
+        litellm_params=litellm_params_map,
+        deployment_model_info=deployment_model_info,
+    )

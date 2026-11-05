@@ -82,6 +82,7 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.MODEL_PARAM_GATING: route_detectors.chat_model_param_gating,
         Feature.MODEL_LIST: route_detectors.model_list,
         Feature.MODEL_ALIAS_MAP: route_detectors.model_alias_map,
+        Feature.INTERACTIONS_API_BRIDGE: route_detectors.chat_interactions_api_bridge,
     }
 )
 

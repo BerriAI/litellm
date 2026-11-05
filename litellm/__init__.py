@@ -251,6 +251,12 @@ sse_keepalive_ping_interval_seconds: float | None = None
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
+route_all_chat_gemini_to_interactions: bool = os.getenv(
+    "LITELLM_ROUTE_ALL_CHAT_GEMINI_TO_INTERACTIONS", "false"
+).lower() in (
+    "1",
+    "true",
+)  # When True, routes all Gemini and Vertex Gemini /chat/completions requests through the Interactions API bridge
 # When True, Gemini/Vertex Live setup is deferred until client `session.update`.
 # Default False preserves historical behavior (auto-send setup on connect).
 gemini_live_defer_setup: bool = os.getenv("LITELLM_GEMINI_LIVE_DEFER_SETUP", "false").lower() == "true"

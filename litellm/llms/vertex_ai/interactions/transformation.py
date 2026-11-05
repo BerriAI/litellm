@@ -2,7 +2,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route
 from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
 from litellm.llms.vertex_ai.common_utils import validate_vertex_location
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -22,8 +22,9 @@ class VertexInteractionsTarget:
 
     @property
     def collection_url(self) -> str:
-        return join_api_base(
-            self.base_url,
+        cleaned_base: Final = self.base_url.removesuffix("?alt=sse")
+        return ensure_api_route(
+            cleaned_base,
             f"{VERTEX_INTERACTIONS_API_VERSION}/projects/{self.project_id}/locations/{self.location}/interactions",
         )
 
