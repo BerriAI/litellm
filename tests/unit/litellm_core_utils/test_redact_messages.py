@@ -8,8 +8,10 @@ but litellm_params["litellm_metadata"] is None.
 import asyncio
 import copy
 import importlib
+import itertools
 import json
 import os
+import sys
 import threading
 import traceback
 import tracemalloc
@@ -2529,18 +2531,29 @@ def test_scrub_request_text_replaces_the_whole_text_when_the_prompt_repeats_past
     ("error", "quoted"),
     [
         ("Invalid content: 'secret one' and \"tab\\tafter\"", {"secret one", "tab\tafter"}),
-        ("litellm.RateLimitError: Rate limit reached", set()),
+        ("Connection timed out", set()),
+        ("litellm.RateLimitError: Rate limit reached", {"Error"}),
+        ("Invalid content: Helloworld!", {"Hello", "world"}),
         ("1 validation error\n  Input should be a valid string [input_value='cut...', input_type=str]", None),
         ("x" * 5_000, None),
     ],
-    ids=["quoted_verbatim_or_escaped", "quoted_only_inside_a_word", "pydantic_input_value", "too_large_to_search"],
+    ids=[
+        "quoted_verbatim_or_escaped",
+        "quotes_none",
+        "quoted_inside_a_word",
+        "message_parts_joined_into_one_word",
+        "pydantic_input_value",
+        "too_large_to_search",
+    ],
 )
-def test_quoted_request_texts_names_the_texts_a_scrub_of_the_error_acts_on(error: str, quoted: set[str] | None) -> None:
+def test_quoted_request_texts_names_the_texts_a_scrub_of_the_error_needs(error: str, quoted: set[str] | None) -> None:
     texts: Final = request_texts(
-        "secret one", "tab\tafter", "Error", [f"message number {index}" for index in range(2_000)]
+        "secret one", "tab\tafter", "Error", "Hello", "world", [f"message number {index}" for index in range(2_000)]
     )
+    named: Final = quoted_request_texts(error, texts)
 
-    assert quoted_request_texts(error, texts) == (texts if quoted is None else quoted)
+    assert named == (texts if quoted is None else quoted)
+    assert scrub_request_text(error, named) == scrub_request_text(error, texts)
 
 
 def test_scrub_request_text_keeps_no_copy_of_the_prompt_after_it_returns() -> None:
@@ -2748,6 +2761,20 @@ def test_scrubbed_exception_record_stops_at_an_exception_chained_back_to_itself(
     assert scrubbed_exception_record(_failure(second, SCRUBBED_ERROR)) == (
         "bad: redacted-by-litellm",
         "".join(traceback.format_exception(second)),
+    )
+
+
+def test_scrubbed_exception_record_prints_a_chain_longer_than_the_recursion_limit() -> None:
+    chain: Final = (
+        _ProviderError("bad: redacted-by-litellm"),
+        *(ValueError("redacted-by-litellm") for _ in range(sys.getrecursionlimit())),
+    )
+    for newer, older in itertools.pairwise(chain):
+        newer.__cause__ = older
+
+    assert scrubbed_exception_record(_failure(chain[0], SCRUBBED_ERROR)) == (
+        "bad: redacted-by-litellm",
+        "".join(traceback.format_exception(chain[0])),
     )
 
 

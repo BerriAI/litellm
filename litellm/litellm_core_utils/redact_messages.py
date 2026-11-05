@@ -495,13 +495,8 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
         return text
     if len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
         return REDACTED_BY_LITELLM
-    forms: Final = frozenset(
-        itertools.chain.from_iterable(_echo_forms(each) for each in texts if len(each) <= len(text))
-    )
     echoes: Final = sorted(
-        (form for form in (each.removesuffix(_INPUT_VALUE_LABEL) for each in forms) if form and form in text),
-        key=len,
-        reverse=True,
+        frozenset(itertools.chain.from_iterable(_quotes_in(text, each) for each in texts)), key=len, reverse=True
     )
     label_quotes: Final = tuple(form for form in echoes if _INPUT_VALUE_LABEL in form)
     other_quotes: Final = tuple(form for form in echoes if _INPUT_VALUE_LABEL not in form)
@@ -516,12 +511,24 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
 
 def quoted_request_texts(text: str, texts: Collection[str]) -> frozenset[str]:
     """
-    The request ``texts`` that ``scrub_request_text`` acts on in ``text``: those it quotes, or all of them when
-    ``text`` holds a pydantic ``input_value`` or is too large to search one text at a time.
+    The request ``texts`` that ``scrub_request_text`` needs to scrub ``text`` as it would with all of them: those
+    quoted anywhere in it, even inside a word, or all of them when ``text`` holds a pydantic ``input_value`` or is
+    too large to search.
     """
-    if len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
+    if _INPUT_VALUE_LABEL in text or len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
         return frozenset(texts)
-    return frozenset(each for each in texts if scrub_request_text(text, (each,)) != text)
+    return frozenset(each for each in texts if _quotes_in(text, each))
+
+
+def _quotes_in(text: str, quoted: str) -> tuple[str, ...]:
+    """The forms of ``quoted`` that turn up in ``text``, each without a trailing ``input_value=``."""
+    if len(quoted) > len(text):
+        return ()
+    return tuple(
+        form
+        for form in (each.removesuffix(_INPUT_VALUE_LABEL) for each in _echo_forms(quoted))
+        if form and form in text
+    )
 
 
 def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str | None:
@@ -698,29 +705,43 @@ def scrubbed_exception_record(model_call_details: Mapping[str, object]) -> tuple
     exception: Final = model_call_details.get("exception")
     if scrubbed is None or scrubbed[1] or not isinstance(exception, BaseException):
         return scrubbed
-    return scrubbed[0], _exception_stack(exception, scrubbed[0], frozenset())
+    chain: Final = _exception_chain(exception)
+    earlier: Final = "".join(
+        _exception_frames(older, REDACTED_BY_LITELLM)
+        + (_DIRECT_CAUSE_LINE if newer.__cause__ is not None else _CONTEXT_LINE)
+        for newer, older in reversed(tuple(itertools.pairwise(chain)))
+    )
+    return scrubbed[0], earlier + _exception_frames(exception, scrubbed[0])
 
 
-def _exception_stack(exception: BaseException, message: str, newer: frozenset[int]) -> str:
-    """``exception``'s traceback as Python prints it, with ``message`` for its text and ``REDACTED_BY_LITELLM`` for
-    the text of each exception it chains. ``newer`` holds the exceptions already printed after it."""
-    printed: Final = newer | {id(exception)}
-    caused: Final = exception.__cause__ is not None
-    chained: Final = (
-        exception.__cause__ if caused else None if exception.__suppress_context__ else exception.__context__
+def _exception_chain(exception: BaseException) -> tuple[BaseException, ...]:
+    """``exception`` and each exception it chains as Python prints them, newest first, up to one already in it."""
+    walk: Final = itertools.accumulate(itertools.repeat(None), _with_older_exception, initial=(exception,))
+    return next(chain for chain, longer in itertools.pairwise(walk) if longer is chain)
+
+
+def _with_older_exception(chain: tuple[BaseException, ...], _: None) -> tuple[BaseException, ...]:
+    """``chain`` with the exception its oldest one chains added, unless there is none or ``chain`` holds it."""
+    oldest: Final = chain[-1]
+    older: Final = (
+        oldest.__cause__
+        if oldest.__cause__ is not None
+        else None
+        if oldest.__suppress_context__
+        else oldest.__context__
     )
-    earlier: Final = (
-        ""
-        if chained is None or id(chained) in printed
-        else _exception_stack(chained, REDACTED_BY_LITELLM, printed) + (_DIRECT_CAUSE_LINE if caused else _CONTEXT_LINE)
-    )
+    return chain if older is None or any(older is each for each in chain) else (*chain, older)
+
+
+def _exception_frames(exception: BaseException, message: str) -> str:
+    """``exception``'s own frames and last line as Python prints them, with ``message`` for its text."""
     frames: Final = "".join(traceback.format_tb(exception.__traceback__))
     header: Final = "Traceback (most recent call last):\n" if frames else ""
     kind: Final = type(exception)
     name: Final = (
         kind.__qualname__ if kind.__module__ in ("__main__", "builtins") else f"{kind.__module__}.{kind.__qualname__}"
     )
-    return f"{earlier}{header}{frames}{name}: {message}\n" if message else f"{earlier}{header}{frames}{name}\n"
+    return f"{header}{frames}{name}: {message}\n" if message else f"{header}{frames}{name}\n"
 
 
 def _exception_text(traceback_text: str) -> str:
