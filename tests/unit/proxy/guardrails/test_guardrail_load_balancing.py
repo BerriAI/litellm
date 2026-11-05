@@ -3,6 +3,7 @@ Test guardrail load balancing through the Router and ProxyLogging.
 """
 
 from collections.abc import AsyncIterator, Mapping
+from contextlib import nullcontext
 from queue import SimpleQueue
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,12 +17,15 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails import guardrail_registry
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 from litellm.types.guardrails import GuardrailEventHooks, GuardrailStreamScope
 from litellm.types.utils import CallTypesLiteral, ModelResponseStream
 
@@ -79,6 +83,21 @@ class InheritedIteratorGuardrail(MockGuardrail):
 
 class NonIteratorGuardrail(CustomGuardrail):
     pass
+
+
+class RelayGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_id: str, fail: bool = False):
+        super().__init__(guardrail_name="relay-lb", event_hook="post_call", default_on=True)
+        self.guardrail_id = guardrail_id
+        self.calls = 0
+        self.fail = fail
+        self.streaming_end_of_stream_only = True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("guardrail offline")
+        return inputs
 
 
 class GuardrailActivator(CustomLogger):
@@ -232,8 +251,9 @@ async def _guarded_output(logging: ProxyLogging, streaming: bool) -> str:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", (False, True))
+@pytest.mark.parametrize("pipeline", (False, True))
 async def test_presidio_load_balancing_keeps_selected_output_sibling(
-    streaming: bool, monkeypatch: pytest.MonkeyPatch
+    streaming: bool, pipeline: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     router: Final = Router(model_list=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
@@ -260,7 +280,30 @@ async def test_presidio_load_balancing_keeps_selected_output_sibling(
     logging: Final = ProxyLogging(user_api_key_cache=DualCache())
     outputs: Final[SimpleQueue[str]] = SimpleQueue()
     for _ in range(50):
-        content: Final = await _guarded_output(logging, streaming)
+        if pipeline:
+            chunks: Final = [chunk async for chunk in _output_chunks()] if streaming else None
+            result: Final = await PipelineExecutor.execute_steps(
+                steps=[PipelineStep(guardrail="presidio-balanced")],
+                mode="post_call",
+                data={
+                    "messages": [{"role": "user", "content": "raw"}],
+                    "response": litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "raw"}}]),
+                },
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+                call_type="completion",
+                policy_name="presidio-pipeline",
+                streaming_chunks=chunks,
+                endpoint_translation=OpenAIChatCompletionsHandler() if streaming else None,
+            )
+            assert result.step_results[0].outcome == "pass"
+            if streaming:
+                assert chunks is not None
+                content = "".join(_chunk_text(chunk) for chunk in chunks)
+            else:
+                assert result.modified_data is not None
+                content = result.modified_data["response"].choices[0].message.content
+        else:
+            content = await _guarded_output(logging, streaming)
         assert content in ("masked-east", "masked-west")
         outputs.put(content)
     assert frozenset(outputs.get() for _ in range(outputs.qsize())) == {"masked-east", "masked-west"}
@@ -526,3 +569,201 @@ async def test_missing_callback_does_not_poison_healthy_replica(
         with pytest.raises(ValueError, match="No callback found for guardrail: partial-lb"):
             await _dispatch_scoped_hook(logging, hook)
         assert guardrail.calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("pre_call", "post_call"))
+async def test_pipeline_balanced_step_splits_traffic_once_per_request(mode, monkeypatch):
+    copies: Final = tuple(
+        MockGuardrail("pipeline-lb", region, event_hook=GuardrailEventHooks(mode))
+        for region in ("east", "west")
+    )
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "pipeline-lb",
+                "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": mode},
+            }
+            for cb in copies
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", list(copies))
+    for index in range(50):
+        result = await PipelineExecutor.execute_steps(
+            steps=[PipelineStep(guardrail="pipeline-lb")],
+            mode=mode,
+            data={"messages": [{"role": "user", "content": "raw"}]},
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+            policy_name="balanced-pipeline",
+        )
+        assert result.step_results[0].outcome == "pass"
+        assert sum(cb.calls for cb in copies) == index + 1
+    assert all(cb.calls > 0 for cb in copies)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ("mode", "stream_scope", "none", "weights", "single"))
+async def test_pipeline_balancing_respects_eligibility_weights_and_single_copy(scenario, monkeypatch):
+    first: Final = MockGuardrail(
+        "pipeline-scoped", "east",
+        event_hook=GuardrailEventHooks.pre_call if scenario in ("mode", "single", "none") else GuardrailEventHooks.post_call,
+        stream_scope="streaming" if scenario == "stream_scope" else "both",
+    )
+    second: Final = MockGuardrail(
+        "pipeline-scoped", "west",
+        event_hook=GuardrailEventHooks.pre_call if scenario == "none" else GuardrailEventHooks.post_call,
+    )
+    copies: Final = (first, second)
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "pipeline-scoped",
+                "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "post_call", "weight": weight},
+            }
+            for cb, weight in ((first, 0), (second, 1))[:1 if scenario == "single" else 2]
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", list(copies))
+    response: Final = object()
+    for _ in range(20):
+        result = await PipelineExecutor.execute_steps(
+            steps=[PipelineStep(guardrail="pipeline-scoped")],
+            mode="post_call",
+            data={"stream": False, "response": response},
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+            policy_name="balanced-pipeline",
+        )
+        assert result.step_results[0].outcome == ("skip" if scenario == "none" else "pass")
+    assert first.calls == (20 if scenario == "single" else 0)
+    assert second.calls == (0 if scenario in ("single", "none") else 20)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", (False, True))
+async def test_streamed_pipeline_selects_supported_replica_and_preserves_errors(fail, monkeypatch):
+    unsupported: Final = MockGuardrail("relay-lb", "native", event_hook=GuardrailEventHooks.post_call)
+    supported: Final = RelayGuardrail("unified", fail=fail)
+    supported.default_on = False
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "relay-lb",
+                "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "post_call", "weight": weight},
+            }
+            for cb, weight in ((unsupported, 1), (supported, 0))
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [unsupported, supported])
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    for index in range(20):
+        with pytest.raises(RuntimeError, match="guardrail offline") if fail else nullcontext():
+            chunks = [
+                chunk
+                async for chunk in logging.async_post_call_streaming_iterator_hook(
+                    response=_output_chunks(),
+                    user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+                    request_data={
+                        "model": "test-model",
+                        "stream": True,
+                        "metadata": {
+                            "_guardrail_pipelines": [("streamed-pipeline", GuardrailPipeline(
+                                mode="post_call", steps=[PipelineStep(guardrail="relay-lb")],
+                            ))],
+                        },
+                    },
+                )
+            ]
+            assert "".join(_chunk_text(chunk) for chunk in chunks) == "raw"
+        assert supported.calls == index + 1
+        assert unsupported.calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", (False, True))
+async def test_passthrough_balanced_relay_splits_traffic_once_per_request(fail, monkeypatch):
+    copies: Final = tuple(RelayGuardrail(region, fail=fail) for region in ("east", "west"))
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "relay-lb",
+                "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "post_call"},
+            }
+            for cb in copies
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", list(copies))
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    for index in range(50):
+        with pytest.raises(RuntimeError, match="guardrail offline") if fail else nullcontext():
+            chunks = [
+                chunk
+                async for chunk in logging.async_post_call_event_stream_iterator_hook(
+                    response=_output_chunks(),
+                    user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+                    request_data={"model": "test-model", "stream": True},
+                    guardrails=tuple((cb, False) for cb in copies),
+                )
+            ]
+            assert "".join(_chunk_text(chunk) for chunk in chunks) == "raw"
+        assert sum(cb.calls for cb in copies) == index + 1
+    assert all(cb.calls > 0 for cb in copies)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ("mode", "stream_scope", "default_off", "none", "weights", "single"))
+async def test_passthrough_balancing_respects_eligible_layers_and_weights(scenario, monkeypatch):
+    first: Final = RelayGuardrail("east")
+    second: Final = RelayGuardrail("west")
+    if scenario == "mode":
+        first.event_hook = GuardrailEventHooks.pre_call
+    if scenario == "stream_scope":
+        first.stream_scope_default = "non_streaming"
+    if scenario in ("default_off", "none"):
+        first.default_on = False
+    if scenario == "none":
+        second.default_on = False
+    copies: Final = (first,) if scenario == "single" else (first, second)
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "relay-lb",
+                "callback": cb,
+                "litellm_params": {
+                    "guardrail": "custom", "mode": "post_call",
+                    "weight": 0 if cb is first and scenario == "weights" else 1,
+                },
+            }
+            for cb in copies
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", list(copies))
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    for _ in range(20):
+        chunks = [
+            chunk
+            async for chunk in logging.async_post_call_event_stream_iterator_hook(
+                response=_output_chunks(),
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+                request_data={"model": "test-model", "stream": True},
+                guardrails=tuple((cb, cb is second) for cb in copies),
+            )
+        ]
+        assert "".join(_chunk_text(chunk) for chunk in chunks) == "raw"
+    assert first.calls == (20 if scenario == "single" else 0)
+    assert second.calls == (0 if scenario in ("none", "single") else 20)

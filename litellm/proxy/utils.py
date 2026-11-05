@@ -701,6 +701,24 @@ def _pipeline_step_guardrail_names(pipelines: Sequence[tuple[str, "GuardrailPipe
     return frozenset(step.guardrail for step in _pipeline_steps(pipelines))
 
 
+def _pipeline_callback_options(guardrail_name: str) -> tuple[CustomGuardrail, ...]:
+    from litellm.proxy.proxy_server import llm_router
+
+    callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
+    if callback is None:
+        return ()
+    deployments: Final = (
+        tuple(entry for entry in llm_router.settings().guardrail_list if entry["guardrail_name"] == guardrail_name)
+        if llm_router is not None and llm_router.settings().is_set("guardrail_list")
+        else ()
+    )
+    if len(deployments) <= 1:
+        return (callback,)
+    return tuple(
+        chain.from_iterable(_deployment_callbacks(entry) for entry in deployments if entry.get("callback") is not None)
+    )
+
+
 def _pipeline_step_streams_live(step: "PipelineStep") -> bool:
     """A detect-only step whose guardrail set ``streaming_buffer_until_moderated: false`` takes its verdict after
     the chunks reach the client. A guardrail that masks response content keeps buffering, since the client would
@@ -708,10 +726,12 @@ def _pipeline_step_streams_live(step: "PipelineStep") -> bool:
     not-found outcome settles the stream before release"""
     if not pipeline_step_is_detect_only(step):
         return False
-    callback: Final = PipelineExecutor.find_guardrail_callback(step.guardrail)
-    if callback is None or callback.mask_response_content:
-        return False
-    return not unified_guardrail.resolve_streaming_flag(callback, "streaming_buffer_until_moderated", True)
+    callbacks: Final = _pipeline_callback_options(step.guardrail)
+    return bool(callbacks) and all(
+        not callback.mask_response_content
+        and not unified_guardrail.resolve_streaming_flag(callback, "streaming_buffer_until_moderated", True)
+        for callback in callbacks
+    )
 
 
 def _drop_stream_chunk_token_ids(chunk: object) -> None:
@@ -795,10 +815,13 @@ def _ran_or_runs_outside_pipelines(
 def _runs_only_in_pipelines(
     name: str, data: Mapping[str, object], pre_call: frozenset[str], post_call: frozenset[str]
 ) -> bool:
-    return not _ran_or_runs_outside_pipelines(
-        PipelineExecutor.find_guardrail_callback(name),
-        data,
-        frozenset(mode for mode, names in (("pre_call", pre_call), ("post_call", post_call)) if name in names),
+    return not any(
+        _ran_or_runs_outside_pipelines(
+            callback,
+            data,
+            frozenset(mode for mode, names in (("pre_call", pre_call), ("post_call", post_call)) if name in names),
+        )
+        for callback in _pipeline_callback_options(name)
     )
 
 
@@ -933,36 +956,36 @@ def _deployment_callbacks(deployment: "GuardrailTypedDict") -> tuple[CustomGuard
 
 @overload
 def _load_balanced_callbacks(
-    callbacks: Sequence[CustomLogger], eligible: Callable[[CustomGuardrail], bool]
+    callbacks: Sequence[CustomLogger], eligible: Callable[[CustomGuardrail], bool], *, eligible_only: bool = False
 ) -> tuple[CustomLogger, ...]: ...
 
 
 @overload
 def _load_balanced_callbacks(
-    callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool]
+    callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool], *, eligible_only: bool = False
 ) -> tuple[object, ...]: ...
 
 
 def _load_balanced_callbacks(
-    callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool]
+    callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool], *, eligible_only: bool = False
 ) -> tuple[object, ...]:
-    return tuple(_iter_load_balanced_callbacks(callbacks, eligible))
+    return tuple(_iter_load_balanced_callbacks(callbacks, eligible, eligible_only=eligible_only))
 
 
 @overload
 def _iter_load_balanced_callbacks(
-    callbacks: Sequence[CustomLogger], eligible: Callable[[CustomGuardrail], bool]
+    callbacks: Sequence[CustomLogger], eligible: Callable[[CustomGuardrail], bool], *, eligible_only: bool = False
 ) -> Iterator[CustomLogger]: ...
 
 
 @overload
 def _iter_load_balanced_callbacks(
-    callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool]
+    callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool], *, eligible_only: bool = False
 ) -> Iterator[object]: ...
 
 
 def _iter_load_balanced_callbacks(
-    callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool]
+    callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool], *, eligible_only: bool = False
 ) -> Iterator[object]:
     from litellm.proxy.proxy_server import llm_router
     from litellm.router_strategy.simple_shuffle import simple_shuffle
@@ -1004,7 +1027,7 @@ def _iter_load_balanced_callbacks(
             model=callback.guardrail_name,
             request_kwargs=None,
         )
-        return _deployment_callbacks(deployment)
+        return tuple(member for member in _deployment_callbacks(deployment) if not eligible_only or eligible(member))
 
     yield from chain.from_iterable(selected(index, callback) for index, callback in enumerate(callbacks))
 
@@ -1063,15 +1086,14 @@ def _merge_pipeline_metadata_writes(data: dict, modified_data: Mapping[str, obje
 
 
 def _pipeline_step_supports_streaming(guardrail_name: str, translation: "BaseTranslation | None") -> bool:
-    callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
-    if callback is None:
-        return False
-    if PipelineExecutor.supports_unified_execution(callback):
-        return True
-    return (
-        translation is not None
-        and type(translation).assembles_streamed_response
-        and PipelineExecutor.supports_streaming_execution(callback)
+    return any(
+        PipelineExecutor.supports_unified_execution(callback)
+        or (
+            translation is not None
+            and type(translation).assembles_streamed_response
+            and PipelineExecutor.supports_streaming_execution(callback)
+        )
+        for callback in _pipeline_callback_options(guardrail_name)
     )
 
 
@@ -5015,7 +5037,17 @@ class ProxyLogging:
         )
         current_response: AsyncIterable[object] = response  # rebind-ok: each guardrail wraps the previous layer
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
-        for guardrail, holds_until_moderated in guardrails:
+        for guardrail in _load_balanced_callbacks(
+            tuple(cb for cb, _ in guardrails),
+            lambda cb: (
+                any(cb is original for original, _ in guardrails)
+                and _post_call_guardrail_eligible(cb, merged_request_data, frozenset())
+            ),
+            eligible_only=True,
+        ):
+            if not isinstance(guardrail, CustomGuardrail):
+                continue
+            holds_until_moderated = next(holds for original, holds in guardrails if original is guardrail)
             if guarded_layers:
                 current_response = ProxyLogging._released_copies(current_response)
                 guarded_layers.append(current_response)
