@@ -28057,6 +28057,11 @@ export interface components {
              */
             max_input_chars?: number | null;
             /**
+             * Mcp Block Behavior
+             * @description How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.
+             */
+            mcp_block_behavior?: ("tool_result" | "raise") | null;
+            /**
              * Model
              * @description Optional field if guardrail requires a 'model' parameter
              */
@@ -38113,6 +38118,11 @@ export interface components {
              * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
              */
             max_input_chars?: number | null;
+            /**
+             * Mcp Block Behavior
+             * @description How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.
+             */
+            mcp_block_behavior?: ("tool_result" | "raise") | null;
             /**
              * Metadata
              * @description Additional metadata to include in the request
