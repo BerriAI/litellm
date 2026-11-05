@@ -4,6 +4,7 @@ import os
 import re
 import secrets
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from datetime import datetime, timezone
 from datetime import datetime as dt
 from functools import reduce
@@ -109,6 +110,12 @@ from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+
+_SPEND_LOGS_PRIVACY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None
+)
+_TENANT_SPEND_LOGS_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _get_max_string_length_prompt_in_db() -> int:
@@ -336,9 +343,11 @@ def _get_spend_logs_metadata(
     clean_metadata["batch_failed_requests"] = batch_failed_requests
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
-        vector_store_request_metadata
+        vector_store_request_metadata, metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)
     )
-    clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(guardrail_information)
+    clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(
+        guardrail_information, metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)
+    )
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
@@ -906,7 +915,9 @@ def get_logging_payload(
     if drop_requester_ip_address:
         clean_metadata["requester_ip_address"] = None
     clean_metadata["error_information"] = sanitize_error_information_for_spend_logs(
-        clean_metadata["error_information"], original_exception=failure_exception
+        clean_metadata["error_information"],
+        original_exception=failure_exception,
+        metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata),
     )
 
     if litellm.cache is None:
@@ -1248,7 +1259,7 @@ def _get_messages_for_spend_logs_payload(
     standard_logging_payload: StandardLoggingPayload | None,
     metadata: dict | None = None,
 ) -> str:
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)):
         if standard_logging_payload is not None:
             call_type: Final = standard_logging_payload.get("call_type", "")
             if call_type == "_arealtime":
@@ -1507,6 +1518,7 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
 
 def _sanitize_guardrail_information_for_spend_logs(
     guardrail_information: list[StandardLoggingGuardrailInformation] | None,
+    metadata: Mapping[str, object] | None = None,
 ) -> list[StandardLoggingGuardrailInformation] | None:
     """
     When ``store_prompts_in_spend_logs`` is False, redact prompt-carrying fields
@@ -1527,7 +1539,7 @@ def _sanitize_guardrail_information_for_spend_logs(
     here to match OTEL's defensive read pattern; otherwise iteration would
     yield the dict's keys and crash the whole spend-log write.
     """
-    if guardrail_information is None or should_store_prompts_and_responses_in_spend_logs():
+    if guardrail_information is None or should_store_prompts_and_responses_in_spend_logs(metadata):
         return guardrail_information
     entries: Final = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
@@ -1577,6 +1589,7 @@ def _redact_prompt_fields_in_guardrail_entry(
 def sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
     original_exception: BaseException | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> StandardLoggingPayloadErrorInformation | None:
     """
     Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
@@ -1605,7 +1618,7 @@ def sanitize_error_information_for_spend_logs(
     )
     sanitized = cast(dict, {**persisted})
 
-    if not should_store_prompts_and_responses_in_spend_logs():
+    if not should_store_prompts_and_responses_in_spend_logs(metadata):
         for field in ("error_message", "traceback"):
             value = sanitized.get(field)
             if isinstance(value, str):
@@ -1913,7 +1926,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)):
         _proxy_server_request: Final = cast(dict | None, litellm_params.get("proxy_server_request", EMPTY_MAPPING))
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", EMPTY_MAPPING) or EMPTY_MAPPING
@@ -1964,17 +1977,19 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
 def _get_vector_store_request_for_spend_logs_payload(
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None,
+    metadata: Mapping[str, object] | None = None,
 ) -> list[StandardLoggingVectorStoreRequest] | None:
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(metadata):
         return vector_store_request_metadata
 
     # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
     if vector_store_request_metadata is None:
         return None
-    for vector_store_request in vector_store_request_metadata:
+    stored_requests: Final = deepcopy(vector_store_request_metadata)
+    for vector_store_request in stored_requests:
         vector_store_search_response: VectorStoreSearchResponse = (
             vector_store_request.get("vector_store_search_response") or VectorStoreSearchResponse()
         )
@@ -1983,7 +1998,7 @@ def _get_vector_store_request_for_spend_logs_payload(
             for content_item in response_item.get("content", []) or []:
                 if "text" in content_item:
                     content_item["text"] = REDACTED_BY_LITELM_STRING
-    return vector_store_request_metadata
+    return stored_requests
 
 
 def _get_response_for_spend_logs_payload(
@@ -1992,7 +2007,9 @@ def _get_response_for_spend_logs_payload(
 ) -> str:
     if payload is None:
         return "{}"
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(
+        _SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(get_litellm_metadata_from_kwargs(kwargs or {}))
+    ):
         response_obj: object = payload.get("response")
         if response_obj is None:
             return "{}"
@@ -2042,9 +2059,16 @@ def _get_response_for_spend_logs_payload(
     return "{}"
 
 
-def should_store_prompts_and_responses_in_spend_logs() -> bool:
+def should_store_prompts_and_responses_in_spend_logs(metadata: Mapping[str, object] | None = None) -> bool:
     from litellm.proxy.proxy_server import general_settings
     from litellm.secret_managers.main import get_secret_bool
+
+    if metadata is not None and any(
+        isinstance(settings := metadata.get(field), Mapping)
+        and _TENANT_SPEND_LOGS_METADATA_ADAPTER.validate_python(settings).get("store_prompts_in_spend_logs") is False
+        for field in ("user_api_key_metadata", "user_api_key_team_metadata")
+    ):
+        return False
 
     # Check general_settings (from DB or proxy_config.yaml)
     store_prompts_value: Final = general_settings.get("store_prompts_in_spend_logs")
