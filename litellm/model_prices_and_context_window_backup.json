@@ -86176,5 +86176,267 @@
         "output_cost_per_token": 6e-07,
         "source": "https://api.together.ai/v1/models",
         "supports_prompt_caching": true
+    },
+    "xhuoapi/deepseek-v4.1-flash": {
+        "cache_read_input_token_cost": 4.8e-09,
+        "input_cost_per_token": 2.4e-07,
+        "litellm_provider": "xhuoapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 2.4e-09,
+            "input_cost_per_token": 1.2e-07,
+            "output_cost_per_token": 4.8e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
+        "output_cost_per_token": 9.6e-07,
+        "source": "https://xhuoapi.ai/en/pricing.html",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "xhuoapi/deepseek-v4.1-flash-1017": {
+        "cache_read_input_token_cost": 4.8e-09,
+        "input_cost_per_token": 2.4e-07,
+        "litellm_provider": "xhuoapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 2.4e-09,
+            "input_cost_per_token": 1.2e-07,
+            "output_cost_per_token": 4.8e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
+        "output_cost_per_token": 9.6e-07,
+        "source": "https://xhuoapi.ai/en/pricing.html",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "xhuoapi/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 3.52e-08,
+        "input_cost_per_token": 1.056e-06,
+        "litellm_provider": "xhuoapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 1.76e-08,
+            "input_cost_per_token": 5.28e-07,
+            "output_cost_per_token": 1.584e-06,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
+        "output_cost_per_token": 3.168e-06,
+        "source": "https://xhuoapi.ai/en/pricing.html",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "xhuoapi/qwen3.8-max": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 1.6e-06,
+        "litellm_provider": "xhuoapi",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.8e-06,
+        "source": "https://xhuoapi.ai/en/pricing.html",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "xhuoapi/qwen3.7-plus": {
+        "litellm_provider": "xhuoapi",
+        "max_input_tokens": 991808,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "source": "https://xhuoapi.ai/en/pricing.html",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false,
+        "tiered_pricing": [
+            {
+                "cache_read_input_token_cost": 3.2e-08,
+                "input_cost_per_token": 3.2e-07,
+                "output_cost_per_token": 1.28e-06,
+                "range": [
+                    0,
+                    256000.0
+                ]
+            },
+            {
+                "cache_read_input_token_cost": 9.6e-08,
+                "input_cost_per_token": 9.6e-07,
+                "output_cost_per_token": 3.84e-06,
+                "range": [
+                    256000.0,
+                    1000000.0
+                ]
+            }
+        ]
+    },
+    "xhuoapi/glm-5.3": {
+        "cache_read_input_token_cost": 2.08e-07,
+        "input_cost_per_token": 1.12e-06,
+        "litellm_provider": "xhuoapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3.52e-06,
+        "source": "https://xhuoapi.ai/en/pricing.html",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": false,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "xhuoapi/kimi-k3": {
+        "cache_read_input_token_cost": 2.4e-07,
+        "input_cost_per_token": 2.4e-06,
+        "litellm_provider": "xhuoapi",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "source": "https://xhuoapi.ai/en/pricing.html",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
     }
 }

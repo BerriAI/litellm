@@ -314,5 +314,13 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "xhuoapi": {
+    "base_url": "https://api.xhuoapi.ai/v1",
+    "api_key_env": "XHUOAPI_API_KEY",
+    "api_base_env": "XHUOAPI_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true
+    }
   }
 }
