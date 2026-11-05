@@ -6069,7 +6069,6 @@ def completion(
                 return resolve_timeout(stream_kind=StreamKind.NOT_STREAMED)
             return resolve_timeout(stream_kind=StreamKind.FAKED if fakes_stream(attempt_params) else StreamKind.LIVE)
 
-        ### TIMEOUT LOGIC ###
         timeout = timeout_for_optional_params(optional_params)
         logging.record_applied_timeout(timeout)
         processed_non_default_params: Final = pre_process_non_default_params(
@@ -6112,6 +6111,11 @@ def completion(
             messages if readable_messages is None else list(readable_messages)
         )
 
+        supplied_client_api_base: Final = (
+            str(client.base_url)
+            if custom_llm_provider == "openai" and isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            else None
+        )
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,
@@ -6120,7 +6124,7 @@ def completion(
             logger_fn=logger_fn,
             verbose=verbose,
             custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
+            api_base=supplied_client_api_base or api_base,
             litellm_call_id=kwargs.get("litellm_call_id", None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,

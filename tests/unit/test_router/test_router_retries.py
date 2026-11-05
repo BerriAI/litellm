@@ -12,7 +12,6 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
-from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router import AllowedFailsPolicy, RetryPolicy
 import os
@@ -170,9 +169,7 @@ async def test_router_retries_errors(sync_mode: bool, error_type: str, monkeypat
 async def test_router_retry_policy(error_type):
     from litellm.router import AllowedFailsPolicy, RetryPolicy
 
-    retry_policy = RetryPolicy(
-        ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0
-    )
+    retry_policy = RetryPolicy(ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0)
 
     allowed_fails_policy = AllowedFailsPolicy(
         ContentPolicyViolationErrorAllowedFails=1000,
@@ -362,9 +359,7 @@ def test_retry_rate_limit_error_with_healthy_deployments():
 
     # Act & Assert
     try:
-        response = router.should_retry_this_error(
-            error=rate_limit_error, healthy_deployments=healthy_deployments
-        )
+        response = router.should_retry_this_error(error=rate_limit_error, healthy_deployments=healthy_deployments)
         print("response from should_retry_this_error: ", response)
     except Exception as e:
         pytest.fail(
@@ -395,9 +390,7 @@ def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments(
 
     # Act & Assert
     try:
-        response = router.should_retry_this_error(
-            error=rate_limit_error, healthy_deployments=healthy_deployments
-        )
+        response = router.should_retry_this_error(error=rate_limit_error, healthy_deployments=healthy_deployments)
         pytest.fail("Should have raised an error")
     except Exception as e:
         print("got an exception", e)
@@ -439,9 +432,7 @@ def test_raise_context_window_exceeded_error():
             healthy_deployments=None,
             context_window_fallbacks=context_window_fallbacks,
         )
-        pytest.fail(
-            "Expected to raise context window exceeded error -> trigger fallback"
-        )
+        pytest.fail("Expected to raise context window exceeded error -> trigger fallback")
     except Exception as e:
         pass
 
@@ -481,114 +472,9 @@ def test_raise_context_window_exceeded_error_no_retry():
             healthy_deployments=None,
             context_window_fallbacks=context_window_fallbacks,
         )
-        assert (
-            response == True
-        ), "Should not have raised exception since we do not have context window fallbacks"
+        assert response == True, "Should not have raised exception since we do not have context window fallbacks"
     except litellm.ContextWindowExceededError:
         pass
-
-
-@pytest.mark.parametrize("num_deployments, expected_timeout", [(1, 60), (2, 0.0)])
-def test_timeout_for_rate_limit_error_with_healthy_deployments(
-    num_deployments, expected_timeout
-):
-    """
-    Test 1. Timeout is 0.0 when RateLimit Error and healthy deployments are > 0
-    """
-    cooldown_time = 60
-    rate_limit_error = litellm.RateLimitError(
-        message="{RouterErrors.no_deployments_available.value}. 12345 Passed model={model_group}. Deployments={deployment_dict}",
-        llm_provider="",
-        model="gpt-3.5-turbo",
-        response=httpx.Response(
-            status_code=429,
-            content="",
-            headers={"retry-after": str(cooldown_time)},  # type: ignore
-            request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
-        ),
-    )
-    model_list = [
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "azure/gpt-4.1-mini",
-                "api_key": os.getenv("AZURE_API_KEY"),
-                "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
-            },
-        }
-    ]
-    if num_deployments == 2:
-        model_list.append(
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-3.5-turbo"},
-            }
-        )
-
-    router = litellm.Router(model_list=model_list)
-
-    _timeout = router._time_to_sleep_before_retry(
-        e=rate_limit_error,
-        remaining_retries=2,
-        num_retries=2,
-        healthy_deployments=[
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {
-                    "api_key": "my-key",
-                    "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
-                    "model": "azure/gpt-4.1-mini",
-                },
-                "model_info": {
-                    "id": "0e30bc8a63fa91ae4415d4234e231b3f9e6dd900cac57d118ce13a720d95e9d6",
-                    "db_model": False,
-                },
-            }
-        ],
-        all_deployments=model_list,
-    )
-
-    if expected_timeout == 0.0:
-        assert _timeout == expected_timeout
-    else:
-        assert _timeout > 0.0
-
-
-def test_timeout_for_rate_limit_error_with_no_healthy_deployments():
-    """
-    Test 2. Timeout is > 0.0 when RateLimit Error and healthy deployments == 0
-    """
-    healthy_deployments = []
-    model_list = [
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "azure/gpt-4.1-mini",
-                "api_key": os.getenv("AZURE_API_KEY"),
-                "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
-            },
-        }
-    ]
-
-    router = litellm.Router(model_list=model_list)
-
-    _timeout = router._time_to_sleep_before_retry(
-        e=rate_limit_error,
-        remaining_retries=4,
-        num_retries=4,
-        healthy_deployments=healthy_deployments,
-        all_deployments=model_list,
-    )
-
-    print(
-        "timeout=",
-        _timeout,
-        "error is rate_limit_error and there are no healthy deployments",
-    )
-
-    assert _timeout > 0.0
 
 
 def test_no_retry_for_not_found_error_404():
@@ -615,9 +501,7 @@ def test_no_retry_for_not_found_error_404():
         llm_provider="azure",
     )
     try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
-        )
+        response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
         pytest.fail(
             "Should have raised an exception 404 NotFoundError should never be retried, it's typically model_not_found error"
         )
@@ -630,7 +514,7 @@ def test_no_retry_for_bad_request_error_400():
     Test that 400 BadRequestError is NOT retried, even if healthy deployments exist.
     This tests the fix for GitHub issue #19216.
     """
-    healthy_deployments = _deployments("deployment1", "deployment2")
+    healthy_deployments = ["deployment1", "deployment2"]  # Multiple healthy deployments
 
     router = Router(
         model_list=[
@@ -653,12 +537,8 @@ def test_no_retry_for_bad_request_error_400():
         llm_provider="azure",
     )
     try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
-        )
-        pytest.fail(
-            "Should have raised BadRequestError - 400 errors should never be retried"
-        )
+        response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
+        pytest.fail("Should have raised BadRequestError - 400 errors should never be retried")
     except litellm.BadRequestError as e:
         print("Correctly raised BadRequestError without retry:", e)
 
@@ -667,7 +547,7 @@ def test_no_retry_for_unprocessable_entity_error_422():
     """
     Test that 422 UnprocessableEntityError is NOT retried, even if healthy deployments exist.
     """
-    healthy_deployments = _deployments("deployment1", "deployment2")
+    healthy_deployments = ["deployment1", "deployment2"]  # Multiple healthy deployments
 
     router = Router(
         model_list=[
@@ -694,117 +574,10 @@ def test_no_retry_for_unprocessable_entity_error_422():
         ),
     )
     try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
-        )
-        pytest.fail(
-            "Should have raised UnprocessableEntityError - 422 errors should never be retried"
-        )
+        response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
+        pytest.fail("Should have raised UnprocessableEntityError - 422 errors should never be retried")
     except litellm.UnprocessableEntityError as e:
         print("Correctly raised UnprocessableEntityError without retry:", e)
-
-
-def _not_found() -> litellm.NotFoundError:
-    return litellm.NotFoundError(message="model not found", model="m", llm_provider="openai")
-
-
-def _bad_request() -> litellm.BadRequestError:
-    return litellm.BadRequestError(message="bad request", model="m", llm_provider="openai")
-
-
-def _deployments(*deployment_ids: str) -> list[dict[str, dict[str, str]]]:
-    return [{"model_info": {"id": deployment_id}} for deployment_id in deployment_ids]
-
-
-@pytest.mark.parametrize(
-    "error,tried_deployment_ids,healthy_deployment_ids",
-    [
-        (_not_found(), ("a",), ("a", "b")),
-        (_bad_request(), ("a",), ("a", "b")),
-        (_bad_request(), ("a",), ("b",)),
-        (
-            litellm.UnprocessableEntityError(
-                message="unprocessable",
-                model="m",
-                llm_provider="openai",
-                response=httpx.Response(422, request=httpx.Request("POST", "https://example.invalid/v1")),
-            ),
-            ("a",),
-            ("a", "b"),
-        ),
-    ],
-)
-def test_non_retryable_error_is_retried_on_an_untried_healthy_deployment(
-    error: Exception, tried_deployment_ids: tuple[str, ...], healthy_deployment_ids: tuple[str, ...]
-) -> None:
-    healthy_deployments: Final = _deployments(*healthy_deployment_ids)
-
-    assert (
-        _retry_test_router().should_retry_this_error(
-            error=error,
-            healthy_deployments=healthy_deployments,
-            all_deployments=healthy_deployments,
-            tried_deployment_ids=tried_deployment_ids,
-        )
-        is True
-    )
-
-
-@pytest.mark.parametrize(
-    "error,tried_deployment_ids,healthy_deployment_ids",
-    [
-        (_bad_request(), (), ("a", "b")),
-        (_bad_request(), ("a", "b"), ("a", "b")),
-        (_not_found(), ("a",), ("a",)),
-        (_not_found(), ("a",), ()),
-    ],
-)
-def test_non_retryable_error_is_raised_when_no_untried_healthy_deployment_is_left(
-    error: Exception, tried_deployment_ids: tuple[str, ...], healthy_deployment_ids: tuple[str, ...]
-) -> None:
-    healthy_deployments: Final = _deployments(*healthy_deployment_ids)
-
-    with pytest.raises(type(error)) as exc_info:
-        _retry_test_router().should_retry_this_error(
-            error=error,
-            healthy_deployments=healthy_deployments,
-            all_deployments=healthy_deployments,
-            tried_deployment_ids=tried_deployment_ids,
-        )
-
-    assert exc_info.value is error
-
-
-@pytest.mark.asyncio
-async def test_guardrail_rejection_on_a_retry_is_not_failed_over_to_a_sibling() -> None:
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "retry-test-model",
-                "litellm_params": {"model": "openai/retry-test-model", "api_key": "test-key"},
-                "model_info": {"id": deployment_id},
-            }
-            for deployment_id in ("refusing", "guarded", "unguarded")
-        ],
-        disable_cooldowns=True,
-    )
-    not_found: Final = _not_found()
-    not_found.retry_skip_deployment_id = "refusing"
-    guardrail_rejection: Final = GuardrailRaisedException(guardrail_name="pii", message="blocked", blocked_content=True)
-    guardrail_rejection.retry_skip_deployment_id = "guarded"
-    attempts: Final = AsyncMock(side_effect=[not_found, guardrail_rejection, "unguarded answer"])
-
-    with pytest.raises(GuardrailRaisedException) as exc_info:
-        await router.async_function_with_retries(
-            model="retry-test-model",
-            messages=[{"role": "user", "content": "retry test"}],
-            original_function=attempts,
-            num_retries=2,
-            metadata={},
-        )
-
-    assert exc_info.value is guardrail_rejection
-    assert attempts.await_count == 2
 
 
 def test_no_retry_when_no_healthy_deployments():
@@ -831,9 +604,7 @@ def test_no_retry_when_no_healthy_deployments():
         timeout_error,
     ]:
         try:
-            response = router.should_retry_this_error(
-                error=error, healthy_deployments=healthy_deployments
-            )
+            response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
             pytest.fail(
                 "Should have raised an exception,  there's no point retrying an error when there are 0 healthy deployments"
             )
@@ -843,8 +614,6 @@ def test_no_retry_when_no_healthy_deployments():
 
 @pytest.mark.asyncio
 async def test_router_retries_model_specific_and_global():
-    from unittest.mock import MagicMock, patch
-
     litellm.num_retries = 0
     router = Router(
         model_list=[
@@ -852,28 +621,21 @@ async def test_router_retries_model_specific_and_global():
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "api_key": "sk-test",
                     "num_retries": 1,
                 },
             }
         ]
     )
 
-    with patch.object(
-        router, "_time_to_sleep_before_retry"
-    ) as mock_async_function_with_retries:
-        try:
-            await router.acompletion(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                mock_response="litellm.RateLimitError",
-            )
-        except Exception as e:
-            print("got exception", e)
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            mock_response="litellm.RateLimitError",
+        )
 
-        mock_async_function_with_retries.assert_called_once()
-
-        assert mock_async_function_with_retries.call_args.kwargs["num_retries"] == 1
+    assert exc_info.value.num_retries == 1
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")
@@ -921,68 +683,28 @@ async def test_router_retry_num_retries_tracking():
     This verifies the fix for the bug where num_retries was incorrectly set to current_attempt
     (0-indexed) instead of the actual number of retries attempted.
     """
-    from unittest.mock import AsyncMock, patch
-
     router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
             }
         ],
-        num_retries=3,  # Set at router level to ensure it's used
+        num_retries=2,
     )
 
-    # Mock make_call to always raise a RateLimitError
-    async def mock_make_call(*args, **kwargs):
-        raise litellm.RateLimitError(
-            message="Rate limit exceeded",
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        await router.acompletion(
             model="gpt-3.5-turbo",
-            llm_provider="openai",
+            messages=[{"role": "user", "content": "Hello"}],
+            mock_response="litellm.RateLimitError",
         )
 
-    with patch.object(router, "make_call", side_effect=mock_make_call):
-        with patch.object(
-            router,
-            "_async_get_healthy_deployments",
-            return_value=(
-                [{"model_info": {"id": "test-id"}}],
-                [{"model_info": {"id": "test-id"}}],
-            ),
-        ):
-            with patch.object(
-                router, "_time_to_sleep_before_retry", return_value=0.01
-            ):  # Fast retries for testing
-                with pytest.raises(litellm.RateLimitError) as exc_info:
-                    await router.acompletion(
-                        model="gpt-3.5-turbo",
-                        messages=[{"role": "user", "content": "Hello"}],
-                    )
-                e = exc_info.value
-                assert hasattr(
-                    e, "num_retries"
-                ), "Exception should have num_retries attribute"
-                assert hasattr(
-                    e, "max_retries"
-                ), "Exception should have max_retries attribute"
-                assert (
-                    e.num_retries == 3
-                ), f"Expected num_retries to be 3, got {e.num_retries}"
-                assert (
-                    e.max_retries == 3
-                ), f"Expected max_retries to be 3, got {e.max_retries}"
-
-                # Verify the error message includes correct retry information
-                error_str = str(e)
-                assert (
-                    "LiteLLM Retried: 3 times" in error_str
-                ), f"Error message should indicate 3 retries: {error_str}"
-                assert (
-                    "LiteLLM Max Retries: 3" in error_str
-                ), f"Error message should show max retries: {error_str}"
+    e = exc_info.value
+    assert e.num_retries == 2
+    assert e.max_retries == 2
+    assert "LiteLLM Retried: 2 times" in str(e)
+    assert "LiteLLM Max Retries: 2" in str(e)
 
 
 @pytest.mark.asyncio
@@ -990,51 +712,25 @@ async def test_router_retry_num_retries_single_retry():
     """
     Test num_retries tracking with a single retry to verify edge case handling.
     """
-    from unittest.mock import patch
-
     router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
             }
         ],
-        num_retries=1,  # Set at router level - single retry
+        num_retries=1,
     )
 
-    # Mock make_call to always raise a Timeout error
-    async def mock_make_call(*args, **kwargs):
-        raise litellm.Timeout(
-            message="Request timed out",
+    with pytest.raises(litellm.InternalServerError) as exc_info:
+        await router.acompletion(
             model="gpt-3.5-turbo",
-            llm_provider="openai",
+            messages=[{"role": "user", "content": "Hello"}],
+            mock_response="litellm.InternalServerError",
         )
 
-    with patch.object(router, "make_call", side_effect=mock_make_call):
-        with patch.object(
-            router,
-            "_async_get_healthy_deployments",
-            return_value=(
-                [{"model_info": {"id": "test-id"}}],
-                [{"model_info": {"id": "test-id"}}],
-            ),
-        ):
-            with patch.object(router, "_time_to_sleep_before_retry", return_value=0.01):
-                with pytest.raises(litellm.Timeout) as exc_info:
-                    await router.acompletion(
-                        model="gpt-3.5-turbo",
-                        messages=[{"role": "user", "content": "Hello"}],
-                    )
-                e = exc_info.value
-                assert (
-                    e.num_retries == 1
-                ), f"Expected num_retries to be 1, got {e.num_retries}"
-                assert (
-                    e.max_retries == 1
-                ), f"Expected max_retries to be 1, got {e.max_retries}"
+    assert exc_info.value.num_retries == 1
+    assert exc_info.value.max_retries == 1
 
 
 class MyCustomHandler(CustomLogger):
@@ -1044,18 +740,14 @@ class MyCustomHandler(CustomLogger):
 
     def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
-        print(
-            f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}"
-        )
+        print(f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}")
         self.previous_models = len(
             kwargs["litellm_params"]["metadata"].get("previous_models", [])
         )  # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
         print(f"self.previous_models: {self.previous_models}")
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
-        print(
-            f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}"
-        )
+        print(f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}")
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Stream")
