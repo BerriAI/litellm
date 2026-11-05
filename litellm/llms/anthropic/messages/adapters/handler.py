@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.caching.caching import REQUEST_MESSAGE_COUNT_KWARG
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -745,6 +746,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if chat_reasoning is not None and chat_reasoning.summary is not None:
             completion_kwargs["reasoning_summary"] = chat_reasoning.summary
 
+        if REQUEST_MESSAGE_COUNT_KWARG not in completion_kwargs:
+            completion_kwargs[REQUEST_MESSAGE_COUNT_KWARG] = len(messages)
         return completion_kwargs, tool_name_mapping
 
     @staticmethod
@@ -822,7 +825,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             top_k=top_k,
             top_p=top_p,
             output_format=output_format,
-            extra_kwargs=kwargs,
+            extra_kwargs={REQUEST_MESSAGE_COUNT_KWARG: len(messages), **kwargs},
         )
 
         completion_response: Final = await litellm.acompletion(**completion_kwargs)
@@ -969,7 +972,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             top_k=top_k,
             top_p=top_p,
             output_format=output_format,
-            extra_kwargs=kwargs,
+            extra_kwargs={REQUEST_MESSAGE_COUNT_KWARG: len(messages), **kwargs},
         )
 
         completion_response: Final = litellm.completion(**completion_kwargs)

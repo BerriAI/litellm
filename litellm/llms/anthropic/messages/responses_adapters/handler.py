@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.caching.caching import REQUEST_MESSAGE_COUNT_KWARG
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     routed_model_info,
@@ -388,6 +389,8 @@ def _build_responses_kwargs(
             *(item for item in deployment_include if item not in bridge_include),
         ]
 
+    if REQUEST_MESSAGE_COUNT_KWARG not in responses_kwargs:
+        responses_kwargs[REQUEST_MESSAGE_COUNT_KWARG] = len(messages)
     return responses_kwargs
 
 
@@ -439,7 +442,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
             top_k=top_k,
             top_p=top_p,
             output_format=output_format,
-            extra_kwargs=kwargs,
+            extra_kwargs={REQUEST_MESSAGE_COUNT_KWARG: len(messages), **kwargs},
         )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
@@ -543,7 +546,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
             top_k=top_k,
             top_p=top_p,
             output_format=output_format,
-            extra_kwargs=kwargs,
+            extra_kwargs={REQUEST_MESSAGE_COUNT_KWARG: len(messages), **kwargs},
         )
 
         result: Final = litellm.responses(**responses_kwargs)

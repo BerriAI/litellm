@@ -13,6 +13,7 @@ from typing import (
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.caching.caching import REQUEST_MESSAGE_COUNT_KWARG
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
@@ -203,6 +204,8 @@ class ResponsesToCompletionBridgeHandler:
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
+        if REQUEST_MESSAGE_COUNT_KWARG not in request_data:
+            request_data[REQUEST_MESSAGE_COUNT_KWARG] = len(messages)
         result: Final = responses(
             **request_data,
         )
@@ -307,6 +310,8 @@ class ResponsesToCompletionBridgeHandler:
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
+        if REQUEST_MESSAGE_COUNT_KWARG not in request_data:
+            request_data[REQUEST_MESSAGE_COUNT_KWARG] = len(messages)
         result: Final = await aresponses(
             **request_data,
             aresponses=True,

@@ -1092,6 +1092,123 @@ def test_completion_past_max_messages_is_neither_served_from_nor_written_to_the_
 
 
 @respx.mock
+def test_bridged_responses_counts_caller_input_items_against_max_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, max_messages=4))
+    route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        )
+    )
+    five_items: Final = [
+        {"role": "user", "content": "list a and b"},
+        {"type": "function_call", "call_id": "c1", "name": "ls", "arguments": '{"p":"a"}'},
+        {"type": "function_call", "call_id": "c2", "name": "ls", "arguments": '{"p":"b"}'},
+        {"type": "function_call_output", "call_id": "c1", "output": "a"},
+        {"type": "function_call_output", "call_id": "c2", "output": "b"},
+    ]
+
+    litellm.responses(model="anthropic/claude-sonnet-4-5", input=five_items, api_key="k")
+    second: Final = litellm.responses(model="anthropic/claude-sonnet-4-5", input=five_items, api_key="k")
+
+    assert route.call_count == 2
+    assert second._hidden_params.get("cache_hit") is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_bridged_aresponses_counts_caller_input_items_against_max_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, max_messages=4))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        )
+    )
+    five_items: Final = [
+        {"role": "user", "content": "list a and b"},
+        {"type": "function_call", "call_id": "c1", "name": "ls", "arguments": '{"p":"a"}'},
+        {"type": "function_call", "call_id": "c2", "name": "ls", "arguments": '{"p":"b"}'},
+        {"type": "function_call_output", "call_id": "c1", "output": "a"},
+        {"type": "function_call_output", "call_id": "c2", "output": "b"},
+    ]
+
+    await litellm.aresponses(model="anthropic/claude-sonnet-4-5", input=five_items, api_key="k")
+    second: Final = await litellm.aresponses(model="anthropic/claude-sonnet-4-5", input=five_items, api_key="k")
+
+    assert route.call_count == 2
+    assert second._hidden_params.get("cache_hit") is None
+
+
+@respx.mock
+def test_bridged_anthropic_messages_counts_caller_messages_against_max_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, max_messages=4))
+    route: Final = respx.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/.*/models/gemini-2\.5-flash:generateContent.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1, "totalTokenCount": 6},
+            },
+        )
+    )
+    three_messages: Final = [
+        {"role": "user", "content": "check a, b, c"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "t1", "name": "ls", "input": {"p": "a"}},
+                {"type": "tool_use", "id": "t2", "name": "ls", "input": {"p": "b"}},
+                {"type": "tool_use", "id": "t3", "name": "ls", "input": {"p": "c"}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "a"},
+                {"type": "tool_result", "tool_use_id": "t2", "content": "b"},
+                {"type": "tool_result", "tool_use_id": "t3", "content": "c"},
+            ],
+        },
+    ]
+
+    litellm.anthropic.messages.create(
+        model="gemini/gemini-2.5-flash", max_tokens=16, messages=three_messages, api_key="k"
+    )
+    litellm.anthropic.messages.create(
+        model="gemini/gemini-2.5-flash", max_tokens=16, messages=three_messages, api_key="k"
+    )
+
+    assert route.call_count == 1
+
+
+@respx.mock
 def test_enable_cache_serves_a_repeated_bedrock_titan_embedding_from_the_local_cache(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_provider_credentials: None
 ) -> None:

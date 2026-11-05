@@ -10,6 +10,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.caching.caching import REQUEST_MESSAGE_COUNT_KWARG, request_message_count
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
@@ -91,10 +92,14 @@ class LiteLLMCompletionTransformationHandler:
         | BaseResponsesAPIStreamingIterator
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
+        request_kwargs: Final = {
+            REQUEST_MESSAGE_COUNT_KWARG: request_message_count({"input": input}),
+            **_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+        }
         hoisted: Final = hoist_additional_tools(
             input,
             responses_api_request.get("tools"),
-            drop_params=drops_unsupported_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")),
+            drop_params=drops_unsupported_params(request_kwargs.get("drop_params")),
         )
         previous_response_id: Final = responses_api_request.get("previous_response_id")
         if _is_async and previous_response_id and has_client_tool_search(hoisted.tools):
@@ -108,7 +113,7 @@ class LiteLLMCompletionTransformationHandler:
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
-                request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                request_kwargs=request_kwargs,
             )
         bridged: Final = _bridged_request(hoisted, responses_api_request, ())
         bridged_input: Final = bridged.input
@@ -123,7 +128,7 @@ class LiteLLMCompletionTransformationHandler:
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
-                **_without_bridge_transform_keywords(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)),
+                **_without_bridge_transform_keywords(request_kwargs),
             ),
             **_chat_verbosity(bridged_request),
         }
@@ -134,11 +139,11 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
                 request_input=bridged_input,
                 responses_api_request=bridged_request,
-                **kwargs,
+                **request_kwargs,
             )
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            **{**request_kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -237,7 +242,12 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            **{
+                REQUEST_MESSAGE_COUNT_KWARG: request_message_count({"input": request_input}),
+                **kwargs,
+                **litellm_completion_request,
+                "_skip_responses_api_bridge": True,
+            },
         )
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
