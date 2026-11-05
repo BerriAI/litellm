@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     _redacted_responses_api_response,
     perform_redaction,
+    quoted_request_texts,
     redacted_model_call_details_for_custom_logger,
     redacted_response_obj_for_custom_logger,
     redacted_standard_logging_payload,
@@ -2491,6 +2492,24 @@ def test_scrub_request_text_replaces_the_whole_text_when_the_prompt_repeats_past
     echoes: int, scrubbed: str
 ) -> None:
     assert scrub_request_text("bad: secret " * echoes, request_texts("secret")) == scrubbed
+
+
+@pytest.mark.parametrize(
+    ("error", "quoted"),
+    [
+        ("Invalid content: 'secret one' and \"tab\\tafter\"", {"secret one", "tab\tafter"}),
+        ("litellm.RateLimitError: Rate limit reached", set()),
+        ("1 validation error\n  Input should be a valid string [input_value='cut...', input_type=str]", None),
+        ("x" * 5_000, None),
+    ],
+    ids=["quoted_verbatim_or_escaped", "quoted_only_inside_a_word", "pydantic_input_value", "too_large_to_search"],
+)
+def test_quoted_request_texts_names_the_texts_a_scrub_of_the_error_acts_on(error: str, quoted: set[str] | None) -> None:
+    texts: Final = request_texts(
+        "secret one", "tab\tafter", "Error", [f"message number {index}" for index in range(2_000)]
+    )
+
+    assert quoted_request_texts(error, texts) == (texts if quoted is None else quoted)
 
 
 def test_scrub_request_text_keeps_no_copy_of_the_prompt_after_it_returns() -> None:

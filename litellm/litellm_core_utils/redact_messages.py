@@ -514,6 +514,16 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
     return REDACTED_BY_LITELLM if scrubbed is None else scrubbed
 
 
+def quoted_request_texts(text: str, texts: Collection[str]) -> frozenset[str]:
+    """
+    The request ``texts`` that ``scrub_request_text`` acts on in ``text``: those it quotes, or all of them when
+    ``text`` holds a pydantic ``input_value`` or is too large to search one text at a time.
+    """
+    if len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
+        return frozenset(texts)
+    return frozenset(each for each in texts if scrub_request_text(text, (each,)) != text)
+
+
 def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str | None:
     """
     ``text`` with each quote of ``echoes`` replaced by ``REDACTED_BY_LITELLM`` in one left-to-right pass, the
