@@ -265,6 +265,32 @@ async def _execute_policy_bodies(
             },
             None,
         ),
+        (
+            {
+                "texts": ["You are a helpful assistant.", "   "],
+                "structured_messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": "   "},
+                ],
+            },
+            None,
+        ),
+        (
+            {
+                "texts": ["every", "message", "\n"],
+                "structured_messages": [
+                    *_CONVERSATION,
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "\n"},
+                            {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+                        ],
+                    },
+                ],
+            },
+            None,
+        ),
     ],
     ids=[
         "string-content",
@@ -275,6 +301,8 @@ async def _execute_policy_bodies(
         "ends-on-assistant",
         "ends-on-tool",
         "no-user-message",
+        "whitespace-only-latest-turn",
+        "whitespace-text-beside-image",
     ],
 )
 async def test_request_scan_sends_only_the_last_user_turn(

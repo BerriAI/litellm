@@ -268,7 +268,8 @@ class ZscalerAIGuard(CustomGuardrail):
     def _last_user_turn_texts(messages: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
         from_last_user_message: Final = dropwhile(lambda message: message.get("role") != "user", reversed(messages))
         last_user_turn: Final = tuple(takewhile(lambda message: message.get("role") == "user", from_last_user_message))
-        return tuple(chain.from_iterable(map(ZscalerAIGuard._content_texts, reversed(last_user_turn))))
+        texts: Final = tuple(chain.from_iterable(map(ZscalerAIGuard._content_texts, reversed(last_user_turn))))
+        return texts if any(text.strip() for text in texts) else ()
 
     @staticmethod
     def _content_texts(message: Mapping[str, object]) -> tuple[str, ...]:
