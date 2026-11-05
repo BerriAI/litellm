@@ -109,8 +109,6 @@ class DeepKeepGuardrail(CustomGuardrail):
               deepkeep_firewall_id: your-firewall-id
     """
 
-    natively_scans_tool_definitions = True
-
     def __init__(
         self,
         api_key: str | None = None,

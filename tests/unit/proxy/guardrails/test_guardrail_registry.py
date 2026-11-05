@@ -1982,3 +1982,38 @@ async def test_rotate_guardrail_params_gives_up_on_a_row_that_keeps_changing(mon
     assert rows_updated == 0
     assert prisma_client.db.litellm_guardrailstable.update_many.await_count == GUARDRAIL_ROTATION_ATTEMPTS
     assert prisma_client.db.litellm_guardrailstable.find_unique.await_count == GUARDRAIL_ROTATION_ATTEMPTS - 1
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"guardrail": "panw_prisma_airs", "mode": "pre_call", "api_key": "test-key", "profile_name": "test-profile"},
+        {
+            "guardrail": "presidio",
+            "mode": "pre_call",
+            "presidio_analyzer_api_base": "http://localhost:5002",
+            "presidio_anonymizer_api_base": "http://localhost:5001",
+        },
+    ],
+    ids=["panw_prisma_airs", "presidio"],
+)
+def test_scan_tool_definitions_in_guardrail_is_accepted_on_text_guardrails(params):
+    guardrail = TestScanOnlyToolResultsInitRefusal()._initialize(
+        f"{params['guardrail']}-tool-scan", {**params, "scan_tool_definitions_in_guardrail": True}
+    )
+
+    assert guardrail is not None
+    assert guardrail["litellm_params"].scan_tool_definitions_in_guardrail is True
+
+
+def test_scan_tool_definitions_in_guardrail_is_rejected_on_other_guardrails():
+    with pytest.raises(ValueError, match="only supported on panw_prisma_airs and presidio"):
+        TestScanOnlyToolResultsInitRefusal()._initialize(
+            "generic-tool-scan",
+            {
+                "guardrail": "generic_guardrail_api",
+                "mode": "pre_call",
+                "api_base": "http://localhost:8092",
+                "scan_tool_definitions_in_guardrail": True,
+            },
+        )

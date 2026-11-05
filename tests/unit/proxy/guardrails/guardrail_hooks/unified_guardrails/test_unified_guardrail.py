@@ -3370,9 +3370,13 @@ class PhraseGuardrail(RecordingGuardrail):
             texts=[text.replace("IGNORE PRIOR INSTRUCTIONS", "[MASKED]") for text in recorded["texts"]]
         )
 
+    def supports_tool_description_scan(self) -> bool:
+        return True
 
-class NativeToolPhraseGuardrail(PhraseGuardrail):
-    natively_scans_tool_definitions = True
+
+class NoToolScanPhraseGuardrail(PhraseGuardrail):
+    def supports_tool_description_scan(self) -> bool:
+        return False
 
 
 @pytest.fixture
@@ -3403,13 +3407,8 @@ async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_descr
 
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
-@pytest.mark.parametrize("global_setting", [False, True])
 @pytest.mark.asyncio
-async def test_pre_call_tool_description_scan_follows_per_guardrail_then_global_setting(
-    monkeypatch, call_type, body, global_setting: bool
-) -> None:
-    monkeypatch.setattr(litellm, "scan_tool_definitions_in_guardrail", global_setting)
-
+async def test_pre_call_tool_description_scan_is_opt_in_per_guardrail(call_type, body) -> None:
     async def blocked(scan_tool_definitions: bool | None) -> bool:
         try:
             await UnifiedLLMGuardrails().async_pre_call_hook(
@@ -3424,7 +3423,7 @@ async def test_pre_call_tool_description_scan_follows_per_guardrail_then_global_
             return True
         return False
 
-    assert (await blocked(None), await blocked(False), await blocked(True)) == (global_setting, False, True)
+    assert (await blocked(None), await blocked(False), await blocked(True)) == (False, False, True)
 
 
 @pytest.mark.usefixtures("_real_translation_mappings")
@@ -3447,8 +3446,8 @@ async def test_pre_call_masks_tool_descriptions_without_touching_the_schema(call
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
 @pytest.mark.asyncio
-async def test_pre_call_leaves_native_tool_scanners_to_their_own_tools_input(call_type, body) -> None:
-    guardrail: Final = NativeToolPhraseGuardrail(mask=False, scan_tool_definitions=True)
+async def test_pre_call_skips_tool_description_scan_for_guardrails_without_support(call_type, body) -> None:
+    guardrail: Final = NoToolScanPhraseGuardrail(mask=False, scan_tool_definitions=True)
 
     await UnifiedLLMGuardrails().async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),

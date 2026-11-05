@@ -656,6 +656,14 @@ def _configure_callback_scoping(
         "scan_tool_definitions_in_guardrail",
     ):
         setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
+    if (
+        litellm_params.scan_tool_definitions_in_guardrail
+        and not custom_guardrail_callback.supports_tool_description_scan()
+    ):
+        raise ValueError(
+            f"Guardrail {guardrail_name}: scan_tool_definitions_in_guardrail is only supported on "
+            "panw_prisma_airs and presidio guardrails. Remove it from this guardrail."
+        )
     scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
     if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
         raise ValueError(

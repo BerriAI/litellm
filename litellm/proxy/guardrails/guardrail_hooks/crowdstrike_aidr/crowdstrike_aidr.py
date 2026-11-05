@@ -250,8 +250,6 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
     AI Guard service.
     """
 
-    natively_scans_tool_definitions = True
-
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [

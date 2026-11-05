@@ -142,8 +142,6 @@ class AliceGuardrail(CustomGuardrail):
               unreachable_fallback: fail_closed       # optional
     """
 
-    natively_scans_tool_definitions = True
-
     def __init__(
         self,
         api_key: str | None = None,

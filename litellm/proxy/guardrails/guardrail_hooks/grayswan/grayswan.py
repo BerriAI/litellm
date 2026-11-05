@@ -126,8 +126,6 @@ class GraySwanGuardrail(CustomGuardrail):
     see: https://docs.grayswan.ai/cygnal/monitor-requests
     """
 
-    natively_scans_tool_definitions = True
-
     SUPPORTED_ON_FLAGGED_ACTIONS = {"block", "monitor", "passthrough"}
     DEFAULT_ON_FLAGGED_ACTION = "monitor"
     BASE_API_URL = "https://api.grayswan.ai"

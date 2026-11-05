@@ -50,8 +50,6 @@ class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
 
 
 class SingulrGuardrail(CustomGuardrail):
-    natively_scans_tool_definitions = True
-
     def __init__(
         self,
         singulr_api_key: str | None = None,

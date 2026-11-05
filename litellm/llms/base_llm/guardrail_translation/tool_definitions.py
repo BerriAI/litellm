@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -23,14 +22,11 @@ _TOOLS: Final = TypeAdapter(list[JsonValue])
 
 
 def effective_scan_tool_definitions_for_guardrail(guardrail_to_apply: CustomGuardrail) -> bool:
-    if guardrail_to_apply.natively_scans_tool_definitions:
-        return False
-    if effective_scan_only_tool_results_for_guardrail(guardrail_to_apply):
-        return False
-    per: Final[object] = getattr(guardrail_to_apply, "scan_tool_definitions_in_guardrail", None)
-    if per is not None:
-        return bool(per)
-    return litellm.scan_tool_definitions_in_guardrail
+    return (
+        guardrail_to_apply.supports_tool_description_scan()
+        and getattr(guardrail_to_apply, "scan_tool_definitions_in_guardrail", None) is True
+        and not effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
+    )
 
 
 _TOOL_SCHEMA_KEYS: Final = ("parameters", "input_schema")

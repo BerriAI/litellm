@@ -880,8 +880,6 @@ def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse | None:
 
 
 class StraikerGuardrail(CustomGuardrail):
-    natively_scans_tool_definitions = True
-
     @staticmethod
     def get_config_model() -> type[GuardrailConfigModel]:
         return StraikerGuardrailConfigModel
