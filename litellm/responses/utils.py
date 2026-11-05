@@ -730,11 +730,13 @@ class ResponsesAPIRequestUtils:
         from litellm.litellm_core_utils.prompt_templates.factory import (
             THOUGHT_SIGNATURE_SEPARATOR,
         )
-        from litellm.utils import _is_gemini_model, _remove_thought_signature_from_id
 
-        if _is_gemini_model(model=model, custom_llm_provider=custom_llm_provider):
+        # Same check as litellm.utils._is_gemini_model (vertex_ai is Gemini only when
+        # the model name says so), inlined to avoid importing private helpers.
+        is_gemini_target = custom_llm_provider == "gemini" or "gemini" in (model or "").lower()
+        if is_gemini_target:
             return call_id
-        return _remove_thought_signature_from_id(call_id, THOUGHT_SIGNATURE_SEPARATOR)
+        return call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
 
     @staticmethod
     def _normalize_function_call_item_id_for_provider(
@@ -765,7 +767,7 @@ class ResponsesAPIRequestUtils:
         return item_id
 
     @staticmethod
-    def _normalize_function_call_ids_in_input(
+    def normalize_function_call_ids_in_input(
         request_input: Any,  # noqa: ANN401 -- raw responses-api request body, structurally varied
         model: str | None,
         custom_llm_provider: str | None,

@@ -86,7 +86,7 @@ class TestNormalizeFunctionCallItemIdForProvider:
 class TestNormalizeFunctionCallIdsInInput:
     def test_non_list_input_passes_through_unchanged(self):
         assert (
-            ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+            ResponsesAPIRequestUtils.normalize_function_call_ids_in_input(
                 request_input="not a list",
                 model="gpt-4.1",
                 custom_llm_provider="openai",
@@ -114,7 +114,7 @@ class TestNormalizeFunctionCallIdsInInput:
             },
         ]
 
-        result = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+        result = ResponsesAPIRequestUtils.normalize_function_call_ids_in_input(
             request_input=request_input,
             model="gpt-4.1",
             custom_llm_provider="openai",
@@ -134,7 +134,7 @@ class TestNormalizeFunctionCallIdsInInput:
             {"type": "function_call", "name": "get_weather", "arguments": "{}"},
             {"type": "function_call_output", "output": "done"},
         ]
-        result = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+        result = ResponsesAPIRequestUtils.normalize_function_call_ids_in_input(
             request_input=request_input,
             model="gpt-4.1",
             custom_llm_provider="openai",
@@ -154,7 +154,7 @@ class TestNormalizeFunctionCallIdsInInput:
                 "arguments": "{}",
             },
         ]
-        result = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+        result = ResponsesAPIRequestUtils.normalize_function_call_ids_in_input(
             request_input=request_input,
             model="gpt-4.1",
             custom_llm_provider="openai",
@@ -187,7 +187,7 @@ class TestNormalizeFunctionCallIdsIntegration:
             },
         ]
 
-        normalized = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+        normalized = ResponsesAPIRequestUtils.normalize_function_call_ids_in_input(
             request_input=request_input,
             model="gpt-4.1",
             custom_llm_provider="openai",
