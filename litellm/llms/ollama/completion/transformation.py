@@ -11,6 +11,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -96,6 +97,7 @@ class _OllamaGenerateResponse(TypedDict):
     message: ReadOnly[NotRequired[_OllamaGenerateMessage]]
     prompt_eval_count: ReadOnly[NotRequired[int]]
     eval_count: ReadOnly[NotRequired[int]]
+    done_reason: ReadOnly[NotRequired[str | None]]
 
 
 _OLLAMA_GENERATE_RESPONSE: Final = TypeAdapter(_OllamaGenerateResponse)
@@ -321,7 +323,7 @@ class OllamaConfig(BaseConfig):
     ) -> ModelResponse:
         response_json: Final = _OLLAMA_GENERATE_RESPONSE.validate_python(raw_response.json())
         ## RESPONSE OBJECT
-        model_response.choices[0].finish_reason = "stop"
+        model_response.choices[0].finish_reason = map_finish_reason(response_json.get("done_reason") or "stop")
         if request_data.get("format", "") == "json":
             # Check if response field exists and is not empty before parsing JSON
             response_text = response_json.get("response", "")
@@ -331,7 +333,6 @@ class OllamaConfig(BaseConfig):
                 # Handle empty response gracefully - set empty content
                 message = litellm.Message(content="", reasoning_content=thinking)
                 model_response.choices[0].message = message
-                model_response.choices[0].finish_reason = "stop"
             else:
                 try:
                     response_content: Final = _JSON_VALUE.validate_python(
@@ -369,13 +370,11 @@ class OllamaConfig(BaseConfig):
                             reasoning_content=thinking,
                         )
                         model_response.choices[0].message = message
-                        model_response.choices[0].finish_reason = "stop"
                 except json.JSONDecodeError:
                     # If JSON parsing fails, treat as regular text response
                     reasoning_content, content = _OllamaGenerateReasoning.from_response(response_json).split()
                     message = litellm.Message(content=content, reasoning_content=reasoning_content)
                     model_response.choices[0].message = message
-                    model_response.choices[0].finish_reason = "stop"
         else:
             reasoning_content, content = _OllamaGenerateReasoning.from_response(response_json).split()
             model_response.choices[0].message.content = content
@@ -541,13 +540,13 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
         self.held_content = ""
         return released
 
-    def _flush_held_content(self, usage: ChatCompletionUsageBlock | None) -> GenericStreamingChunk:
+    def _flush_held_content(self, usage: ChatCompletionUsageBlock | None, finish_reason: str) -> GenericStreamingChunk:
         held: Final = self.held_content
         self.held_content = ""
         try:
             parsed: Final = _JSON_VALUE.validate_python(json.loads(_strip_json_code_fence(held)))
         except json.JSONDecodeError:
-            return GenericStreamingChunk(text=held, is_finished=True, finish_reason="stop", usage=usage)
+            return GenericStreamingChunk(text=held, is_finished=True, finish_reason=finish_reason, usage=usage)
         if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
             return GenericStreamingChunk(
                 text="",
@@ -563,7 +562,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 finish_reason="tool_calls",
                 usage=usage,
             )
-        return GenericStreamingChunk(text=held, is_finished=True, finish_reason="stop", usage=usage)
+        return GenericStreamingChunk(text=held, is_finished=True, finish_reason=finish_reason, usage=usage)
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         return self.chunk_parser(json.loads(str_line))
@@ -579,7 +578,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
             if chunk["done"] is True:
                 text = ""
                 is_finished = True
-                finish_reason = "stop"
+                finish_reason = _OLLAMA_GENERATE_RESPONSE.validate_python(chunk).get("done_reason") or "stop"
                 prompt_eval_count: Final[int | None] = chunk.get("prompt_eval_count", None)
                 eval_count: Final[int | None] = chunk.get("eval_count", None)
 
@@ -591,7 +590,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         total_tokens=prompt_eval_count + eval_count,
                     )
                 if self.held_content:
-                    return self._flush_held_content(usage)
+                    return self._flush_held_content(usage, finish_reason)
                 return GenericStreamingChunk(
                     text=text,
                     is_finished=is_finished,
