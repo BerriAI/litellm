@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -564,11 +565,13 @@ async def test_raised_intake_error_preserves_datadog_requeue_behavior(datadog_en
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
-async def test_failure_hook_scrubs_the_prompt_out_of_the_logged_exception(datadog_env, monkeypatch, redact):
-    secret = "my ssn is 123-45-6789"
+async def test_failure_hook_scrubs_the_prompt_out_of_the_logged_exception(
+    datadog_env: None, monkeypatch: pytest.MonkeyPatch, redact: bool
+) -> None:
+    secret: Final = "my ssn is 123-45-6789"
     monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
     with patch("asyncio.create_task"):
-        logger = DataDogLogger()
+        logger: Final = DataDogLogger()
 
     await logger.async_post_call_failure_hook(
         request_data={"messages": [{"role": "user", "content": secret}], "metadata": {}},
@@ -579,7 +582,7 @@ async def test_failure_hook_scrubs_the_prompt_out_of_the_logged_exception(datado
         traceback_str=f"Traceback: {secret}",
     )
 
-    message = json.loads(logger.log_queue[0]["message"])
+    message: Final = json.loads(logger.log_queue[0]["message"])
     assert (secret in json.dumps(message)) is not redact
     assert "Unsupported content: " in message["exception"]
     assert message["error_class"] == "BadRequestError"

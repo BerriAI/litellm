@@ -4062,7 +4062,7 @@ async def test_a_poll_of_an_already_charged_job_still_charges_its_own_guardrails
 @pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
 async def test_async_post_call_failure_hook_scrubs_the_prompt_out_of_the_persisted_error(
     monkeypatch: pytest.MonkeyPatch, redact: bool
-):
+) -> None:
     secret: Final = "my ssn is 123-45-6789"
     monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
     spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
