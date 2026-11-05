@@ -3133,9 +3133,32 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
     def test_post_call_marker_requires_usable_id(self, response_id: object) -> None:
         guardrail: Final = CustomGuardrail(guardrail_name="post-mod")
         data: Final[dict[str, object]] = {"metadata": {}}
-        guardrail._record_post_call_deployment_hook_run(data, {"id": response_id})
+        guardrail._record_post_call_deployment_hook_run(data, {"id": response_id, "choices": []})
         assert data == {"metadata": {}}
-        assert guardrail.post_call_deployment_hook_ran(data, {"id": response_id}) is False
+        assert guardrail.post_call_deployment_hook_ran(data, {"id": response_id, "choices": []}) is False
+
+    @pytest.mark.parametrize("output", [None, object(), float("nan")])
+    def test_post_call_marker_requires_serializable_output(self, output: object) -> None:
+        guardrail: Final = CustomGuardrail(guardrail_name="post-mod")
+        data: Final[dict[str, object]] = {"metadata": {}}
+        response: Final = {"id": "chatcmpl-same", **({"choices": output} if output is not None else {})}
+        guardrail._record_post_call_deployment_hook_run(data, response)
+        assert data == {"metadata": {}}
+        assert guardrail.post_call_deployment_hook_ran(data, response) is False
+
+    def test_post_call_marker_tracks_tool_calls_but_not_routing_fields(self) -> None:
+        guardrail: Final = CustomGuardrail(guardrail_name="post-mod")
+        data: Final[dict[str, object]] = {"metadata": {}}
+        response: Final = {
+            "id": "chatcmpl-same",
+            "model": "deployment",
+            "choices": [{"message": {"tool_calls": [{"function": {"arguments": "checked"}}]}}],
+        }
+        guardrail._record_post_call_deployment_hook_run(data, response)
+        assert guardrail.post_call_deployment_hook_ran(data, {**response, "model": "alias"}) is True
+        assert guardrail.post_call_deployment_hook_ran(
+            data, {**response, "choices": [{"message": {"tool_calls": [{"function": {"arguments": "rewritten"}}]}}]}
+        ) is False
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_retains_request_identity(self) -> None:

@@ -14,7 +14,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
+from litellm.types.utils import GenericGuardrailAPIInputs, LLMResponseTypes, ModelResponse
+from litellm.utils import async_post_call_success_deployment_hook
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +85,52 @@ async def test_post_call_moderates_returned_response_once(
     )
     assert out is returned
     assert guardrail.evaluations == (2 if scenario in ("discarded", "no-id") else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parallel", [False, True])
+@pytest.mark.parametrize("rewrite", [False, True])
+async def test_post_call_rechecks_output_after_later_deployment_callback(
+    proxy_logging: ProxyLogging, monkeypatch: pytest.MonkeyPatch, parallel: bool, rewrite: bool
+) -> None:
+    class Guardrail(CustomGuardrail):
+        def __init__(self) -> None:
+            super().__init__(guardrail_name="post-mod", event_hook=GuardrailEventHooks.post_call)
+            self.evaluations = 0
+            self.run_in_parallel = parallel
+
+        async def async_post_call_success_hook(
+            self, data: dict[str, object], response: LLMResponseTypes, user_api_key_dict: UserAPIKeyAuth
+        ) -> None:
+            self.evaluations += 1
+            if isinstance(response, ModelResponse) and "restored" in response.model_dump_json():
+                raise HTTPException(status_code=400, detail="blocked restored output")
+
+    class Rewriter(CustomLogger):
+        async def async_post_call_success_deployment_hook(
+            self, request_data: dict[str, object], response: LLMResponseTypes, call_type: CallTypes | None
+        ) -> ModelResponse | None:
+            if not rewrite or not isinstance(response, ModelResponse):
+                return None
+            return ModelResponse(
+                id=response.id, choices=[{"message": {"role": "assistant", "content": "restored"}}]
+            )
+
+    guardrail: Final = Guardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail, Rewriter()])
+    data: Final = {"model": "m", "guardrails": ["post-mod"], "metadata": {}}
+    response: Final = ModelResponse(
+        id="chatcmpl-same", choices=[{"message": {"role": "assistant", "content": "placeholder"}}]
+    )
+    returned: Final = await async_post_call_success_deployment_hook(data, response, CallTypes.acompletion)
+    if rewrite:
+        with pytest.raises(HTTPException, match="blocked restored output"):
+            await proxy_logging.post_call_success_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), response=returned)
+    else:
+        assert await proxy_logging.post_call_success_hook(
+            data=data, user_api_key_dict=UserAPIKeyAuth(), response=returned
+        ) is returned
+    assert guardrail.evaluations == (2 if rewrite else 1)
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 import contextvars
 import copy
 import hashlib
+import json
 import os
 import secrets
 from collections.abc import Iterable, Mapping, Sequence
@@ -10,7 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -940,14 +941,26 @@ class CustomGuardrail(CustomLogger):
         return _request_carries_marker(data, self._marker(_DEPLOYMENT_HOOK_RAN_TOKEN))
 
     def _post_call_deployment_marker(self, response: object) -> str | None:
-        response_id: Final[object] = (
-            cast("Mapping[object, object]", response).get("id")  # cast-ok: only reading a mapping value
-            if isinstance(response, Mapping)
-            else getattr(response, "id", None)
-        )
+        try:
+            response_data: Final[Mapping[str, object]] = (
+                response.model_dump(mode="json")
+                if isinstance(response, BaseModel)
+                else _REQUEST_FIELDS.validate_python(response)
+            )
+            output: Final = tuple(
+                (key, response_data[key]) for key in ("choices", "output", "content", "data") if key in response_data
+            )
+            if not output:
+                return None
+            digest: Final = hashlib.sha256(
+                json.dumps(output, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            ).hexdigest()
+        except (TypeError, ValueError):
+            return None
+        response_id: Final = response_data.get("id")
         if not isinstance(response_id, str) or not response_id.strip():
             return None
-        return self._marker(f"{_POST_CALL_DEPLOYMENT_HOOK_RAN_TOKEN}:{response_id}")
+        return self._marker(f"{_POST_CALL_DEPLOYMENT_HOOK_RAN_TOKEN}:{response_id}:{digest}")
 
     def post_call_deployment_hook_ran(self, data: Mapping[str, object], response: object) -> bool:
         return _request_carries_marker(data, self._post_call_deployment_marker(response))
