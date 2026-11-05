@@ -1143,7 +1143,7 @@ async def _inherit_auth_guardrails(
     runs_guardrails: Final = bool(entries) or bool((as_str_mapping(metadata) or {}).get("_guardrail_pipelines"))
     if entries and isinstance(metadata, dict):
         metadata["guardrails"] = entries
-    elif isinstance(merged, list) and isinstance(metadata, dict):
+    elif isinstance(merged, (list, dict)) and isinstance(metadata, dict):
         _restore_unmerged_guardrail_fields(
             parsed_body,
             cast("dict[str, object]", metadata),  # cast-ok: the request body's JSON metadata object
@@ -1200,8 +1200,8 @@ def _restore_unmerged_guardrail_fields(
     client_body_guardrails: Mapping[str, object],
     client_metadata_guardrails: Mapping[str, object],
 ) -> None:
-    """Put back the client's ``guardrails`` and ``metadata.guardrails`` when the merge found no guardrail to run, so
-    the body keeps main's shape"""
+    """Put back the client's ``guardrails`` and ``metadata.guardrails`` when the merge produced no list of guardrails,
+    such as an empty list or the client's object form on a plain key, so the body keeps main's shape"""
     metadata.pop("guardrails", None)
     metadata.update(client_metadata_guardrails)
     parsed_body.update(client_body_guardrails)
