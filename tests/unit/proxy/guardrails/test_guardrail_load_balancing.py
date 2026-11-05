@@ -44,6 +44,7 @@ class MockGuardrail(CustomGuardrail):
         stream_scope: GuardrailStreamScope = "both",
         run_in_parallel: bool = False,
         scan_raw_request: bool = False,
+        fail: bool = False,
     ):
         super().__init__(
             guardrail_name=guardrail_name,
@@ -55,10 +56,13 @@ class MockGuardrail(CustomGuardrail):
         )
         self.guardrail_id = guardrail_id
         self.calls = 0
+        self.fail = fail
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         self.calls += 1
         MockGuardrail.call_count += 1
+        if self.fail:
+            raise RuntimeError("guardrail offline")
         return None
 
     async def async_moderation_hook(self, data, user_api_key_dict, call_type):
@@ -490,8 +494,10 @@ async def test_streaming_selects_iterator_capable_deployment(monkeypatch: pytest
 @pytest.mark.parametrize("action", ("enable", "noop", "raise"))
 @pytest.mark.parametrize("run_in_parallel", (False, True))
 @pytest.mark.parametrize("call_type", ("completion", "call_mcp_tool"))
+@pytest.mark.parametrize("activator_first", (False, True))
 async def test_pre_call_load_balancing_observes_earlier_callback_activation(
-    action: str, run_in_parallel: bool, call_type: CallTypesLiteral, monkeypatch: pytest.MonkeyPatch
+    action: str, run_in_parallel: bool, call_type: CallTypesLiteral, activator_first: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event: Final = GuardrailEventHooks.pre_mcp_call if call_type == "call_mcp_tool" else GuardrailEventHooks.pre_call
     replicas: Final = tuple(
@@ -511,7 +517,8 @@ async def test_pre_call_load_balancing_observes_earlier_callback_activation(
         ],
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    monkeypatch.setattr(litellm, "callbacks", [GuardrailActivator(action), *replicas])
+    activator: Final = GuardrailActivator(action)
+    monkeypatch.setattr(litellm, "callbacks", [activator, *replicas] if activator_first else [*replicas, activator])
     logging: Final = ProxyLogging(user_api_key_cache=DualCache())
     for request_index in range(30):
         if action == "raise":
@@ -523,8 +530,75 @@ async def test_pre_call_load_balancing_observes_earlier_callback_activation(
             await logging.pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(), data={"model": "test", "messages": []}, call_type=call_type
             )
-        assert sum(cb.calls for cb in replicas) == (request_index + 1 if action == "enable" else 0)
-    assert all(cb.calls > 0 for cb in replicas) is (action == "enable")
+        assert sum(cb.calls for cb in replicas) == (
+            request_index + 1 if action == "enable" and (activator_first or run_in_parallel) else 0
+        )
+    assert all(cb.calls > 0 for cb in replicas) is (action == "enable" and (activator_first or run_in_parallel))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan_raw_request", (False, True))
+@pytest.mark.parametrize("requested", (False, True))
+@pytest.mark.parametrize("fail", (False, True))
+async def test_late_parallel_activation_rechecks_final_request(
+    scan_raw_request: bool, requested: bool, fail: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replicas: Final = tuple(
+        MockGuardrail(
+            "dynamic-lb", region, event_hook=GuardrailEventHooks.pre_call, default_on=False,
+            run_in_parallel=True, scan_raw_request=scan_raw_request, fail=fail,
+        )
+        for region in ("east", "west")
+    )
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "dynamic-lb", "id": cb.guardrail_id, "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+            }
+            for cb in replicas
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [*replicas, GuardrailActivator("enable")])
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    should_run: Final = requested or not scan_raw_request
+    with pytest.raises(RuntimeError, match="guardrail offline") if fail and should_run else nullcontext():
+        await logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            data={"model": "test", "messages": [], "guardrails": ["dynamic-lb"] if requested else []},
+            call_type="completion",
+        )
+    assert any(cb.calls > 0 for cb in replicas) is should_run
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parallel_weight", (0, 1))
+async def test_mixed_parallel_and_sequential_replicas_keep_one_weighted_selection(
+    parallel_weight: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sequential: Final = MockGuardrail("dynamic-lb", "sequential", default_on=True)
+    parallel: Final = MockGuardrail("dynamic-lb", "parallel", default_on=True, run_in_parallel=True)
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "dynamic-lb", "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "pre_call", "weight": weight},
+            }
+            for cb, weight in ((sequential, 1 - parallel_weight), (parallel, parallel_weight))
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [sequential, parallel])
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    for request_index in range(20):
+        await logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), data={"model": "test", "messages": []}, call_type="completion",
+        )
+        assert sequential.calls == (request_index + 1) * (1 - parallel_weight)
+        assert parallel.calls == (request_index + 1) * parallel_weight
 
 
 @pytest.mark.asyncio

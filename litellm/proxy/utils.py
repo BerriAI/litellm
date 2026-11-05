@@ -3370,25 +3370,25 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
                 return data
 
+            def _eligible_pre_call(callback: CustomGuardrail) -> bool:
+                return (
+                    data is not None
+                    and callback.guardrail_name not in pipeline_managed
+                    and callback.should_run_guardrail(
+                        data=raw_request_snapshot
+                        if callback.scan_raw_request and raw_request_snapshot is not None
+                        else data,
+                        event_type=GuardrailEventHooks.pre_mcp_call
+                        if call_type in MCP_GUARDRAIL_CALL_TYPES
+                        else GuardrailEventHooks.pre_call,
+                    )
+                    is True
+                )
+
             callback_iterators: Final = tee(
                 caps.resolved_callbacks
                 if skip_guardrails
-                else _iter_load_balanced_callbacks(
-                    caps.resolved_callbacks,
-                    lambda cb: (
-                        data is not None
-                        and cb.guardrail_name not in pipeline_managed
-                        and cb.should_run_guardrail(
-                            data=raw_request_snapshot
-                            if cb.scan_raw_request and raw_request_snapshot is not None
-                            else data,
-                            event_type=GuardrailEventHooks.pre_mcp_call
-                            if call_type in MCP_GUARDRAIL_CALL_TYPES
-                            else GuardrailEventHooks.pre_call,
-                        )
-                        is True
-                    ),
-                )
+                else _iter_load_balanced_callbacks(caps.resolved_callbacks, _eligible_pre_call)
             )
             deferred_route_exc: SensitiveDataRouteException | None = None
             for _callback in callback_iterators[0]:
@@ -3469,15 +3469,36 @@ class ProxyLogging:
             if deferred_route_exc is not None and data is not None:
                 data = await self._handle_sensitive_data_route_exception(deferred_route_exc, data, user_api_key_dict)
 
+            selected_callbacks: Final = tuple(callback_iterators[1])
+            sequential_names: Final = frozenset(
+                cb.guardrail_name
+                for cb in selected_callbacks
+                if isinstance(cb, CustomGuardrail) and not getattr(cb, "run_in_parallel", False)
+            )
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
                 ()
                 if skip_guardrails
                 else tuple(
                     cb
-                    for cb in callback_iterators[1]
+                    for cb in _load_balanced_callbacks(
+                        tuple(
+                            cb
+                            for cb in caps.resolved_callbacks
+                            if isinstance(cb, CustomGuardrail)
+                            and getattr(cb, "run_in_parallel", False)
+                            and cb.guardrail_name not in pipeline_managed
+                        ),
+                        lambda cb: (
+                            getattr(cb, "run_in_parallel", False)
+                            and _eligible_pre_call(cb)
+                            and (
+                                cb.guardrail_name not in sequential_names
+                                or any(cb is selected for selected in selected_callbacks)
+                            )
+                        ),
+                        eligible_only=True,
+                    )
                     if isinstance(cb, CustomGuardrail)
-                    and getattr(cb, "run_in_parallel", False)
-                    and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
                 )
             )
             if parallel_guardrails and data is not None:
