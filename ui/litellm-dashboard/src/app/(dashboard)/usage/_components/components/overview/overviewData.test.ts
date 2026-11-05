@@ -227,7 +227,10 @@ describe("daily key stacks", () => {
     };
     const result = seriesBy([first, second], "api_keys", "requests", 1);
     expect(result.labels).toEqual(["key-b", "Other"]);
-    expect(result.data.map(row => [row[result.keys[0]], row[result.keys[1]]])).toEqual([[20, 80], [80, 70]]);
+    expect(result.data.map((row) => [row[result.keys[0]], row[result.keys[1]]])).toEqual([
+      [20, 80],
+      [80, 70],
+    ]);
     expect([...bucketTotals(result).values()]).toEqual([100, 150]);
   });
 });
