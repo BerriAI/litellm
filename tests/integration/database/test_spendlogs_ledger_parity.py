@@ -63,10 +63,10 @@ _DAILY_TABLES: Final = (
 )
 
 
-@pytest.mark.parametrize("batch_size,row_count,expected,distinct_models", [(None, 251, 251, False), (None, 501, 500, False), ("200", 251, 200, False), ("10000", 10001, 10000, False), ("3001", 3001, 3001, True)])
+@pytest.mark.parametrize("batch_size,row_count,transactions,distinct_models", [(None, 251, 1, False), (None, 1001, 3, False), ("200", 251, 2, False), ("3001", 3001, 1, True)])
 @pytest.mark.asyncio
-async def test_worker_applies_the_configured_backlog_in_one_transaction(
-    parity_database: str, monkeypatch: pytest.MonkeyPatch, batch_size: str | None, row_count: int, expected: int, distinct_models: bool
+async def test_worker_drains_a_backlog_in_one_run_one_configured_batch_per_transaction(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch, batch_size: str | None, row_count: int, transactions: int, distinct_models: bool
 ):
     from litellm.accounting.worker import flush_accounting_deliveries
 
@@ -92,13 +92,13 @@ async def test_worker_applies_the_configured_backlog_in_one_transaction(
         )) == row_count - 1
         started = time.monotonic()
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
-        print(f"Ledger batch applied={expected} queued={row_count} seconds={time.monotonic() - started:.3f}")
+        print(f"Ledger backlog queued={row_count} seconds={time.monotonic() - started:.3f}")
         with psycopg.connect(parity_database) as connection:
-            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE state=\'applied\'').fetchone() == (expected,)
-            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE state=\'pending\'').fetchone() == (row_count - expected,)
-            assert connection.execute('SELECT COUNT(DISTINCT applied_at) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (1,)
-            assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (expected * 0.25,)
-            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_DailyUserSpend"').fetchone() == (expected if distinct_models else 1,)
+            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE state=\'applied\'').fetchone() == (row_count,)
+            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE state=\'pending\'').fetchone() == (0,)
+            assert connection.execute('SELECT COUNT(DISTINCT applied_at) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (transactions,)
+            assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (row_count * 0.25,)
+            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_DailyUserSpend"').fetchone() == (row_count if distinct_models else 1,)
     finally:
         await client.db.disconnect()
 

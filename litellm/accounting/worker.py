@@ -14,6 +14,7 @@ from litellm.accounting.metrics import record_deliveries
 from litellm.accounting.projection import Contribution
 from litellm.repositories.accounting_delivery_repository import (
     AccountingDeliveryRepository,
+    DeliveryBatchResult,
     DeliveryProjection,
     LedgerDatabase,
     LedgerTransaction,
@@ -32,6 +33,14 @@ class _AccountingAlerts(Protocol):
 
 
 _JOB: Final = "accounting_delivery"
+
+
+def _filled(result: DeliveryBatchResult, batch_size: int) -> bool:
+    return result.applied + len(result.parked) >= batch_size
+
+
+def _progressed(result: DeliveryBatchResult) -> bool:
+    return bool(result.applied or result.failed)
 
 
 async def flush_accounting_deliveries(
@@ -56,7 +65,7 @@ async def flush_accounting_deliveries(
         started: Final = time.monotonic()
         batch_size: Final = int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "500"))
 
-        async def run_batch(*, retry_only: bool) -> bool:
+        async def run_batch(*, retry_only: bool) -> DeliveryBatchResult:
             result: Final = await repository.apply_pending(apply, batch_size=batch_size, retry_only=retry_only)
             if result.applied:
                 await writer.invalidate_accounting_entities(applied, proxy_logging_obj)
@@ -68,12 +77,15 @@ async def flush_accounting_deliveries(
                     proxy_logging_obj,
                     message=f"Accounting delivery parked {len(result.parked)} requests. Included spend totals require repair.",
                 )
-            return bool(result.applied or result.failed)
+            return result
 
-        await run_batch(retry_only=False)
+        fresh_deadline: Final = time.monotonic() + 5
+        for _ in range(batch_size):
+            if not _filled(await run_batch(retry_only=False), batch_size) or time.monotonic() >= fresh_deadline:
+                break
         retry_deadline: Final = time.monotonic() + 5
         for _ in range(batch_size):
-            if time.monotonic() >= retry_deadline or not await run_batch(retry_only=True):
+            if time.monotonic() >= retry_deadline or not _progressed(await run_batch(retry_only=True)):
                 break
         await repository.cleanup_applied(
             retention_days=int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_RETENTION_DAYS", "1")),
