@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from prisma import models as prisma_models
-from prisma.errors import UniqueViolationError
+from prisma.errors import ForeignKeyViolationError, UniqueViolationError
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -75,6 +75,8 @@ class HubClient:
     client: httpx.AsyncClient
     plugins: MagicMock
     archives: MagicMock
+    downloads: MagicMock
+    anonymous_counter: AsyncMock
     upstream: MagicMock
     clock: MagicMock
     database: MagicMock
@@ -84,15 +86,18 @@ class HubClient:
 async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
+    prisma.db.execute_raw = AsyncMock(return_value=1)
     prisma.get_data = AsyncMock(return_value=None)
     prisma.db.litellm_skillstable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     plugins: Final = prisma.db.litellm_claudecodeplugintable
     archives: Final = prisma.db.litellm_claudecodepluginupload
     async def create_row(data: Mapping[str, object]) -> prisma_models.LiteLLM_ClaudeCodePluginTable:
-        return prisma_models.LiteLLM_ClaudeCodePluginTable.model_validate({"id": "hub-id", "enabled": True, **data})
+        return prisma_models.LiteLLM_ClaudeCodePluginTable.model_validate({"id": "hub-id", "enabled": True, "anonymous_download_count": 0, **data})
 
     plugins.create = AsyncMock(side_effect=create_row)
+    downloads: Final = prisma.db.litellm_claudecodeplugindownload
+    downloads.create = AsyncMock()
     plugins.find_unique = AsyncMock(return_value=None)
     plugins.find_many = AsyncMock(return_value=[])
 
@@ -154,7 +159,7 @@ async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
             get_skill_submission_repository: lambda: SkillSubmissionRepository(prisma),
             import_http_client: lambda: source_client,
         })
-        yield HubClient(client, plugins, archives, upstream, clock, prisma.db)
+        yield HubClient(client, plugins, archives, downloads, prisma.db.execute_raw, upstream, clock, prisma.db)
 
 
 async def _upload(
@@ -171,7 +176,7 @@ async def _upload(
 def _stored_upload(hub: HubClient, enabled: bool = True) -> prisma_models.LiteLLM_ClaudeCodePluginTable:
     data: Final = hub.plugins.create.await_args.kwargs["data"]
     record: Final = prisma_models.LiteLLM_ClaudeCodePluginTable(
-        id="hub-id", name=data["name"], version=data["version"], description=data["description"],
+        id="hub-id", name=data["name"], version=data["version"], description=data["description"], anonymous_download_count=0,
         manifest_json=data["manifest_json"], enabled=enabled, updated_at=data["updated_at"],
     )
     hub.plugins.find_unique.return_value = record
@@ -189,6 +194,27 @@ def _assert_portable(response: httpx.Response) -> None:
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         assert {name: archive.read(name) for name in archive.namelist()} == FILES
         assert stat.S_IMODE(archive.getinfo("scripts/check.sh").external_attr >> 16) == 0o755
+
+
+@pytest.mark.parametrize("key, expected", ((MASTER_KEY, 7), (PLAIN_KEY, None)))
+async def test_catalog_counts_are_admin_only_and_batched_for_the_page(
+    hub: HubClient, key: str, expected: int | None,
+) -> None:
+    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    record: Final = _stored_upload(hub)
+    hub.plugins.find_many.return_value = [record, record.model_copy(update={"id": "other", "name": "zzz-other"})]
+    hub.database.query_raw.reset_mock()
+    hub.database.query_raw.return_value = [{"id": record.id, "download_count": 7}]
+    response: Final = await hub.client.get(f"{HUB}?limit=1", headers=_headers(key))
+    assert response.status_code == 200, response.text
+    assert [(item["id"], item["download_count"]) for item in response.json()["skills"]] == [(record.id, expected)]
+    if expected is None:
+        hub.database.query_raw.assert_not_awaited()
+    else:
+        assert hub.database.query_raw.await_count == 1
+        assert hub.database.query_raw.await_args.args[1] == (record.id,)
+        assert (await hub.client.get(f"{HUB}?offset=2", headers=_headers(key))).json()["skills"] == []
+        assert hub.database.query_raw.await_count == 1
 
 
 @pytest.mark.parametrize("operation", ("upload", "import"))
@@ -222,6 +248,8 @@ async def test_publication_round_trips_both_formats_without_inflating_on_the_req
     assert details.json()["content_url"] == f"{serving_base}{HUB}/{NAME}/content"
     catalog: Final = await hub.client.get("/claude-code/plugins", headers=_headers(PLAIN_KEY))
     assert catalog.status_code == 200 and "has_agent_skill_metadata" not in catalog.text
+    hub.downloads.create.assert_not_awaited()
+    hub.anonymous_counter.assert_not_awaited()
     request_thread: Final = threading.get_ident()
     decompress: Final = zlib.decompressobj
 
@@ -241,10 +269,13 @@ async def test_publication_round_trips_both_formats_without_inflating_on_the_req
     assert (await hub.client.get(entry["url"])).content == portable.content
     assert (await hub.client.get(f"{HUB}/{NAME}/archive?digest=sha256:stale")).status_code == 404
     legacy_path: Final = httpx.URL(manifest["source"]["url"]).path
-    legacy: Final = await hub.client.get(legacy_path)
+    legacy: Final = await hub.client.get(legacy_path, headers=_headers(GRANTED_KEY))
     assert legacy.status_code == 200
     assert hashlib.sha256(legacy.content).hexdigest() == manifest["source"]["sha256"]
     assert (await hub.client.get(legacy_path.replace(manifest["source"]["sha256"], "stale"))).status_code == 404
+    assert hub.anonymous_counter.await_count == 2
+    assert hub.anonymous_counter.await_args.args[1:] == (record.id,)
+    hub.downloads.create.assert_awaited_once()
     monkeypatch.setattr(zlib, "decompressobj", decompress)
     _assert_portable(portable)
     with zipfile.ZipFile(io.BytesIO(legacy.content)) as archive:
@@ -317,12 +348,29 @@ async def test_download_policy_requires_publication_or_a_valid_grant(
     for suffix in ("archive", "content"):
         response: Final = await hub.client.get(f"{HUB}/{NAME}/{suffix}", headers=_headers(key))
         assert response.status_code == status, response.text
+    assert hub.downloads.create.await_count == int(status == 200 and key is not None)
+    assert hub.anonymous_counter.await_count == int(status == 200 and key is None)
     if status != 200:
         hub.archives.find_first.assert_not_awaited()
     index: Final = await hub.client.get(INDEX)
     assert index.status_code == (200 if public_index else 404)
     if public_index:
         assert [entry["name"] for entry in index.json()["skills"]] == ([NAME] if enabled and not auth_required else [])
+
+
+@pytest.mark.parametrize("key", (None, GRANTED_KEY))
+async def test_deleted_skill_is_not_served_when_download_cannot_be_recorded(hub: HubClient, key: str | None) -> None:
+    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    record: Final = _stored_upload(hub)
+    legacy_url: Final = json.loads(record.manifest_json)["source"]["url"]
+    hub.anonymous_counter.return_value = 0
+    hub.downloads.create.side_effect = ForeignKeyViolationError(data={})
+    for path in (f"{HUB}/{NAME}/archive", legacy_url):
+        response: Final = await hub.client.get(path, headers=_headers(key))
+        assert response.status_code == 404, response.text
+        assert "Skill archive not found" in response.text
+    assert hub.anonymous_counter.await_count == (2 if key is None else 0)
+    assert hub.downloads.create.await_count == (0 if key is None else 2)
 
 
 async def test_search_paginates_visible_matches(hub: HubClient) -> None:
@@ -516,6 +564,7 @@ async def test_neutral_history_list_detail_and_portable_download_share_current_v
     original: Final = _stored_upload(hub, enabled=False)
     data: Final = hub.database.litellm_claudecodepluginversion.create.await_args.kwargs["data"]
     version: Final = prisma_models.LiteLLM_ClaudeCodePluginVersion.model_validate({"id": "retained", **data})
+    hub.plugins.find_unique.return_value = original.model_copy(update={"version": "3.0.0"})
     hub.database.litellm_claudecodepluginversion.find_first.return_value = version
     hub.database.query_raw.return_value = [{
         "id": version.id, "version": version.version, "description": version.description,
@@ -526,7 +575,11 @@ async def test_neutral_history_list_detail_and_portable_download_share_current_v
     detail: Final = await hub.client.get(f"{HUB}/{NAME}/versions/retained", headers=_headers(key))
     downloaded: Final = await hub.client.get(f"{HUB}/{NAME}/versions/retained/archive", headers=_headers(key))
     assert listed.status_code == detail.status_code == downloaded.status_code == status
+    assert hub.downloads.create.await_count == int(status == 200)
     if status == 200:
+        event: Final = hub.downloads.create.await_args.kwargs["data"]
+        assert event["version"] == version.version != "3.0.0"
+        assert event["digest"] == hashlib.sha256(downloaded.content).hexdigest()
         assert listed.json() == {"versions": [detail.json()], "next_offset": None}
         assert detail.json()["manifest"]["agent_skill"] == json.loads(original.manifest_json)["agent_skill"]
         assert detail.json()["download_url"] == f"http://test{HUB}/{NAME}/versions/retained/archive"

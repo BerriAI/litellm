@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy, Download, Link2 } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
 import { useClaudeCodeMarketplaceRequiresKey } from "@/app/(dashboard)/hooks/claudeCodeMarketplace/useClaudeCodeMarketplaceRequiresKey";
@@ -6,6 +7,8 @@ import { cn } from "@/lib/cva.config";
 import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import { apiClient, getProxyBaseUrl } from "@/components/networking";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { SkillDownloads, skillDownloadsQueryKey } from "./SkillDownloads";
 import {
   buildMarketplaceSettingsSnippet,
   formatInstallCommand,
@@ -44,22 +47,14 @@ export const skillHubDetail = (skill: SkillHubSkill): SkillDetailData => ({
   downloadAvailable: Boolean(skill.download_url),
 });
 
-const SkillSource: React.FC<Pick<SkillDetailProps, "skill" | "accessToken">> = ({ skill, accessToken }) => {
+const SkillSource: React.FC<
+  Pick<SkillDetailProps, "skill" | "accessToken" | "isAdmin"> & { archivePath: string | null }
+> = ({ skill, accessToken, isAdmin, archivePath }) => {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const { source } = skill;
-  const portableArchivePath = skill.downloadAvailable
-    ? `/skill-hub/skills/${encodeURIComponent(skill.name)}/archive`
-    : null;
-  const archivePath = skill.portable
-    ? portableArchivePath
-    : getManagedSkillArchivePath(
-        skill.name,
-        source,
-        getProxyBaseUrl(),
-        typeof window !== "undefined" ? window.location.origin : undefined,
-      );
   const downloadArchive = async () => {
     if (!archivePath || downloading) return;
     setDownloading(true);
@@ -67,6 +62,14 @@ const SkillSource: React.FC<Pick<SkillDetailProps, "skill" | "accessToken">> = (
     try {
       const blob = await apiClient.getBlob(archivePath, { accessToken, redirect: "error" });
       downloadBlob(blob, `${skill.name}.zip`);
+      if (isAdmin) {
+        await queryClient.invalidateQueries({
+          queryKey: skillDownloadsQueryKey(skill, accessToken),
+          exact: true,
+          refetchType: "all",
+        });
+        await queryClient.invalidateQueries({ queryKey: ["skill-hub", accessToken] });
+      }
     } catch (error) {
       setDownloadError(
         error instanceof Error ? error.message : t("claudeCodePlugins.skillDetail.overview.downloadFailed"),
@@ -121,11 +124,23 @@ interface SkillDetailProps {
   onEditClick?: () => void;
 }
 
-const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, onEditClick }) => {
+const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, onEditClick, isAdmin = false }) => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const marketplaceRequiresKey = useClaudeCodeMarketplaceRequiresKey();
+  const visibleTab = activeTab === "downloads" && !isAdmin ? "overview" : activeTab;
+  const portableArchivePath = skill.downloadAvailable
+    ? `/skill-hub/skills/${encodeURIComponent(skill.name)}/archive`
+    : null;
+  const archivePath = skill.portable
+    ? portableArchivePath
+    : getManagedSkillArchivePath(
+        skill.name,
+        skill.source,
+        getProxyBaseUrl(),
+        typeof window !== "undefined" ? window.location.origin : undefined,
+      );
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -168,10 +183,11 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
     { key: "overview", label: t("claudeCodePlugins.skillDetail.tabs.overview") },
     ...(!skill.portable ? [{ key: "usage", label: t("claudeCodePlugins.skillDetail.tabs.usage") }] : []),
     ...(accessToken ? [{ key: "history", label: t("claudeCodePlugins.skillDetail.history.title") }] : []),
+    ...(isAdmin ? [{ key: "downloads", label: t("claudeCodePlugins.skillDetail.tabs.downloads") }] : []),
   ];
 
   return (
-    <div className="py-6 pl-0 pr-8">
+    <Tabs value={visibleTab} onValueChange={setActiveTab} className="block py-6 pl-0 pr-8">
       {/* Back link */}
       <div
         onClick={onBack}
@@ -198,30 +214,32 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
 
       {/* Tab bar */}
       <div className="mb-7 mt-6 border-b border-border">
-        <div className="flex">
+        <TabsList variant="line" className="h-auto p-0">
           {tabs.map((tab) => (
-            <div
+            <TabsTrigger
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              value={tab.key}
               className={cn(
-                "-mb-px cursor-pointer border-b-[3px] px-5 py-3 text-sm",
-                activeTab === tab.key
+                "-mb-px h-auto cursor-pointer rounded-none border-b-[3px] px-5 py-3 text-sm after:hidden",
+                visibleTab === tab.key
                   ? "border-info font-medium text-info"
                   : "border-transparent font-normal text-muted-foreground",
               )}
             >
               {tab.label}
-            </div>
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
       </div>
 
       {/* Overview tab */}
-      {activeTab === "history" && accessToken && (
-        <SkillVersionHistory key={`${skill.id}:${accessToken}`} skill={skill} accessToken={accessToken} />
+      {visibleTab === "history" && accessToken && (
+        <TabsContent value="history">
+          <SkillVersionHistory key={`${skill.id}:${accessToken}`} skill={skill} accessToken={accessToken} />
+        </TabsContent>
       )}
-      {activeTab === "overview" && (
-        <div className="flex gap-16">
+      {visibleTab === "overview" && (
+        <TabsContent value="overview" className="flex gap-16">
           {/* Left column */}
           <div className="min-w-0 flex-1">
             <h2 className="m-0 mb-1 text-lg font-normal text-foreground">
@@ -268,7 +286,13 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
               </span>
             </div>
 
-            <SkillSource skill={skill} accessToken={accessToken} />
+            <SkillSource
+              key={skill.id}
+              skill={skill}
+              accessToken={accessToken}
+              isAdmin={isAdmin}
+              archivePath={archivePath}
+            />
 
             {skill.keywords && skill.keywords.length > 0 && (
               <div className="mb-6">
@@ -295,12 +319,12 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
               <div className="break-all font-mono text-xs text-foreground">{skill.id}</div>
             </div>
           </div>
-        </div>
+        </TabsContent>
       )}
 
       {/* How to Use tab */}
-      {activeTab === "usage" && (
-        <div className="max-w-[640px]">
+      {visibleTab === "usage" && (
+        <TabsContent value="usage" className="max-w-[640px]">
           <h2 className="m-0 mb-2 text-lg font-normal text-foreground">
             {t("claudeCodePlugins.skillDetail.usage.title")}
           </h2>
@@ -346,12 +370,12 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
               {t("claudeCodePlugins.skillDetail.usage.seeSetup")}
             </span>
           </p>
-        </div>
+        </TabsContent>
       )}
 
       {/* Setup tab (linked from usage) */}
-      {activeTab === "setup" && (
-        <div className="max-w-[640px]">
+      {visibleTab === "setup" && (
+        <TabsContent value="setup" className="max-w-[640px]">
           <h2 className="m-0 mb-2 text-lg font-normal text-foreground">
             {t("claudeCodePlugins.skillDetail.setup.title")}
           </h2>
@@ -447,9 +471,14 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
             </div>
             <pre className="m-0 bg-card px-4 py-3.5 font-mono text-[13px] text-foreground">{settingsSnippet}</pre>
           </div>
-        </div>
+        </TabsContent>
       )}
-    </div>
+      {isAdmin && visibleTab === "downloads" && (
+        <TabsContent value="downloads">
+          <SkillDownloads skill={skill} accessToken={accessToken} />
+        </TabsContent>
+      )}
+    </Tabs>
   );
 };
 

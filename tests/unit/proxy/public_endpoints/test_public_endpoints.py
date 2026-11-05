@@ -1808,7 +1808,8 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference: 
     from litellm.types.proxy.claude_code_endpoints import RegisterPluginRequest
 
     def create(data: Mapping[str, object]) -> LiteLLM_ClaudeCodePluginTable:
-        return LiteLLM_ClaudeCodePluginTable.model_validate({"id": "plugin-id", "enabled": True, **data})
+        defaults: Final = {"id": "plugin-id", "enabled": True, "anonymous_download_count": 0}
+        return LiteLLM_ClaudeCodePluginTable.model_validate({**defaults, **data})
 
     def find_many(where: Mapping[str, object]) -> list[LiteLLM_ClaudeCodePluginTable]:
         return [create(table.create.call_args.kwargs["data"])]

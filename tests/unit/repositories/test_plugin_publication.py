@@ -65,7 +65,7 @@ def publication_tx() -> MagicMock:
     tx: Final = MagicMock()
     tx.query_raw = AsyncMock(return_value=())
     tx.litellm_claudecodeplugintable.find_unique = AsyncMock(return_value=LiteLLM_ClaudeCodePluginTable(
-        id="skill-id", name="skill", version="1.0.0", enabled=False,
+        id="skill-id", name="skill", version="1.0.0", enabled=False, anonymous_download_count=0,
         updated_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
         manifest_json=json.dumps({"source": {"source": "archive", "sha256": hashlib.sha256(content).hexdigest()}}),
     ))

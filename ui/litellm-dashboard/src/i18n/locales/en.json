@@ -1647,7 +1647,8 @@
         "createdAt": "Created At",
         "actions": "Actions",
         "domain": "Domain",
-        "updatedAt": "Updated at"
+        "updatedAt": "Updated at",
+        "downloads": "Downloads"
       }
     },
     "addForm": {
@@ -1847,7 +1848,30 @@
       "back": "Skills",
       "tabs": {
         "overview": "Overview",
-        "usage": "How to Use"
+        "usage": "How to Use",
+        "downloads": "Downloads"
+      },
+      "downloads": {
+        "title": "Download history",
+        "description": "ZIP downloads served by this gateway, including repeat downloads and client prefetches. Counts do not confirm installations. External downloads are not tracked.",
+        "attributionNote": "History identifies authenticated callers or shared-key owners. Anonymous downloads are included in totals without individual history.",
+        "total": "Total downloads",
+        "anonymousTotal": "Anonymous downloads",
+        "downloadedAt": "Downloaded at",
+        "downloader": "User or key owner",
+        "key": "Key alias",
+        "team": "Team",
+        "version": "Version",
+        "anonymous": "Anonymous",
+        "unidentified": "Authenticated, no user identity",
+        "unavailable": "Not recorded",
+        "loading": "Loading download history…",
+        "loadFailed": "Could not load download history. Try refreshing.",
+        "empty": "No authenticated download history yet.",
+        "refresh": "Refresh",
+        "refreshing": "Refreshing download history…",
+        "loadMore": "Load more",
+        "loadingMore": "Loading more downloads…"
       },
       "properties": {
         "category": "Category",

@@ -2708,6 +2708,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/claude-code/plugins/{plugin_name}/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plugin Downloads
+         * @description Admin-only ZIP download totals and authenticated downloader history.
+         *
+         *     Anonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,
+         *     starting when tracking is deployed. External sources and installation completion are not observed.
+         */
+        get: operations["get_plugin_downloads_claude_code_plugins__plugin_name__downloads_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claude-code/plugins/{plugin_name}/enable": {
         parameters: {
             query?: never;
@@ -15911,6 +15934,29 @@ export interface paths {
          * @description Download a retained publication as a portable ZIP with SKILL.md at its root.
          */
         get: operations["download_skill_version_skill_hub_skills__name__versions__version_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{plugin_name}/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plugin Downloads
+         * @description Admin-only ZIP download totals and authenticated downloader history.
+         *
+         *     Anonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,
+         *     starting when tracking is deployed. External sources and installation completion are not observed.
+         */
+        get: operations["get_plugin_downloads_skill_hub_skills__plugin_name__downloads_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -42000,6 +42046,43 @@ export interface components {
              */
             url: string;
         };
+        /** PluginDownloadEvent */
+        PluginDownloadEvent: {
+            /** Authenticated */
+            authenticated: boolean;
+            /** Digest */
+            digest: string;
+            /**
+             * Downloaded At
+             * Format: date-time
+             */
+            downloaded_at: string;
+            /** Id */
+            id: string;
+            /** Key Alias */
+            key_alias: string | null;
+            /** Team Alias */
+            team_alias: string | null;
+            /** Team Id */
+            team_id: string | null;
+            /** User Email */
+            user_email: string | null;
+            /** User Id */
+            user_id: string | null;
+            /** Version */
+            version: string | null;
+        };
+        /** PluginDownloadsResponse */
+        PluginDownloadsResponse: {
+            /** Anonymous Downloads */
+            anonymous_downloads: number;
+            /** Downloads */
+            downloads: components["schemas"]["PluginDownloadEvent"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Total Downloads */
+            total_downloads: number;
+        };
         /**
          * PluginListItem
          * @description Plugin item in list responses.
@@ -46902,6 +46985,11 @@ export interface components {
             description?: string | null;
             /** Domain */
             domain?: string | null;
+            /**
+             * Download Count
+             * @description Gateway ZIP downloads, included in proxy-admin catalog listings
+             */
+            download_count?: number | null;
             /** Download Url */
             download_url?: string | null;
             /** Id */
@@ -56898,6 +56986,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plugin_downloads_claude_code_plugins__plugin_name__downloads_get: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of download events */
+                limit?: number;
+                /** @description Previous next_cursor */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginDownloadsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -74582,6 +74706,42 @@ export interface operations {
                 };
                 content: {
                     "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plugin_downloads_skill_hub_skills__plugin_name__downloads_get: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of download events */
+                limit?: number;
+                /** @description Previous next_cursor */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginDownloadsResponse"];
                 };
             };
             /** @description Validation Error */
