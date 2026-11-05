@@ -91,7 +91,7 @@ class _Impact:
 def _admin_ids(team: LiteLLM_TeamTable | None) -> frozenset[str]:
     if team is None:
         return frozenset()
-    return frozenset(team.admins or ()) | frozenset(
+    return frozenset(
         member.user_id for member in (team.members_with_roles or ()) if member.role == "admin" and member.user_id
     )
 

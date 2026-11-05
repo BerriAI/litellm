@@ -164,7 +164,7 @@ async def test_should_dedupe_model_aliases_and_skip_models_with_no_observed_owne
 
 
 @pytest.mark.asyncio
-async def test_should_scope_usage_to_current_key_owners_and_team_admins_across_pages(
+async def test_should_scope_usage_to_current_owners_and_admins_excluding_former_admins_across_pages(
     monkeypatch,
 ):
     instance = module.ModelDeprecationEmailSender(MagicMock())
@@ -197,7 +197,7 @@ async def test_should_scope_usage_to_current_key_owners_and_team_admins_across_p
     team = LiteLLM_TeamTable(
         team_id="research",
         team_alias="Research",
-        admins=["bob"],
+        admins=["bob", "mallory", "removed-admin"],
         members_with_roles=[
             {"user_id": "bob", "user_email": "BOB@example.com", "role": "admin"},
             {"user_id": "mallory", "user_email": "mallory@example.com", "role": "user"},
