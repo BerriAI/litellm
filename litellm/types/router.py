@@ -767,6 +767,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         def __init__(self, *, model: str, **data: object) -> None: ...  # kwargs-ok: provider fields vary by model
 
     model: str
+    max_output_tokens_cap: int | None = None
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __contains__(self, key) -> bool:
