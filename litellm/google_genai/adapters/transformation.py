@@ -249,10 +249,6 @@ def _genai_tool_call(part: object) -> ChatCompletionAssistantToolCall | None:
     )
 
 
-def _system_texts(parts: object) -> tuple[str, ...]:
-    return tuple(part["text"] for part in _genai_message_parts(_genai_content_parts(parts)) if part["type"] == "text")
-
-
 def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
     fields: Final = _validated(_CONFIG_FIELDS, content)
     if fields is None:
@@ -636,9 +632,11 @@ class GoogleGenAIAdapter:
         system_instruction: _GenAISystemInstruction | None = None,
     ) -> list[AllMessageValues]:
         """Transform Google GenAI contents to OpenAI messages format"""
-        system_texts: Final = _system_texts(system_instruction.get("parts") if system_instruction else None)
+        system_parts: Final = system_instruction.get("parts", ()) if system_instruction else ()
         system_messages: Final = (
-            (ChatCompletionSystemMessage(role="system", content="\n".join(system_texts)),) if system_texts else ()
+            (ChatCompletionSystemMessage(role="system", content=system_parts[0]["text"]),)
+            if system_parts and "text" in system_parts[0]
+            else ()
         )
         return [*system_messages, *chain.from_iterable(_genai_content_messages(content) for content in contents)]
 

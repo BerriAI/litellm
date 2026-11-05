@@ -8490,9 +8490,9 @@ class TestAzureSpeechRawBodyThroughRealAuth:
 class _CountingCustomAuth:
     def __init__(self, only_accepts: str | None = None) -> None:
         self.only_accepts: Final = only_accepts
-        self.api_keys_seen: tuple[str, ...] = ()
+        self.api_keys_seen: tuple[str | None, ...] = ()
 
-    async def __call__(self, request: Request, api_key: str) -> UserAPIKeyAuth:
+    async def __call__(self, request: Request, api_key: str | None) -> UserAPIKeyAuth:
         self.api_keys_seen = (*self.api_keys_seen, api_key)
         if self.only_accepts is not None and api_key != self.only_accepts:
             raise ValueError("unknown caller")
@@ -8693,6 +8693,21 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert recorder.served_user_ids == ()
         assert not google.called
 
+
+    @pytest.mark.parametrize("path", [f"/vertex_ai/{GENERATE_CONTENT}", f"/vertex_ai/discovery/{DISCOVERY_SEARCH}"])
+    def test_request_without_a_key_hands_custom_auth_none(
+        self, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
+        with respx.mock(assert_all_called=False) as upstream:
+            google: Final = upstream.route().mock(return_value=httpx.Response(200))
+
+            response, recorder = self._post(monkeypatch, path, {}, custom_auth, ("us-central1", "global"))
+
+        assert response.status_code == 401, response.text
+        assert custom_auth.api_keys_seen == (None,)
+        assert recorder.served_user_ids == ()
+        assert not google.called
 
 class TestTypeSafePassthroughRoute:
     @staticmethod

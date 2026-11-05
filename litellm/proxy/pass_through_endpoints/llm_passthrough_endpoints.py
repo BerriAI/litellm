@@ -3203,7 +3203,9 @@ async def _authenticate_vertex_caller(
     litellm_api_key: Annotated[str | None, Security(custom_litellm_key_header)],
 ) -> UserAPIKeyAuth:
     return await user_api_key_auth(
-        request=request, api_key=authorization or "", custom_litellm_key_header=litellm_api_key
+        request=request,
+        api_key=authorization,  # pyright: ignore[reportArgumentType]  # its own Security default is None when unset
+        custom_litellm_key_header=litellm_api_key,
     )
 
 
