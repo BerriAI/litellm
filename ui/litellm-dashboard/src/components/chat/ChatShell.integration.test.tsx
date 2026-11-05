@@ -56,13 +56,13 @@ describe("ChatShell", () => {
     mockUseMediaQuery.mockReturnValue(true);
   });
 
-  it("should render the workspace and mark Chats active on the base chat route", () => {
+  it("should render the chat workspace with a single New Chat action", () => {
     render(
       <ChatShell>
         <div />
       </ChatShell>,
     );
-    expect(screen.getByRole("button", { name: "Chats" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "New Chat" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Models" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: "Workspace" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: /Account menu/ })).toBeInTheDocument();
@@ -79,7 +79,6 @@ describe("ChatShell", () => {
     );
 
     expect(screen.getByRole("button", { name: "Models" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: "Chats" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: "Workspace" })).not.toHaveAttribute("aria-current");
   });
 
@@ -91,7 +90,6 @@ describe("ChatShell", () => {
       </ChatShell>,
     );
     expect(screen.getByRole("button", { name: "Workspace" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: "Chats" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: "Search chats" })).toBeInTheDocument();
   });
 

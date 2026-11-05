@@ -5,7 +5,6 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   Menu,
   Plus,
-  MessageSquare,
   Network,
   LayoutGrid,
   KeyRound,
@@ -134,12 +133,6 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         <NavItem icon={<Plus />} label="New Chat" onClick={() => navigate(routes.chats)} />
       </div>
       <SidebarContent aria-label="Chat workspace" className="flex-none">
-        <NavItem
-          icon={<MessageSquare className="size-4" />}
-          label="Chats"
-          onClick={() => navigate(routes.chats)}
-          active={isChatsRoute}
-        />
         <NavItem
           icon={<Network className="size-4" />}
           label="Models"

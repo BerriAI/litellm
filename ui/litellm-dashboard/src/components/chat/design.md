@@ -159,7 +159,7 @@ Sizes: `default` (h-9), `sm` (h-8), `xs` (h-6), `lg` (h-10), `icon` (size-9), `i
 
 Use `Sidebar`, `SidebarContent`, `SidebarFooter` and `SidebarMenuButton` from `components/shared/Sidebar`. Both workspaces use `SidebarBrand`, `ViewSwitcher` and `DashboardHeader`. Chat has a compact account menu with its existing identity, Settings and Sign out actions. Theme lives in the shared top bar. Gateway account preferences and admin controls stay in the gateway. Keep the shared 280px expanded and 72px collapsed widths, 56px header and 768px mobile breakpoint
 
-Chat retains Models, Integrations, Workspace and conversation history. Chat has no gateway-wide header search or worker selector. Search chats in the sidebar owns Cmd/Ctrl+K, including when the sidebar is collapsed or on mobile. Mobile navigation uses the same Sheet treatment as the dashboard
+Use one New Chat action for the blank composer; do not duplicate it with a Chats destination. Chat retains Models, Integrations, Workspace and conversation history. Chat has no gateway-wide header search or worker selector. Search chats in the sidebar owns Cmd/Ctrl+K, including when the sidebar is collapsed or on mobile. Mobile navigation uses the same Sheet treatment as the dashboard
 
 The conversation title appears in the shared header. Do not repeat it in a second content header. Routed pages keep their content-specific headings and actions
 
