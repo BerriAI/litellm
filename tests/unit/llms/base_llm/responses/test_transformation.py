@@ -1643,6 +1643,67 @@ async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream
         router.discard()
 
 
+def _openai_stream_cut_after_a_tool_call_without_text(failure: Mapping[str, object]) -> httpx.Response:
+    call: Final = {
+        "type": "function_call", "id": "fc_primary", "call_id": "call_primary",
+        "name": "lookup", "arguments": '{"city": "Paris"}', "status": "completed",
+    }
+    return _sse(
+        {"type": "response.created", "sequence_number": 0, "response": {
+            "id": "resp_primary", "object": "response", "created_at": 0, "status": "in_progress",
+            "model": "gpt-6-astra", "output": [],
+        }},
+        {
+            "type": "response.output_item.added", "sequence_number": 1, "output_index": 0,
+            "item": {**call, "arguments": "", "status": "in_progress"},
+        },
+        {
+            "type": "response.function_call_arguments.delta", "sequence_number": 2,
+            "item_id": "fc_primary", "output_index": 0, "delta": call["arguments"],
+        },
+        {"type": "response.output_item.done", "sequence_number": 3, "output_index": 0, "item": call},
+        {**failure, "sequence_number": 4},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        {"type": "error", "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"}},
+        {"type": "response.failed", "response": {
+            "id": "resp_primary", "object": "response", "created_at": 0, "status": "failed",
+            "model": "gpt-6-astra", "output": [],
+            "error": {"code": "server_error", "message": "interrupted"},
+        }},
+    ],
+    ids=["error", "response_failed"],
+)
+async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_delivered_a_tool_call_without_text(
+    failure: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after_a_tool_call_without_text(failure)
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("It is sunny in Paris.")
+    )
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input="What is the weather in Paris?",
+            stream=True,
+            tools=[{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
 def _openai_stream_cut_after_event(preamble: str, event: Mapping[str, object]) -> httpx.Response:
     return _sse(
         {
