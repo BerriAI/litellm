@@ -836,6 +836,58 @@ async def test_streaming_pipeline_falls_back_when_eligible_and_capable_replicas_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("first_balanced", (False, True))
+@pytest.mark.parametrize("output", ("normal", "empty", "error"))
+async def test_skipped_streaming_step_does_not_drop_later_policy_only_guardrail(
+    first_balanced, output, monkeypatch,
+):
+    skipped: Final = tuple(RelayGuardrail(region) for region in (("east", "west") if first_balanced else ("east",)))
+    for callback in skipped:
+        callback.guardrail_name = "skipped-step"
+        callback.apply_stream_scope("non_streaming")
+    checked: Final = RelayGuardrail("checked", fail=output == "error")
+    checked.guardrail_name = "policy-only"
+    checked.default_on = False
+    callbacks: Final = (*skipped, checked)
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": cb.guardrail_name, "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "post_call"},
+            }
+            for cb in callbacks
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", list(callbacks))
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+
+    async def response_chunks() -> AsyncIterator[ModelResponseStream]:
+        if output != "empty":
+            async for chunk in _output_chunks():
+                yield chunk
+
+    with pytest.raises(RuntimeError, match="guardrail offline") if output == "error" else nullcontext():
+        delivered: Final = [
+            chunk
+            async for chunk in logging.async_post_call_streaming_iterator_hook(
+                response=response_chunks(),
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+                request_data={
+                    "model": "test-model", "stream": True,
+                    "metadata": {"_guardrail_pipelines": [("streamed-pipeline", GuardrailPipeline(
+                        mode="post_call", steps=[PipelineStep(guardrail="skipped-step"), PipelineStep(guardrail="policy-only")],
+                    ))]},
+                },
+            )
+        ]
+        assert "".join(_chunk_text(chunk) for chunk in delivered) == ("" if output == "empty" else "raw")
+    assert checked.calls == (0 if output == "empty" else 1)
+    assert all(cb.calls == 0 for cb in skipped)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fail", (False, True))
 async def test_passthrough_balanced_relay_splits_traffic_once_per_request(fail, monkeypatch):
     copies: Final = tuple(RelayGuardrail(region, fail=fail) for region in ("east", "west"))

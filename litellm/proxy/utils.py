@@ -1089,9 +1089,32 @@ def _merge_pipeline_metadata_writes(data: dict, modified_data: Mapping[str, obje
 def _pipeline_step_supports_streaming(
     step: "PipelineStep", data: Mapping[str, object], translation: "BaseTranslation | None"
 ) -> bool:
-    return any(
+    from litellm.proxy.proxy_server import llm_router
+
+    callbacks: Final = _pipeline_callback_options(step.guardrail)
+    if not callbacks:
+        return False
+    balanced: Final = (
+        llm_router is not None
+        and llm_router.settings().is_set("guardrail_list")
+        and sum(entry["guardrail_name"] == step.guardrail for entry in llm_router.settings().guardrail_list) > 1
+    )
+    if not balanced:
+        callback: Final = callbacks[0]
+        return PipelineExecutor.supports_unified_execution(callback) or (
+            translation is not None
+            and type(translation).assembles_streamed_response
+            and PipelineExecutor.supports_streaming_execution(callback)
+        )
+    streaming_data: Final = {**data, "stream": True}
+    eligible_callbacks: Final = tuple(
+        callback
+        for callback in callbacks
+        if pipeline_callback_eligible(callback, step, streaming_data, None, "post_call", None, translation)
+    )
+    return not eligible_callbacks or any(
         pipeline_callback_eligible(callback, step, data, None, "post_call", [], translation)
-        for callback in _pipeline_callback_options(step.guardrail)
+        for callback in eligible_callbacks
     )
 
 
