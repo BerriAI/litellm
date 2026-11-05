@@ -251,15 +251,6 @@ _GUARDRAIL_HEADERS_MAX_BYTES: Final = 8192
 _RESPONSE_HEADERS_MAX_BYTES: Final = 15360
 # The ": " and the line ending around each header on the wire.
 _HEADER_FRAMING_BYTES: Final = 4
-_GUARDRAIL_HEADER_NAMES: Final = frozenset(
-    (
-        "x-litellm-applied-guardrails",
-        "x-litellm-applied-policies",
-        "x-litellm-guardrail-scan-id",
-        "x-litellm-guardrail-scan-metadata",
-        "x-litellm-policy-sources",
-    )
-)
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
@@ -339,12 +330,14 @@ def _guardrail_headers_with_room(
 def _add_callback_headers(
     response_headers: dict[str, str],  # mutable-ok: adds to the response's headers in place, like the dict's update
     callback_headers: Mapping[str, str],
+    own_guardrail_headers: Mapping[str, str],
 ) -> None:
-    """Add a callback's headers to ``response_headers``, less a guardrail header they then leave no room for"""
+    """Add a callback's headers to ``response_headers``, less a guardrail header this proxy set, ``own_guardrail_headers``,
+    that they then leave no room for. The upstream's guardrail headers are kept as they came."""
     guardrail_headers: Final = {
         name: value
-        for name, value in response_headers.items()
-        if name in _GUARDRAIL_HEADER_NAMES and name not in callback_headers
+        for name, value in own_guardrail_headers.items()
+        if response_headers.get(name) == value and name not in callback_headers
     }
     for name in guardrail_headers:
         response_headers.pop(name)
@@ -2238,10 +2231,11 @@ async def pass_through_request(
 
             # Built before the failure hooks rebuild kwargs' metadata without the guardrail fields. The relay
             # response differs only in body-framing headers, which get_response_headers drops anyway.
+            streamed_guardrail_headers: Final = _guardrail_response_headers(_parsed_body, kwargs)  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
                 headers=response.headers,
                 litellm_call_id=litellm_call_id,
-                guardrail_request_data=(_parsed_body, kwargs),  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
+                earlier_guardrail_headers=streamed_guardrail_headers,
             )
             relay_response: Final = await _log_passthrough_upstream_failure(
                 response=response,
@@ -2267,7 +2261,7 @@ async def pass_through_request(
                 request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
-                _add_callback_headers(_response_headers, callback_headers)  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
+                _add_callback_headers(_response_headers, callback_headers, streamed_guardrail_headers)  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
 
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
@@ -2343,10 +2337,11 @@ async def pass_through_request(
 
             # Built before the failure hooks rebuild kwargs' metadata without the guardrail fields. The relay
             # response differs only in body-framing headers, which get_response_headers drops anyway.
+            detected_stream_guardrail_headers: Final = _guardrail_response_headers(_parsed_body, kwargs)  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
                 headers=response.headers,
                 litellm_call_id=litellm_call_id,
-                guardrail_request_data=(_parsed_body, kwargs),  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
+                earlier_guardrail_headers=detected_stream_guardrail_headers,
             )
             detected_relay_response: Final = await _log_passthrough_upstream_failure(
                 response=response,
@@ -2372,7 +2367,7 @@ async def pass_through_request(
                 request_headers=dict(redact_credential_headers(request.headers)),
             )
             if callback_headers:
-                _add_callback_headers(_response_headers, callback_headers)  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
+                _add_callback_headers(_response_headers, callback_headers, detected_stream_guardrail_headers)  # pyright: ignore[reportUnknownArgumentType]  # untyped header dict
 
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(

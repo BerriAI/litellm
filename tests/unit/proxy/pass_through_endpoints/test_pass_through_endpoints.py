@@ -68,6 +68,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     WebsocketFrameModelVerdict,
     _build_passthrough_failure_request_payload,
     _registered_pass_through_routes,
+    _add_callback_headers,
     _guardrail_response_headers,
     _log_passthrough_upstream_failure_keeping_guardrail_headers,
     _strip_client_guardrail_fields,
@@ -14086,6 +14087,36 @@ class TestGuardrailResponseHeaders:
         )
 
         assert headers["x-litellm-applied-guardrails"] == "guard"
+
+    @staticmethod
+    def _upstream_with_guardrail_headers() -> dict[str, str]:
+        return {
+            "x-litellm-applied-guardrails": "upstream-guard",
+            "x-litellm-guardrail-scan-id": "upstream-scan",
+            "x-upstream-0": "o" * 8_000,
+            "x-upstream-1": "o" * 8_000,
+        }
+
+    def test_upstream_guardrail_headers_survive_a_callback_header_when_the_proxy_recorded_nothing(self):
+        headers: Final = self._upstream_with_guardrail_headers()
+
+        _add_callback_headers(headers, {"x-callback": "c"}, {})
+
+        assert headers == {**self._upstream_with_guardrail_headers(), "x-callback": "c"}
+
+    def test_the_proxys_guardrail_header_gives_way_to_a_callback_header_with_no_room(self):
+        headers: Final = {"x-litellm-applied-guardrails": "guard", "x-upstream": "o" * 15_000}
+
+        _add_callback_headers(headers, {"x-callback": "c" * 300}, {"x-litellm-applied-guardrails": "guard"})
+
+        assert headers == {"x-upstream": "o" * 15_000, "x-callback": "c" * 300}
+
+    def test_the_proxys_guardrail_header_stays_beside_a_callback_header_with_room(self):
+        headers: Final = {"x-litellm-applied-guardrails": "guard", "x-upstream": "o"}
+
+        _add_callback_headers(headers, {"x-callback": "c"}, {"x-litellm-applied-guardrails": "guard"})
+
+        assert headers == {"x-litellm-applied-guardrails": "guard", "x-upstream": "o", "x-callback": "c"}
 
     def test_guardrail_header_past_the_size_budget_is_left_out(self):
         names: Final = [f"g{index}" for index in range(2_000)]
