@@ -19,7 +19,7 @@ from litellm.constants import (
     VLLM_CHOICE_FIELDS,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
 )
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer

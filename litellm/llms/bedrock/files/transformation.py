@@ -39,8 +39,10 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     validate_managed_cloud_file_id,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    extract_file_data,
     text_completion_prompt_to_messages,
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    extract_file_data,
 )
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role

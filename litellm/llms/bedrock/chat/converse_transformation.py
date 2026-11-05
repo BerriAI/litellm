@@ -38,10 +38,6 @@ from litellm.litellm_core_utils.core_helpers import (
     safe_deep_copy,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    native_redacted_thinking_data,
-    parse_content_for_reasoning,
-)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
@@ -58,6 +54,10 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     is_system_message,
     message_field,
     parts_of,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    native_redacted_thinking_data,
+    parse_content_for_reasoning,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
