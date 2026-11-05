@@ -550,3 +550,23 @@ def test_the_three_request_files_send_one_system_prompt_and_one_tool_so_endpoint
     assert CHAT_COMPLETIONS_SCRIPT.turn_one() == chat.turn_1
     assert RESPONSES_SCRIPT.turn_one() == responses.turn_1
     assert MESSAGES_SCRIPT.turn_one() == messages.turn_1
+
+
+@pytest.mark.parametrize(
+    ("answer", "status"),
+    [
+        ("It is 72°F in Boston.", "pass"),
+        ("Around 72 degrees.", "pass"),
+        ("It is 172F.", "fail"),
+        ("It is 72C.", "fail"),
+    ],
+)
+def test_the_answer_check_wants_seventy_two_as_a_whole_number_and_not_in_celsius(answer: str, status: str) -> None:
+    provider: Final = _ScriptedProvider(
+        CalledTurn(_chat_reply(tool_call=True), 0.004),
+        [CalledTurn(_chat_reply(tool_call=False, text=answer, cached_tokens=4800), 0.0005)] * 2,
+    )
+
+    checks: Final = _checks(_run(CHAT_COMPLETIONS_SCRIPT, provider))
+
+    assert checks["conversation"][0] == status, checks["conversation"]

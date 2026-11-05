@@ -40,7 +40,7 @@ from litellm.proxy.health_endpoints.test_model_requests import CHAT_COMPLETIONS
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash, claim_request_stash_for_data
 from litellm.router import Router
 from litellm.types.router import RouterModelGroupAliasItem
-from litellm.types.utils import oauth_token_exchange_litellm_params
+from litellm.types.utils import LLMResponseTypes, oauth_token_exchange_litellm_params
 from litellm.types.workload_identity import (
     ANTHROPIC_WIF_KWARGS_KEYS,
     OPENAI_WIF_KWARGS_KEYS,
@@ -6276,6 +6276,16 @@ class _RewritingHooks:
         first["content"] = "<redacted by a guardrail>"
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
+    async def during_call_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth | None, call_type: TestModelRouteType
+    ) -> object:
+        return None
+
+    async def post_call_success_hook(
+        self, data: dict[str, object], response: LLMResponseTypes, user_api_key_dict: UserAPIKeyAuth
+    ) -> object:
+        return response
+
     async def post_call_failure_hook(
         self,
         request_data: dict[str, object],
@@ -6323,6 +6333,16 @@ class _RecordingHooks:
         self.guardrails = (*self.guardrails, metadata.get("guardrails"))
         raise HTTPException(status_code=400, detail="stopped before the provider")
 
+    async def during_call_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth | None, call_type: TestModelRouteType
+    ) -> object:
+        return None
+
+    async def post_call_success_hook(
+        self, data: dict[str, object], response: LLMResponseTypes, user_api_key_dict: UserAPIKeyAuth
+    ) -> object:
+        return response
+
     async def post_call_failure_hook(
         self,
         request_data: dict[str, object],
@@ -6362,3 +6382,68 @@ async def test_test_model_turns_pick_up_the_keys_guardrails_and_the_pinned_team_
         await call(CHAT_COMPLETIONS_SCRIPT, CHAT_COMPLETIONS.turn_1, "turn-a")
 
     assert hooks.guardrails == (["key-prompt-guard", "pii-mask"],)
+
+
+class _MaskingHooks:
+    """Lets the turn through and masks the answer on the way out, like an output guardrail."""
+
+    def __init__(self) -> None:
+        self.during_calls: int = 0
+        self.masked: tuple[LLMResponseTypes, ...] = ()
+
+    async def pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: TestModelRouteType
+    ) -> dict[str, object]:
+        return data
+
+    async def during_call_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth | None, call_type: TestModelRouteType
+    ) -> object:
+        self.during_calls += 1
+        return None
+
+    async def post_call_success_hook(
+        self, data: dict[str, object], response: LLMResponseTypes, user_api_key_dict: UserAPIKeyAuth
+    ) -> object:
+        assert isinstance(response, litellm.ModelResponse)
+        masked: Final = copy.deepcopy(response)
+        masked.choices[0].message.content = "<masked by an output guardrail>"  # pyright: ignore[reportAttributeAccessIssue]  # a non-streaming choice
+        self.masked = (*self.masked, masked)
+        return masked
+
+    async def post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        *,
+        route: str,
+    ) -> HTTPException | None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_test_model_turns_run_the_during_and_post_call_hooks_and_report_the_masked_answer() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mocked-model",
+                "litellm_params": {"model": "openai/synthetic", "api_key": "synthetic", "mock_response": "It is 72F"},
+                "model_info": {"id": "mocked-deployment"},
+            }
+        ]
+    )
+    hooks: Final = _MaskingHooks()
+    call: Final = _health_endpoints_module._turn_caller(  # pyright: ignore[reportPrivateUsage]  # the seam under test
+        router,
+        pinned_model_id="mocked-deployment",
+        call_params={},
+        proxy_metadata={},
+        user_api_key_dict=UserAPIKeyAuth(token="synthetic-token"),
+        hooks=hooks,
+    )
+
+    turn: Final = await call(CHAT_COMPLETIONS_SCRIPT, CHAT_COMPLETIONS.turn_1, "turn-a")
+
+    assert hooks.during_calls == 1
+    assert turn.response is hooks.masked[0]

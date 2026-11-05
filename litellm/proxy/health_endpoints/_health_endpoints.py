@@ -16,7 +16,7 @@ from typing import Annotated, Final, Literal, Protocol, TypeAlias, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
@@ -123,11 +123,15 @@ from litellm.proxy.utils import check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_api import deployment_usable_by_team
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import Deployment, reject_server_owned_wif_fields
 from litellm.types.utils import (
     AdminApiKeySecretReference,
     CustomPricingLiteLLMParams,
+    LLMResponseTypes,
+    ModelResponse,
     admin_api_key_secret_reference,
 )
 
@@ -2735,6 +2739,22 @@ async def _logged_cost(logging_obj: LiteLLMLoggingObj, fallback: float | None) -
     return float(logged) if isinstance(logged, int | float) else fallback
 
 
+_MESSAGES_RESPONSE: Final = TypeAdapter(AnthropicMessagesResponse)
+
+
+def _as_llm_response(response: object) -> LLMResponseTypes | None:
+    """The reply as the post-call hooks type it: chat and responses replies are pydantic objects, a /v1/messages
+    reply is a plain dict shaped like AnthropicMessagesResponse."""
+    if isinstance(response, ModelResponse | ResponsesAPIResponse):
+        return response
+    if not isinstance(response, dict):
+        return None
+    try:
+        return _MESSAGES_RESPONSE.validate_python(response)
+    except ValidationError:
+        return None
+
+
 class TurnHooks(Protocol):
     """The part of ProxyLogging a health-check turn goes through, the same two hooks a proxied request hits."""
 
@@ -2744,6 +2764,20 @@ class TurnHooks(Protocol):
         data: dict[str, object],  # mutable-ok: ProxyLogging.pre_call_hook rewrites the request dict in place
         call_type: TestModelRouteType,
     ) -> dict[str, object]: ...  # mutable-ok: ProxyLogging.pre_call_hook returns that same request dict
+
+    async def during_call_hook(
+        self,
+        data: dict[str, object],  # mutable-ok: ProxyLogging.during_call_hook takes the request dict
+        user_api_key_dict: UserAPIKeyAuth | None,
+        call_type: TestModelRouteType,
+    ) -> object: ...
+
+    async def post_call_success_hook(
+        self,
+        data: dict[str, object],  # mutable-ok: ProxyLogging.post_call_success_hook takes the request dict
+        response: LLMResponseTypes,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> object: ...
 
     async def post_call_failure_hook(
         self,
@@ -2779,8 +2813,9 @@ def _turn_caller(
     deployment's own credentials and pricing apply, or straight through litellm with the submitted params.
     Either way the turn picks up the guardrails of the calling key, team, project and policies, then the ones
     on the pinned deployment (or on the deployments serving the requested model name), and goes through the
-    proxy's pre-call hooks, so the caller's rate limits, parallel request cap and those guardrails apply to it
-    the way they apply to every proxied request, and it carries the
+    proxy's pre-call, during-call and post-call hooks, so the caller's rate limits, parallel request cap and
+    those guardrails apply to it, and mask its answers, the way they do for every proxied request, and it
+    carries the
     proxy's own logging object, so the cost read back is the one the spend log row gets. Each turn runs in its
     own task, so hooks that keep per-request state in context variables (the rate limiter's slot stash) see one
     request per turn, as they do for separate proxied requests, and the hooks get a deep copy of the shared
@@ -2812,8 +2847,19 @@ def _turn_caller(
             )
             prepared["litellm_logging_obj"] = logging_obj
             target: Final = llm_router if pinned_model_id is not None and llm_router is not None else litellm
-            response: Final[object] = await asyncio.wait_for(
-                getattr(target, script.route_type)(**prepared), HEALTH_CHECK_TIMEOUT_SECONDS
+            during: Final = asyncio.create_task(
+                hooks.during_call_hook(data=admitted, user_api_key_dict=user_api_key_dict, call_type=script.route_type)
+            )
+            response, _ = await asyncio.gather(
+                asyncio.wait_for(getattr(target, script.route_type)(**prepared), HEALTH_CHECK_TIMEOUT_SECONDS), during
+            )
+            llm_response: Final = _as_llm_response(response)
+            checked: Final = (
+                await hooks.post_call_success_hook(
+                    data=admitted, response=llm_response, user_api_key_dict=user_api_key_dict
+                )
+                if llm_response is not None
+                else response
             )
         except Exception as error:
             await hooks.post_call_failure_hook(
@@ -2823,7 +2869,7 @@ def _turn_caller(
                 route="/health/test_model",
             )
             raise
-        return logging_obj, response
+        return logging_obj, checked
 
     async def call(script: EndpointScript, body: Mapping[str, object], call_id: str) -> CalledTurn:
         target_params: Final = {"model": pinned_model_id} if pinned_model_id is not None else call_params

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -476,13 +477,16 @@ async def _turn(script: EndpointScript, body: Mapping[str, object], call: TurnCa
     return TurnOutcome(response=called.response, cost=called.cost, error=None, call_id=call_id)
 
 
+_SEVENTY_TWO_FAHRENHEIT: Final = re.compile(r"(?<!\d)72(?!\d)(?!\s*°?\s*C\b)")
+
+
 def _answer_failure(turn: RepeatedTurn, purpose: str, expectation: str) -> CheckResult | None:
     if turn.outcome is None or turn.outcome.error is not None:
         reason: Final = turn.outcome.error if turn.outcome is not None else "not sent"
         return CheckResult("conversation", "fail", f"turn {turn.number} request with {purpose} failed: {reason}")
     if isinstance(turn.parsed, str):
         return CheckResult("conversation", "fail", f"turn {turn.number} {turn.parsed}")
-    if turn.parsed is None or "72" not in turn.parsed.text:
+    if turn.parsed is None or _SEVENTY_TWO_FAHRENHEIT.search(turn.parsed.text) is None:
         answer: Final = turn.parsed.text[:160] if turn.parsed is not None else ""
         return CheckResult("conversation", "fail", f"turn {turn.number} {expectation}: {answer!r}")
     return None
