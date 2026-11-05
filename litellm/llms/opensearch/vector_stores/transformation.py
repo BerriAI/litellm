@@ -249,7 +249,7 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
 
         try:
             return _usable_credentials(self._aws.resolve_credentials(auth, region))
-        except CredentialRetrievalError as error:
+        except (CredentialRetrievalError, OSError) as error:
             verbose_logger.warning("OpenSearch vector store AWS credential source failed: %s", error)
             raise _unauthenticated("the AWS credential source failed, see the LiteLLM logs") from None
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as error:

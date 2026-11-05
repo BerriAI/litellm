@@ -286,6 +286,17 @@ _AMBIENT_AWS_ENV: Final = (
 )
 
 
+
+def _isolate_from_ambient_aws(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    for name in _AMBIENT_AWS_ENV:
+        monkeypatch.delenv(name, raising=False)
+    for name in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "BOTO_CONFIG"):
+        config_file: Path = tmp_path / name
+        config_file.write_text("")
+        monkeypatch.setenv(name, str(config_file))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
     "credentials,env",
@@ -313,13 +324,7 @@ async def test_missing_aws_credentials_are_a_401_before_embedding_or_any_request
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    for name in _AMBIENT_AWS_ENV:
-        monkeypatch.delenv(name, raising=False)
-    for name in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "BOTO_CONFIG"):
-        config_file: Path = tmp_path / name
-        config_file.write_text("")
-        monkeypatch.setenv(name, str(config_file))
-    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    _isolate_from_ambient_aws(monkeypatch, tmp_path)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     executor: Final = RecordingEmbeddingExecutor()
@@ -351,6 +356,34 @@ def test_failing_credential_source_is_a_401_that_keeps_its_output_out_of_the_rep
 
     assert error.value.status_code == 401
     assert CREDENTIAL_SOURCE_OUTPUT not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "sign",
+    [
+        pytest.param(
+            lambda config: config.validate_environment({}, GenericLiteLLMParams(api_base=SERVERLESS)),
+            id="vector-store-search",
+        ),
+        pytest.param(
+            lambda config: config.sign_http_request(
+                "GET", f"{SERVERLESS}/docs/_mapping", b"", "application/json", {"api_base": SERVERLESS}
+            ),
+            id="index-pass-through",
+        ),
+    ],
+)
+def test_a_missing_container_credentials_token_file_is_a_401(
+    sign: Callable[[OpenSearchVectorStoreConfig], object], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_from_ambient_aws(monkeypatch, tmp_path)
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", "http://127.0.0.1:9/v1/credentials")
+    monkeypatch.setenv("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", str(tmp_path / "missing-token"))
+
+    with pytest.raises(litellm.AuthenticationError, match="the AWS credential source failed") as error:
+        sign(OpenSearchVectorStoreConfig())
+
+    assert error.value.status_code == 401
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
