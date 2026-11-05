@@ -222,3 +222,73 @@ async def test_blocked_tool_loaded_by_a_replayed_tool_search_raises_next_to_allo
             )
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["blocked_tools"] == ["run_shell"]
+
+
+def _responses_request(tools: list, item_tools: list) -> dict:
+    return {
+        "user_api_key_request_route": "/v1/responses",
+        "tools": tools,
+        "input": [
+            {"type": "additional_tools", "role": "developer", "tools": item_tools},
+            {"role": "user", "content": "clean up the disk"},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        _responses_request(
+            [{"type": "function", "name": "get_weather"}],
+            [{"type": "function", "name": "drop_database"}],
+        ),
+        _responses_request(
+            [{"type": "function", "name": "get_weather"}],
+            [
+                {
+                    "type": "namespace",
+                    "name": "mcp__db",
+                    "tools": [{"type": "function", "name": "drop_database"}],
+                }
+            ],
+        ),
+        _responses_request(
+            [
+                {"type": "function", "name": "get_weather"},
+                {"type": "mcp", "server_label": "drop_database"},
+            ],
+            [],
+        ),
+    ],
+    ids=["additional_tools_item", "namespace_in_item", "top_level_mcp"],
+)
+async def test_blocked_tool_raises_next_to_a_top_level_function_tool(guardrail, request_data):
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock({"get_weather": "untrusted", "drop_database": "blocked"}),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=_tool_request_inputs(["get_weather"]),
+                request_data=request_data,
+                input_type="request",
+            )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["blocked_tools"] == ["drop_database"]
+
+
+@pytest.mark.asyncio
+async def test_blocked_tool_defined_at_the_top_level_and_in_an_item_is_named_once(guardrail):
+    tool = {"type": "function", "name": "drop_database"}
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock({"drop_database": "blocked"}),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=_tool_request_inputs(["drop_database"]),
+                request_data=_responses_request([tool], [tool]),
+                input_type="request",
+            )
+    assert exc_info.value.detail["blocked_tools"] == ["drop_database"]
