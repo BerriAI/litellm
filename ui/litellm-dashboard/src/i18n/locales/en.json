@@ -15660,6 +15660,41 @@
     }
   },
   "addModel": {
+    "addModelModes": {
+      "chat": "Chat - /chat/completions",
+      "completion": "Completion - /completions",
+      "embedding": "Embedding - /embeddings",
+      "audioSpeech": "Audio Speech - /audio/speech",
+      "audioTranscription": "Audio Transcription - /audio/transcriptions",
+      "imageGeneration": "Image Generation - /images/generations",
+      "imageEdit": "Image Edit - /images/edits",
+      "videoGeneration": "Video Generation - /videos",
+      "rerank": "Rerank - /rerank",
+      "realtime": "Realtime - /realtime",
+      "batch": "Batch - /batch",
+      "anthropicMessages": "Anthropic Messages - /v1/messages",
+      "ocr": "OCR - /ocr",
+      "decisions": "Decisions - /v1/decisions",
+      "extraction": "Extraction - /v1/extraction"
+    },
+    "providerAuthTypes": {
+      "sharedDeviceLogin": {
+        "label": "Shared device login",
+        "description": "One GitHub device login on the proxy host, stored in its token file, is used for every caller of models on this credential."
+      },
+      "perUserOauth": {
+        "label": "Per-user GitHub OAuth",
+        "description": "Each LiteLLM user connects their own GitHub account from LLM Credentials, and their requests use their own GitHub Copilot access. Users who have not connected get a 401."
+      },
+      "oauthTokenExchange": {
+        "label": "OAuth token exchange (on-behalf-of)",
+        "description": "LiteLLM exchanges each caller's IdP-issued JWT at your IdP's token endpoint for a delegated token. Microsoft Graph only accepts Microsoft Entra tokens, so for Microsoft 365 Copilot the token endpoint must be Entra and callers must send an Entra-issued JWT for this app. Users can still sign in through any IdP federated with Entra."
+      },
+      "staticToken": {
+        "label": "Static delegated access token",
+        "description": "Sends one pre-acquired delegated Microsoft Graph token for every caller."
+      }
+    },
     "classificationMethodConfig": {
       "explanations": {
         "defaultScoring": "The router scores each request across 7 built-in dimensions: token count, code presence, reasoning markers, technical terms, simple indicators, multi-step patterns, and question complexity, plus any custom dimensions you add. The weighted score determines the tier:",
@@ -16033,6 +16068,7 @@
       "help": "Time budget for the plugin call. On expiry the fallback path decides the tier."
     },
     "compressionControls": {
+      "noneOption": "None (no compression)",
       "routing": {
         "title": "Routing decision",
         "tooltip": "Compression applied to the classifier's own call that picks a tier, separate from the model the request routes to.",
@@ -16138,6 +16174,24 @@
       }
     },
     "complexityRouterConfig": {
+      "rubrics": {
+        "legacy": {
+          "label": "Legacy (uncalibrated)",
+          "description": "The rubric as it shipped before calibration examples, with no worked examples at all. Routers created before this setting existed use it, so their tier decisions and spend are unchanged. It over-routes ordinary engineering to the most expensive tier."
+        },
+        "agentic": {
+          "label": "Agentic",
+          "description": "Anchors routine installs, builds, multi-file edits, and standard debugging at Medium, so ordinary engineering does not route to your most expensive tier. Suits agent, terminal, and coding-assistant traffic, and mixed traffic."
+        },
+        "chat": {
+          "label": "Chat",
+          "description": "Drops the engineering examples, for a router serving only conversational traffic that never sees those requests."
+        },
+        "business": {
+          "label": "Business",
+          "description": "Business and sales examples plus business-oriented tier definitions: routine drafting and summarizing stay at Medium, data-determined analysis is Complex, and only decisions under conflicting tradeoffs reach Reasoning. Suits sales, support, and go-to-market traffic."
+        }
+      },
       "rowOrigin": {
         "builtIn": "built-in",
         "custom": "custom"
@@ -16175,22 +16229,27 @@
       },
       "tiers": {
         "nonReasoning": {
+          "label": "Non-reasoning",
           "description": "Operational relay work: passing information along with no judgment about it",
           "examples": "\"Reformat this tool output\", \"Acknowledge the write succeeded\""
         },
         "simple": {
+          "label": "Simple",
           "description": "Basic questions, greetings, simple factual queries",
           "examples": "\"Hello!\", \"What is Python?\", \"Thanks!\""
         },
         "medium": {
+          "label": "Medium",
           "description": "Standard queries requiring some reasoning or explanation",
           "examples": "\"Explain how REST APIs work\", \"Debug this error\""
         },
         "complex": {
+          "label": "Complex",
           "description": "Technical, multi-part requests requiring deep knowledge",
           "examples": "\"Design a microservices architecture\", \"Implement a rate limiter\""
         },
         "reasoning": {
+          "label": "Reasoning",
           "description": "Chain-of-thought, analysis, explicit reasoning requests",
           "examples": "\"Think step by step...\", \"Analyze the pros and cons...\""
         }
@@ -16328,6 +16387,10 @@
       "tierDistancePenaltyHelp": "Score penalty applied per tier-step away from the classified tier."
     },
     "customDimensionRows": {
+      "scoringModes": {
+        "binary": "Binary",
+        "matchCount": "Match count"
+      },
       "legend": "Custom dimension {{number}}",
       "removeAria": "Remove custom dimension {{number}}",
       "remove": "Remove",
@@ -16343,6 +16406,11 @@
       "matchersHelp": "Keywords match the current ask. Regex scans its first 2,048 characters and permits bounded single-character repeats up to 64. The proxy validates patterns on save."
     },
     "autoSetup": {
+      "goals": {
+        "cheapest": "Cheapest",
+        "balanced": "Balanced",
+        "quality": "Best quality"
+      },
       "mixedFamiliesNotice": "A complete pair is unavailable in one family. Using two model families.",
       "closestPairNotice": "Using the closest available pair in this family.",
       "loadingModels": "Loading deployed models",
@@ -16350,6 +16418,17 @@
       "selectTwoModels": "Select two different deployed models"
     },
     "tierRows": {
+      "restrictions": {
+        "displayNames": "Display names rename the built-in tiers, which your tier set replaces. Name each tier directly",
+        "escalation": "Escalation bumps a request along the built-in tier ladder, which your tier set replaces",
+        "stallEscalation": "Stall escalation bumps a request along the built-in tier ladder, which your tier set replaces",
+        "adaptive": "Adaptive routing scores models along the built-in tier ladder, which your tier set replaces",
+        "sessionAffinity": "Session pinning escalates along the built-in tier ladder, which your tier set replaces",
+        "heuristicClassifier": "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM or JEV classifier. Heuristic first and hybrid are out for the same reason: their local scorer decides the traffic it is sure of",
+        "heuristicScoring": "The heuristic scorer never runs under an edited tier set, so its inputs have no effect",
+        "classificationRubric": "The preset calibration examples are written against the built-in tiers, which your tier set replaces",
+        "classifierFallback": "Fallback Tier is where an edited tier set routes when the classifier fails"
+      },
       "tierCountRange": "A tier set needs {{min}} to {{max}} tiers",
       "nameEveryTier": "Name every tier",
       "uniqueNames": "Tier names must be unique, ignoring case",
@@ -16372,6 +16451,15 @@
       "timeoutHelp": "Keep the original route if the comparison takes too long. Leave blank to use the default of 2000 ms."
     },
     "heuristicScoringKnobs": {
+      "dimensions": {
+        "codePresence": "Code presence",
+        "reasoningMarkers": "Reasoning markers",
+        "technicalTerms": "Technical terms",
+        "tokenCount": "Token count",
+        "simpleIndicators": "Simple indicators",
+        "multiStepPatterns": "Multi-step patterns",
+        "questionComplexity": "Question complexity"
+      },
       "loadDefaultsFirst": "Load the shipped defaults before changing weights",
       "invalidExistingWeights": "Existing weights must be finite and nonnegative; custom weights must be greater than 0 and at most 1",
       "dimensionUnavailable": "The dimension is no longer available",
@@ -16550,6 +16638,10 @@
       "close": "Close"
     },
     "advancedSettings": {
+      "pricingModels": {
+        "perToken": "Per Million Tokens",
+        "perSecond": "Per Second"
+      },
       "invalidPositiveNumber": "Please enter a valid positive number",
       "title": "Advanced Settings",
       "customPricing": "Custom Pricing",
@@ -16643,6 +16735,16 @@
       "azureHelp": "Your deployment name will be saved as the public model name, and LiteLLM will use 'azure/deployment-name' internally"
     },
     "cacheControlSettings": {
+      "label": "Cache Control Injection Points",
+      "tooltip": "Tell litellm where to inject cache control checkpoints. You can specify either by role (to apply to all messages of that role) or by specific message index.",
+      "locations": {
+        "message": "Message"
+      },
+      "roles": {
+        "user": "User",
+        "system": "System",
+        "assistant": "Assistant"
+      },
       "description": "Providers like Anthropic, Bedrock API require users to specify where to inject cache control checkpoints, litellm can automatically add them for you as a cost saving feature.",
       "roleHint": "LiteLLM will mark all messages of this role as cacheable",
       "indexHint": "(Optional) If set litellm will mark the message at this index as cacheable",
@@ -16809,12 +16911,89 @@
   },
   "modelAdd": {
     "anthropicFederation": {
+      "fields": {
+        "federationRuleId": {
+          "label": "Federation Rule ID",
+          "tooltip": "The fdrl_ id of the federation rule, from Settings > Workload identity in the Claude Console. Leave empty when the proxy sets ANTHROPIC_FEDERATION_RULE_ID in its environment."
+        },
+        "organizationId": {
+          "label": "Organization ID",
+          "tooltip": "The Anthropic organization the federation rule belongs to, shown on the rule's detail page. Leave empty when the proxy sets ANTHROPIC_ORGANIZATION_ID in its environment."
+        },
+        "serviceAccountId": {
+          "label": "Service Account ID",
+          "tooltip": "The svac_ id the federation rule targets. Anthropic's reference lists it as required."
+        },
+        "workspaceId": {
+          "label": "Workspace ID",
+          "tooltip": "Set this when the federation rule is enabled in more than one workspace: the wrkspc_ id to mint tokens for, or 'default'."
+        },
+        "identityTokenFile": {
+          "label": "Identity Token File",
+          "tooltip": "Absolute path on the proxy host of a file holding the identity token, for example a projected Kubernetes service account token. It must sit under an allowed credential directory."
+        },
+        "identityTokenReference": {
+          "label": "Identity Token Reference",
+          "tooltip": "An oidc/ secret reference the proxy resolves on each exchange, such as oidc/env/VAR_NAME, oidc/github/<audience>, or oidc/google/<audience>. Raw tokens are not accepted."
+        },
+        "issuerUrl": {
+          "label": "Issuer URL",
+          "tooltip": "The issuer registered on the federation rule. The proxy puts it in the token's iss claim."
+        },
+        "issuerSubject": {
+          "label": "Subject",
+          "tooltip": "The sub claim the federation rule matches."
+        },
+        "issuerAudience": {
+          "label": "Audience",
+          "tooltip": "Optional aud claim, when the federation rule checks one."
+        },
+        "issuerTtlSeconds": {
+          "label": "Token Lifetime (seconds)",
+          "tooltip": "Optional. How long each signed token is valid, from 1 to {{max}} seconds. The proxy uses its default when this is empty."
+        },
+        "issuerSigningKeyRef": {
+          "label": "Signing Key Reference",
+          "tooltip": "A secret reference to the PEM private key the proxy signs with, such as os.environ/VAR_NAME. Enter the reference, never the key itself."
+        },
+        "keycloakTokenUrl": {
+          "label": "Keycloak Token URL",
+          "tooltip": "The realm's token endpoint the proxy requests an identity token from."
+        },
+        "keycloakClientId": {
+          "label": "Keycloak Client ID",
+          "tooltip": "The client the proxy authenticates as."
+        },
+        "keycloakClientSecretRef": {
+          "label": "Client Secret Reference",
+          "tooltip": "A secret reference to the client secret, such as os.environ/VAR_NAME. Enter the reference, never the secret itself."
+        },
+        "keycloakAuthMethod": {
+          "label": "Client Authentication Method",
+          "tooltip": "Optional. How the client secret is sent to Keycloak. The proxy uses client_secret_basic when unset."
+        },
+        "keycloakScope": {
+          "label": "Scope",
+          "tooltip": "Optional scope to request with the token."
+        }
+      },
+      "sources": {
+        "tokenFile": "Identity token file",
+        "secretReference": "Identity token secret reference",
+        "internalIssuer": "Token signed by LiteLLM (internal issuer)",
+        "keycloak": "Keycloak client credentials",
+        "environment": "Proxy environment variables"
+      },
       "storedSource": "Stored: {{source}}",
       "storedValueRequired": "Enter at least one of these ids, or pick an identity source that stores a token. The proxy rejects a credential with no values",
       "invalidTokenReference": "Enter an oidc/ secret reference such as oidc/env/VAR_NAME. Raw tokens and oidc/env_path/ references are not accepted",
       "invalidTtl": "Enter a whole number of seconds from 1 to {{max}}"
     },
     "credentialModal": {
+      "authMethods": {
+        "apiKey": "API key",
+        "federation": "Workload identity federation"
+      },
       "editTitle": "Edit Credential",
       "addTitle": "Add New Credential",
       "credentialName": "Credential Name:",
@@ -16914,6 +17093,20 @@
       "submit": "Reuse Credentials"
     },
     "openaiFederation": {
+      "fields": {
+        "identityProviderId": {
+          "label": "Identity Provider ID",
+          "tooltip": "The workload identity provider registered in your OpenAI organization that trusts the token's issuer. Leave empty when the proxy sets OPENAI_IDENTITY_PROVIDER_ID in its environment."
+        },
+        "serviceAccountId": {
+          "label": "Service Account ID",
+          "tooltip": "The OpenAI service account the verified identity acts as. Its project decides what the model can reach. Leave empty when the proxy sets OPENAI_SERVICE_ACCOUNT_ID in its environment."
+        },
+        "identityTokenFile": {
+          "label": "Identity Token File",
+          "tooltip": "Absolute path on the proxy host of a file holding the identity token, for example a projected Kubernetes service account token. Leave empty when the proxy sets OPENAI_IDENTITY_TOKEN_FILE in its environment."
+        }
+      },
       "apiBaseNotOpenAI": "Workload identity federation only reaches the OpenAI API. Enter https://{{host}}/v1 or a regional *.{{host}} URL, or leave this empty"
     },
     "internalIssuerJwks": {
@@ -16985,6 +17178,21 @@
     "dismiss": "Dismiss banner"
   },
   "modelsAndEndpoints": {
+    "autoRouterRows": {
+      "types": {
+        "llm": "LLM Classifier",
+        "oss": "OSS Classifier",
+        "capability": "Capability",
+        "fuseV2": "Fuse v2",
+        "heuristicFirst": "Heuristic first",
+        "hybrid": "Hybrid",
+        "custom": "Custom classifier",
+        "heuristic": "Heuristic",
+        "semantic": "Semantic",
+        "adaptive": "Adaptive",
+        "quality": "Quality"
+      }
+    },
     "autoRoutersPanel": {
       "deleted": "Deleted auto router: {{name}}",
       "deleteFailed": "Failed to delete auto router: {{error}}",
@@ -17061,6 +17269,11 @@
       }
     },
     "allModelsTable": {
+      "filterLabels": {
+        "publicModelName": "Public Model Name",
+        "modelAccessGroup": "Model Access Group",
+        "status": "Status"
+      },
       "allProxyModels": "All Proxy Models",
       "wildcardModels": "Wildcard Models (*)",
       "allAccessGroups": "All Model Access Groups",
@@ -17514,6 +17727,10 @@
       }
     },
     "healthChecksTableColumns": {
+      "sentinels": {
+        "none": "None",
+        "checkInProgress": "Check in progress..."
+      },
       "columns": {
         "modelId": "Model ID",
         "modelName": "Model Name",

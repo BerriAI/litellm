@@ -147,8 +147,8 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
       {rubricSummary && (
         <p className="mb-1 text-xs text-muted-foreground">
           {isOverridden
-            ? t("addModel.openingPromptEditor.customOpeningOnRubric", { rubric: rubricSummary.label })
-            : t("addModel.openingPromptEditor.rubricName", { rubric: rubricSummary.label })}
+            ? t("addModel.openingPromptEditor.customOpeningOnRubric", { rubric: t(rubricSummary.labelKey) })
+            : t("addModel.openingPromptEditor.rubricName", { rubric: t(rubricSummary.labelKey) })}
         </p>
       )}
       <div className="flex items-center gap-2">
@@ -190,7 +190,7 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
               <Select
                 items={Object.entries(CLASSIFICATION_RUBRIC_DESCRIPTIONS).map(([rubric, description]) => ({
                   value: rubric,
-                  label: description.label,
+                  label: t(description.labelKey),
                 }))}
                 value={classificationRubric ?? tierSource.classificationRubric}
                 onValueChange={(rubric: ClassificationRubric | null) => rubric && setRubricDraft(rubric)}
@@ -210,13 +210,13 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
                 >
                   {Object.entries(CLASSIFICATION_RUBRIC_DESCRIPTIONS).map(([rubric, description]) => (
                     <SelectItem key={rubric} value={rubric}>
-                      {description.label}
+                      {t(description.labelKey)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <p className="mt-1 text-xs text-muted-foreground">
-                {tierSource.rubricRestriction ?? draftRubricSummary?.description}
+                {tierSource.rubricRestriction ?? (draftRubricSummary && t(draftRubricSummary.descriptionKey))}
               </p>
             </div>
           )}

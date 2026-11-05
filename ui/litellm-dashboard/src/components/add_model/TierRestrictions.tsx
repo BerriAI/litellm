@@ -8,7 +8,8 @@ export const restrictedBy = (
   key: keyof typeof CUSTOM_TIER_RESTRICTIONS,
   t: TFunction = i18n.t.bind(i18n),
 ): TierRestriction | undefined => {
-  if (value.custom_tier_set) return CUSTOM_TIER_RESTRICTIONS[key];
+  if (value.custom_tier_set)
+    return { omit: CUSTOM_TIER_RESTRICTIONS[key].omit, reason: t(CUSTOM_TIER_RESTRICTIONS[key].reason) };
   if (value.classifier_type === "llm_v2" && key === "adaptive")
     return {
       omit: ["adaptive", "adaptive_weights", "adaptive_eligible", "tier_distance_penalty"],
