@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -10,6 +11,9 @@ from litellm._auth.decision import (
     CachedAdminKey,
     Deny,
     ExpiredKey,
+    KeyBlocked,
+    KeyBudgetExceeded,
+    KeyFacts,
     MalformedKey,
     MasterKey,
     MasterKeyOnlyRoute,
@@ -19,9 +23,14 @@ from litellm._auth.decision import (
     NonAdminKey,
     NotAVirtualKey,
     Outcome,
+    OwnerDeactivated,
+    OwnerFacts,
     PresentedKey,
     RequestFacts,
     Settings,
+    Step,
+    TeamMemberBudget,
+    TeamMemberBudgetExceeded,
     UserAuthDisabled,
     UserAuthRoute,
     VirtualKey,
@@ -38,25 +47,95 @@ SETTINGS: Final = Settings(
     has_db=True,
     master_key_only_routes=frozenset({"/global/spend/reset"}),
 )
+PLAIN_KEY: Final = KeyFacts(
+    blocked=False,
+    expires=None,
+    max_budget=None,
+    team_member_spend=None,
+    user_id=None,
+    team_id=None,
+    budget_throttle_pct=None,
+)
+CHECKED: Final = (
+    "prepare_key",
+    "inspect_key",
+    "enforce_model_access",
+    "check_budget_exemption",
+    "send_key_budget_alerts",
+)
+
+Call = tuple[str, object]
 
 
 @dataclass
 class RecordingHandler:
     presented: PresentedKey | None = None
-    calls: tuple[tuple[str, object], ...] = ()
+    key: KeyFacts = PLAIN_KEY
+    owner: OwnerFacts | None = None
+    exempt: bool = False
+    team_member_budget: TeamMemberBudget | None = None
+    key_spend: float = 0.0
+    calls: tuple[Call, ...] = ()
+
+    def _record(self, name: str, payload: object = None) -> None:
+        self.calls = (*self.calls, (name, payload))
 
     async def resolve_end_user(self, prefetch_key: bool) -> None:
-        self.calls = (*self.calls, ("resolve_end_user", prefetch_key))
+        self._record("resolve_end_user", prefetch_key)
 
     async def resolve_presented_key(self, hashed_token: str) -> PresentedKey | None:
-        self.calls = (*self.calls, ("resolve_presented_key", hashed_token))
+        self._record("resolve_presented_key", hashed_token)
         return self.presented
 
     async def evict_presented_key(self, hashed_token: str) -> None:
-        self.calls = (*self.calls, ("evict_presented_key", hashed_token))
+        self._record("evict_presented_key", hashed_token)
 
     async def load_key(self, hashed_token: str) -> None:
-        self.calls = (*self.calls, ("load_key", hashed_token))
+        self._record("load_key", hashed_token)
+
+    async def prepare_key(self, loaded_from_db: bool) -> None:
+        self._record("prepare_key", loaded_from_db)
+
+    async def inspect_key(self) -> KeyFacts:
+        self._record("inspect_key")
+        return self.key
+
+    async def enforce_model_access(self) -> None:
+        self._record("enforce_model_access")
+
+    async def load_key_owner(self, user_id: str) -> OwnerFacts | None:
+        self._record("load_key_owner", user_id)
+        return self.owner
+
+    async def check_budget_exemption(self) -> bool:
+        self._record("check_budget_exemption")
+        return self.exempt
+
+    async def read_team_member_budget(self, user_id: str, team_id: str) -> TeamMemberBudget | None:
+        self._record("read_team_member_budget", (user_id, team_id))
+        return self.team_member_budget
+
+    async def alert_team_member_budget(self, user_id: str, team_id: str, budget: TeamMemberBudget) -> None:
+        self._record("alert_team_member_budget", budget)
+
+    async def send_key_budget_alerts(self) -> None:
+        self._record("send_key_budget_alerts")
+
+    async def read_key_spend(self, max_budget: float) -> float:
+        self._record("read_key_spend", max_budget)
+        return self.key_spend
+
+    async def alert_key_budget(self, spend: float) -> None:
+        self._record("alert_key_budget", spend)
+
+
+def _facts(token: str | None, route: str = "/chat/completions", is_llm_api_route: bool = True) -> RequestFacts:
+    return RequestFacts(route=route, token=token, is_llm_api_route=is_llm_api_route)
+
+
+async def _run(step: Step, handler: RecordingHandler) -> tuple[Outcome, tuple[str, ...]]:
+    outcome: Final = await drive(step, handler)
+    return outcome, tuple(name for name, _ in handler.calls)
 
 
 async def _decide(
@@ -64,11 +143,34 @@ async def _decide(
     *,
     route: str = "/chat/completions",
     settings: Settings = SETTINGS,
-    presented: PresentedKey | None = None,
-) -> tuple[Outcome, tuple[tuple[str, object], ...]]:
-    handler: Final = RecordingHandler(presented=presented)
-    outcome: Final = await drive(PythonCore().start(RequestFacts(route=route, token=token), settings, NOW), handler)
-    return outcome, handler.calls
+    handler: RecordingHandler | None = None,
+) -> tuple[Outcome, tuple[str, ...]]:
+    return await _run(PythonCore().start(_facts(token, route), settings, NOW), handler or RecordingHandler())
+
+
+async def _check(
+    key: KeyFacts,
+    *,
+    is_llm_api_route: bool = True,
+    settings: Settings = SETTINGS,
+    owner: OwnerFacts | None = None,
+    exempt: bool = False,
+    team_member_budget: TeamMemberBudget | None = None,
+    key_spend: float = 0.0,
+) -> tuple[Outcome, tuple[str, ...]]:
+    handler: Final = RecordingHandler(
+        key=key, owner=owner, exempt=exempt, team_member_budget=team_member_budget, key_spend=key_spend
+    )
+    facts: Final = _facts("hash", is_llm_api_route=is_llm_api_route)
+    return await _run(PythonCore().start_resolved_key(facts, settings, NOW), handler)
+
+
+def _allowed(budget_checks_skipped: bool = False, budget_throttle_pct: float | None = None) -> Outcome:
+    return Allow(
+        VirtualKey(
+            loaded_from_db=True, budget_checks_skipped=budget_checks_skipped, budget_throttle_pct=budget_throttle_pct
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -92,71 +194,206 @@ async def test_credential_decisions_do_no_io(route: str, token: str | None, sett
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["/chat/completions", "/global/spend/reset"])
 async def test_master_key_resolves_end_user_without_key_prefetch(route: str):
-    assert await _decide(MASTER, route=route) == (Allow(MasterKey()), (("resolve_end_user", False),))
+    handler: Final = RecordingHandler()
+    assert await _decide(MASTER, route=route, handler=handler) == (Allow(MasterKey()), ("resolve_end_user",))
+    assert handler.calls == (("resolve_end_user", False),)
 
 
 @pytest.mark.asyncio
-async def test_unknown_virtual_key_is_loaded_from_the_db_after_a_cache_miss():
-    hashed: Final = hash_token("sk-x")
-    assert await _decide("sk-x") == (
-        Allow(VirtualKey(loaded_from_db=True)),
-        (("resolve_end_user", True), ("resolve_presented_key", hashed), ("load_key", hashed)),
-    )
+async def test_unknown_virtual_key_is_loaded_from_the_db_then_checked():
+    handler: Final = RecordingHandler()
+    outcome, calls = await _decide("sk-x", handler=handler)
+    assert outcome == Allow(VirtualKey(loaded_from_db=True, budget_checks_skipped=False, budget_throttle_pct=None))
+    assert calls == ("resolve_end_user", "resolve_presented_key", "load_key", *CHECKED)
+    assert handler.calls[2] == ("load_key", hash_token("sk-x"))
+    assert handler.calls[3] == ("prepare_key", True)
 
 
 @pytest.mark.asyncio
-async def test_cached_virtual_key_is_not_loaded_again():
-    assert await _decide("sk-x", presented=NonAdminKey()) == (
-        Allow(VirtualKey(loaded_from_db=False)),
-        (("resolve_end_user", True), ("resolve_presented_key", hash_token("sk-x"))),
-    )
+async def test_cached_virtual_key_is_checked_without_a_db_load():
+    handler: Final = RecordingHandler(presented=NonAdminKey())
+    outcome, calls = await _decide("sk-x", handler=handler)
+    assert outcome == Allow(VirtualKey(loaded_from_db=False, budget_checks_skipped=False, budget_throttle_pct=None))
+    assert calls == ("resolve_end_user", "resolve_presented_key", *CHECKED)
+    assert handler.calls[2] == ("prepare_key", False)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("expires", [None, NOW + timedelta(seconds=1), NOW])
-async def test_unexpired_cached_admin_key_skips_route_and_db_checks(expires: datetime | None):
+async def test_unexpired_cached_admin_key_skips_route_db_and_key_checks(expires: datetime | None):
     no_db: Final = Settings(MASTER, False, False, frozenset({"/global/spend/reset"}))
-    outcome, _ = await _decide(
-        "sk-admin", route="/global/spend/reset", settings=no_db, presented=AdminKey(expires=expires)
+    outcome, calls = await _decide(
+        "sk-admin",
+        route="/global/spend/reset",
+        settings=no_db,
+        handler=RecordingHandler(presented=AdminKey(expires=expires)),
     )
-    assert outcome == Allow(CachedAdminKey())
+    assert (outcome, calls) == (Allow(CachedAdminKey()), ("resolve_end_user", "resolve_presented_key"))
 
 
 @pytest.mark.asyncio
-async def test_expired_cached_admin_key_is_evicted_then_denied():
+async def test_expired_cached_admin_key_is_evicted_then_denied_with_the_presented_key():
     expires: Final = NOW - timedelta(seconds=1)
-    hashed: Final = hash_token("sk-admin")
-    assert await _decide("sk-admin", presented=AdminKey(expires=expires)) == (
-        Deny(ExpiredKey(expires=expires, now=NOW)),
-        (("resolve_end_user", True), ("resolve_presented_key", hashed), ("evict_presented_key", hashed)),
-    )
+    handler: Final = RecordingHandler(presented=AdminKey(expires=expires))
+    outcome, calls = await _decide("sk-admin", handler=handler)
+    assert outcome == Deny(ExpiredKey(expires=expires, now=NOW, key_label="sk-admin"))
+    assert calls == ("resolve_end_user", "resolve_presented_key", "evict_presented_key")
+    assert handler.calls[-1] == ("evict_presented_key", hash_token("sk-admin"))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("presented", [None, NonAdminKey()])
 async def test_non_admin_key_cannot_use_master_key_only_routes(presented: PresentedKey | None):
-    outcome, calls = await _decide("sk-x", route="/global/spend/reset", presented=presented)
-    assert outcome == Deny(MasterKeyOnlyRoute())
-    assert "load_key" not in {name for name, _ in calls}
+    outcome, calls = await _decide("sk-x", route="/global/spend/reset", handler=RecordingHandler(presented=presented))
+    assert (outcome, calls) == (Deny(MasterKeyOnlyRoute()), ("resolve_end_user", "resolve_presented_key"))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("presented", [None, NonAdminKey()])
 async def test_virtual_key_needs_a_database(presented: PresentedKey | None):
     no_db: Final = Settings(MASTER, False, False, frozenset())
-    outcome, _ = await _decide("sk-x", settings=no_db, presented=presented)
+    outcome, _ = await _decide("sk-x", settings=no_db, handler=RecordingHandler(presented=presented))
     assert outcome == Deny(NoDatabase())
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("token", ["eyJhbGciOiJIUzI1NiJ9.e30.sig", "a" * 64, "sk"])
 async def test_uncached_token_without_virtual_key_prefix_is_rejected_before_the_db(token: str):
-    outcome, calls = await _decide(token)
-    assert outcome == Deny(NotAVirtualKey())
-    assert [name for name, _ in calls] == ["resolve_end_user", "resolve_presented_key"]
+    assert await _decide(token) == (Deny(NotAVirtualKey()), ("resolve_end_user", "resolve_presented_key"))
 
 
 @pytest.mark.asyncio
-async def test_cached_token_without_virtual_key_prefix_is_accepted():
-    outcome, _ = await _decide("ui-login-blob", presented=NonAdminKey())
-    assert outcome == Allow(VirtualKey(loaded_from_db=False))
+async def test_expired_virtual_key_is_labelled_by_the_hash_it_was_loaded_with():
+    expires: Final = NOW - timedelta(seconds=1)
+    outcome, _ = await _decide("sk-x", handler=RecordingHandler(key=replace(PLAIN_KEY, expires=expires)))
+    assert outcome == Deny(ExpiredKey(expires=expires, now=NOW, key_label=hash_token("sk-x")))
+
+
+@pytest.mark.asyncio
+async def test_blocked_key_is_denied_before_model_access():
+    assert await _check(replace(PLAIN_KEY, blocked=True)) == (Deny(KeyBlocked()), ("inspect_key",))
+
+
+@pytest.mark.asyncio
+async def test_deactivated_owner_is_denied_after_model_access():
+    outcome, calls = await _check(replace(PLAIN_KEY, user_id="u1"), owner=OwnerFacts(deactivated=True))
+    assert (outcome, calls) == (
+        Deny(OwnerDeactivated(user_id="u1")),
+        ("inspect_key", "enforce_model_access", "load_key_owner"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", [None, OwnerFacts(deactivated=False)])
+async def test_active_or_missing_owner_continues(owner: OwnerFacts | None):
+    outcome, _ = await _check(replace(PLAIN_KEY, user_id="u1"), owner=owner)
+    assert outcome == _allowed()
+
+
+@pytest.mark.asyncio
+async def test_exempt_request_skips_every_budget_check_but_not_expiry():
+    key: Final = replace(PLAIN_KEY, user_id="u1", team_id="t1", team_member_spend=99.0, max_budget=1.0)
+    assert await _check(key, exempt=True) == (
+        _allowed(budget_checks_skipped=True),
+        ("inspect_key", "enforce_model_access", "load_key_owner", "check_budget_exemption"),
+    )
+    expired: Final = replace(key, expires=NOW - timedelta(seconds=1))
+    outcome, _ = await _check(expired, exempt=True)
+    assert outcome == Deny(ExpiredKey(expires=NOW - timedelta(seconds=1), now=NOW, key_label="hash"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("budget", "denied"),
+    [
+        (TeamMemberBudget(spend=10.0, max_budget=10.0), True),
+        (TeamMemberBudget(spend=10.1, max_budget=10.0), True),
+        (TeamMemberBudget(spend=9.9, max_budget=10.0), False),
+        (None, False),
+    ],
+)
+async def test_team_member_budget_alerts_then_denies_at_the_limit(budget: TeamMemberBudget | None, denied: bool):
+    key: Final = replace(PLAIN_KEY, user_id="u1", team_id="t1", team_member_spend=0.0)
+    outcome, calls = await _check(key, team_member_budget=budget)
+    if denied:
+        assert budget is not None
+        assert outcome == Deny(
+            TeamMemberBudgetExceeded(user_id="u1", team_id="t1", spend=budget.spend, max_budget=budget.max_budget)
+        )
+        assert calls[-2:] == ("read_team_member_budget", "alert_team_member_budget")
+    else:
+        assert outcome == _allowed()
+        assert "alert_team_member_budget" not in calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key",
+    [
+        replace(PLAIN_KEY, user_id="u1", team_id="t1", team_member_spend=None),
+        replace(PLAIN_KEY, user_id=None, team_id="t1", team_member_spend=0.0),
+        replace(PLAIN_KEY, user_id="u1", team_id=None, team_member_spend=0.0),
+    ],
+)
+async def test_team_member_budget_is_read_only_for_a_member_with_tracked_spend(key: KeyFacts):
+    _, calls = await _check(key, team_member_budget=TeamMemberBudget(spend=1.0, max_budget=0.5))
+    assert "read_team_member_budget" not in calls
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_needs_a_database():
+    key: Final = replace(PLAIN_KEY, user_id="u1", team_id="t1", team_member_spend=0.0)
+    no_db: Final = Settings(MASTER, False, False, frozenset())
+    _, calls = await _check(key, settings=no_db, team_member_budget=TeamMemberBudget(spend=1.0, max_budget=0.5))
+    assert "read_team_member_budget" not in calls
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_is_checked_before_expiry():
+    key: Final = replace(
+        PLAIN_KEY, user_id="u1", team_id="t1", team_member_spend=0.0, expires=NOW - timedelta(seconds=1)
+    )
+    outcome, _ = await _check(key, team_member_budget=TeamMemberBudget(spend=1.0, max_budget=0.5))
+    assert outcome == Deny(TeamMemberBudgetExceeded(user_id="u1", team_id="t1", spend=1.0, max_budget=0.5))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spend", "max_budget", "throttle", "expected"),
+    [
+        (5.0, 5.0, None, Deny(KeyBudgetExceeded(spend=5.0, max_budget=5.0))),
+        (6.0, 5.0, None, Deny(KeyBudgetExceeded(spend=6.0, max_budget=5.0))),
+        (4.9, 5.0, None, Allow(VirtualKey(loaded_from_db=True, budget_checks_skipped=False, budget_throttle_pct=None))),
+        (6.0, 5.0, 0.5, Allow(VirtualKey(loaded_from_db=True, budget_checks_skipped=False, budget_throttle_pct=0.5))),
+        (4.9, 5.0, 0.5, Allow(VirtualKey(loaded_from_db=True, budget_checks_skipped=False, budget_throttle_pct=None))),
+        (
+            1e9,
+            math.inf,
+            None,
+            Allow(VirtualKey(loaded_from_db=True, budget_checks_skipped=False, budget_throttle_pct=None)),
+        ),
+        (
+            1e9,
+            math.nan,
+            None,
+            Allow(VirtualKey(loaded_from_db=True, budget_checks_skipped=False, budget_throttle_pct=None)),
+        ),
+    ],
+)
+async def test_key_budget_denies_or_throttles_at_the_limit(
+    spend: float, max_budget: float, throttle: float | None, expected: Outcome
+):
+    key: Final = replace(PLAIN_KEY, max_budget=max_budget, budget_throttle_pct=throttle)
+    handler: Final = RecordingHandler(key=key, key_spend=spend)
+    outcome, calls = await _run(PythonCore().start_resolved_key(_facts("hash"), SETTINGS, NOW), handler)
+    assert outcome == expected
+    assert calls[-3:] == ("send_key_budget_alerts", "read_key_spend", "alert_key_budget")
+    assert handler.calls[-1] == ("alert_key_budget", spend)
+
+
+@pytest.mark.asyncio
+async def test_key_budget_is_enforced_only_on_llm_routes():
+    key: Final = replace(PLAIN_KEY, max_budget=1.0)
+    outcome, calls = await _check(key, is_llm_api_route=False, key_spend=2.0)
+    assert outcome == _allowed()
+    assert calls[-1] == "send_key_budget_alerts"

@@ -1,14 +1,25 @@
+import math
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
 from litellm._auth.decision import (
     AdminKey,
+    AlertKeyBudget,
+    AlertTeamMemberBudget,
     Allow,
     CachedAdminKey,
+    CheckBudgetExemption,
     Deny,
+    EnforceModelAccess,
     EvictPresentedKey,
     ExpiredKey,
+    InspectKey,
+    KeyBlocked,
+    KeyBudgetExceeded,
+    KeyFacts,
     LoadKey,
+    LoadKeyOwner,
     MalformedKey,
     MasterKey,
     MasterKeyOnlyRoute,
@@ -17,12 +28,20 @@ from litellm._auth.decision import (
     NoMasterKey,
     NonAdminKey,
     NotAVirtualKey,
+    OwnerDeactivated,
+    OwnerFacts,
+    PrepareKey,
     PresentedKey,
+    ReadKeySpend,
+    ReadTeamMemberBudget,
     RequestFacts,
     ResolveEndUser,
     ResolvePresentedKey,
+    SendKeyBudgetAlerts,
     Settings,
     Step,
+    TeamMemberBudget,
+    TeamMemberBudgetExceeded,
     UserAuthDisabled,
     UserAuthRoute,
     VirtualKey,
@@ -55,6 +74,11 @@ class PythonCore:
             ),
         )
 
+    def start_resolved_key(self, facts: RequestFacts, settings: Settings, now: datetime) -> Step:
+        return _check_key(
+            _KeyCheck(facts=facts, settings=settings, now=now, loaded_from_db=True, key_label=facts.token or "")
+        )
+
 
 def _after_presented_key(
     presented: PresentedKey | None,
@@ -67,7 +91,8 @@ def _after_presented_key(
     match presented:
         case AdminKey(expires=expires) if expires is not None and expires < now:
             return EvictPresentedKey(
-                hashed_token=hashed_token, resume=lambda: Deny(ExpiredKey(expires=expires, now=now))
+                hashed_token=hashed_token,
+                resume=lambda: Deny(ExpiredKey(expires=expires, now=now, key_label=token)),
             )
         case AdminKey():
             return Allow(CachedAdminKey())
@@ -78,7 +103,114 @@ def _after_presented_key(
     if not settings.has_db:
         return Deny(NoDatabase())
     if presented is not None:
-        return Allow(VirtualKey(loaded_from_db=False))
+        cached: Final = _KeyCheck(facts=facts, settings=settings, now=now, loaded_from_db=False, key_label=token)
+        return PrepareKey(loaded_from_db=False, resume=lambda: _check_key(cached))
     if not token.startswith(_VIRTUAL_KEY_PREFIX):
         return Deny(NotAVirtualKey())
-    return LoadKey(hashed_token=hashed_token, resume=lambda: Allow(VirtualKey(loaded_from_db=True)))
+    loaded: Final = _KeyCheck(facts=facts, settings=settings, now=now, loaded_from_db=True, key_label=hashed_token)
+    return LoadKey(
+        hashed_token=hashed_token,
+        resume=lambda: PrepareKey(loaded_from_db=True, resume=lambda: _check_key(loaded)),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyCheck:
+    facts: RequestFacts
+    settings: Settings
+    now: datetime
+    loaded_from_db: bool
+    key_label: str
+
+
+def _allow(check: _KeyCheck, budget_checks_skipped: bool, budget_throttle_pct: float | None) -> Step:
+    return Allow(
+        VirtualKey(
+            loaded_from_db=check.loaded_from_db,
+            budget_checks_skipped=budget_checks_skipped,
+            budget_throttle_pct=budget_throttle_pct,
+        )
+    )
+
+
+def _check_key(check: _KeyCheck) -> Step:
+    return InspectKey(resume=lambda key: _after_inspect(check, key))
+
+
+def _after_inspect(check: _KeyCheck, key: KeyFacts) -> Step:
+    if key.blocked:
+        return Deny(KeyBlocked())
+    return EnforceModelAccess(resume=lambda: _check_owner(check, key))
+
+
+def _check_owner(check: _KeyCheck, key: KeyFacts) -> Step:
+    user_id: Final = key.user_id
+    if user_id is None:
+        return _check_budget_exemption(check, key)
+    return LoadKeyOwner(user_id=user_id, resume=lambda owner: _after_owner(check, key, user_id, owner))
+
+
+def _after_owner(check: _KeyCheck, key: KeyFacts, user_id: str, owner: OwnerFacts | None) -> Step:
+    if owner is not None and owner.deactivated:
+        return Deny(OwnerDeactivated(user_id=user_id))
+    return _check_budget_exemption(check, key)
+
+
+def _check_budget_exemption(check: _KeyCheck, key: KeyFacts) -> Step:
+    return CheckBudgetExemption(resume=lambda exempt: _check_team_member_budget(check, key, exempt))
+
+
+def _check_team_member_budget(check: _KeyCheck, key: KeyFacts, exempt: bool) -> Step:
+    user_id: Final = key.user_id
+    team_id: Final = key.team_id
+    if exempt or key.team_member_spend is None or not check.settings.has_db or user_id is None or team_id is None:
+        return _check_expiry(check, key, exempt)
+    return ReadTeamMemberBudget(
+        user_id=user_id,
+        team_id=team_id,
+        resume=lambda budget: _after_team_member_budget(check, key, user_id, team_id, budget),
+    )
+
+
+def _after_team_member_budget(
+    check: _KeyCheck, key: KeyFacts, user_id: str, team_id: str, budget: TeamMemberBudget | None
+) -> Step:
+    if budget is None or budget.spend < budget.max_budget:
+        return _check_expiry(check, key, exempt=False)
+    return AlertTeamMemberBudget(
+        user_id=user_id,
+        team_id=team_id,
+        budget=budget,
+        resume=lambda: Deny(
+            TeamMemberBudgetExceeded(user_id=user_id, team_id=team_id, spend=budget.spend, max_budget=budget.max_budget)
+        ),
+    )
+
+
+def _check_expiry(check: _KeyCheck, key: KeyFacts, exempt: bool) -> Step:
+    if key.expires is not None and key.expires < check.now:
+        return Deny(ExpiredKey(expires=key.expires, now=check.now, key_label=check.key_label))
+    if exempt:
+        return _allow(check, budget_checks_skipped=True, budget_throttle_pct=None)
+    return SendKeyBudgetAlerts(resume=lambda: _check_key_budget(check, key))
+
+
+def _check_key_budget(check: _KeyCheck, key: KeyFacts) -> Step:
+    max_budget: Final = key.max_budget
+    if not check.facts.is_llm_api_route or max_budget is None:
+        return _allow(check, budget_checks_skipped=False, budget_throttle_pct=None)
+    return ReadKeySpend(
+        max_budget=max_budget,
+        resume=lambda spend: AlertKeyBudget(
+            spend=spend, resume=lambda: _after_key_spend(check, key, spend, max_budget)
+        ),
+    )
+
+
+def _after_key_spend(check: _KeyCheck, key: KeyFacts, spend: float, max_budget: float) -> Step:
+    # A NaN max_budget compares false against any spend, so a non-finite budget means no limit, never a bypass.
+    if not math.isfinite(max_budget) or spend < max_budget:
+        return _allow(check, budget_checks_skipped=False, budget_throttle_pct=None)
+    if key.budget_throttle_pct is not None:
+        return _allow(check, budget_checks_skipped=False, budget_throttle_pct=key.budget_throttle_pct)
+    return Deny(KeyBudgetExceeded(spend=spend, max_budget=max_budget))

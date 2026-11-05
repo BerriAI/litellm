@@ -1600,7 +1600,9 @@ def test_jwt_path_enforces_the_user_model_budget_before_returning():
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
         + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+        + textwrap.dedent(inspect.getsource(auth_module._finish_virtual_key_auth))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
     )
 
     def calls_before_each_return(node):
@@ -1645,7 +1647,9 @@ def test_every_jwt_branch_carries_the_user_model_budget():
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
         + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+        + textwrap.dedent(inspect.getsource(auth_module._finish_virtual_key_auth))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
     )
 
     assignments = [
@@ -1663,7 +1667,7 @@ def test_every_jwt_branch_carries_the_user_model_budget():
     assert "auto_registered" in targets, (
         f"the auto-registered JWT token must carry the user's model budget; only these are populated: {sorted(targets)}"
     )
-    assert "valid_token" in targets, "the virtual-key path must carry the user's model budget"
+    assert "key" in targets, "the virtual-key path must carry the user's model budget"
 
 
 @pytest.mark.asyncio
@@ -1782,7 +1786,9 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
         + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+        + textwrap.dedent(inspect.getsource(auth_module._finish_virtual_key_auth))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
     )
 
     def guarded_by_skip(node: ast.AST, target: ast.AST) -> bool:
@@ -1803,7 +1809,9 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
     calls = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_check_user_model_budget"
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"_check_user_model_budget", "_check_soft_and_model_budgets"}
     ]
     assert len(calls) == 2, f"expected the JWT and virtual-key call sites, found {len(calls)}"
 
@@ -1927,7 +1935,9 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
         + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+        + textwrap.dedent(inspect.getsource(auth_module._finish_virtual_key_auth))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
     )
 
     # Half one: the shared block copies the user row's budget onto the token.

@@ -8,6 +8,7 @@ from typing import Protocol, TypeAlias
 class RequestFacts:
     route: str
     token: str | None
+    is_llm_api_route: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,8 @@ class CachedAdminKey:
 @dataclass(frozen=True, slots=True)
 class VirtualKey:
     loaded_from_db: bool
+    budget_checks_skipped: bool
+    budget_throttle_pct: float | None
 
 
 Grant: TypeAlias = NoMasterKey | UserAuthRoute | MasterKey | CachedAdminKey | VirtualKey
@@ -65,6 +68,7 @@ class UserAuthDisabled:
 class ExpiredKey:
     expires: datetime
     now: datetime
+    key_label: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,8 +86,42 @@ class NotAVirtualKey:
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class KeyBlocked:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerDeactivated:
+    user_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class TeamMemberBudgetExceeded:
+    user_id: str
+    team_id: str
+    spend: float
+    max_budget: float
+
+
+@dataclass(frozen=True, slots=True)
+class KeyBudgetExceeded:
+    spend: float
+    max_budget: float
+
+
 Denial: TypeAlias = (
-    MissingKey | MalformedKey | UserAuthDisabled | ExpiredKey | MasterKeyOnlyRoute | NoDatabase | NotAVirtualKey
+    MissingKey
+    | MalformedKey
+    | UserAuthDisabled
+    | ExpiredKey
+    | MasterKeyOnlyRoute
+    | NoDatabase
+    | NotAVirtualKey
+    | KeyBlocked
+    | OwnerDeactivated
+    | TeamMemberBudgetExceeded
+    | KeyBudgetExceeded
 )
 
 
@@ -114,6 +152,28 @@ PresentedKey: TypeAlias = AdminKey | NonAdminKey
 
 
 @dataclass(frozen=True, slots=True)
+class KeyFacts:
+    blocked: bool
+    expires: datetime | None
+    max_budget: float | None
+    team_member_spend: float | None
+    user_id: str | None
+    team_id: str | None
+    budget_throttle_pct: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerFacts:
+    deactivated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TeamMemberBudget:
+    spend: float
+    max_budget: float
+
+
+@dataclass(frozen=True, slots=True)
 class ResolveEndUser:
     prefetch_key: bool
     resume: "Callable[[], Step]"
@@ -137,9 +197,85 @@ class LoadKey:
     resume: "Callable[[], Step]"
 
 
-Effect: TypeAlias = ResolveEndUser | ResolvePresentedKey | EvictPresentedKey | LoadKey
+@dataclass(frozen=True, slots=True)
+class PrepareKey:
+    loaded_from_db: bool
+    resume: "Callable[[], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class InspectKey:
+    resume: "Callable[[KeyFacts], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class EnforceModelAccess:
+    resume: "Callable[[], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class LoadKeyOwner:
+    user_id: str
+    resume: "Callable[[OwnerFacts | None], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class CheckBudgetExemption:
+    resume: "Callable[[bool], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class ReadTeamMemberBudget:
+    user_id: str
+    team_id: str
+    resume: "Callable[[TeamMemberBudget | None], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class AlertTeamMemberBudget:
+    user_id: str
+    team_id: str
+    budget: TeamMemberBudget
+    resume: "Callable[[], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class SendKeyBudgetAlerts:
+    resume: "Callable[[], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class ReadKeySpend:
+    max_budget: float
+    resume: "Callable[[float], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class AlertKeyBudget:
+    spend: float
+    resume: "Callable[[], Step]"
+
+
+Effect: TypeAlias = (
+    ResolveEndUser
+    | ResolvePresentedKey
+    | EvictPresentedKey
+    | LoadKey
+    | PrepareKey
+    | InspectKey
+    | EnforceModelAccess
+    | LoadKeyOwner
+    | CheckBudgetExemption
+    | ReadTeamMemberBudget
+    | AlertTeamMemberBudget
+    | SendKeyBudgetAlerts
+    | ReadKeySpend
+    | AlertKeyBudget
+)
 Step: TypeAlias = Outcome | Effect
 
 
 class AuthCore(Protocol):
     def start(self, facts: RequestFacts, settings: Settings, now: datetime) -> Step: ...
+
+    def start_resolved_key(self, facts: RequestFacts, settings: Settings, now: datetime) -> Step: ...
