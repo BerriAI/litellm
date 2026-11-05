@@ -1,11 +1,11 @@
 """Project daily observations into scoped, persisted investigations."""
 
 import asyncio
-import hashlib
-from collections.abc import Mapping
+from collections import OrderedDict
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from itertools import chain, groupby
+from itertools import chain, groupby, islice
 from typing import Final, Protocol
 from uuid import NAMESPACE_URL, uuid5
 
@@ -21,6 +21,7 @@ from litellm.repositories.usage_alert_metrics import (
     IssueSourceProvider,
     UsageAlertMetricsRepository,
 )
+from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.proxy.issues import (
     Issue,
     IssueCohort,
@@ -29,14 +30,24 @@ from litellm.types.proxy.issues import (
     IssueDeliveryInput,
     IssueImpact,
     IssueInput,
-    IssueModelPair,
     IssuePendingDelivery,
     IssueProjectionSignal,
     IssueSignal,
     IssueSignalGroupingReason,
 )
-from litellm.types.proxy.usage_alert_defaults import PerformanceIssueFamily, is_default_usage_rule
-from litellm.types.proxy.usage_alerts import UsageAlertDirection, UsageAlertMetric, UsageAlertRule, UsageAlertScope
+from litellm.types.proxy.usage_alert_defaults import (
+    PerformanceIssueFamily,
+    default_usage_rule_id,
+    is_default_usage_rule,
+)
+from litellm.types.proxy.usage_alerts import (
+    UsageAlertDirection,
+    UsageAlertMetric,
+    UsageAlertProjectionCursor,
+    UsageAlertProjectionWork,
+    UsageAlertRule,
+    UsageAlertScope,
+)
 
 _SCOPES: Final[tuple[UsageAlertScope, ...]] = ("key", "user", "team", "model", "deployment")
 _METRICS: Final[tuple[UsageAlertMetric, ...]] = ("spend", "latency", "error_rate", "errors", "requests")
@@ -147,6 +158,10 @@ def _resource_issue(candidate: _Candidate, now: datetime) -> IssueInput:
     )
 
 
+def _comparison_window(candidate: _Candidate) -> tuple[str | None, date, date]:
+    return candidate.source.alert.scope_id, candidate.window.start, candidate.window.day
+
+
 def _volume_explains_spend(traffic: _Candidate, spend: _Candidate) -> bool:
     if spend.comparison.baseline <= 0 or traffic.comparison.baseline <= 0:
         return False
@@ -194,42 +209,62 @@ class PerformanceIssueProjector:
         self._metrics = metrics
         self._providers = providers
         self._delivery = delivery
-        self._overrides: frozenset[tuple[UsageAlertScope, UsageAlertMetric, UsageAlertDirection, str | None]] = (
-            frozenset()
-        )
+        self._provider_rule: UsageAlertRule | None = None
+        self._provider_cache: OrderedDict[str, _ProviderGroup | None] = OrderedDict()  # mutable-ok: max 32 providers
 
-    async def run(self, now: datetime, day: date, rules: tuple[UsageAlertRule, ...], *, ready: bool) -> None:
-        self._overrides = frozenset(
-            (rule.scope_type, rule.metric, rule.direction, rule.scope_id)
-            for rule in rules
-            if rule.enabled and not is_default_usage_rule(rule)
-        )
+    async def run_pending(
+        self, now: datetime, work: UsageAlertProjectionWork, rules: UsageAlertsRepository, deadline: float
+    ) -> bool:
+        self._provider_cache.clear()
+        self._provider_rule = None
+        for scope in _SCOPES:
+            if (
+                rule := await rules.get_rule(default_usage_rule_id(scope, "latency", "increase"))
+            ) is not None and rule.enabled:
+                self._provider_rule = rule
+                break
+        position = await rules.projection_cursor(work)  # rebind-ok: persisted bounded source cursor
         observed_at: Final = now.replace(microsecond=now.microsecond // 1000 * 1000)
-        version: Final = hashlib.sha256(
-            ("performance-v1:" + ",".join(f"{rule.id}:{rule.updated_at.isoformat()}" for rule in rules)).encode()
-        ).hexdigest()
-        if ready and not await self._store.projection_completed(day, version):
-            await self._store.recover_issues(day)
-            providers: Final = await self._provider_evidence(day, rules, observed_at)
-            for metric in _METRICS:
-                for scope in _SCOPES:
-                    await self._scope(observed_at, day, scope, metric, providers)
-            await self._store.complete_projection(day, version)
-        await self._notify()
-        await self._store.prune()
+        projection_deadline: Final = deadline - min(2, max(0, deadline - asyncio.get_running_loop().time()) / 4)
+        while asyncio.get_running_loop().time() < projection_deadline:
+            if (next_position := await self._projection_page(position, work, observed_at)) is None:
+                await self._store.recover_issues(work.day, completed_only=True)
+                await self._store.complete_projection(work.day, work.version)
+                await self._notify(deadline)
+                await self._store.prune()
+                return True
+            position = next_position
+            await rules.save_projection_cursor(position)
+            await asyncio.sleep(0.01)
+        await self._notify(deadline)
+        return False
+
+    async def _projection_page(
+        self, position: UsageAlertProjectionCursor, work: UsageAlertProjectionWork, observed_at: datetime
+    ) -> UsageAlertProjectionCursor | None:
+        if position.step == 0:
+            prior: Final = await self._store.active_provider_issues(limit=1, cursor=position.after_id)
+            if prior:
+                if self._provider_rule is not None:
+                    await self._prior_provider_page(prior, work.day, self._provider_rule, observed_at)
+                return UsageAlertProjectionCursor(version=work.version, after_id=prior[-1].id)
+            return UsageAlertProjectionCursor(version=work.version, step=1)
+        if position.step > len(_SCOPES) * len(_METRICS):
+            return None
+        metric: Final = _METRICS[(position.step - 1) // len(_SCOPES)]
+        scope: Final = _SCOPES[(position.step - 1) % len(_SCOPES)]
+        sources: Final = await self._store.active_signals(
+            work.day, scope_type=scope, metric=metric, cursor=position.after_id, limit=10, completed_only=True
+        )
+        if sources:
+            await self._project_page(sources, scope, work.day, observed_at)
+            return UsageAlertProjectionCursor(version=work.version, step=position.step, after_id=sources[-1].alert.id)
+        return UsageAlertProjectionCursor(version=work.version, step=position.step + 1)
 
     async def _candidates(
         self, sources: tuple[IssueProjectionSignal, ...], scope: UsageAlertScope, day: date
     ) -> tuple[_Candidate, ...]:
-        eligible: Final = tuple(
-            source
-            for source in sources
-            if not is_default_usage_rule(source.rule)
-            or not any(
-                (scope, source.rule.metric, source.rule.direction, entity) in self._overrides
-                for entity in (None, source.alert.scope_id)
-            )
-        )
+        eligible: Final = sources
         windows: Final = tuple(_window(source, day) for source in eligible)
         rows: Final = await self._metrics.issue_windows(scope, windows)
         by_reference: Final = {
@@ -264,30 +299,15 @@ class PerformanceIssueProjector:
             _window(source, day),
         )
 
-    async def _scope(
-        self,
-        now: datetime,
-        day: date,
-        scope: UsageAlertScope,
-        metric: UsageAlertMetric,
-        providers: Mapping[str, _ProviderGroup],
-    ) -> None:
-        cursor: str | None = None  # rebind-ok: bounded source pagination
-        while sources := await self._store.active_signals(day, scope_type=scope, metric=metric, cursor=cursor):
-            await self._project_page(sources, scope, day, providers, now)
-            cursor = sources[-1].alert.id
-            await asyncio.sleep(0)
-
     async def _project_page(
         self,
         sources: tuple[IssueProjectionSignal, ...],
         scope: UsageAlertScope,
         day: date,
-        providers: Mapping[str, _ProviderGroup],
         now: datetime,
     ) -> None:
         candidates: Final = await self._candidates(sources, scope, day)
-        provider_targets: Final = await self._provider_targets(candidates, providers, now)
+        provider_targets: Final = await self._provider_targets(candidates, now)
         resource_targets: Final = await self._resource_targets(
             tuple(item for item in candidates if item.source.alert.id not in provider_targets), now
         )
@@ -299,17 +319,21 @@ class PerformanceIssueProjector:
         }
         await self._save(candidates, targets, now)
 
-    async def _spend_candidates(
+    async def _spend_pages(
         self, scope: UsageAlertScope, entities: tuple[str, ...] | None, day: date
-    ) -> tuple[_Candidate, ...]:
-        found: Final[list[_Candidate]] = []  # mutable-ok: bounded entity batch may match multiple configured rules
-        cursor: str | None = None  # rebind-ok: page matching rules without one query per entity
+    ) -> AsyncIterator[tuple[_Candidate, ...]]:
+        cursor: str | None = None  # rebind-ok: stream configured rules without retaining earlier candidate pages
         while sources := await self._store.active_signals(
-            day, scope_type=scope, metric="spend", scope_ids=entities, cursor=cursor
+            day,
+            scope_type=scope,
+            metric="spend",
+            scope_ids=entities,
+            cursor=cursor,
+            limit=10,
+            completed_only=True,
         ):
-            found.extend(await self._candidates(sources, scope, day))
+            yield await self._candidates(sources, scope, day)
             cursor = sources[-1].alert.id
-        return tuple(found)
 
     async def _volume_targets(self, candidates: tuple[_Candidate, ...], now: datetime) -> Mapping[str, _Target]:
         traffic: Final = tuple(
@@ -320,32 +344,37 @@ class PerformanceIssueProjector:
         if not traffic:
             return {}
         scope: Final = traffic[0].source.rule.scope_type
-        entities: Final = tuple(
-            dict.fromkeys(item.source.alert.scope_id for item in traffic if item.source.alert.scope_id is not None)
-        )
-        spending: Final = await self._spend_candidates(
-            scope, entities if scope != "deployment" else None, traffic[0].window.day
-        )
-        by_entity: Final = {
-            entity: tuple(group)
-            for entity, group in groupby(
-                sorted(spending, key=lambda item: item.source.alert.scope_id or ""),
-                lambda item: item.source.alert.scope_id,
-            )
-        }
         keys: Final = tuple(_cohort_key("spend", scope, item.source.alert.scope_id, "increase") for item in traffic)
         issues: Final = {
             issue.cohort_key: issue for issue in await self._store.find_active_issues(keys) if issue.last_seen == now
         }
+        targets: Final = {
+            _comparison_window(item): item
+            for item in traffic
+            if _cohort_key("spend", scope, item.source.alert.scope_id, "increase") in issues
+        }
+        if not targets:
+            return {}
+        entities: Final = tuple(dict.fromkeys(identity for identity, _, _ in targets if identity is not None))
+        matched: Final[set[tuple[str | None, date, date]]] = set()  # mutable-ok: max 10 flags
+        async for page in self._spend_pages(scope, entities if scope != "deployment" else None, traffic[0].window.day):
+            for spend in page:
+                if (identity := _comparison_window(spend)) in targets and _volume_explains_spend(
+                    targets[identity], spend
+                ):
+                    matched.add(identity)
+            if len(matched) == len(targets):
+                break
         return {
             item.source.alert.id: _Target(
-                issue.model_copy(update={"observed_at": now}),
+                issues[_cohort_key("spend", scope, item.source.alert.scope_id, "increase")].model_copy(
+                    update={"observed_at": now}
+                ),
                 "volume_explains_spend",
                 "Request volume and spend increased by similar proportions in the same comparison window.",
             )
             for item in traffic
-            if (issue := issues.get(_cohort_key("spend", scope, item.source.alert.scope_id, "increase"))) is not None
-            and any(_volume_explains_spend(item, spend) for spend in by_entity.get(item.source.alert.scope_id, ()))
+            if _comparison_window(item) in matched
         }
 
     async def _resource_targets(self, candidates: tuple[_Candidate, ...], now: datetime) -> Mapping[str, _Target]:
@@ -428,19 +457,24 @@ class PerformanceIssueProjector:
         if not traffic:
             return {}
         key_ids: Final = tuple(dict.fromkeys(attributions[item.source.alert.id].key_id for item in traffic))
-        spending: Final = await self._spend_candidates("key", key_ids, traffic[0].window.day)
-        matching: Final = tuple(item for item in spending if self._volume_matches_key_spend(item))
-        by_key: Final = {
-            identity: tuple(group)
-            for identity, group in groupby(
-                sorted(matching, key=lambda item: item.source.alert.scope_id or ""),
-                lambda item: item.source.alert.scope_id,
-            )
-        }
         keys: Final = tuple(_cohort_key("spend", "key", key, "increase") for key in key_ids)
         issues: Final = {
             issue.cohort_key: issue for issue in await self._store.find_active_issues(keys) if issue.last_seen == now
         }
+        needed: Final = frozenset(
+            (attributions[item.source.alert.id].key_id, item.window.start, item.window.day)
+            for item in traffic
+            if _cohort_key("spend", "key", attributions[item.source.alert.id].key_id, "increase") in issues
+        )
+        if not needed:
+            return {}
+        matched: Final[set[tuple[str | None, date, date]]] = set()  # mutable-ok: max 10 flags
+        async for page in self._spend_pages("key", key_ids, traffic[0].window.day):
+            for spend in page:
+                if (identity := _comparison_window(spend)) in needed and self._volume_matches_key_spend(spend):
+                    matched.add(identity)
+            if len(matched) == len(needed):
+                break
         return {
             item.source.alert.id: _Target(
                 issue.model_copy(update={"observed_at": now}),
@@ -450,10 +484,7 @@ class PerformanceIssueProjector:
             for item in traffic
             if (issue := issues.get(_cohort_key("spend", "key", attributions[item.source.alert.id].key_id, "increase")))
             is not None
-            and any(
-                (spend.window.start, spend.window.day) == (item.window.start, item.window.day)
-                for spend in by_key.get(attributions[item.source.alert.id].key_id, ())
-            )
+            and (attributions[item.source.alert.id].key_id, item.window.start, item.window.day) in matched
         }
 
     @staticmethod
@@ -482,48 +513,31 @@ class PerformanceIssueProjector:
             right.min_value,
         )
 
-    async def _provider_evidence(
-        self, day: date, rules: tuple[UsageAlertRule, ...], now: datetime
-    ) -> Mapping[str, _ProviderGroup]:
-        rule: Final = next(
-            (
-                rule
-                for rule in rules
-                if is_default_usage_rule(rule) and rule.metric == "latency" and rule.direction == "increase"
-            ),
-            None,
-        )
+    async def _provider_group(self, provider: str, day: date, now: datetime) -> _ProviderGroup | None:
+        if provider in self._provider_cache:
+            self._provider_cache.move_to_end(provider)
+            return self._provider_cache[provider]
+        rule: Final = self._provider_rule
         if rule is None:
-            return {}
-        groups: Final[dict[str, _ProviderGroup]] = {}  # mutable-ok: retain one confirmed cohort per provider
-        reserved: Final[set[str]] = set()  # mutable-ok: an active frozen cohort prevents a competing subset episode
-        cursor: str | None = None  # rebind-ok: bounded existing-cohort pagination
-        while existing := await self._store.active_provider_issues(cursor=cursor):
-            for prior, recovered, evidence in await self._prior_provider_page(existing, day, rule, now):
-                if recovered or prior.cohort.scope_id is None:
-                    continue
-                reserved.add(prior.cohort.scope_id)
-                if evidence is not None:
-                    groups[prior.cohort.scope_id] = _ProviderGroup(evidence, rule)
-            cursor = existing[-1].id
-        source_cursor: str | None = None  # rebind-ok: stop discovery when no compatible active source exists
-        compatible = False  # rebind-ok: early-exit source scan
-        while sources := await self._store.active_signals(day, metric="latency", cursor=source_cursor):
-            if any(is_default_usage_rule(source.rule) and self._same_policy(source.rule, rule) for source in sources):
-                compatible = True
-                break
-            source_cursor = sources[-1].alert.id
-        if not compatible:
-            return groups
-        pair_cursor: IssueModelPair | None = None  # rebind-ok: keyset pagination of model pairs
-        while pairs := await self._providers.candidate_pairs(day, pair_cursor):
-            for provider, selected in groupby(pairs, lambda pair: pair.provider):
-                if provider in reserved or provider in groups:
-                    continue
-                if (candidate_evidence := await self._providers.latency_cohort(tuple(selected), day, rule)) is not None:
-                    groups[provider] = _ProviderGroup(candidate_evidence, rule)
-            pair_cursor = pairs[-1]
-        return groups
+            return None
+        existing: Final = await self._store.find_active_issues(
+            (_cohort_key("latency", "provider", provider, "increase"),)
+        )
+        evidence: ProviderLatencyEvidence | None = None  # rebind-ok: fresh or saved cohort evidence
+        if existing:
+            prior: Final = existing[0]
+            _, recovered, evidence = await self._prior_provider(prior, day, rule)  # rebind-ok: saved cohort
+            if recovered:
+                await self._store.recover_issue_ids((prior.id,), now)
+        else:
+            pairs: Final = await self._providers.provider_pairs(provider, day)
+            if 2 <= len(pairs) <= 100:
+                evidence = await self._providers.latency_cohort(pairs, day, rule)  # rebind-ok: new cohort
+        result: Final = _ProviderGroup(evidence, rule) if evidence is not None else None
+        self._provider_cache[provider] = result
+        if len(self._provider_cache) > 32:
+            self._provider_cache.popitem(last=False)
+        return result
 
     async def _prior_provider_page(
         self,
@@ -551,22 +565,23 @@ class PerformanceIssueProjector:
             evidence if evidence is not None and evidence.cohort.model_pairs == issue.cohort.model_pairs else None,
         )
 
-    async def _provider_targets(
-        self, candidates: tuple[_Candidate, ...], providers: Mapping[str, _ProviderGroup], now: datetime
-    ) -> Mapping[str, _Target]:
+    async def _provider_targets(self, candidates: tuple[_Candidate, ...], now: datetime) -> Mapping[str, _Target]:
         eligible: Final = tuple(
             item
             for item in candidates
             if item.source.rule.metric == "latency" and is_default_usage_rule(item.source.rule)
         )
-        if not eligible or not providers:
+        if not eligible or self._provider_rule is None:
             return {}
         scope: Final = eligible[0].source.rule.scope_type
         by_reference: Final = {item.source.alert.id: item for item in eligible}
         hints: Final = await self._metrics.issue_source_providers(scope, tuple(item.window for item in eligible))
         targets: Final[dict[str, _Target]] = {}  # mutable-ok: each source belongs to at most one 80%-coverage provider
         for provider, matches in groupby(sorted(hints, key=lambda hint: hint.provider), lambda hint: hint.provider):
-            targets.update(await self._provider_matches(provider, tuple(matches), by_reference, providers, scope, now))
+            if (group := await self._provider_group(provider, eligible[0].window.day, now)) is not None:
+                targets.update(
+                    await self._provider_matches(provider, tuple(matches), by_reference, {provider: group}, scope, now)
+                )
         return targets
 
     async def _provider_matches(
@@ -628,7 +643,7 @@ class PerformanceIssueProjector:
                 range_start=cohort.baseline_start,
                 range_end=item.window.day,
                 grouping_reason="provider_cohort",
-                explanation="Several keys and models slowed down together. The comparison holds today's key and model mix constant and excludes keys still collecting a baseline. This is a shared pattern, not proof of a common cause.",
+                explanation="Several keys and models slowed down together. The comparison holds the observed day's key and model mix constant and excludes keys still collecting a baseline. This is a shared pattern, not proof of a common cause.",
                 comparisons=(cohort,),
                 impact=evidence.impact,
             ),
@@ -659,29 +674,32 @@ class PerformanceIssueProjector:
                 for candidate in candidates
             )
         )
-        bindings: Final = tuple(
-            chain.from_iterable(
-                _bindings(candidate, saved[targets[candidate.source.alert.id].issue.cohort_key].id)
-                for candidate in candidates
-            )
+        bindings: Final = chain.from_iterable(
+            _bindings(candidate, saved[targets[candidate.source.alert.id].issue.cohort_key].id)
+            for candidate in candidates
         )
-        for offset in range(0, len(bindings), 500):
-            await self._store.queue_deliveries(bindings[offset : offset + 500])
+        while batch := tuple(islice(bindings, 500)):
+            await self._store.queue_deliveries(batch)
 
-    async def _notify(self) -> None:
-        deadline: Final = asyncio.get_running_loop().time() + 60
-        while asyncio.get_running_loop().time() < deadline and (pending := await self._store.pending_deliveries()):
+    async def _notify(self, stop_at: float | None = None) -> None:
+        deadline: Final = stop_at if stop_at is not None else asyncio.get_running_loop().time() + 60
+        while asyncio.get_running_loop().time() + 2 < deadline and (pending := await self._store.pending_deliveries()):
             for item in pending:
-                if asyncio.get_running_loop().time() >= deadline:
+                if asyncio.get_running_loop().time() + 2 >= deadline:
                     return
-                await self._notify_one(item)
+                await self._notify_one(item, deadline)
 
-    async def _notify_one(self, item: IssuePendingDelivery) -> None:
+    async def _notify_one(self, item: IssuePendingDelivery, deadline: float) -> None:
         current: Final = await self._store.pending_delivery(item.delivery.id)
         if current is None:
             return
+        remaining: Final = deadline - asyncio.get_running_loop().time()
+        if remaining <= 2 or not await self._store.reserve_delivery(item.delivery.id):
+            return
         try:
-            delivered: Final = await asyncio.wait_for(self._delivery.send_issue(current), timeout=30)
+            delivered: Final = await asyncio.wait_for(
+                self._delivery.send_issue(current), timeout=min(30, remaining - 1)
+            )
         except Exception:  # noqa: BLE001  # persisted retry avoids losing a notification on transport failure
             await self._store.defer_delivery(item.delivery.id, "delivery_failed")
             verbose_proxy_logger.warning("Performance issue notification failed; queued for retry")

@@ -338,6 +338,7 @@ class IssuesRepository:
         scope_type: IssueScope | None = None,
         metric: UsageAlertMetric | None = None,
         scope_ids: tuple[str, ...] | None = None,
+        completed_only: bool = False,
     ) -> tuple[IssueProjectionSignal, ...]:
         if not 1 <= limit <= 500:
             raise ValueError("Read between one and 500 source signals")
@@ -356,13 +357,39 @@ class IssuesRepository:
                     AND (r.scope_id IS NULL OR a.scope_id=r.scope_id)
                     AND ($2::text IS NULL OR a.id>$2) AND ($4::text IS NULL OR a.scope_type=$4)
                     AND ($5::text IS NULL OR a.metric=$5)
-                    AND ($6::text[] IS NULL OR a.scope_id=ANY($6::text[])) ORDER BY a.id LIMIT $3""",
+                    AND ($6::text[] IS NULL OR a.scope_id=ANY($6::text[]))
+                    AND (NOT $7::boolean OR EXISTS (
+                        SELECT 1 FROM "LiteLLM_UsageAlertCheckpoint" c WHERE c.completed
+                        AND c.id=r.id||':'||replace(r.record->>'updated_at','Z','+00:00')||':'||$1::text))
+                    AND (NOT $7::boolean OR NOT(r.id=ANY($8::text[])) OR NOT EXISTS (
+                        SELECT 1 FROM "LiteLLM_UsageAlertRule" dependency
+                        WHERE dependency.enabled AND NOT dependency.deleted AND dependency.id=ANY($8::text[])
+                        AND ((a.scope_type<>'key' AND dependency.scope_type='key'
+                            AND dependency.record->>'metric'=r.record->>'metric'
+                            AND dependency.record->>'direction'=r.record->>'direction')
+                            OR (r.record->>'metric'='requests' AND r.record->>'direction'='increase'
+                                AND dependency.record->>'metric'='spend' AND dependency.record->>'direction'='increase'
+                                AND dependency.scope_type IN ('key',r.scope_type)))
+                        AND NOT (dependency.record->>'evaluation_status'='insufficient_coverage'
+                            AND dependency.record->>'last_evaluated_day'=$1::text)
+                        AND NOT EXISTS (SELECT 1 FROM "LiteLLM_UsageAlertCheckpoint" completed WHERE completed.completed
+                            AND completed.id=dependency.id||':'||replace(dependency.record->>'updated_at','Z','+00:00')||':'||$1::text)))
+                    AND (NOT(r.id=ANY($8::text[])) OR NOT EXISTS (
+                        SELECT 1 FROM "LiteLLM_UsageAlertRule" override WHERE override.enabled AND NOT override.deleted
+                        AND COALESCE((override.record->>'overrides_defaults')::boolean,false)
+                        AND NOT(override.id=ANY($8::text[])) AND override.scope_type=r.scope_type
+                        AND override.record->>'metric'=r.record->>'metric'
+                        AND override.record->>'direction'=r.record->>'direction'
+                        AND (override.scope_id IS NULL OR override.scope_id=a.scope_id)))
+                    ORDER BY a.id LIMIT $3""",
                 day.isoformat(),
                 cursor,
                 limit,
                 scope_type,
                 metric,
                 list(scope_ids) if scope_ids is not None else None,
+                completed_only,
+                tuple(DEFAULT_USAGE_RULE_IDS),
             )
         )
 
@@ -571,6 +598,14 @@ class IssuesRepository:
                 delivery_id,
             )
         )
+
+    async def reserve_delivery(self, delivery_id: str) -> bool:
+        rows: Final = await self.database.query_raw(
+            """UPDATE "LiteLLM_IssueDelivery" SET next_attempt=CURRENT_TIMESTAMP+interval '1 hour',
+                updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND NOT sent AND next_attempt<=CURRENT_TIMESTAMP RETURNING id""",
+            delivery_id,
+        )
+        return bool(rows)
 
     async def mark_delivery_sent(self, delivery_id: str) -> None:
         await self.database.query_raw(

@@ -26,6 +26,13 @@ class DailyAlertMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class DailyMetricsPage:
+    rows: tuple[DailyAlertMetrics, ...]
+    cursor: str | None
+    complete: bool
+
+
+@dataclass(frozen=True, slots=True)
 class IssueMetricWindow:
     reference_id: str
     entity_id: str
@@ -173,7 +180,7 @@ class MetricsDatabase(Protocol):
 
 
 _ROWS: Final = TypeAdapter(tuple[DailyAlertMetrics, ...])
-_BATCH_SIZE: Final = 500
+_BATCH_SIZE: Final = 10
 _DEPRECATION_USAGE: Final = TypeAdapter(tuple[ModelDeprecationUsage, ...])
 
 _DEPRECATION_USAGE_QUERY: Final = """
@@ -216,7 +223,7 @@ def _source(scope: Scope) -> tuple[str, str]:
 def _query(scope: Scope) -> str:
     table, entity = _source(scope)
     # Identifiers come only from the closed scope mapping; request values are parameters.
-    return f"""
+    query: Final = f"""
 WITH entities AS MATERIALIZED (
     SELECT DISTINCT {entity} AS entity_id FROM {table}
     WHERE date >= $1 AND date <= $2 AND {entity} >= COALESCE($3::text, '') AND ($3::text IS NULL OR {entity} <> $3)
@@ -233,6 +240,21 @@ WHERE activity.date >= $1 AND activity.date <= $2
 GROUP BY entities.entity_id, activity.date
 ORDER BY entities.entity_id, activity.date
 """
+    if scope != "key":
+        return query
+    return (
+        query[: query.index("\nSELECT entities")]
+        + """
+SELECT entities.entity_id, daily.* FROM entities CROSS JOIN LATERAL (
+    SELECT activity.date AS day,SUM(activity.spend) AS spend,
+        SUM(activity.api_requests)::bigint AS requests,SUM(activity.failed_requests)::bigint AS errors,
+        SUM(activity.total_response_time_ms) AS response_time_ms,SUM(activity.timed_requests)::bigint AS timed_requests
+    FROM "LiteLLM_DailyUserSpend" activity
+    WHERE activity.api_key=entities.entity_id AND activity.date>=$1 AND activity.date<=$2
+    GROUP BY activity.date
+) daily ORDER BY entities.entity_id,daily.day
+"""
+    )
 
 
 def _reporting_id(scope: Scope, row: DailyAlertMetrics) -> DailyAlertMetrics:
@@ -319,6 +341,48 @@ class UsageAlertMetricsRepository:
             raise ValueError("Deprecation usage accepts at most 500 models and 30 consecutive dates")
         return _DEPRECATION_USAGE.validate_python(
             await self._database.query_raw(_DEPRECATION_USAGE_QUERY, start.isoformat(), end.isoformat(), models)
+        )
+
+    async def page(
+        self,
+        scope: Scope,
+        target: date,
+        baseline_days: int,
+        *,
+        cursor: str | None = None,
+        entity_ids: tuple[str, ...] | None = None,
+    ) -> DailyMetricsPage:
+        if entity_ids is not None and len(entity_ids) > _BATCH_SIZE:
+            raise ValueError("Read at most 10 exact entities")
+        if entity_ids == ():
+            return DailyMetricsPage((), cursor, True)
+        query: Final = _query(scope)
+        arguments: Final = (
+            (target - timedelta(days=baseline_days)).isoformat(),
+            target.isoformat(),
+            cursor,
+            _BATCH_SIZE,
+        )
+        exact_query: Final = (
+            query[: query.index("WITH entities")]
+            + "WITH entities AS MATERIALIZED (SELECT unnest($3::text[]) AS entity_id)"
+            + query[query.index("\nSELECT entities") :]
+        )
+        raw: Final = _ROWS.validate_python(
+            await self._database.query_raw(
+                exact_query if entity_ids is not None else query,
+                *(
+                    arguments[:2]
+                    + (tuple(api_key_from_bucket(item) if scope == "key" else item for item in entity_ids),)
+                    if entity_ids is not None
+                    else arguments
+                ),
+            )
+        )
+        return DailyMetricsPage(
+            tuple(_reporting_id(scope, row) for row in raw),
+            raw[-1].entity_id if raw else cursor,
+            entity_ids is not None or scope == "deployment" or len({row.entity_id for row in raw}) < _BATCH_SIZE,
         )
 
     async def batches(

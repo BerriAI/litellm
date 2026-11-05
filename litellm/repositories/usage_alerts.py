@@ -34,12 +34,16 @@ from litellm.types.proxy.usage_alerts import (
     UsageAlertModelOption,
     UsageAlertNotification,
     UsageAlertObservation,
+    UsageAlertProgress,
+    UsageAlertProjectionCursor,
+    UsageAlertProjectionWork,
     UsageAlertRule,
     UsageAlertRuleInput,
     UsageAlertRuleKind,
     UsageAlertRuleList,
     UsageAlertScope,
     UsageAlertStatus,
+    UsageAlertWorkCursor,
 )
 
 if TYPE_CHECKING:
@@ -287,6 +291,7 @@ class UsageAlertsRepository:
                     jsonb_build_object('total',count(*) FILTER (WHERE builtin),
                         'enabled',count(*) FILTER (WHERE builtin AND enabled),
                         'evaluation_status_counts',jsonb_build_object(
+                            'delayed',count(*) FILTER (WHERE builtin AND enabled AND record->>'evaluation_status'='delayed'),
                             'pending',count(*) FILTER (WHERE builtin AND enabled AND COALESCE(record->>'evaluation_status','pending')='pending'),
                             'complete',count(*) FILTER (WHERE builtin AND enabled AND record->>'evaluation_status'='complete'),
                             'insufficient_coverage',count(*) FILTER (WHERE builtin AND enabled AND record->>'evaluation_status'='insufficient_coverage'),
@@ -320,6 +325,136 @@ class UsageAlertsRepository:
             )
         )
         return tuple(UsageAlertRule.model_validate(row.record) for row in rows)
+
+    async def enabled_rule_page(
+        self, scope: UsageAlertScope, wildcard: bool, cursor: str | None, limit: int = 500
+    ) -> tuple[UsageAlertRule, ...]:
+        if not 1 <= limit <= 500:
+            raise ValueError("Read at most 500 rules")
+        rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
+            await self.database.query_raw(
+                'SELECT record FROM "LiteLLM_UsageAlertRule" WHERE enabled AND NOT deleted AND scope_type=$1 AND (scope_id IS NULL)=$2 AND ($3::text IS NULL OR id>$3) ORDER BY id LIMIT $4',
+                scope,
+                wildcard,
+                cursor,
+                limit,
+            )
+        )
+        return tuple(UsageAlertRule.model_validate(row.record) for row in rows)
+
+    async def work_cursor(self) -> UsageAlertWorkCursor:
+        rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
+            await self.database.query_raw(
+                'SELECT param_value AS record FROM "LiteLLM_Config" WHERE param_name=$1', "usage_alert_work_cursor"
+            )
+        )
+        return UsageAlertWorkCursor.model_validate(rows[0].record) if rows else UsageAlertWorkCursor()
+
+    async def save_work_cursor(self, cursor: UsageAlertWorkCursor) -> None:
+        await self.database.query_raw(
+            'INSERT INTO "LiteLLM_Config" (param_name,param_value) VALUES ($1,$2::jsonb) ON CONFLICT(param_name) DO UPDATE SET param_value=EXCLUDED.param_value RETURNING param_name',
+            "usage_alert_work_cursor",
+            cursor.model_dump_json(),
+        )
+
+    async def save_progress(self, updates: tuple[tuple[UsageAlertRule, UsageAlertProgress], ...]) -> None:
+        if not updates:
+            return
+        if len(updates) > 500:
+            raise ValueError("Save at most 500 rule positions")
+        await self.database.query_raw(
+            """WITH input AS (SELECT * FROM jsonb_to_recordset($1::jsonb)
+                AS x(id text,revision timestamptz,progress jsonb))
+            UPDATE "LiteLLM_UsageAlertRule" r SET record=r.record || jsonb_build_object(
+                'evaluation_progress',x.progress,'evaluation_status','delayed','last_evaluated_day',x.progress->'day')
+            FROM input x WHERE r.id=x.id AND r.enabled AND NOT r.deleted
+                AND (r.record->>'updated_at')::timestamptz=x.revision RETURNING r.id""",
+            json.dumps(
+                tuple(
+                    {
+                        "id": rule.id,
+                        "revision": rule.updated_at.isoformat(),
+                        "progress": progress.model_dump(mode="json"),
+                    }
+                    for rule, progress in updates
+                )
+            ),
+        )
+
+    async def suppressed_entities(
+        self, rules: tuple[UsageAlertRule, ...], entities: tuple[str | None, ...]
+    ) -> Mapping[str, frozenset[str | None]]:
+        defaults: Final = tuple(rule for rule in rules if rule.id in _DEFAULT_RULE_IDS)
+        if not defaults or not entities:
+            return {}
+        if len(rules) > 500 or len(entities) > 500:
+            raise ValueError("Check at most 500 rules and entities")
+        rows: Final = TypeAdapter(tuple[_BreachedEntity, ...]).validate_python(
+            await self.database.query_raw(
+                """WITH input AS (SELECT * FROM jsonb_to_recordset($1::jsonb)
+                    AS x(id text,scope_type text,metric text,direction text))
+                SELECT DISTINCT x.id AS rule_id,r.scope_id FROM input x JOIN "LiteLLM_UsageAlertRule" r
+                    ON r.scope_type=x.scope_type AND r.record->>'metric'=x.metric AND r.record->>'direction'=x.direction
+                WHERE r.enabled AND NOT r.deleted AND COALESCE((r.record->>'overrides_defaults')::boolean,false) AND NOT(r.id=ANY($2::text[]))
+                    AND (r.scope_id IS NULL OR r.scope_id=ANY($3::text[])) ORDER BY rule_id""",
+                json.dumps(
+                    tuple(
+                        {"id": r.id, "scope_type": r.scope_type, "metric": r.metric, "direction": r.direction}
+                        for r in defaults
+                    )
+                ),
+                tuple(_DEFAULT_RULE_IDS),
+                tuple(entity for entity in entities if entity is not None),
+            )
+        )
+        return {
+            rule_id: frozenset(row.scope_id for row in group)
+            for rule_id, group in groupby(rows, lambda row: row.rule_id)
+        }
+
+    async def ensure_projection_work(self, day: date) -> None:
+        await self.database.query_raw(
+            'INSERT INTO "LiteLLM_UsageAlertCheckpoint" (id,owner,completed) VALUES ($1,$2,false) ON CONFLICT(id) DO NOTHING RETURNING id',
+            "performance-dirty:" + day.isoformat(),
+            str(uuid4()),
+        )
+
+    async def pending_projection_work(self) -> UsageAlertProjectionWork | None:
+        rows: Final = TypeAdapter(tuple[UsageAlertProjectionWork, ...]).validate_python(
+            await self.database.query_raw(
+                """SELECT substring(id FROM 19)::date AS day,owner AS version FROM "LiteLLM_UsageAlertCheckpoint"
+                WHERE id LIKE 'performance-dirty:%' AND NOT completed ORDER BY id LIMIT 1"""
+            )
+        )
+        return rows[0] if rows else None
+
+    async def projection_cursor(self, work: UsageAlertProjectionWork) -> UsageAlertProjectionCursor:
+        rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
+            await self.database.query_raw(
+                'SELECT param_value AS record FROM "LiteLLM_Config" WHERE param_name=$1',
+                "usage_issue_projection_cursor",
+            )
+        )
+        current: Final = UsageAlertProjectionCursor.model_validate(rows[0].record) if rows else None
+        return (
+            current
+            if current is not None and current.version == work.version
+            else UsageAlertProjectionCursor(version=work.version)
+        )
+
+    async def save_projection_cursor(self, cursor: UsageAlertProjectionCursor) -> None:
+        await self.database.query_raw(
+            'INSERT INTO "LiteLLM_Config" (param_name,param_value) VALUES ($1,$2::jsonb) ON CONFLICT(param_name) DO UPDATE SET param_value=EXCLUDED.param_value RETURNING param_name',
+            "usage_issue_projection_cursor",
+            cursor.model_dump_json(),
+        )
+
+    async def finish_projection_work(self, work: UsageAlertProjectionWork) -> None:
+        await self.database.query_raw(
+            'UPDATE "LiteLLM_UsageAlertCheckpoint" SET completed=true WHERE id=$1 AND owner=$2 RETURNING id',
+            "performance-dirty:" + work.day.isoformat(),
+            work.version,
+        )
 
     async def get_alert(self, alert_id: str) -> UsageAlert | None:
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
@@ -609,16 +744,24 @@ class UsageAlertsRepository:
             """WITH input AS (
                 SELECT * FROM jsonb_to_recordset($1::jsonb)
                 AS i(rule_id text,checkpoint_id text,revision timestamptz,status text)
+            ), valid AS (
+                SELECT input.* FROM input JOIN "LiteLLM_UsageAlertRule" r ON r.id=input.rule_id
+                WHERE r.enabled AND NOT r.deleted AND (r.record->>'updated_at')::timestamptz=input.revision
             ), checkpoints AS (
                 INSERT INTO "LiteLLM_UsageAlertCheckpoint" (id,completed)
-                SELECT checkpoint_id,true FROM input WHERE $3::boolean
-                ON CONFLICT(id) DO NOTHING
-            ) UPDATE "LiteLLM_UsageAlertRule" r SET record=r.record || jsonb_build_object(
-                'last_evaluated_day',$2::text,'evaluation_status',input.status)
-            FROM input WHERE r.id=input.rule_id AND NOT r.deleted
-                AND (r.record->>'updated_at')::timestamptz=input.revision
-                AND (r.record->>'last_evaluated_day' IS DISTINCT FROM $2::text
-                    OR r.record->>'evaluation_status' IS DISTINCT FROM input.status) RETURNING r.id""",
+                SELECT checkpoint_id,true FROM valid WHERE $3::boolean
+                ON CONFLICT(id) DO NOTHING RETURNING id
+            ), dirty AS (
+                INSERT INTO "LiteLLM_UsageAlertCheckpoint" (id,owner,completed)
+                SELECT 'performance-dirty:'||$2::text,$4,false WHERE EXISTS(SELECT 1 FROM checkpoints)
+                ON CONFLICT(id) DO UPDATE SET owner=EXCLUDED.owner,completed=false
+            ) UPDATE "LiteLLM_UsageAlertRule" r SET record=
+                (CASE WHEN $3::boolean THEN r.record-'evaluation_progress' ELSE r.record END) || jsonb_build_object(
+                    'last_evaluated_day',$2::text,'evaluation_status',input.status)
+            FROM valid input WHERE r.id=input.rule_id AND (
+                r.record->>'last_evaluated_day' IS DISTINCT FROM $2::text
+                OR r.record->>'evaluation_status' IS DISTINCT FROM input.status
+                OR ($3::boolean AND r.record ? 'evaluation_progress')) RETURNING r.id""",
             json.dumps(
                 tuple(
                     {
@@ -632,6 +775,7 @@ class UsageAlertsRepository:
             ),
             day.isoformat(),
             completed,
+            str(uuid4()),
         )
 
     async def ensure_default_rules(self, rules: tuple[UsageAlertRuleInput, ...]) -> None:

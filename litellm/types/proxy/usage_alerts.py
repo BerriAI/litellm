@@ -10,7 +10,9 @@ UsageAlertMetric: TypeAlias = Literal["spend", "requests", "latency", "errors", 
 UsageAlertDirection: TypeAlias = Literal["increase", "decrease"]
 UsageAlertStatus: TypeAlias = Literal["open", "resolved", "dismissed"]
 UsageAlertChannel: TypeAlias = Literal["email", "slack"]
-UsageAlertEvaluationStatus: TypeAlias = Literal["pending", "complete", "insufficient_coverage", "insufficient_history"]
+UsageAlertEvaluationStatus: TypeAlias = Literal[
+    "pending", "complete", "insufficient_coverage", "insufficient_history", "delayed"
+]
 UsageAlertRuleKind: TypeAlias = Literal["all", "default", "custom"]
 
 
@@ -54,6 +56,31 @@ class UsageAlertRuleInput(BaseModel):
         return self
 
 
+class UsageAlertProgress(BaseModel, frozen=True):
+    """Internal durable position; never part of rule input or public output."""
+
+    day: date
+    revision: datetime
+    cursor: str | None = None
+    evaluated: bool = False
+
+
+class UsageAlertWorkCursor(BaseModel, frozen=True):
+    phase: int = Field(default=0, ge=0, lt=10)
+    after_id: str | None = None
+
+
+class UsageAlertProjectionWork(BaseModel, frozen=True):
+    day: date
+    version: str
+
+
+class UsageAlertProjectionCursor(BaseModel, frozen=True):
+    version: str
+    step: int = Field(default=0, ge=0, le=26)
+    after_id: str | None = None
+
+
 class UsageAlertRule(UsageAlertRuleInput):
     overrides_defaults: bool = Field(default=False, exclude=True)
     id: str
@@ -63,6 +90,8 @@ class UsageAlertRule(UsageAlertRuleInput):
     last_evaluated_day: date | None = None
     evaluation_status: UsageAlertEvaluationStatus = "pending"
     is_default: bool = False
+    evaluation_progress: UsageAlertProgress | None = Field(default=None, exclude=True)
+    overrides_defaults: bool = Field(default=False, exclude=True)
 
 
 class UsageAlert(BaseModel):
@@ -99,6 +128,7 @@ class UsageAlertUpdate(BaseModel):
 
 
 class UsageAlertEvaluationCounts(BaseModel, frozen=True):
+    delayed: int = 0
     pending: int = 0
     complete: int = 0
     insufficient_coverage: int = 0

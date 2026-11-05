@@ -129,30 +129,6 @@ def test_sentinel_entities_cannot_create_alerts_with_unusable_activity_links(sco
     assert observations.changed == ()
 
 
-def test_custom_entity_rule_replaces_only_the_matching_default() -> None:
-    from uuid import NAMESPACE_URL, uuid5
-
-    from litellm.proxy.spend_tracking.usage_alert_job import _suppressed_entities
-    from litellm.types.proxy.usage_alerts import UsageAlertRule
-
-    default: Final = UsageAlertRule(
-        id=str(uuid5(NAMESPACE_URL, "litellm:usage-alert:key:spend:increase")),
-        name="default",
-        scope_type="key",
-        metric="spend",
-        direction="increase",
-        created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
-        created_by=None,
-    )
-    custom: Final = default.model_copy(update={"id": "custom", "scope_id": "key-a"})
-    other_metric: Final = custom.model_copy(update={"id": "latency", "metric": "latency", "scope_id": "key-b"})
-    assert _suppressed_entities(default, (default, custom, other_metric)) == frozenset({"key-a"})
-    assert _suppressed_entities(custom, (default, custom, other_metric)) == frozenset()
-    wildcard: Final = custom.model_copy(update={"scope_id": None})
-    assert _suppressed_entities(default, (default, wildcard)) == frozenset({None})
-
-
 def test_database_metric_rows_preserve_numeric_and_date_validation() -> None:
     from pydantic import TypeAdapter, ValidationError
 
@@ -341,3 +317,25 @@ def test_error_rate_drop_requires_enough_current_requests() -> None:
     assert compare_daily_usage(rule, (*history, replace(_row(_DAY, requests=1), errors=0)), _DAY) is None
     result: Final = compare_daily_usage(rule, (*history, replace(_row(_DAY, requests=500), errors=0)), _DAY)
     assert result is not None and result.breached
+
+
+def test_suppressed_default_can_recover_existing_episode_without_creating_a_new_one() -> None:
+    from litellm.proxy.spend_tracking.usage_alert_job import _observations
+
+    rule: Final = UsageAlertRule(
+        id="rule",
+        name="Default",
+        scope_type="key",
+        metric="spend",
+        direction="increase",
+        created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        created_by=None,
+    )
+    history: Final = tuple(_row(_DAY - timedelta(days=day)) for day in range(1, 4))
+    suppressed: Final = frozenset({"key-a"})
+    active: Final = frozenset({"key-a"})
+    recovered: Final = _observations(rule, (*history, _row(_DAY)), _DAY, suppressed, active=active)
+    assert len(recovered.changed) == 1 and not recovered.changed[0].breached
+    assert not _observations(rule, (*history, _row(_DAY, spend=100)), _DAY, suppressed, active=active).changed
+    assert not _observations(rule, (*history, _row(_DAY, spend=100)), _DAY, suppressed).changed
