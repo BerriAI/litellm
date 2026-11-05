@@ -89,10 +89,10 @@ export default function MigrationDetail({
     },
   });
   const keys = useMemo(() => keyQuery.data?.api_keys.map((key) => key.api_key) ?? [], [keyQuery.data]);
-  const tagQuery = useQuery({
+  const tagQueryOptions = {
     queryKey: ["deprecationUsageTags", scope, model, range, keys],
     enabled: keys.length > 0,
-    queryFn: async ({ signal }) => {
+    queryFn: async ({ signal }: { signal: AbortSignal }) => {
       const { data } = await backgroundFetchClient.GET("/model/deprecations/alerts/tags", {
         params: { query: { ...range, model, api_keys: keys } },
         signal,
@@ -101,7 +101,8 @@ export default function MigrationDetail({
       return data;
     },
     staleTime: 5 * 60 * 1000,
-  });
+  };
+  const tagQuery = useQuery(tagQueryOptions);
   const tagsByKey = useMemo(() => {
     const tags = new Map<string, string[]>();
     for (const usage of tagQuery.data ?? []) {
