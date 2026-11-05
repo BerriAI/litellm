@@ -19,13 +19,13 @@ import {
 const STORAGE_KEY = "modelDeprecationBannerDismissed";
 
 const ModelDeprecationBanner = ({ today = new Date() }: { today?: Date }) => {
-  const { data, isError, isLoading } = useModelDeprecations();
+  const { data } = useModelDeprecations();
   const [isExpanded, setIsExpanded] = useState(false);
   const [dismissedFingerprint, setDismissedFingerprint] = useState<string | null>(() =>
     getLocalStorageItem(STORAGE_KEY),
   );
 
-  if (isLoading || isError || !data) {
+  if (!data) {
     return null;
   }
 

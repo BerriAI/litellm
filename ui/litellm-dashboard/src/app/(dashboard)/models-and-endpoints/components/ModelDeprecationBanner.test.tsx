@@ -37,7 +37,9 @@ const queryResult = (
   data: ModelDeprecationResponse | undefined,
   isLoading = false,
   isError = false,
-): ReturnType<typeof useModelDeprecations> => ({ data, isLoading, isError }) as ReturnType<typeof useModelDeprecations>;
+  overrides: Partial<ReturnType<typeof useModelDeprecations>> = {},
+): ReturnType<typeof useModelDeprecations> =>
+  ({ data, isLoading, isError, ...overrides }) as ReturnType<typeof useModelDeprecations>;
 
 const pinnedToday = (): Date => new Date(2026, 10, 4);
 
@@ -113,6 +115,37 @@ describe("ModelDeprecationBanner", () => {
     rerender(<ModelDeprecationBanner today={pinnedToday()} />);
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps the banner visible when a refetch fails", () => {
+    const staleInfoOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "stale-model",
+      deprecation_date: "2026-06-01",
+      days_until_deprecation: -156,
+      status: "deprecated",
+    };
+    const info = makeInfo(staleInfoOverrides);
+    const refetchError = new Error("Refetch failed");
+    const refetchErrorResult: Partial<ReturnType<typeof useModelDeprecations>> = {
+      error: refetchError,
+      failureCount: 1,
+      failureReason: refetchError,
+      fetchStatus: "idle",
+      isFetching: false,
+      isLoadingError: false,
+      isRefetchError: true,
+      status: "error",
+    };
+    mockedUseModelDeprecations.mockReturnValue(
+      queryResult(makeResponse({ deprecated: [info] }), false, true, refetchErrorResult),
+    );
+
+    renderBanner();
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(within(screen.getByRole("list")).getByRole("listitem")).toHaveTextContent(
+      "stale-model was deprecated on 2026-06-01",
+    );
   });
 
   it("shows deprecated and imminent entries with a link to Logging & Alerts", () => {
