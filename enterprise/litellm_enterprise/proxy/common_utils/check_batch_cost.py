@@ -1163,7 +1163,7 @@ class CheckBatchCost:
         - if not, return False
         - if so, return True
         """
-        from litellm.proxy.openai_files_endpoints.common_utils import with_created_batch_endpoint
+        from litellm.proxy.openai_files_endpoints.common_utils import created_batch_endpoint
 
         try:
             from litellm.integrations.prometheus import PrometheusLogger
@@ -1226,7 +1226,7 @@ class CheckBatchCost:
             )
 
             try:
-                provider_response = await self.llm_router.aretrieve_batch(
+                response = await self.llm_router.aretrieve_batch(
                     model=model_id,
                     batch_id=batch_id,
                     litellm_metadata={
@@ -1245,7 +1245,7 @@ class CheckBatchCost:
                 else:
                     await self._expire_if_old_and_unfinished(job)
                 continue
-            response = with_created_batch_endpoint(provider_response, self._stored_batch(job))
+            response.endpoint = created_batch_endpoint(response, self._stored_batch(job))
             if self._is_completed_with_output_id_pending(response):
                 verbose_proxy_logger.info(
                     f"CheckBatchCost: batch {batch_id} is completed but its output file id "
