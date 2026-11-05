@@ -685,6 +685,10 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
                 request=masked_request,
             ),
         )
+        if isinstance(message, bytes):
+            message = message.decode("utf-8", errors="replace")
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", errors="replace")
         self.message = message
         self.text = text
         self.status_code = original_error.response.status_code
