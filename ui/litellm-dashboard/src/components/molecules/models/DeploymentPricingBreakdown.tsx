@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
@@ -23,11 +24,12 @@ import {
   type ServiceTier,
 } from "./deploymentPricing";
 
-const groupName = (threshold: number | null): string =>
-  threshold === null ? "Base prices" : `Above ${formatTokenCount(threshold)} tokens`;
-
 function PriceGroupRows({ group, tiers }: { group: PriceGroup; tiers: readonly ServiceTier[] }) {
-  const name = groupName(group.threshold);
+  const { t } = useTranslation();
+  const name =
+    group.threshold === null
+      ? t("deploymentPricing.basePrices")
+      : t("deploymentPricing.aboveThreshold", { threshold: formatTokenCount(group.threshold) });
   return (
     <TableBody aria-label={name}>
       {group.threshold !== null && (
@@ -54,11 +56,15 @@ function PriceGroupRows({ group, tiers }: { group: PriceGroup; tiers: readonly S
 }
 
 function DeploymentPrices({ deployment }: { deployment: DeploymentPricing }) {
+  const { t } = useTranslation();
   const table = buildPricingTable(deployment.costs);
   const tiers = deployment.tiered_pricing;
   const providerName = getProviderLogoAndName(deployment.provider).displayName;
   return (
-    <section aria-label={`${providerName} pricing`} className="flex flex-col gap-2 rounded-lg border border-border p-3">
+    <section
+      aria-label={t("deploymentPricing.providerPricing", { provider: providerName })}
+      className="flex flex-col gap-2 rounded-lg border border-border p-3"
+    >
       <h4 className="flex items-center gap-2 text-sm font-medium">
         <ProviderLogo provider={deployment.provider} />
         {providerName}
@@ -67,10 +73,10 @@ function DeploymentPrices({ deployment }: { deployment: DeploymentPricing }) {
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead>Charge</TableHead>
+              <TableHead>{t("deploymentPricing.chargeColumn")}</TableHead>
               {table.tiers.map((tier) => (
                 <TableHead key={tier} className={NUMERIC_CELL_CLASS}>
-                  {SERVICE_TIER_LABELS[tier]}
+                  {t(SERVICE_TIER_LABELS[tier])}
                 </TableHead>
               ))}
             </TableRow>
@@ -80,12 +86,10 @@ function DeploymentPrices({ deployment }: { deployment: DeploymentPricing }) {
           ))}
         </Table>
       )}
-      {table.hasBlankCells && (
-        <p className="text-xs text-muted-foreground">Blank cells aren&apos;t priced separately for this deployment.</p>
-      )}
+      {table.hasBlankCells && <p className="text-xs text-muted-foreground">{t("deploymentPricing.blankCells")}</p>}
       {tiers.length > 0 && (
         <div className="flex flex-col gap-1 text-sm">
-          <p className="text-xs font-medium text-muted-foreground">Prices by request size, per 1M tokens</p>
+          <p className="text-xs font-medium text-muted-foreground">{t("deploymentPricing.tieredPricing")}</p>
           <ul className="flex flex-col gap-0.5 tabular-nums">
             {tiers.map((tier) => (
               <li key={tier.range.join("-")}>{describePricingTier(tier)}</li>
@@ -116,14 +120,14 @@ export function DeploymentPricingBreakdown({
   heading?: React.ReactNode;
   className?: string;
 }) {
+  const { t } = useTranslation();
   if (!deployments || deployments.length === 0) return null;
   return (
     <div className={cn("flex flex-col gap-3", className)}>
       {heading}
       {deployments.length > 1 && (
         <p className="text-xs text-muted-foreground">
-          This model has {deployments.length} deployments. Each request is billed at the prices of the deployment
-          that served it.
+          {t("deploymentPricing.deploymentCount", { count: deployments.length })}
         </p>
       )}
       {deployments.map((deployment, index) => (

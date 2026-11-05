@@ -823,7 +823,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <DeploymentPricingBreakdown
                   className="mt-4"
                   deployments={selectedModel.deployment_pricing}
-                  heading={<p className="font-medium">Pricing by Deployment:</p>}
+                  heading={<p className="font-medium">{t("aiHub.modelHubTable.modelDialog.pricingByDeployment")}</p>}
                 />
               </div>
 

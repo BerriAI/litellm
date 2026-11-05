@@ -179,7 +179,7 @@ export function ModelInspector({ model }: { model: ModelGroupInfo }) {
       <Facts groups={modelFacts(model)} />
       <DeploymentPricingBreakdown
         deployments={model.deployment_pricing}
-        heading={<h3 className={SECTION_TITLE}>Pricing by deployment</h3>}
+        heading={<h3 className={SECTION_TITLE}>{t("publicModelHub.modelInspector.pricingByDeployment")}</h3>}
       />
       {capabilities.length > 0 && (
         <PaneSection title={t("publicModelHub.modelInspector.capabilities")}>

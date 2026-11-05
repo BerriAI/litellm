@@ -958,7 +958,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     <DeploymentPricingBreakdown
                       className="mt-4"
                       deployments={selectedModel.deployment_pricing}
-                      heading={<p className="font-medium">Pricing by Deployment:</p>}
+                      heading={
+                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.pricingByDeployment")}</p>
+                      }
                     />
                   </div>
 

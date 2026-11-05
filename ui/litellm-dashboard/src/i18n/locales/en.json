@@ -6514,7 +6514,8 @@
         "rpm": "Requests per Minute:",
         "openaiParams": "Supported OpenAI Parameters",
         "usageExample": "Usage Example",
-        "copyToClipboard": "Copy to clipboard"
+        "copyToClipboard": "Copy to clipboard",
+        "pricingByDeployment": "Pricing by Deployment:"
       },
       "agentDialog": {
         "fallbackTitle": "Agent Details",
@@ -6667,7 +6668,8 @@
         "usageExample": "Usage Example",
         "decisionNote": "Decision models answer on <code>/v1/decisions</code> and <code>/v1/systemone</code>, not <code>/chat/completions</code>.",
         "howToCall": "How to call decision models",
-        "tryPlayground": "Try it in the Playground"
+        "tryPlayground": "Try it in the Playground",
+        "pricingByDeployment": "Pricing by Deployment:"
       },
       "agentDialog": {
         "fallbackTitle": "Agent Details",
@@ -7156,7 +7158,8 @@
         "title": "Wildcard model",
         "description": "Call it as <example/>, with any model name this provider offers"
       },
-      "capabilities": "Capabilities"
+      "capabilities": "Capabilities",
+      "pricingByDeployment": "Pricing by deployment"
     },
     "agentInspector": {
       "copyName": "Copy agent name",
@@ -18464,6 +18467,67 @@
         "cancel": "Cancel",
         "save": "Save Changes"
       }
+    }
+  },
+  "deploymentPricing": {
+    "deploymentCount_one": "This model has {{count}} deployment. Each request is billed at the prices of the deployment that served it.",
+    "deploymentCount_other": "This model has {{count}} deployments. Each request is billed at the prices of the deployment that served it.",
+    "providerPricing": "{{provider}} pricing",
+    "chargeColumn": "Charge",
+    "basePrices": "Base prices",
+    "aboveThreshold": "Above {{threshold}} tokens",
+    "blankCells": "Blank cells aren't priced separately for this deployment.",
+    "tieredPricing": "Prices by request size, per 1M tokens",
+    "tierRange": "{{low}}–{{high}} tokens: {{prices}}",
+    "tierPrice": "{{price}} {{charge}}",
+    "tierPricePerUnit": "{{price}} {{charge}} per {{unit}}",
+    "free": "Free",
+    "rowLabel": "{{charge}} / {{unit}}",
+    "withModality": "{{modality}} {{charge}}",
+    "withCacheDuration": "{{charge}} ({{duration}})",
+    "fallbackCost": "Cost",
+    "tiers": {
+      "standard": "Standard",
+      "flex": "Flex",
+      "balanced": "Balanced",
+      "priority": "Priority",
+      "ultrafast": "Ultrafast",
+      "batches": "Batch"
+    },
+    "charges": {
+      "input": "Input",
+      "cacheRead": "Cache read",
+      "cacheWrite": "Cache write",
+      "output": "Output"
+    },
+    "chargesInline": {
+      "input": "input",
+      "cacheRead": "cache read",
+      "cacheWrite": "cache write",
+      "output": "output"
+    },
+    "modalities": {
+      "text": "Text",
+      "image": "Image",
+      "audio": "Audio",
+      "video": "Video",
+      "reasoning": "Reasoning"
+    },
+    "modalitiesInline": {
+      "text": "text",
+      "image": "image",
+      "audio": "audio",
+      "video": "video",
+      "reasoning": "reasoning"
+    },
+    "units": {
+      "token": "1M tokens",
+      "second": "second",
+      "image": "image",
+      "pixel": "pixel",
+      "character": "character",
+      "query": "query",
+      "request": "request"
     }
   }
 }

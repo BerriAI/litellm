@@ -1,3 +1,6 @@
+import type { ParseKeys } from "i18next";
+
+import i18n from "@/i18n/i18n";
 import type { components } from "@/lib/http/schema";
 
 export type PricingTier = components["schemas"]["PriceTier"];
@@ -6,13 +9,13 @@ export type DeploymentPricing = components["schemas"]["DeploymentPricing"];
 export const SERVICE_TIERS = ["standard", "flex", "balanced", "priority", "ultrafast", "batches"] as const;
 export type ServiceTier = (typeof SERVICE_TIERS)[number];
 
-export const SERVICE_TIER_LABELS: Readonly<Record<ServiceTier, string>> = {
-  standard: "Standard",
-  flex: "Flex",
-  balanced: "Balanced",
-  priority: "Priority",
-  ultrafast: "Ultrafast",
-  batches: "Batch",
+export const SERVICE_TIER_LABELS: Readonly<Record<ServiceTier, ParseKeys>> = {
+  standard: "deploymentPricing.tiers.standard",
+  flex: "deploymentPricing.tiers.flex",
+  balanced: "deploymentPricing.tiers.balanced",
+  priority: "deploymentPricing.tiers.priority",
+  ultrafast: "deploymentPricing.tiers.ultrafast",
+  batches: "deploymentPricing.tiers.batches",
 };
 
 const UNITS = ["token", "second", "image", "pixel", "character", "query", "request"] as const;
@@ -80,22 +83,67 @@ export const parseCostKey = (key: string): CostKey => {
 
 type Price = Extract<CostKey, { kind: "price" }>;
 
-const CHARGE_LABELS: Readonly<Record<Charge, string>> = {
-  input: "Input",
-  cache_read: "Cache read",
-  cache_write: "Cache write",
-  output: "Output",
+type LabelForm = "start" | "inline";
+
+const CHARGE_LABELS: Readonly<Record<LabelForm, Readonly<Record<Charge, ParseKeys>>>> = {
+  start: {
+    input: "deploymentPricing.charges.input",
+    cache_read: "deploymentPricing.charges.cacheRead",
+    cache_write: "deploymentPricing.charges.cacheWrite",
+    output: "deploymentPricing.charges.output",
+  },
+  inline: {
+    input: "deploymentPricing.chargesInline.input",
+    cache_read: "deploymentPricing.chargesInline.cacheRead",
+    cache_write: "deploymentPricing.chargesInline.cacheWrite",
+    output: "deploymentPricing.chargesInline.output",
+  },
 };
 
-const chargeLabel = ({ charge, modality, cacheDuration }: Price): string => {
-  const name = modality ? `${modality} ${CHARGE_LABELS[charge].toLowerCase()}` : CHARGE_LABELS[charge];
-  const capitalized = name.charAt(0).toUpperCase() + name.slice(1);
-  return cacheDuration ? `${capitalized} (${cacheDuration})` : capitalized;
+const MODALITY_LABELS: Readonly<Record<LabelForm, Readonly<Record<Exclude<Modality, "">, ParseKeys>>>> = {
+  start: {
+    text: "deploymentPricing.modalities.text",
+    image: "deploymentPricing.modalities.image",
+    audio: "deploymentPricing.modalities.audio",
+    video: "deploymentPricing.modalities.video",
+    reasoning: "deploymentPricing.modalities.reasoning",
+  },
+  inline: {
+    text: "deploymentPricing.modalitiesInline.text",
+    image: "deploymentPricing.modalitiesInline.image",
+    audio: "deploymentPricing.modalitiesInline.audio",
+    video: "deploymentPricing.modalitiesInline.video",
+    reasoning: "deploymentPricing.modalitiesInline.reasoning",
+  },
 };
 
-const unitLabel = (unit: Unit): string => (unit === "token" ? "1M tokens" : unit);
+const UNIT_LABELS: Readonly<Record<Unit, ParseKeys>> = {
+  token: "deploymentPricing.units.token",
+  second: "deploymentPricing.units.second",
+  image: "deploymentPricing.units.image",
+  pixel: "deploymentPricing.units.pixel",
+  character: "deploymentPricing.units.character",
+  query: "deploymentPricing.units.query",
+  request: "deploymentPricing.units.request",
+};
 
-const rowLabel = (price: Price): string => `${chargeLabel(price)} / ${unitLabel(price.unit)}`;
+const chargeName = ({ charge, modality }: Price, form: LabelForm): string =>
+  modality
+    ? i18n.t("deploymentPricing.withModality", {
+        modality: i18n.t(MODALITY_LABELS[form][modality]),
+        charge: i18n.t(CHARGE_LABELS.inline[charge]),
+      })
+    : i18n.t(CHARGE_LABELS[form][charge]);
+
+const chargeLabel = (price: Price, form: LabelForm): string =>
+  price.cacheDuration
+    ? i18n.t("deploymentPricing.withCacheDuration", { charge: chargeName(price, form), duration: price.cacheDuration })
+    : chargeName(price, form);
+
+const unitLabel = (unit: Unit): string => i18n.t(UNIT_LABELS[unit]);
+
+const rowLabel = (price: Price): string =>
+  i18n.t("deploymentPricing.rowLabel", { charge: chargeLabel(price, "start"), unit: unitLabel(price.unit) });
 
 const rowRank = (price: Price): readonly number[] => [
   CHARGES.indexOf(price.charge),
@@ -117,7 +165,8 @@ const PRICE_FORMAT_OPTIONS: Intl.NumberFormatOptions = {
 
 const PRICE_FORMAT = new Intl.NumberFormat("en-US", PRICE_FORMAT_OPTIONS);
 
-export const formatRawPrice = (value: number): string => (value === 0 ? "Free" : PRICE_FORMAT.format(value));
+export const formatRawPrice = (value: number): string =>
+  value === 0 ? i18n.t("deploymentPricing.free") : PRICE_FORMAT.format(value);
 
 const formatUnitPrice = (value: number, unit: Unit): string =>
   formatRawPrice(unit === "token" ? value * 1_000_000 : value);
@@ -155,7 +204,12 @@ const sentenceCase = (text: string): string => {
 
 export const fallbackCostLabel = (key: string): string => {
   const perUnit = PER_UNIT_KEY.exec(key);
-  if (perUnit) return `${sentenceCase(perUnit[1] || "cost")} / ${perUnit[2].replaceAll("_", " ")}`;
+  if (perUnit) {
+    return i18n.t("deploymentPricing.rowLabel", {
+      charge: perUnit[1] ? sentenceCase(perUnit[1]) : i18n.t("deploymentPricing.fallbackCost"),
+      unit: perUnit[2].replaceAll("_", " "),
+    });
+  }
   const suffixed = COST_SUFFIX.exec(key);
   if (suffixed) return sentenceCase([suffixed[1], suffixed[2]].filter(Boolean).join(" "));
   return sentenceCase(key);
@@ -219,9 +273,11 @@ export const formatTokenCount = (tokens: number): string => {
 };
 
 const tierPart = ({ cost, value }: PriceEntry): string => {
-  const charge = chargeLabel(cost).toLowerCase();
+  const charge = chargeLabel(cost, "inline");
   const price = formatUnitPrice(value, cost.unit);
-  return cost.unit === "token" ? `${price} ${charge}` : `${price} ${charge} per ${cost.unit}`;
+  return cost.unit === "token"
+    ? i18n.t("deploymentPricing.tierPrice", { price, charge })
+    : i18n.t("deploymentPricing.tierPricePerUnit", { price, charge, unit: unitLabel(cost.unit) });
 };
 
 export const describePricingTier = ({ range: [low, high], costs }: PricingTier): string => {
@@ -230,7 +286,16 @@ export const describePricingTier = ({ range: [low, high], costs }: PricingTier):
     ...[...parsed.filter(isPriceEntry)].sort(byRowRank).map(tierPart),
     ...parsed
       .filter((entry) => !isPriceEntry(entry))
-      .map(({ key, value }) => `${formatRawPrice(value)} ${fallbackCostLabel(key).toLowerCase()}`),
+      .map(({ key, value }) =>
+        i18n.t("deploymentPricing.tierPrice", {
+          price: formatRawPrice(value),
+          charge: fallbackCostLabel(key).toLowerCase(),
+        }),
+      ),
   ];
-  return `${formatTokenCount(low)}–${formatTokenCount(high)} tokens: ${parts.join(" / ")}`;
+  return i18n.t("deploymentPricing.tierRange", {
+    low: formatTokenCount(low),
+    high: formatTokenCount(high),
+    prices: parts.join(" / "),
+  });
 };
