@@ -140,7 +140,10 @@ class IssuesRepository:
                     (record->>'observed_at')::timestamptz AT TIME ZONE 'UTC',
                     (record->>'observed_at')::timestamptz AT TIME ZONE 'UTC' FROM incoming
                 ON CONFLICT(id) DO UPDATE SET
-                    record=CASE WHEN old.kind='model_deprecation' AND EXCLUDED.last_seen >= old.last_seen
+                    record=CASE WHEN old.kind='model_deprecation' AND (
+                        EXCLUDED.last_seen > old.last_seen OR (EXCLUDED.last_seen = old.last_seen AND
+                        EXCLUDED.record->'deprecation'->'model'->>'model_name' <
+                            old.record->'deprecation'->'model'->>'model_name'))
                         THEN EXCLUDED.record ELSE old.record END,
                     last_seen=GREATEST(old.last_seen,EXCLUDED.last_seen),
                     active=CASE WHEN old.kind='model_deprecation' AND EXCLUDED.last_seen >= old.last_seen

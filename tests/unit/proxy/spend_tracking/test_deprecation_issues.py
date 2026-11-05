@@ -1,11 +1,12 @@
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
+
 from litellm.proxy.spend_tracking.deprecation_issues import deprecation_candidates, used_deprecation_issues
 from litellm.types.proxy.model_deprecation import (
     DeprecationAlertState,
     DeprecationAlertStatus,
     ModelDeprecationInfo,
-    ModelDeprecationResponse,
     ModelDeprecationUsage,
     SuccessorModelSource,
 )
@@ -29,13 +30,7 @@ def model(**updates):
 
 
 def snapshot(*models, upcoming=()):
-    return ModelDeprecationResponse(
-        imminent=[entry for entry in models if entry.status == "imminent"],
-        deprecated=[entry for entry in models if entry.status == "deprecated"],
-        upcoming=upcoming,
-        warn_within_days=30,
-        checked_at=NOW,
-    )
+    return (*models, *upcoming)
 
 
 def usage(name="example/retiring-model", **updates):
@@ -126,3 +121,10 @@ def test_maximum_model_identity_is_preserved_in_activity_and_evidence():
     assert issue.cohort.scope_id == name
     assert issue.deprecation.usage_model == name
     assert issue.title.startswith("public-alias")
+
+
+def test_retirement_candidates_are_bounded_and_preserve_alias_choice() -> None:
+    candidates = deprecation_candidates((model(model_name="z-alias"), model(model_name="a-alias")))
+    assert len(candidates) == 1 and candidates[0].model.model_name == "a-alias"
+    with pytest.raises(ValueError, match="at most 10"):
+        deprecation_candidates(tuple(model(model_name=f"alias-{index}") for index in range(11)))

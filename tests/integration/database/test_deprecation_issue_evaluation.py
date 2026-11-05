@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import suppress
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -5,12 +7,19 @@ import pytest
 from integration._support.actors import ManagementDatabase
 from integration._support.client import Gateway
 
-from litellm.proxy.common_utils.model_deprecation import deprecation_alert_state_key
-from litellm.proxy.spend_tracking.deprecation_issues import DeprecationIssueProjector
+from litellm import Router
+from litellm.proxy.common_utils.model_deprecation import RouterDeprecationSource, deprecation_alert_state_key
+from litellm.proxy.spend_tracking.deprecation_issues import (
+    DeprecationCandidate,
+    DeprecationIssueProjector,
+    _ProjectionCheckpoint,
+    deprecation_issue,
+)
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.issues import IssuesRepository
 from litellm.repositories.usage_alert_metrics import UsageAlertMetricsRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
-from litellm.types.proxy.model_deprecation import ModelDeprecationInfo, ModelDeprecationResponse
+from litellm.types.proxy.model_deprecation import DeprecationAlertState, ModelDeprecationInfo, ModelDeprecationUsage
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -72,30 +81,24 @@ async def test_retirement_issue_http_state_survives_replay_and_reopens_only_for_
     gateway: Gateway, db: ManagementDatabase
 ) -> None:
     prefix = f"retirement-lifecycle-{uuid4()}"
-    name = f"example/{prefix}"
-    now = datetime(2026, 11, 5, 10, microsecond=123456, tzinfo=timezone.utc)
+    name = f"openai/{prefix}"
+    now = datetime(2026, 11, 5, 10, tzinfo=timezone.utc)
     retirement = now.date() + timedelta(days=15)
     config = ConfigRepository(db.prisma, use_writer=True)
     previous_checkpoint = await config.get_param("issues:deprecation_projection")
     lease = UsageAlertsRepository.from_prisma(db.prisma)
     assert await lease.claim_job(prefix)
 
-    def schedule(today: date) -> ModelDeprecationResponse:
-        info = ModelDeprecationInfo(
-            model_name=prefix,
-            litellm_model=name,
-            deprecation_date=retirement,
-            days_until_deprecation=(retirement - today).days,
-            status="deprecated" if retirement < today else "imminent",
-            successor_model="example/replacement",
-        )
-        return ModelDeprecationResponse(
-            deprecated=(info,) if retirement < today else (),
-            imminent=(info,) if retirement >= today else (),
-            upcoming=(),
-            warn_within_days=30,
-            checked_at=now,
-        )
+    router = Router(
+        model_list=[
+            {
+                "model_name": prefix,
+                "litellm_params": {"model": name},
+                "model_info": {"deprecation_date": retirement.isoformat(), "successor_model": "replacement"},
+            }
+        ]
+    )
+    source = RouterDeprecationSource(lambda: router)
 
     async def record(day: date, requests: int) -> None:
         await db.prisma.writer_db.query_raw(
@@ -113,7 +116,7 @@ async def test_retirement_issue_http_state_survives_replay_and_reopens_only_for_
     try:
         await config.delete_param("issues:deprecation_projection")
         await record(now.date(), 100)
-        projector = DeprecationIssueProjector.from_prisma(db.prisma, schedule)
+        projector = DeprecationIssueProjector.from_prisma(db.prisma, source)
         await projector.run(now)
         page = gateway.get("/issues", {"scope_type": "model", "scope_id": name})
         assert page["total"] == 1
@@ -180,4 +183,136 @@ async def test_retirement_issue_http_state_survives_replay_and_reopens_only_for_
             await config.delete_param("issues:deprecation_projection")
         else:
             await config.set_param("issues:deprecation_projection", previous_checkpoint.param_value)
+        await lease.release_job(prefix)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_retirement_scan_resumes_bounded_pages_without_premature_recovery(db: ManagementDatabase) -> None:
+    prefix = f"retirement-pages-{uuid4()}"
+    now = datetime(2026, 11, 5, 10, tzinfo=timezone.utc)
+    retirement = date(2026, 11, 20)
+    config = ConfigRepository(db.prisma, use_writer=True)
+    checkpoint_name = "issues:deprecation_projection"
+    previous = await config.get_param(checkpoint_name)
+    lease = UsageAlertsRepository.from_prisma(db.prisma)
+    assert await lease.claim_job(prefix)
+    repository = IssuesRepository(db.prisma.writer_db)
+    old_model = f"openai/{prefix}-old"
+    old = deprecation_issue(
+        DeprecationCandidate(
+            old_model,
+            ModelDeprecationInfo(
+                model_name=prefix + "-old",
+                litellm_model=old_model,
+                deprecation_date=retirement,
+                days_until_deprecation=15,
+                status="imminent",
+            ),
+        ),
+        ModelDeprecationUsage(
+            model=old_model, requests=1, last_used_date=now.date(), last_day_requests=1, keys=1, users=1, teams=0
+        ),
+        DeprecationAlertState(model=old_model, deprecation_date=retirement),
+        now - timedelta(hours=1),
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": f"{prefix}-{index}",
+                "litellm_params": {"model": f"openai/{prefix}-{index}"},
+                "model_info": {"id": f"{prefix}-{index}", "deprecation_date": retirement.isoformat()},
+            }
+            for index in range(600)
+        ]
+    )
+    try:
+        await config.delete_param(checkpoint_name)
+        await repository.upsert_issues((old,))
+        earlier_alias = old.model_copy(
+            update={
+                "title": "alphabetically first configured alias",
+                "deprecation": old.deprecation.model_copy(
+                    update={
+                        "model": old.deprecation.model.model_copy(update={"model_name": "a-" + prefix}),
+                    }
+                ),
+            }
+        )
+        await repository.upsert_issues((earlier_alias,))
+        await repository.upsert_issues((old,))
+        assert (await repository.get_issue(old.id)).title == earlier_alias.title
+        await db.prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,model,api_requests,updated_at)
+            SELECT $1||n,$1,$2,$1,'openai/'||$1||'-'||n,1,CURRENT_TIMESTAMP
+            FROM generate_series(0,599) n RETURNING id""",
+            prefix,
+            now.date().isoformat(),
+        )
+        source = RouterDeprecationSource(lambda: router)
+        projector = DeprecationIssueProjector.from_prisma(db.prisma, source)
+
+        async def interrupt_after_page(
+            projector: DeprecationIssueProjector, observed_at: datetime, revision: str
+        ) -> _ProjectionCheckpoint:
+            task = asyncio.create_task(projector.run(observed_at))
+            try:
+
+                async def checkpoint() -> _ProjectionCheckpoint:
+                    while not task.done():
+                        value = await config.get_param(checkpoint_name)
+                        if value is not None:
+                            state = _ProjectionCheckpoint.model_validate(value.param_value)
+                            if state.source_revision == revision and 0 < state.cursor.deployment < 600:
+                                return state
+                        await asyncio.sleep(0)
+                    pytest.fail("projector finished before observing a partial scan")
+
+                return await asyncio.wait_for(checkpoint(), timeout=10)
+            finally:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+        partial = await interrupt_after_page(projector, now, source.revision)
+        assert partial.complete is False
+        assert (await repository.get_issue(old.id)).active is True
+        # A different process/router generation cannot trust the same numeric registry version.
+        next_source = RouterDeprecationSource(lambda: router)
+        replacement = DeprecationIssueProjector.from_prisma(db.prisma, next_source)
+        restarted = await interrupt_after_page(replacement, now + timedelta(seconds=10), next_source.revision)
+        assert restarted.source_revision != partial.source_revision
+        assert restarted.complete is False
+        assert (await repository.get_issue(old.id)).active is True
+        for iteration in range(10):
+            await replacement.run(now + timedelta(seconds=20 + iteration))
+            complete = await config.get_param(checkpoint_name)
+            if _ProjectionCheckpoint.model_validate(complete.param_value).complete:
+                break
+        else:
+            pytest.fail("retirement scan did not resume to completion")
+        assert (await repository.get_issue(old.id)).active is False
+        rows = await db.prisma.writer_db.query_raw(
+            'SELECT count(*)::int AS count FROM "LiteLLM_Issue" WHERE scope_id LIKE $1 AND active',
+            f"openai/{prefix}-%",
+        )
+        assert rows[0]["count"] == 600
+    finally:
+        await db.prisma.writer_db.query_raw(
+            'DELETE FROM "LiteLLM_IssueSignal" WHERE issue_id IN (SELECT id FROM "LiteLLM_Issue" '
+            "WHERE scope_id LIKE $1) RETURNING issue_id",
+            f"openai/{prefix}-%",
+        )
+        await db.prisma.writer_db.query_raw(
+            'DELETE FROM "LiteLLM_Issue" WHERE scope_id LIKE $1 RETURNING id',
+            f"openai/{prefix}-%",
+        )
+        await db.prisma.writer_db.query_raw(
+            'DELETE FROM "LiteLLM_DailyUserSpend" WHERE id LIKE $1 RETURNING id',
+            prefix + "%",
+        )
+        if previous is None:
+            await config.delete_param(checkpoint_name)
+        else:
+            await config.set_param(checkpoint_name, previous.param_value)
         await lease.release_job(prefix)
