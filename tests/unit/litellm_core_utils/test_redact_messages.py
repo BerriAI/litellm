@@ -54,9 +54,25 @@ SIGNATURE: Final = "opaque-thought-signature"
 def _provider_fields() -> dict[str, object]:
     return {
         "reasoning_content": SECRET,
+        "reasoning": SECRET,
+        "reasoning_text": SECRET,
+        "reasoning_details": [{"type": "reasoning.text", "text": SECRET, "index": 0, "format": "unknown"}],
         "thinking_blocks": [{"type": "thinking", "thinking": SECRET}],
         "reasoningContentBlocks": [{"reasoningText": {"text": SECRET}}],
+        "reasoningContent": {"reasoningText": {"text": SECRET}},
+        "annotations": [{"type": "file", "file": {"name": "notes.pdf", "content": [{"type": "text", "text": SECRET}]}}],
         "citations": [{"cited_text": SECRET}],
+        "citationsContent": [{"citations": [{"location": {}}], "content": [{"text": SECRET}]}],
+        "citation": {"type": "char_location", "cited_text": SECRET},
+        "web_search_calls": [{"type": "web_search_call", "action": {"type": "search", "query": SECRET}}],
+        "web_search_results": [{"type": "web_search_tool_result", "content": [{"title": SECRET}]}],
+        "tool_results": [{"type": "web_fetch_tool_result", "content": {"text": SECRET}}],
+        "code_interpreter_results": [{"stdout": SECRET}],
+        "search_results": [{"object": "vector_store.search_results.page", "data": [{"content": [{"text": SECRET}]}]}],
+        "rerank_results": {"results": [{"document": {"text": SECRET}}]},
+        "executed_tools": [{"type": "search", "search_results": {"results": [{"content": SECRET}]}}],
+        "custom_outputs": {"answer": SECRET},
+        "tool_search_items": [{"type": "tool_search_output", "tools": [{"description": SECRET}]}],
         "compaction_blocks": [{"type": "compaction", "content": SECRET, "signature": "compaction-signature"}],
         "compaction_start": {"type": "compaction", "content": SECRET},
         "compaction_delta": {"type": "compaction_delta", "content": SECRET},
@@ -110,6 +126,57 @@ def test_redaction_reuses_message_rules_for_request_body_and_provider_fields(sha
     assert body["system"] == "kept-system" and body["model"] == "redaction-model"
     assert body["metadata"] is params["metadata"]
     assert result == original_result and params == original_params
+
+
+def _reasoning_items() -> list[dict[str, object]]:
+    return [{"type": "reasoning", "id": "rs_redaction", "summary": [{"type": "summary_text", "text": SECRET}]}]
+
+
+def _message_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "answer", "reasoning_items": _reasoning_items()}}]
+    )
+
+
+def _delta_choices() -> dict[str, object]:
+    return {"choices": [{"index": 0, "delta": {"content": "answer", "reasoning_items": _reasoning_items()}}]}
+
+
+@pytest.mark.parametrize(
+    ("details", "result"),
+    [
+        pytest.param({}, _message_response(), id="message_object"),
+        pytest.param({}, _message_response().model_dump(), id="message_dict"),
+        pytest.param({}, _delta_choices(), id="delta_dict"),
+        pytest.param(
+            {"stream": True, "complete_streaming_response": ModelResponseStream(**_delta_choices())},
+            None,
+            id="stream_chunk",
+        ),
+        pytest.param({"standard_logging_object": {"response": _message_response().model_dump()}}, None, id="logged"),
+        pytest.param({"standard_logging_object": {"response": _delta_choices()}}, None, id="logged_delta"),
+    ],
+)
+def test_redaction_hides_reasoning_item_summaries(details: dict[str, object], result: object) -> None:
+    assert SECRET in str(details) + str(result)
+
+    redacted: Final = perform_redaction(details, result)
+
+    assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
+
+
+def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted() -> None:
+    logprobs: Final = {"tokens": [SECRET], "token_logprobs": [-0.1], "text_offset": [0], "top_logprobs": [{SECRET: -0.1}]}
+    response: Final = TextCompletionResponse(
+        choices=[{"index": 0, "text": SECRET, "logprobs": logprobs, "finish_reason": "stop"}]
+    )
+
+    redacted: Final = redacted_response_obj_for_custom_logger(response, CustomLogger(message_logging=False))
+
+    assert isinstance(redacted, TextCompletionResponse)
+    assert redacted.choices[0].text == "redacted-by-litellm"
+    assert SECRET not in redacted.model_dump_json()
+    assert response.choices[0].text == SECRET, "the caller's own response is not redacted"
 
 
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:

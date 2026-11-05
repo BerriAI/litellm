@@ -52,6 +52,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     cache_control_count,
     dropped_cache_control,
     newest_marks_within_cache_control_limit,
+    routed_model_info,
     whole_messages_within_cache_control_limit,
     with_cache_control,
 )
@@ -782,13 +783,15 @@ def _replays_compaction_block(input: str | ResponseInputParam, context_managemen
 _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL: Final = frozenset(("anthropic", "dashscope", "minimax", "sap", "zai"))
 
 
-def _bedrock_target_keeps_item_marks(model: str, drop_params: bool) -> bool:
-    declared: Final = bedrock_declared_cache_point_support(model)
+def _bedrock_target_keeps_item_marks(model: str, drop_params: bool, model_info: Mapping[str, object] | None) -> bool:
+    declared: Final = bedrock_declared_cache_point_support(model, model_info)
     return declared is True or (declared is None and not drop_params)
 
 
-def _target_keeps_item_marks(model: str, custom_llm_provider: str | None, drop_params: bool) -> bool:
-    if supports_anthropic_cache_control(model, custom_llm_provider):
+def _target_keeps_item_marks(
+    model: str, custom_llm_provider: str | None, drop_params: bool, model_info: Mapping[str, object] | None
+) -> bool:
+    if supports_anthropic_cache_control(model, custom_llm_provider, model_info):
         return True
     if custom_llm_provider in _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL:
         return True
@@ -798,7 +801,7 @@ def _target_keeps_item_marks(model: str, custom_llm_provider: str | None, drop_p
         return is_snowflake_claude_model(model)
     if custom_llm_provider == "databricks":
         return "claude" in model.lower()
-    return custom_llm_provider == "bedrock" and _bedrock_target_keeps_item_marks(model, drop_params)
+    return custom_llm_provider == "bedrock" and _bedrock_target_keeps_item_marks(model, drop_params, model_info)
 
 
 def _refuses_marks_on_tool_blocks(model: str, custom_llm_provider: str | None) -> bool:
@@ -1234,7 +1237,10 @@ class LiteLLMCompletionResponsesConfig:
         request_kwargs: Final = _STR_KEY_DICT_ADAPTER.validate_python({**kwargs, "drop_params": drop_params})
         context_management: Final = responses_api_request.get("context_management")
         keeps_item_marks: Final = _target_keeps_item_marks(
-            model, custom_llm_provider, drops_unsupported_params(request_kwargs.get("drop_params"))
+            model,
+            custom_llm_provider,
+            drops_unsupported_params(request_kwargs.get("drop_params")),
+            routed_model_info(request_kwargs.get("model_info")),
         )
         request_input: Final = with_compaction_items_as_params(input)
         native_compaction: Final = _replays_compaction_block(
@@ -1456,7 +1462,10 @@ class LiteLLMCompletionResponsesConfig:
         model: Final = str(request_fields.get("model") or "")
         provider: Final = requested_provider if isinstance(requested_provider, str) else None
         keeps_item_marks: Final = _target_keeps_item_marks(
-            model, provider, drops_unsupported_params(request_kwargs.get("drop_params"))
+            model,
+            provider,
+            drops_unsupported_params(request_kwargs.get("drop_params")),
+            routed_model_info(request_kwargs.get("model_info")),
         )
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,

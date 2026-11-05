@@ -18,7 +18,7 @@ from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.conftest import NativeStructuredOutputKey
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
@@ -562,19 +562,27 @@ def _invoke_params_for_schema(
 
 
 @pytest.mark.parametrize(
-    ("native_key", "thinking_params", "native"),
+    ("model", "native_key", "thinking_params", "native"),
     [
-        ("legacy", {}, True),
-        ("bedrock", {}, False),
-        ("bedrock", {"thinking": {"type": "adaptive"}}, True),
-        ("bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "legacy", {}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {}, False),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "disabled"}}, False),
     ],
-    ids=["legacy-key", "bedrock-key-no-thinking", "bedrock-key-adaptive", "bedrock-key-effort"],
+    ids=[
+        "legacy-key",
+        "bedrock-key-thinking-by-default",
+        "bedrock-key-thinking-off-by-default",
+        "bedrock-key-adaptive",
+        "bedrock-key-effort",
+        "bedrock-key-thinking-disabled",
+    ],
 )
-def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
-    set_native_structured_output, native_key, thinking_params, native
+def test_bedrock_native_output_key_applies_only_when_the_model_will_think(
+    set_native_structured_output, model, native_key, thinking_params, native
 ):
-    model = "us.anthropic.claude-haiku-5-5"
     set_native_structured_output(model, native_key)
     schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
 
@@ -914,9 +922,7 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     assert result["output_config"] == {"effort": "high"}
 
 
-def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(set_native_structured_output):
-    """Anthropic accepts a forced tool_choice next to adaptive thinking, and dropping
-    it lets the model answer in prose instead of the requested JSON."""
+def test_bedrock_chat_invoke_adaptive_thinking_leaves_the_response_format_tool_unforced(set_native_structured_output):
     set_native_structured_output("us.anthropic.claude-opus-5", None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
@@ -935,7 +941,8 @@ def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_
         drop_params=False,
     )
 
-    assert result["tool_choice"] == {"type": "tool", "name": result["tools"][0]["name"]}
+    assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]
+    assert "tool_choice" not in result
     assert result["thinking"] == {"type": "adaptive"}
 
 
@@ -1050,6 +1057,64 @@ async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sourc
         "type": "document",
         "source": {"type": "base64", "media_type": "application/pdf", "data": async_only_image_fetch.base64_png},
     } in captured["body"]["messages"][0]["content"]
+
+
+def test_bedrock_invoke_claude_sync_completion_downloads_a_pdf_link_once_and_sends_it_as_a_base64_document(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates import image_handling
+
+    pdf_url = f"https://docs.example/{uuid.uuid4()}/report.pdf"
+    pdf_bytes = b"%PDF-1.7\n" + b"0" * 64
+    fetched = []
+    captured = {}
+
+    def serve_pdf(client, url, **kwargs):
+        fetched.append(url)
+        return httpx.Response(
+            200, content=pdf_bytes, headers={"content-type": "application/pdf"}, request=httpx.Request("GET", url)
+        )
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "A lease"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(image_handling, "safe_get", serve_pdf)
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(handle))
+
+    response = litellm.completion(
+        model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this document?"},
+                    {"type": "image_url", "image_url": {"url": pdf_url}},
+                ],
+            }
+        ],
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "A lease"
+    assert fetched == [pdf_url]
+    assert captured["body"]["messages"][0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(pdf_bytes).decode()},
+    }
 
 
 @pytest.mark.parametrize(
@@ -2026,7 +2091,7 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
         (False, True, None, {"thinking": {"type": "adaptive"}}, True),
         (False, False, None, {}, False),
         (False, None, {"supports_bedrock_native_structured_output": False}, {}, False),
-        (True, True, None, {}, False),
+        (True, True, None, {"thinking": {"type": "disabled"}}, False),
     ],
     ids=[
         "cannot-force-tool",

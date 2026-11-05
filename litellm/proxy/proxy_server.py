@@ -6,6 +6,7 @@ import importlib
 import inspect
 import io
 import itertools
+import logging
 import os
 import random
 import re
@@ -60,6 +61,7 @@ import anyio
 import anyio.lowlevel
 import websockets
 import websockets.exceptions
+from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
 from pydantic.main import IncEx
@@ -215,6 +217,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountMessagesFormat,
     TokenCountResponse,
+    TranscriptionResponse,
     echoed_cost_map_pricing_fields,
     is_server_derived_pricing_key,
     pricing_override_fields,
@@ -324,6 +327,7 @@ from litellm._internal_context import service_target, with_service_target
 from litellm._logging import (
     STARTUP_OUTPUT_SETTINGS,
     print_startup_message,
+    redact_internal_details_from_client_message,
     redact_string,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -373,6 +377,11 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
+from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+    TRANSCRIPTION_STREAM_DONE_FRAME,
+    GuardedTranscriptionReplay,
+    guarded_transcription_events,
+)
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
@@ -415,9 +424,13 @@ from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
+from litellm.proxy.alerting_endpoints.model_deprecation_alerts import (
+    router as model_deprecation_alerts_router,
+)
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
+from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload
 from litellm.proxy.auth.auth_checks import (
     ROLE_BASED_PERMISSIONS_ADAPTER,
     ExperimentalUIJWTToken,
@@ -471,6 +484,7 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # lega
     user_api_key_auth,
     user_api_key_auth_accepted_websocket_for_model,
     user_api_key_auth_live_websocket,
+    user_api_key_auth_realtime_websocket,
     user_api_key_auth_websocket,
 )
 from litellm.proxy.batches_endpoints.endpoints import router as batches_router
@@ -521,6 +535,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
+from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -535,6 +550,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401, RUF10
     read_request_body,
     resolve_inference_model,
     safe_get_request_headers,
+)
+from litellm.proxy.common_utils.http_parsing_utils import (
+    resolve_realtime_route_model as _resolve_realtime_route_model,
 )
 from litellm.proxy.common_utils.load_config_utils import get_config_from_bucket
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
@@ -555,9 +573,11 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
     attribute_of,
+    error_status_code,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
     openai_error_param,
+    openai_error_type,
     proxy_exception_for,
     route_failure_proxy_exception,
     with_litellm_call_id,
@@ -862,8 +882,6 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
-from litellm.proxy.spend_tracking.usage_capture import UsageBatchWriter, UsageCaptureRuntime
-from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
 from litellm.proxy.telemetry.endpoints import router as telemetry_router
 from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
@@ -1171,6 +1189,27 @@ server_root_path: Final = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 premium_user_data: Optional["EnterpriseLicenseData"] = _license_check.airgapped_license_data
+
+
+def _set_premium_user(is_premium: bool) -> None:
+    global premium_user, premium_user_data
+    premium_user = is_premium  # rebind-ok: config load can switch the license in use
+    premium_user_data = _license_check.airgapped_license_data  # rebind-ok: tracks the license in use
+
+
+def _use_config_license(config_license: str, env_license_is_premium: bool) -> bool:
+    env_license: Final = _license_check.license_str
+    env_license_data: Final = _license_check.airgapped_license_data
+    _license_check.license_str = config_license
+    if _license_check.is_premium():
+        return True
+    if not env_license_is_premium:
+        return False
+    _license_check.license_str = env_license
+    _license_check.airgapped_license_data = env_license_data
+    return True
+
+
 global_max_parallel_request_retries_env: Final[str | None] = os.getenv("LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES")
 proxy_state: Final = ProxyState()
 SENSITIVE_DATA_MASKER: Final = SensitiveDataMasker()
@@ -1356,7 +1395,6 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     finally:
         await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
     await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
-    await usage_capture.stop(GracefulShutdownManager.remaining(clock=clock))
     await flush_spend()
 
 
@@ -1637,6 +1675,8 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             decoded_worker_config: Final = as_str_mapping(_UNTYPED_VALUE.validate_python(json.loads(worker_config)))
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
+
+    enforce_fips_mode(general_settings_view())
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
@@ -2893,9 +2933,15 @@ def configured_max_request_size_mb() -> int | float | None:
     return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
 
 
+_ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProxyType(
+    {("POST", "/claude-code/plugins/upload"): 11}
+)
+
+
 app.add_middleware(
     RequestBodyDecompressionMiddleware,
     get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -3265,39 +3311,9 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 spend_event_producer: SpendEventProducer | None = None
 
-usage_capture: Final = UsageCaptureRuntime()
-
-
-def _configure_usage_capture() -> None:
-    settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
-    capture_settings: Final = settings.get("accounting_capture")
-    if settings.get("accounting_sync_ack") and capture_settings is None:
-        raise ValueError("accounting_sync_ack requires accounting_capture")
-    if capture_settings is None:
-        if usage_capture.meter is not None:
-            raise ValueError("Disabling accounting_capture requires a worker restart")
-        return
-    if (
-        prisma_client is None
-        or CollectorSettings().enabled
-        or os.getenv("SPEND_LOGS_URL")
-        or litellm.apply_search_free_tier
-    ):
-        raise ValueError(
-            "Usage capture requires local Prisma writes and disabled collector, remote writer and search free tier"
-        )
-    from litellm.proxy.db.accounting_ledger import AccountingLedger
-
-    ledger: Final = AccountingLedger.for_client(prisma_client)
-    writer: Final = UsageBatchWriter(ledger.insert_usage_batch, ledger.load_usage_batch)
-    usage_capture.start(
-        writer.write, UsageCaptureSettings.model_validate(capture_settings), load=ledger.load_usage_batch
-    )
-
 
 def cost_tracking():
     global prisma_client, spend_event_producer
-    _configure_usage_capture()
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
@@ -3605,6 +3621,7 @@ async def increment_spend_counters(
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
+    windows_from_ledger: bool = False,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3641,6 +3658,7 @@ async def increment_spend_counters(
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            windows_from_ledger=windows_from_ledger,
         )
 
 
@@ -3668,6 +3686,50 @@ def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bo
         user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=True)
         return
     user_api_key_cache.budget_windows_absent_cache.delete_cache(absent_key)
+
+
+async def accounting_window_keys(token: str | None, team_id: str | None) -> tuple[Mapping[str, object], ...]:
+    scopes: Final = tuple(
+        (entity_type, entity_id, cache_key)
+        for entity_type, entity_id, cache_key in (
+            (Litellm_EntityType.KEY, token, token),
+            (Litellm_EntityType.TEAM, team_id, f"team_id:{team_id}"),
+        )
+        if entity_id is not None and cache_key is not None
+    )
+    snapshots: Final = tuple(
+        [
+            await _accounting_scope_windows(entity_type, entity_id, cache_key)
+            for entity_type, entity_id, cache_key in scopes
+        ]
+    )
+    from itertools import chain
+
+    return tuple(chain.from_iterable(snapshots))
+
+
+async def _accounting_scope_windows(
+    entity_type: Litellm_EntityType, entity_id: str, cache_key: str
+) -> tuple[Mapping[str, object], ...]:
+    from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
+
+    cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    limits: Final = (
+        await _stored_budget_limits(entity_type, entity_id) if cached is None else _cached_budget_limits(cached)
+    )
+    if not isinstance(limits, list):
+        return ()
+    windows: Final = TypeAdapter(tuple[object, ...]).validate_python(limits)
+    return tuple(
+        {
+            "entity_type": entity_type.value,
+            "entity_id": entity_id,
+            "window_duration": fixed[0],
+            "window_start": fixed[1].isoformat(),
+        }
+        for window in windows
+        if (fixed := fixed_budget_window(window)) is not None
+    )
 
 
 async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str) -> object:
@@ -3711,6 +3773,7 @@ async def _increment_spend_counters_batched(
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None = None,
+    windows_from_ledger: bool = False,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
@@ -3752,15 +3815,16 @@ async def _increment_spend_counters_batched(
             if window_counter not in reserved_counter_keys
             else None
         )
-        await _enqueue_window_spend_row_update(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            reset_at=window_reset_at,
-            window_duration=duration,
-            window_start=window_start,
-            increment=cost,
-            request_started_at=request_started_at,
-        )
+        if not windows_from_ledger:
+            await _enqueue_window_spend_row_update(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                reset_at=window_reset_at,
+                window_duration=duration,
+                window_start=window_start,
+                increment=cost,
+                request_started_at=request_started_at,
+            )
         return pending_window
 
     async def _window_increments(
@@ -6672,7 +6736,6 @@ class ProxyConfig:
 
     def _load_environment_variables(self, config: dict):
         ## ENVIRONMENT VARIABLES
-        global premium_user
         environment_variables: Final = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
@@ -6712,7 +6775,7 @@ class ProxyConfig:
             # check if litellm_license in general_settings
             if "LITELLM_LICENSE" in environment_variables:
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
-                premium_user = _license_check.is_premium()
+                _set_premium_user(_license_check.is_premium())
 
     def _set_config_environment_variable(self, key: str, value: str) -> None:
         if key in os.environ and os.environ[key] != value:
@@ -6764,7 +6827,6 @@ class ProxyConfig:
             prompt_injection_detection_obj, \
             redis_usage_cache, \
             store_model_in_db, \
-            premium_user, \
             open_telemetry_logger, \
             health_check_details, \
             proxy_batch_polling_interval, \
@@ -6776,6 +6838,12 @@ class ProxyConfig:
         self._warn_on_misplaced_jwt_keys(config=config)
 
         self._load_environment_variables(config=config)
+
+        config_license: Final = _GENERAL_SETTINGS_VIEW.validate_python(
+            _GENERAL_SETTINGS_VIEW.validate_python(config).get("general_settings") or {}
+        ).get("litellm_license")
+        if isinstance(config_license, str):
+            _set_premium_user(_use_config_license(config_license, env_license_is_premium=premium_user))
 
         ## Coordination Redis (before cache init, so the explicit block wins)
         coordination_redis_cache: Final = self._init_coordination_redis(config=config)
@@ -7353,7 +7421,7 @@ class ProxyConfig:
             allowed_ips: Final = general_settings.get("allowed_ips", None)
             if allowed_ips is not None and premium_user is False:
                 raise ValueError(
-                    "allowed_ips is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your envionment."
+                    "allowed_ips is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your environment."
                 )
             ## BUDGET RESCHEDULER ##
             proxy_budget_rescheduler_min_time = general_settings.get(
@@ -7408,11 +7476,6 @@ class ProxyConfig:
             ## check if user has set a premium feature in general_settings
             if general_settings.get("enforced_params") is not None and premium_user is not True:
                 raise ValueError("Trying to use `enforced_params`" + CommonProxyErrors.not_premium_user.value)
-
-            # check if litellm_license in general_settings
-            if "litellm_license" in general_settings:
-                _license_check.license_str = general_settings["litellm_license"]
-                premium_user = _license_check.is_premium()
 
         router_params: Final[dict] = {
             "cache_responses": litellm.cache is not None,  # cache if user passed in cache values
@@ -10715,6 +10778,26 @@ def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[ob
     return _resolve
 
 
+def _transcription_sse_error_frame(client_error: Exception) -> str:
+    status_code: Final = error_status_code(client_error, 500)
+    error_returned: Final = json.dumps(
+        {
+            "error": sse_error_payload(client_error)[1]
+            if isinstance(client_error, HTTPException)
+            else ProxyException(
+                message=redact_internal_details_from_client_message(
+                    str(getattr(client_error, "message", client_error))
+                ),
+                type=openai_error_type(client_error, status_code),
+                param=openai_error_param(client_error),
+                code=status_code,
+            ).to_dict()
+        },
+        default=str,
+    )
+    return f"data: {error_returned}\n\n"
+
+
 async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
@@ -13345,6 +13428,13 @@ async def completion(
             _response.choices[0].text = e.message
             return _response
     except Exception as e:
+        if is_provider_overload(e):
+            raise await base_llm_response_processor.handle_llm_api_exception(
+                e=e,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+                version=version,
+            )
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -13751,11 +13841,13 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
+    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
 )
 @router.post(
     "/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
+    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
 )
 async def audio_transcriptions(
     request: Request,
@@ -13843,34 +13935,72 @@ async def audio_transcriptions(
         cache_key: Final = hidden_params.get("cache_key", None) or ""
         api_base: Final = hidden_params.get("api_base", None) or ""
         response_cost: Final = hidden_params.get("response_cost", None) or ""
-        response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
+        response_call_id: Final = hidden_params.get("litellm_call_id", None) or litellm_call_id
         additional_headers: Final[dict] = hidden_params.get("additional_headers", {}) or {}
+        stream_logging_obj: Final = getattr(response, "logging_obj", None)
 
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                call_id=response_call_id,
-                request_data=data,
-                hidden_params=hidden_params,
-                **additional_headers,
-            )
+        custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            model_id=model_id,
+            cache_key=cache_key,
+            api_base=api_base,
+            version=version,
+            response_cost=response_cost,
+            model_region=user_api_key_dict.allowed_model_region,
+            call_id=response_call_id,
+            request_data=data,
+            hidden_params=hidden_params,
+            litellm_logging_obj=stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None,
+            **additional_headers,
         )
 
         # Call response headers hook (matches base_process_llm_request behavior)
         callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
-            response=response,
+            response=response.response if isinstance(response, GuardedTranscriptionReplay) else response,
             request_headers=dict(request.headers),
         )
-        if callback_headers:
-            fastapi_response.headers.update(callback_headers)
+        response_headers: Final = {**custom_headers, **(callback_headers or {})}
+
+        if hasattr(response, "__aiter__"):
+
+            async def transcription_event_stream(
+                stream: AsyncIterator[TranscriptionStreamEvent],
+            ) -> AsyncGenerator[str, None]:
+                try:
+                    async for event in stream:
+                        yield f"data: {event.model_dump_json(exclude_unset=True)}\n\n"
+                    yield TRANSCRIPTION_STREAM_DONE_FRAME
+                except Exception as stream_error:  # noqa: BLE001  # stream boundary: a mid-stream failure ends the SSE body as an error event
+                    replacement: Final = await proxy_logging_obj.post_call_failure_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        original_exception=stream_error,
+                        request_data=(
+                            {**data, "litellm_logging_obj": stream_logging_obj}
+                            if isinstance(stream_logging_obj, LiteLLMLoggingObj)
+                            else data
+                        ),
+                    )
+                    yield _transcription_sse_error_frame(stream_error if replacement is None else replacement)
+                    yield TRANSCRIPTION_STREAM_DONE_FRAME
+                finally:
+                    with anyio.CancelScope(shield=True):
+                        close: Final = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+                        if callable(close):
+                            close_result: Final = close()
+                            if inspect.isawaitable(close_result):
+                                await close_result
+
+            return StreamingResponse(
+                guarded_transcription_events(response.response)
+                if isinstance(response, GuardedTranscriptionReplay)
+                else transcription_event_stream(cast(AsyncIterator[TranscriptionStreamEvent], response)),
+                media_type="text/event-stream",
+                headers=response_headers,
+            )
+
+        fastapi_response.headers.update(response_headers)
 
         return response
     except Exception as e:
@@ -14019,6 +14149,8 @@ async def _reject_realtime_session(
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
+@app.websocket("/v1/realtime/translations")
+@app.websocket("/realtime/translations")
 async def realtime_websocket_endpoint(
     websocket: WebSocket,
     model: str | None = fastapi.Query(None, description="The model to use for the websocket connection."),
@@ -14027,7 +14159,7 @@ async def realtime_websocket_endpoint(
         None,
         description="Comma-separated list of guardrail names to apply to this request.",
     ),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_realtime_websocket),
 ):
     requested_protocols: Final = tuple(
         protocol.strip()
@@ -14035,15 +14167,13 @@ async def realtime_websocket_endpoint(
         if protocol.strip()
     )
 
-    route_model = model
+    is_translation: Final = websocket.url.path.endswith("/realtime/translations")
+    route_model: Final = _resolve_realtime_route_model(model, intent, is_translation)
     if route_model is None:
-        if intent == "transcription":
-            route_model = "gpt-realtime-whisper"
-        else:
-            await _reject_realtime_session(
-                websocket, user_api_key_dict, code=1008, reason="model query parameter is required"
-            )
-            return
+        await _reject_realtime_session(
+            websocket, user_api_key_dict, code=1008, reason="model query parameter is required"
+        )
+        return
     assert route_model is not None
     try:
         await can_key_call_resolved_model(
@@ -14064,6 +14194,7 @@ async def realtime_websocket_endpoint(
         model=model,
         intent=intent,
         guardrails=guardrails,
+        is_translation=is_translation,
     )
 
 
@@ -14077,13 +14208,20 @@ async def _route_realtime_websocket_session(
     guardrails: str | None,
     request_path: str | None = None,
     live_session_start: Mapping[str, object] | None = None,
+    is_translation: bool = False,
 ) -> None:
     # Only use explicit parameters, not all query params
-    query_params: Final = cast(RealtimeQueryParams, dict(_realtime_query_params_template(model, intent)))
+    query_model: Final = route_model if is_translation else model
+    query_params: Final = cast(  # cast-ok: cached tuples contain only the declared realtime query keys
+        RealtimeQueryParams,
+        dict(_realtime_query_params_template(query_model, intent)),
+    )
+
     data: dict[str, object] = {
         "model": route_model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
+        "realtime_mode": "translation" if is_translation else "realtime",
     }
     # Pass guardrails into data so pre-call guardrail processing picks them up
     if guardrails:
@@ -16898,9 +17036,6 @@ async def _apply_search_filter_to_models(
         team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
         if search_lower in team_public_model_name.lower():
             return True
-        # Also match the underlying LiteLLM model name (e.g.
-        # "openrouter/deepseek/deepseek-chat"), so users can find
-        # deployments by typing the provider or the upstream model id.
         litellm_params: Final[Mapping[str, object]] = m.get("litellm_params") or MappingProxyType({})
         litellm_model: Final = litellm_params.get("model")
         return isinstance(litellm_model, str) and search_lower in litellm_model.lower()
@@ -18409,14 +18544,21 @@ async def model_info_v1(
     alias_models: Final = copy.deepcopy(registry.deployments(source="alias"))
     all_models.extend(alias_models)
 
-    all_models = await run_model_listing(partial(expand_wildcard_deployments_for_model_info, all_models, llm_router))
-
     allowed_model_names: Final = await _get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+    )
+
+    all_models = await run_model_listing(
+        partial(
+            expand_wildcard_deployments_for_model_info,
+            all_models,
+            llm_router,
+            allowed_model_names=allowed_model_names,
+        )
     )
 
     all_models = _filter_v1_model_info_deployments(
@@ -18502,8 +18644,9 @@ async def model_deprecations(
 
     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
     (and any per-deployment `model_info.deprecation_date` overrides) for the
-    models configured on this proxy. An entry also names its `successor_model`
-    when the deployment sets `model_info.successor_model`.
+    models configured on this proxy. An entry also names its `successor_model`:
+    `model_info.successor_model` when the deployment sets one, else the
+    replacement the cost map records from the provider's deprecation notice.
 
     Parameters:
         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -18523,7 +18666,11 @@ async def model_deprecations(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
-    return collect_model_deprecations(llm_router=llm_router, warn_within_days=warn_within_days)
+    return collect_model_deprecations(
+        llm_router=llm_router,
+        warn_within_days=warn_within_days,
+        successor_log_level=logging.DEBUG,
+    )
 
 
 def get_model_group_info(
@@ -22290,6 +22437,7 @@ app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(model_deprecation_alerts_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
@@ -22307,6 +22455,7 @@ app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     AdmissionControlMiddleware,

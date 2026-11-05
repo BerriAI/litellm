@@ -13,8 +13,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    RemoteMedia,
     async_inline_remote_media,
     convert_url_to_base64,
+    inline_every_remote_url,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import (
@@ -107,8 +109,16 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         self._read_configured_max_tokens: Final = read_configured_max_tokens
 
     @classmethod
-    def get_config(cls, *, model: str | None = None) -> dict[str, object]:  # mutable-ok: overrides BaseConfig's dict
-        return {key: value for key, value in super().get_config(model=model).items() if key != "max_tokens"}
+    def get_config(
+        cls, *, model: str | None = None, configured_max_output_tokens: int | None = None
+    ) -> dict[str, object]:  # mutable-ok: overrides BaseConfig's dict
+        return {
+            key: value
+            for key, value in super()
+            .get_config(model=model, configured_max_output_tokens=configured_max_output_tokens)
+            .items()
+            if key != "max_tokens"
+        }
 
     @property
     def custom_llm_provider(self) -> str | None:
@@ -116,6 +126,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    def inlines_remote_media(self, media: RemoteMedia) -> bool:
+        return inline_every_remote_url(media)
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
@@ -129,14 +142,19 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         json_schema: Mapping[str, object] | None,
         request_params: Mapping[str, object],
     ) -> bool:
-        return self.chat_uses_native_structured_output(
-            model, self.is_thinking_requested(request_params), self._deployment_model_info
-        ) and (json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None)
+        return self.chat_uses_native_structured_output(model, request_params, self._deployment_model_info) and (
+            json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None
+        )
 
     def chat_uses_native_structured_output(
-        self, model: str, thinking_requested: bool, model_info: Mapping[str, object] | None
+        self, model: str, request_params: Mapping[str, object], model_info: Mapping[str, object] | None
     ) -> bool:
-        return bedrock_chat_uses_native_structured_output(model, thinking_requested, model_info=model_info)
+        return bedrock_chat_uses_native_structured_output(
+            model,
+            will_think=self.will_think(model, "bedrock", request_params),
+            thinking_requested=self.is_thinking_requested(request_params),
+            model_info=model_info,
+        )
 
     def uses_opt_in_native_output(
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
@@ -346,7 +364,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             request_body=anthropic_request,
             model_info=model_info,
             chat_uses_native_output=lambda: self.chat_uses_native_structured_output(
-                model, self.is_thinking_requested(_NON_DEFAULT_PARAMS.validate_python(filtered_params)), model_info
+                model, _NON_DEFAULT_PARAMS.validate_python(filtered_params), model_info
             ),
         )
         strip_unsupported_bedrock_invoke_output_config_keys(

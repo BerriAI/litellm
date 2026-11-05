@@ -360,6 +360,52 @@ class TestComplexityRouterInit:
         )
 
     @pytest.mark.asyncio
+    async def test_jev_choice_without_confidence_routes_and_reports_no_confidence(self, mock_router_instance):
+        client = _StaticJevClient(
+            JevSystemOneResponse(
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice",
+                        choice="MEDIUM",
+                        probabilities={"SIMPLE": 0.1, "MEDIUM": 0.9},
+                    )
+                },
+            )
+        )
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test", "timeout_ms": 100},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        outcome = await router.aclassify("Explain this")
+        result = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Explain this"}],
+        )
+
+        assert outcome.tier == ComplexityTier.MEDIUM
+        assert outcome.cause == "jev_classifier"
+        assert outcome.jev_verdict is not None
+        assert outcome.jev_verdict.confidence is None
+        assert outcome.signals == (
+            "jev-classifier:MEDIUM",
+            "tier-probability:SIMPLE=0.100000",
+            "tier-probability:MEDIUM=0.900000",
+        )
+        assert result is not None
+        assert result.routing_decision is not None
+        assert result.routing_decision["classifier_probabilities"] == {"SIMPLE": 0.1, "MEDIUM": 0.9}
+        assert "classifier_confidence" not in result.routing_decision
+
+    @pytest.mark.asyncio
     async def test_jev_pre_routing_hook_exposes_routing_decision_provenance(
         self, mock_router_instance, monkeypatch: pytest.MonkeyPatch
     ):
