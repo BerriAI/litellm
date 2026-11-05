@@ -32320,7 +32320,9 @@
         "deprecation_source": "https://ai.google.dev/gemini-api/docs/deprecations",
         "successor_model": "gemini/gemini-3.8-flash",
         "input_cost_per_token_above_200k_tokens_batches": 1.25e-06,
-        "output_cost_per_token_above_200k_tokens_batches": 7.5e-06
+        "input_cost_per_token_above_200k_tokens_flex": 1.25e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 7.5e-06,
+        "output_cost_per_token_above_200k_tokens_flex": 7.5e-06
     },
     "gemini/gemini-2.5-computer-use-preview-10-2025": {
         "deprecation_date": "2026-07-28",
@@ -32899,7 +32901,9 @@
         "output_cost_per_token_flex": 6e-06,
         "cache_read_input_token_cost_above_200k_tokens_batches": 4e-07,
         "input_cost_per_token_above_200k_tokens_batches": 2e-06,
-        "output_cost_per_token_above_200k_tokens_batches": 9e-06
+        "input_cost_per_token_above_200k_tokens_flex": 2e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 9e-06,
+        "output_cost_per_token_above_200k_tokens_flex": 9e-06
     },
     "gemini/gemini-3.1-pro-preview-customtools": {
         "prompt_cache_min_tokens": 4096,
@@ -32965,7 +32969,9 @@
         "output_cost_per_token_flex": 6e-06,
         "cache_read_input_token_cost_above_200k_tokens_batches": 4e-07,
         "input_cost_per_token_above_200k_tokens_batches": 2e-06,
-        "output_cost_per_token_above_200k_tokens_batches": 9e-06
+        "input_cost_per_token_above_200k_tokens_flex": 2e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 9e-06,
+        "output_cost_per_token_above_200k_tokens_flex": 9e-06
     },
     "gemini-3-flash-preview": {
         "cache_read_input_audio_token_cost": 1e-07,
