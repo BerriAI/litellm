@@ -10,7 +10,7 @@ use serde_json::json;
 
 mod settings;
 
-use settings::{Settings, UiSettings};
+use settings::{LogSettings, Settings, UiSettings};
 
 struct StderrSink {
     level: Level,
@@ -41,6 +41,15 @@ impl Sink for StderrSink {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    if let Some(forward) = litellm_gateway_forward::Settings::from_env()? {
+        let log: LogSettings = settings::from_iter(std::env::vars_os())?;
+        Logger::new(StderrSink {
+            level: log.log_level(),
+        })
+        .install_global()?;
+        litellm_gateway_forward::run(forward, shutdown_signal()).await?;
+        return Ok(());
+    }
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
@@ -126,7 +135,20 @@ async fn shutdown_signal() {
             }
         }
     }
-    #[cfg(not(unix))]
+    // Windows support exists for local CLI runs only, the proxy is never deployed on Windows. The supervisor
+    // stops the gateway with CTRL_BREAK_EVENT, which has to drain the same way SIGTERM does.
+    #[cfg(windows)]
+    {
+        match tokio::signal::windows::ctrl_break() {
+            Ok(mut ctrl_break) => {
+                tokio::select! { _ = tokio::signal::ctrl_c() => (), _ = ctrl_break.recv() => () }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = tokio::signal::ctrl_c().await;
     }
