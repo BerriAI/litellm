@@ -212,7 +212,10 @@ describe("model deprecation notifications", () => {
       "href",
       "/ui/alerts?type=model-deprecations&model=anthropic%2Fclaude-sonnet-4-5",
     );
-    expect(screen.getByRole("link", { name: "View all 1" })).toHaveAttribute("href", "/ui/alerts?type=model-deprecations");
+    expect(screen.getByRole("link", { name: "View all 1" })).toHaveAttribute(
+      "href",
+      "/ui/alerts?type=model-deprecations",
+    );
     expect(screen.getByText("recommended-model")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dismiss", exact: true })).not.toBeInTheDocument();
   });
