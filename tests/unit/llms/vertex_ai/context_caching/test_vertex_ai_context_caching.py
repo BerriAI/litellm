@@ -1,5 +1,7 @@
+import asyncio
 import json
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2520,6 +2522,71 @@ async def test_async_reusing_an_existing_cache_records_no_storage(local_model_co
     assert cache_name == _STORAGE_TEST_CACHE_NAME
     assert client.post.call_count == 1
     assert reusing_logging_obj.context_cache_storage_token_hours == 0.0
+
+
+_STORAGE_TEST_CREATED_AT: Final = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()
+
+
+def _remembering_endpoints() -> ContextCachingEndpoints:
+    return ContextCachingEndpoints(known_caches=KnownCachedContents(clock=lambda: _STORAGE_TEST_CREATED_AT))
+
+
+def test_reusing_a_remembered_cache_records_no_storage(local_model_cost_map: None) -> None:
+    endpoints: Final = _remembering_endpoints()
+    client: Final = MagicMock(spec=HTTPHandler)
+    client.get.return_value = _json_response("GET", {})
+    client.post.return_value = _json_response("POST", _CREATED_CACHE)
+    creating_logging_obj: Final = _storage_logging_obj()
+    endpoints.check_and_create_cache(**_create_kwargs(creating_logging_obj, client))
+    reusing_logging_obj: Final = _storage_logging_obj()
+
+    _, _, cache_name = endpoints.check_and_create_cache(**_create_kwargs(reusing_logging_obj, client))
+
+    assert cache_name == _STORAGE_TEST_CACHE_NAME
+    assert (client.get.call_count, client.post.call_count) == (1, 1)
+    assert creating_logging_obj.context_cache_storage_token_hours == 7200 * 0.5
+    assert reusing_logging_obj.context_cache_storage_token_hours == 0.0
+
+
+@pytest.mark.asyncio
+async def test_async_reusing_a_remembered_cache_records_no_storage(local_model_cost_map: None) -> None:
+    endpoints: Final = _remembering_endpoints()
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(return_value=_json_response("GET", {}))
+    client.post = AsyncMock(return_value=_json_response("POST", _CREATED_CACHE))
+    creating_logging_obj: Final = _storage_logging_obj()
+    await endpoints.async_check_and_create_cache(**_create_kwargs(creating_logging_obj, client))
+    reusing_logging_obj: Final = _storage_logging_obj()
+
+    _, _, cache_name = await endpoints.async_check_and_create_cache(**_create_kwargs(reusing_logging_obj, client))
+
+    assert cache_name == _STORAGE_TEST_CACHE_NAME
+    assert (client.get.await_count, client.post.await_count) == (1, 1)
+    assert creating_logging_obj.context_cache_storage_token_hours == 7200 * 0.5
+    assert reusing_logging_obj.context_cache_storage_token_hours == 0.0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_requests_for_one_prefix_record_storage_once(local_model_cost_map: None) -> None:
+    endpoints: Final = _remembering_endpoints()
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+
+    async def slow_list(**_: object) -> httpx.Response:
+        await asyncio.sleep(0.01)
+        return _json_response("GET", {})
+
+    client.get = AsyncMock(side_effect=slow_list)
+    client.post = AsyncMock(return_value=_json_response("POST", _CREATED_CACHE))
+    logging_objs: Final = [_storage_logging_obj() for _ in range(3)]
+
+    results: Final = await asyncio.gather(
+        *(endpoints.async_check_and_create_cache(**_create_kwargs(logging_obj, client)) for logging_obj in logging_objs)
+    )
+
+    assert {cache_name for _, _, cache_name in results} == {_STORAGE_TEST_CACHE_NAME}
+    assert client.post.await_count == 1
+    recorded: Final = sorted(logging_obj.context_cache_storage_token_hours for logging_obj in logging_objs)
+    assert recorded == [0.0, 0.0, 7200 * 0.5]
 
 
 def _created_cache_body(total_token_count: int) -> dict:
