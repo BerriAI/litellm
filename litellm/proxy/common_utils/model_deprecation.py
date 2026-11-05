@@ -8,11 +8,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from itertools import groupby
 from types import MappingProxyType
-from typing import (  # noqa: TID251  # router exposes its live validated deployment list
+from typing import (
     TYPE_CHECKING,
     Final,
     TypeAlias,
-    cast,
+    cast,  # noqa: TID251  # router exposes its live validated deployment list
 )
 from uuid import uuid4
 

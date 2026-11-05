@@ -51062,6 +51062,11 @@ export interface components {
              */
             complete: number;
             /**
+             * Delayed
+             * @default 0
+             */
+            delayed: number;
+            /**
              * Insufficient Coverage
              * @default 0
              */
@@ -51191,6 +51196,29 @@ export interface components {
             /** Scope Id */
             scope_id: string;
         };
+        /**
+         * UsageAlertProgress
+         * @description Internal durable position; never part of rule input or public output.
+         */
+        UsageAlertProgress: {
+            /** Cursor */
+            cursor?: string | null;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /**
+             * Evaluated
+             * @default false
+             */
+            evaluated: boolean;
+            /**
+             * Revision
+             * Format: date-time
+             */
+            revision: string;
+        };
         /** UsageAlertRule */
         UsageAlertRule: {
             /**
@@ -51225,7 +51253,7 @@ export interface components {
              * @default pending
              * @enum {string}
              */
-            evaluation_status: "pending" | "complete" | "insufficient_coverage" | "insufficient_history";
+            evaluation_status: "pending" | "complete" | "insufficient_coverage" | "insufficient_history" | "delayed";
             /** Id */
             id: string;
             /**

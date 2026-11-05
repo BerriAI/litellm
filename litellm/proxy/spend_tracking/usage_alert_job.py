@@ -221,13 +221,12 @@ class UsageAlertJob:
         await self._evaluate(
             target, asyncio.get_running_loop().time() + max(0, deadline - asyncio.get_running_loop().time()) * 0.65
         )
-        if self._performance_projection is not None:
-            if work := await self._store.pending_projection_work():
-                # Source eligibility is per completed rule/day, never a global all-rules gate.
-                if await self._performance_projection.run_pending(now, work, self._store, deadline):
-                    await self._store.finish_projection_work(work)
-        else:
+        if self._performance_projection is None:
             await self._notify(deadline)
+        elif work := await self._store.pending_projection_work():
+            # Source eligibility is per completed rule/day, never a global all-rules gate.
+            if await self._performance_projection.run_pending(now, work, self._store, deadline):
+                await self._store.finish_projection_work(work)
         await self._store.prune()
 
     @staticmethod

@@ -1,3 +1,4 @@
+import smtplib
 from datetime import date, datetime, timezone
 from typing import Final
 
@@ -206,7 +207,7 @@ async def test_cancelled_smtp_attempt_retains_only_one_send(monkeypatch: pytest.
                 await delivery.send(_ALERT, rule, "email")
             assert UsageAlertDelivery._email_task is pending
         assert len(accepted) == 1 and threading.active_count() == threads
-        with pytest.raises(Exception):
+        with pytest.raises(smtplib.SMTPServerDisconnected, match="timed out"):
             await asyncio.wait_for(asyncio.shield(pending), timeout=3)
         assert pending.done()
     finally:
