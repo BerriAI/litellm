@@ -1,17 +1,17 @@
 """Support for OpenAI gpt-5 model family."""
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import ClassVar, Final
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.utils import (
-    ModelInfoLookupMiss,
     declared_value_factory,
+    get_model_cost_key,
     has_catalog_entry,
     is_explicitly_disabled_factory,
-    lookup_catalog_model_info,
+    model_cost_row,
     supports_factory,
 )
 
@@ -133,13 +133,23 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         stays excluded by name, a ``responses`` row keeps its route, and a deployment row may carry no ``mode``."""
         if is_gpt_5_chat_name(model):
             return False
-        row: Final = lookup_catalog_model_info(cls._model_map_lookup_name(model), cls.COST_MAP_PROVIDER)
-        if isinstance(row, ModelInfoLookupMiss) or row.get("mode") not in (None, "chat"):
+        row: Final = cls._cost_map_row(cls._model_map_lookup_name(model))
+        if row is None or row.get("mode") not in (None, "chat"):
             return False
         return any(
             key.startswith("supports_") and key.endswith("_reasoning_effort") and value is True
             for key, value in row.items()
         )
+
+    @classmethod
+    def _cost_map_row(cls, name: str) -> Mapping[str, object] | None:
+        """An O(1) probe, not ``lookup_catalog_model_info``: this runs several times per chat call for every model."""
+        keys: Final = (get_model_cost_key(f"{cls.COST_MAP_PROVIDER}/{name}"), get_model_cost_key(name))
+        key: Final = next((key for key in keys if key is not None), None)
+        if key is None:
+            return None
+        row: Final = model_cost_row(key)
+        return row if row.get("litellm_provider") in (None, cls.COST_MAP_PROVIDER) else None
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:

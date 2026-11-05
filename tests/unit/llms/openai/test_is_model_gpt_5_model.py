@@ -320,6 +320,17 @@ class TestCostMapRoutesToReasoningConfig:
         assert optional_params["reasoning_effort"] == "none"
         assert optional_params["tools"] == [WEATHER_TOOL]
 
+    def test_router_registered_deployment_row_selects_the_reasoning_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        deployment_row: Final = {
+            key: value for key, value in COST_MAP_ONLY_SERIES_ROW.items() if key not in ("mode", "litellm_provider")
+        }
+        monkeypatch.setitem(litellm.model_cost, f"openai/{COST_MAP_ONLY_SERIES}", deployment_row)
+        monkeypatch.setitem(litellm.model_cost, f"azure/{COST_MAP_ONLY_SERIES}", deployment_row)
+        assert OpenAIGPT5Config.is_model_gpt_5_model(COST_MAP_ONLY_SERIES)
+        assert AzureOpenAIGPT5Config.is_model_gpt_5_model(COST_MAP_ONLY_SERIES)
+
     @pytest.mark.parametrize(
         "row",
         [

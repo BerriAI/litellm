@@ -6849,6 +6849,11 @@ def _get_model_info_from_model_cost(key: str) -> dict[str, object]:
     return litellm.model_cost[key]
 
 
+def model_cost_row(key: str) -> Mapping[str, object]:
+    """The ``litellm.model_cost`` row stored under an exact ``key``, runtime registrations included."""
+    return _get_model_info_from_model_cost(key)
+
+
 def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> bool:
     """
     Check if the model info provider matches the custom provider.
