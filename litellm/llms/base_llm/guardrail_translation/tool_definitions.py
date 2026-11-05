@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import functools
 import itertools
 from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, TypeAlias
@@ -17,6 +19,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
 
 DescriptionPath: TypeAlias = tuple[str | int, ...]
+_Located: TypeAlias = tuple[DescriptionPath, JsonValue]
 
 _TOOLS: Final = TypeAdapter(list[JsonValue])
 
@@ -36,18 +39,50 @@ _SUBSCHEMA_MAP_KEYWORDS: Final = ("properties", "patternProperties", "$defs", "d
 
 
 def tool_description_entries(tools: Sequence[JsonValue]) -> tuple[tuple[DescriptionPath, str], ...]:
-    return tuple(itertools.chain.from_iterable(_tool_entries(tool, (index,)) for index, tool in enumerate(tools)))
+    holders: Final = tuple(
+        itertools.chain.from_iterable(_tool_holders(tool, (index,)) for index, tool in enumerate(tools))
+    )
+    return tuple(
+        itertools.chain(
+            itertools.chain.from_iterable(_own_description(holder, path) for path, holder in holders),
+            itertools.chain.from_iterable(_own_description(schema, path) for path, schema in _schemas(holders)),
+        )
+    )
 
 
-def _tool_entries(tool: JsonValue, path: DescriptionPath) -> Iterator[tuple[DescriptionPath, str]]:
+def _tool_holders(tool: JsonValue, path: DescriptionPath) -> Iterator[tuple[DescriptionPath, Mapping[str, JsonValue]]]:
     if not isinstance(tool, dict):
         return
-    function: Final = tool.get("function")
-    if isinstance(function, dict):
-        yield from _tool_entries(function, (*path, "function"))
-    yield from _own_description(tool, path)
-    for key in _TOOL_SCHEMA_KEYS:
-        yield from _schema_entries(tool.get(key), (*path, key))
+    yield path, tool
+    if isinstance(function := tool.get("function"), dict):
+        yield (*path, "function"), function
+
+
+def _schemas(
+    holders: Sequence[tuple[DescriptionPath, Mapping[str, JsonValue]]],
+) -> Iterator[tuple[DescriptionPath, Mapping[str, JsonValue]]]:
+    roots: Final = itertools.chain.from_iterable(
+        (((*path, key), holder.get(key)) for key in _TOOL_SCHEMA_KEYS) for path, holder in holders
+    )
+    pending: Final[list[_Located]] = list(roots)  # mutable-ok: work stack keeps the schema walk non-recursive
+    while pending:
+        path, schema = pending.pop()
+        if isinstance(schema, dict):
+            yield path, schema
+            pending.extend(_subschemas(schema, path))
+
+
+def _subschemas(schema: Mapping[str, JsonValue], path: DescriptionPath) -> Iterator[tuple[DescriptionPath, JsonValue]]:
+    for key in _SUBSCHEMA_KEYWORDS:
+        yield (*path, key), schema.get(key)
+    for key in _SUBSCHEMA_LIST_KEYWORDS:
+        if isinstance(children := schema.get(key), list):
+            for index, child in enumerate(children):
+                yield (*path, key, index), child
+    for key in _SUBSCHEMA_MAP_KEYWORDS:
+        if isinstance(named := schema.get(key), dict):
+            for name, child in named.items():
+                yield (*path, key, name), child
 
 
 def _own_description(node: Mapping[str, JsonValue], path: DescriptionPath) -> Iterator[tuple[DescriptionPath, str]]:
@@ -56,37 +91,21 @@ def _own_description(node: Mapping[str, JsonValue], path: DescriptionPath) -> It
         yield (*path, "description"), description
 
 
-def _schema_entries(schema: JsonValue, path: DescriptionPath) -> Iterator[tuple[DescriptionPath, str]]:
-    if not isinstance(schema, dict):
-        return
-    yield from _own_description(schema, path)
-    for key in _SUBSCHEMA_KEYWORDS:
-        yield from _schema_entries(schema.get(key), (*path, key))
-    for key in _SUBSCHEMA_LIST_KEYWORDS:
-        if isinstance(children := schema.get(key), list):
-            for index, child in enumerate(children):
-                yield from _schema_entries(child, (*path, key, index))
-    for key in _SUBSCHEMA_MAP_KEYWORDS:
-        if isinstance(named := schema.get(key), dict):
-            for name, child in named.items():
-                yield from _schema_entries(child, (*path, key, name))
+def _child(node: JsonValue, key: str | int) -> JsonValue:
+    if isinstance(node, dict) and isinstance(key, str):
+        return node.get(key)
+    if isinstance(node, list) and isinstance(key, int) and 0 <= key < len(node):
+        return node[key]
+    return None
 
 
-def with_replaced_descriptions(
-    node: JsonValue, replacements: Mapping[DescriptionPath, str], path: DescriptionPath = ()
-) -> JsonValue:
-    if isinstance(node, list):
-        return [with_replaced_descriptions(item, replacements, (*path, index)) for index, item in enumerate(node)]
-    if not isinstance(node, dict):
-        return node
-    return {
-        key: (
-            replacements.get((*path, key), value)
-            if key == "description" and isinstance(value, str)
-            else with_replaced_descriptions(value, replacements, (*path, key))
-        )
-        for key, value in node.items()
-    }
+def with_replaced_descriptions(tools: Sequence[JsonValue], replacements: Mapping[DescriptionPath, str]) -> JsonValue:
+    rewritten: Final = copy.deepcopy(list(tools))
+    for path, text in replacements.items():
+        holder = functools.reduce(_child, path[:-1], rewritten)
+        if isinstance(holder, dict) and isinstance(key := path[-1], str):
+            holder[key] = text
+    return rewritten
 
 
 async def scan_tool_definitions(
