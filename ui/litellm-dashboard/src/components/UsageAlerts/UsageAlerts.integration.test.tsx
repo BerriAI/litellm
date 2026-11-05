@@ -74,7 +74,7 @@ describe("usage alerts API integration", () => {
     expect(link).toHaveAttribute("href", `/ui${observation.activity_path}`);
     expect(screen.getByText("$120.00")).toBeInTheDocument();
     expect(screen.getByText("$30.00")).toBeInTheDocument();
-    expect(screen.getByText("Above $90.00")).toBeInTheDocument();
+    expect(screen.getByText("At least $90.00")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Go to next page", exact: true }));
     expect(await screen.findByRole("link", { name: "second-key" })).toBeInTheDocument();
     expect(calls.some((call) => call.path === "/usage/alerts" && call.query.get("offset") === "50")).toBe(true);

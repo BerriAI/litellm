@@ -76,7 +76,7 @@ export default function UsageAlertsPanel() {
         id: "condition",
         header: "Condition",
         cell: ({ row }) =>
-          `${row.original.direction === "increase" ? "Above" : "Below"} ${formatAlertValue(row.original.metric, row.original.threshold)}`,
+          `${row.original.direction === "increase" ? "At least" : "At most"} ${formatAlertValue(row.original.metric, row.original.threshold)}`,
       },
       {
         id: "actions",

@@ -155,7 +155,7 @@ export default function UsageRuleForm({
       </div>
       <p className="text-xs text-muted-foreground">
         Compares each completed UTC day with the average of recorded days in the baseline window. A 3× decrease means
-        falling below one-third of the baseline.
+        reaching one-third of the baseline or lower.
       </p>
       <div className="flex gap-5">
         <label className="flex items-center gap-2">
