@@ -23,6 +23,15 @@ import { type DeprecationAlert } from "@/components/ModelDeprecationAlerts/depre
 import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
 import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
 import { migrationHref } from "@/components/ModelDeprecationAlerts/migrationRoute";
+import {
+  type AlertPage,
+  formatAlertValue,
+  METRIC_LABELS,
+  SCOPE_LABELS,
+  usageAlertHref,
+  useUsageAlerts,
+} from "@/components/UsageAlerts/usageAlertApi";
+import { uiHref } from "@/utils/uiHref";
 import React, { Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n/i18n";
@@ -108,6 +117,7 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
 
 interface NotificationsBellViewProps {
   deprecationAlerts?: readonly DeprecationAlert[];
+  usageAlerts?: AlertPage;
   deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
@@ -118,6 +128,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   latestRelease,
   deploymentHealthLink,
   deprecationAlerts,
+  usageAlerts,
 }) => {
   const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
@@ -126,12 +137,18 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
 
   const openAlerts = (deprecationAlerts ?? []).filter((alert) => effectiveAlertStatus(alert) === AlertStatus.Open);
   const openDeprecations = openAlerts.length;
+  const openUsageAlerts = usageAlerts?.total ?? 0;
+  const needsAttention = openDeprecations + openUsageAlerts > 0;
   let label =
     unreadCount > 0
       ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
       : t("shell.notifications.bell.trigger");
   if (openDeprecations > 0) {
     label = `Notifications, ${openDeprecations} model deprecation ${openDeprecations === 1 ? "alert needs" : "alerts need"} attention`;
+  }
+  if (openUsageAlerts > 0) {
+    const count = openDeprecations + openUsageAlerts;
+    label = `Notifications, ${count} ${count === 1 ? "alert needs" : "alerts need"} attention`;
   }
 
   return (
@@ -141,13 +158,13 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
         aria-label={label}
       >
         <span className="relative inline-flex">
-          <Bell className={cn("size-4", openDeprecations > 0 && "text-amber-700")} aria-hidden />
-          {openDeprecations > 0 ? (
+          <Bell className={cn("size-4", needsAttention && "text-amber-700")} aria-hidden />
+          {needsAttention ? (
             <span className="absolute -top-2 -right-2 rounded-full bg-background p-px text-amber-600" aria-hidden>
               <AlertTriangle className="size-3" fill="currentColor" stroke="var(--background)" strokeWidth={1.5} />
             </span>
           ) : null}
-          {openDeprecations === 0 && unreadCount > 0 ? (
+          {!needsAttention && unreadCount > 0 ? (
             <Badge className="absolute -top-0.5 -right-1 size-1.5 p-0" aria-hidden />
           ) : null}
         </span>
@@ -162,6 +179,29 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
         </PopoverTitle>
         <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
           <div className="space-y-4 p-4">
+            {openUsageAlerts > 0 && (
+              <>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold">Usage alerts</p>
+                  <a className="text-xs text-primary hover:underline" href={uiHref("alerts?type=usage")}>
+                    View all {openUsageAlerts}
+                  </a>
+                </div>
+                {usageAlerts?.data.slice(0, 3).map((alert) => (
+                  <Fragment key={alert.id}>
+                    <Separator />
+                    <a href={usageAlertHref(alert)} className="block space-y-1 text-sm hover:underline">
+                      <p className="font-medium truncate">{alert.scope_id || SCOPE_LABELS[alert.scope_type]}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {METRIC_LABELS[alert.metric]} {alert.direction === "increase" ? "increased" : "decreased"} to{" "}
+                        {formatAlertValue(alert.metric, alert.observed_value)} · {alert.day}
+                      </p>
+                    </a>
+                  </Fragment>
+                ))}
+                <Separator />
+              </>
+            )}
             {openAlerts.length > 0 && (
               <>
                 <div>
@@ -210,11 +250,13 @@ export const NotificationsBell: React.FC<{ accessToken: string | null; deploymen
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const { data: latestRelease } = useLatestReleaseInfo(accessToken);
   const { data: deprecationAlerts } = useDeprecationAlerts(accessToken);
+  const { data: usageAlerts } = useUsageAlerts(accessToken, "open", 0, 3);
   return (
     <NotificationsBellView
       currentVersion={healthData?.litellm_version}
       latestRelease={latestRelease}
       deprecationAlerts={deprecationAlerts}
+      usageAlerts={usageAlerts}
       deploymentHealthLink={deploymentHealthLink}
     />
   );
