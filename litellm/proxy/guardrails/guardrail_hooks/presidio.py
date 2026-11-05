@@ -30,7 +30,7 @@ from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 import aiohttp
-from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -55,6 +55,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+from litellm.proxy.guardrails._content_utils import DuplicateToolArgumentKeyError, parse_tool_arguments
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
@@ -303,7 +304,15 @@ def _set_tool_call_arguments(tool_call: _ToolCall, arguments: str) -> None:
         function_chunk["arguments"] = arguments
 
 
-_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+def _parsed_arguments(arguments: str) -> JsonValue:
+    try:
+        return parse_tool_arguments(arguments)
+    except DuplicateToolArgumentKeyError as error:
+        raise GuardrailRaisedException(
+            message="Presidio cannot safely scan tool arguments with duplicate JSON object keys",
+            should_wrap_with_default_message=False,
+            blocked_content=True,
+        ) from error
 
 
 def _json_literal_tokens(value: JsonValue) -> frozenset[str]:
@@ -323,8 +332,8 @@ def _segment_literal_tokens(segment: tuple[_TextSlot | _ToolCallSlot, str]) -> f
     if isinstance(slot, _TextSlot):
         return _literal_tokens(source)
     try:
-        parsed: Final = _JSON_VALUE.validate_json(source)
-    except ValidationError:
+        parsed: Final = _parsed_arguments(source)
+    except ValueError:
         return _literal_tokens(source)
     return _json_literal_tokens(parsed)
 
@@ -353,8 +362,8 @@ async def _rewritten_arguments(arguments: str, rewrite: Callable[[str, bool], Aw
     quote or a newline has to be escaped for the arguments to stay valid JSON.
     """
     try:
-        parsed: Final = _JSON_VALUE.validate_json(arguments)
-    except ValidationError:
+        parsed: Final = _parsed_arguments(arguments)
+    except ValueError:
         return await rewrite(arguments, True)
     rewritten: Final = await _rewritten_json_strings(parsed, rewrite)
     return arguments if rewritten == parsed else json.dumps(rewritten, ensure_ascii=False)

@@ -5592,8 +5592,49 @@ async def test_escaped_tool_argument_tokens_never_restore_to_unrelated_pii(argum
         await guardrail._close_http_session()
 
 
-async def test_safe_tool_argument_keys_and_scalar_types_keep_original_bytes() -> None:
-    arguments: Final = '{ "count": 42, "fraction": 1.25, "enabled": true, "absent": null, "items": [false, 0] }'
+@pytest.mark.parametrize(
+    ("input_type", "action"),
+    [("request", PiiAction.MASK), ("request", PiiAction.BLOCK), ("response", PiiAction.MASK)],
+)
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        '{"guest":"test@example.com","guest":"safe"}',
+        '{"items":[{"guest":"test@example.com","guest":"safe"}]}',
+        r'{"guest":"test@example.com","\u0067uest":"safe"}',
+        '{"guest":"<EMAIL_ADDRESS_1>","guest":"safe"}',
+    ],
+)
+async def test_duplicate_tool_argument_keys_cannot_hide_values_from_presidio(
+    arguments: str, input_type: Literal["request", "response"], action: PiiAction
+) -> None:
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed, output_parse_pii=True, action=action)
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup", arguments=arguments)
+    )
+    try:
+        with pytest.raises(GuardrailRaisedException, match="duplicate JSON object keys") as excinfo:
+            await guardrail.apply_guardrail(
+                inputs={"texts": [], "tool_calls": [tool_call]},
+                request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": _EMAIL}}},
+                input_type=input_type,
+            )
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.blocked_content is True
+        assert _EMAIL not in str(excinfo.value)
+    finally:
+        await guardrail._close_http_session()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        '{ "count": 42, "fraction": 1.25, "enabled": true, "absent": null, "items": [false, 0] }',
+        '{ "left": {"guest": "safe"}, "right": {"guest": "safe"} }',
+    ],
+)
+async def test_safe_tool_argument_keys_and_scalar_types_keep_original_bytes(arguments: str) -> None:
     analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
     guardrail: Final = _guardrail_with_in_memory_presidio(analyzed, output_parse_pii=True)
     tool_call: Final = ChatCompletionMessageToolCall(
