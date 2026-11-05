@@ -892,9 +892,8 @@ def _add_applied_guardrails_in_place(
     data: dict[str, object],  # mutable-ok: the names are recorded in the live request body's metadata
     names: Sequence[str],
 ) -> None:
-    """Adds each name the way add_guardrail_to_applied_guardrails_header does, in time linear in the names"""
-    from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
-
+    """Adds each name the way add_guardrail_to_applied_guardrails_header does, in time linear in the names. A record a
+    guardrail left that isn't a list stays as it is, so the request doesn't fail on it."""
     if not names:
         return
     metadata: Final = cast("dict[str, object]", get_or_create_metadata_bucket(data)[1])  # cast-ok: str-keyed bucket
@@ -903,8 +902,6 @@ def _add_applied_guardrails_in_place(
         return
     applied: Final = metadata["applied_guardrails"]
     if not isinstance(applied, list):
-        for name in names:
-            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=name)
         return
     entries: Final = cast("list[object]", applied)  # cast-ok: entries are only compared with names
     present: Final = frozenset(name for name in entries if isinstance(name, str))

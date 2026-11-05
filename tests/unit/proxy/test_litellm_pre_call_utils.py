@@ -5622,6 +5622,38 @@ def test_add_guardrails_from_auth_metadata_lists_each_key_and_team_guardrail_onc
     assert data["metadata"]["guardrails"] == [configured, "audit", "toxic"]
 
 
+@pytest.mark.parametrize("level", ["key", "team", "project"])
+def test_add_guardrails_from_auth_metadata_skips_a_policy_name_that_is_not_a_string(level: str):
+    from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    metadata: Final[dict[str, object]] = {}
+    data: Final[dict[str, object]] = {"model": "gpt-4", "metadata": metadata}
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {"baseline": Policy(guardrails=PolicyGuardrails(add=["pii_blocker"]))}
+    policy_registry._initialized = True
+    policies = {"policies": [{"a": 1}, ["b"], "baseline"]}
+
+    try:
+        with patch("litellm.proxy.utils.premium_user_check"):
+            add_guardrails_from_auth_metadata(
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test-key",
+                    metadata=policies if level == "key" else {},
+                    team_metadata=policies if level == "team" else {},
+                    project_metadata=policies if level == "project" else None,
+                ),
+                data=data,
+                metadata_variable_name="metadata",
+            )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+
+    assert metadata["guardrails"] == ["pii_blocker"]
+
+
 def test_add_guardrails_from_auth_metadata_keeps_a_selected_guardrail_s_settings_when_a_key_policy_adds_it():
     from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
