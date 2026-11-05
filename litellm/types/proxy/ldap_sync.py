@@ -6,7 +6,7 @@ from typing_extensions import Self
 
 
 class LDAPSyncSettings(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     enabled: bool = False
     server_url: str = ""

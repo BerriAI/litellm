@@ -242,6 +242,22 @@ def test_invalid_configuration_is_rejected(updates: Mapping[str, object]):
         LDAPSyncSettings.model_validate({**SETTINGS.model_dump(), **updates})
 
 
+@pytest.mark.parametrize(
+    "updates,message",
+    [
+        ({"bind_dn": "cn=admin", "start_tls": False}, "require TLS"),
+        ({}, "bind_dn and bind_password must be configured together"),
+    ],
+)
+def test_invalid_configuration_errors_do_not_expose_bind_password(updates: Mapping[str, object], message: str):
+    password: Final = "qa-secret-42"
+    with pytest.raises(ValidationError, match=message) as error:
+        LDAPSyncSettings.model_validate(
+            {**SETTINGS.model_dump(exclude_unset=True), **updates, "bind_password": password}
+        )
+    assert password not in str(error.value)
+
+
 def test_cancelled_reader_stops_before_opening_ldap():
     cancellation = Event()
     cancellation.set()
