@@ -488,13 +488,13 @@ def requests_output_config_format(optional_params: Mapping[str, object]) -> bool
 
 
 def requests_native_output(anthropic_optional_params: Mapping[str, object]) -> bool:
-    output_config: Final = anthropic_optional_params.get("outputConfig")
+    output_config: Final = json_object_or_none(anthropic_optional_params.get("outputConfig"))
     return (
         isinstance(anthropic_optional_params.get("output_format"), Mapping)
         or requests_output_config_format(anthropic_optional_params)
         or (
             anthropic_optional_params.get("json_mode") is True
-            and isinstance(output_config, Mapping)
+            and output_config is not None
             and isinstance(output_config.get("textFormat"), Mapping)
         )
     )
@@ -550,7 +550,7 @@ def bedrock_native_output_schema(
     model_info: Mapping[str, object] | None = None,
 ) -> Mapping[str, object] | None:
     native_schema: Final = bedrock_cleaned_output_schema(model, schema, custom_llm_provider)
-    if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
+    if _bedrock_native_output_enabled(model, custom_llm_provider, model_info):
         return schema if native_schema is None else native_schema
     if _bedrock_native_output_opt_in(model, custom_llm_provider, model_info):
         return native_schema
