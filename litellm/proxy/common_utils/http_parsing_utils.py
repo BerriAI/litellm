@@ -207,10 +207,10 @@ def _parse_form_metadata(raw_metadata: str) -> object:
     """The JSON body path rejects a lone surrogate escape (``"\\ud800"``) with a
     400 because no provider or database can encode it. ``json.loads`` accepts
     the escape, so the multipart ``metadata`` field gets the same check."""
-    parsed: Final[object] = json.loads(raw_metadata)
     try:
+        parsed: Final[object] = json.loads(raw_metadata)
         json.dumps(parsed, ensure_ascii=False).encode("utf-8")
-    except UnicodeEncodeError as e:
+    except (json.JSONDecodeError, UnicodeEncodeError) as e:
         raise ProxyException(
             message=f"Invalid form payload: metadata {e}",
             type="invalid_request_error",
@@ -220,6 +220,11 @@ def _parse_form_metadata(raw_metadata: str) -> object:
     return parsed
 
 
+def _reraise_request_size_error(error: Exception) -> None:
+    if isinstance(error, HTTPException) and error.status_code == status.HTTP_413_CONTENT_TOO_LARGE:
+        raise error
+
+
 async def _read_form_data(request: Request) -> FormData:
     try:
         form_data: Final = await request.form()
@@ -227,6 +232,7 @@ async def _read_form_data(request: Request) -> FormData:
     except ClientDisconnect:
         raise
     except Exception as e:
+        _reraise_request_size_error(e)
         # ``request.form()`` raises on malformed multipart (missing
         # boundary, malformed chunk encoding, …). Surface as 400 so
         # the auth-time pre-read does not silently cache ``{}`` while
@@ -377,6 +383,7 @@ async def read_request_body(request: Request | None) -> dict:
         raise disconnected from e
     except Exception as e:
         # Catch unexpected errors to avoid crashes
+        _reraise_request_size_error(e)
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
         return {}
 
@@ -814,10 +821,6 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
                     request_data["vector_store_ids"] = [value]
                 continue
             request_data.setdefault(key, value)
-        verbose_proxy_logger.debug(
-            "populate_request_with_path_params: Found path_params, vector_store_ids=%s",
-            request_data.get("vector_store_ids"),
-        )
         return request_data
 
     # Fallback: parse the URL path directly to extract vector_store_id
@@ -853,7 +856,3 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
                 existing_ids.append(vector_store_id)
         else:
             request_data["vector_store_ids"] = [vector_store_id]
-        verbose_proxy_logger.debug(
-            "populate_request_with_path_params: Updated request_data with vector_store_ids=%s",
-            request_data.get("vector_store_ids"),
-        )
