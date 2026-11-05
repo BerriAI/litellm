@@ -15,6 +15,7 @@ from litellm.models.plugin_upload import (
     PluginPublication,
     PluginPublicationBase,
     PluginPublicationError,
+    PluginSnapshot,
     PluginUpload,
     PluginVersion,
     PublishedPlugin,
@@ -115,6 +116,22 @@ class PluginUploadRepository:
         if version is None or version.content is None:
             return None
         return verified_archive(version.content.decode(), version.manifest_json)
+
+    async def get_plugin(self, name: str) -> PluginSnapshot | None:
+        row: Final = await self._plugins.find_unique(where={"name": name})
+        if row is None:
+            return None
+        return PluginSnapshot(
+            id=row.id,
+            name=row.name,
+            version=row.version,
+            description=row.description,
+            manifest=MappingProxyType(_MANIFEST.validate_json(row.manifest_json or "{}")),
+            enabled=row.enabled,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            created_by=row.created_by,
+        )
 
     async def get_metadata(self, name: str) -> PluginArchiveMetadata | None:
         plugin: Final = await self._plugins.find_unique(where={"name": name})

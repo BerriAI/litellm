@@ -1638,6 +1638,27 @@ model LiteLLM_ClaudeCodePluginVersion {
 }
 
 
+model LiteLLM_SkillSubmission {
+  id               String   @id @default(uuid())
+  plugin_name      String
+  operation        String
+  status           String   @default("pending_review")
+  proposal_json    String
+  archive_content  Bytes?
+  submitted_by     String
+  created_at       DateTime @default(now())
+  base_plugin_id   String?
+  base_updated_at  DateTime?
+  reviewed_by      String?
+  reviewed_at      DateTime?
+  rejection_reason String?
+
+  @@index([submitted_by, created_at(sort: Desc), id(sort: Desc)])
+  @@index([submitted_by, status, created_at(sort: Desc), id(sort: Desc)])
+  @@index([status, created_at(sort: Desc), id(sort: Desc)])
+  @@index([created_at(sort: Desc), id(sort: Desc)])
+}
+
 model LiteLLM_ClaudeCodePluginUpload {
   plugin_name String @id
   content     Bytes

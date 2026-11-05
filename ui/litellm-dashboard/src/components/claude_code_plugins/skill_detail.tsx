@@ -14,20 +14,52 @@ import {
   getSourceLink,
   MARKETPLACE_KEY_PLACEHOLDER,
 } from "./helpers";
-import { Plugin } from "./types";
+import type { Plugin, SkillHubSkill } from "./types";
 import SkillVersionHistory from "./SkillVersionHistory";
+
+type SkillDetailData = Pick<
+  SkillHubSkill,
+  "id" | "name" | "source" | "version" | "description" | "domain" | "namespace" | "keywords" | "updated_at"
+> &
+  Pick<Plugin, "enabled"> &
+  Partial<Pick<Plugin, "created_at" | "category" | "author">> & {
+    portable?: boolean;
+    downloadAvailable?: boolean;
+  };
+
+export const legacySkillDetail = (skill: Plugin): SkillDetailData => skill;
+
+export const skillHubDetail = (skill: SkillHubSkill): SkillDetailData => ({
+  id: skill.id,
+  name: skill.name,
+  source: skill.source,
+  version: skill.version,
+  description: skill.description,
+  domain: skill.domain,
+  namespace: skill.namespace,
+  keywords: skill.keywords,
+  updated_at: skill.updated_at,
+  enabled: skill.visibility === "public",
+  portable: true,
+  downloadAvailable: Boolean(skill.download_url),
+});
 
 const SkillSource: React.FC<Pick<SkillDetailProps, "skill" | "accessToken">> = ({ skill, accessToken }) => {
   const { t } = useTranslation();
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const { source } = skill;
-  const archivePath = getManagedSkillArchivePath(
-    skill.name,
-    source,
-    getProxyBaseUrl(),
-    typeof window !== "undefined" ? window.location.origin : undefined,
-  );
+  const portableArchivePath = skill.downloadAvailable
+    ? `/skill-hub/skills/${encodeURIComponent(skill.name)}/archive`
+    : null;
+  const archivePath = skill.portable
+    ? portableArchivePath
+    : getManagedSkillArchivePath(
+        skill.name,
+        source,
+        getProxyBaseUrl(),
+        typeof window !== "undefined" ? window.location.origin : undefined,
+      );
   const downloadArchive = async () => {
     if (!archivePath || downloading) return;
     setDownloading(true);
@@ -45,7 +77,7 @@ const SkillSource: React.FC<Pick<SkillDetailProps, "skill" | "accessToken">> = (
   };
   const link = getSourceLink(source);
   const href = link && source.source === "git-subdir" && source.path ? `${link}/tree/main/${source.path}` : link;
-  if (!href && !source.url) return null;
+  if (!archivePath && !href && !source.url) return null;
   return (
     <div className="mb-6">
       <div className="mb-1 text-xs text-muted-foreground">{t("claudeCodePlugins.skillDetail.overview.source")}</div>
@@ -81,14 +113,15 @@ const SkillSource: React.FC<Pick<SkillDetailProps, "skill" | "accessToken">> = (
 };
 
 interface SkillDetailProps {
-  skill: Plugin;
+  skill: SkillDetailData;
   onBack: () => void;
   isAdmin?: boolean;
   accessToken?: string | null;
   onPublishClick?: () => void;
+  onEditClick?: () => void;
 }
 
-const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken }) => {
+const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, onEditClick }) => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -133,7 +166,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken })
 
   const tabs = [
     { key: "overview", label: t("claudeCodePlugins.skillDetail.tabs.overview") },
-    { key: "usage", label: t("claudeCodePlugins.skillDetail.tabs.usage") },
+    ...(!skill.portable ? [{ key: "usage", label: t("claudeCodePlugins.skillDetail.tabs.usage") }] : []),
     ...(accessToken ? [{ key: "history", label: t("claudeCodePlugins.skillDetail.history.title") }] : []),
   ];
 
@@ -150,7 +183,14 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken })
 
       {/* Header */}
       <div className="mb-2">
-        <h1 className="m-0 text-[28px] font-normal leading-tight text-foreground">{skill.name}</h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="m-0 text-[28px] font-normal leading-tight text-foreground">{skill.name}</h1>
+          {onEditClick && (
+            <Button variant="outline" onClick={onEditClick}>
+              {t("skills.panel.editButton")}
+            </Button>
+          )}
+        </div>
         {skill.description && (
           <p className="mb-0 ml-0 mr-0 mt-2 text-sm leading-relaxed text-muted-foreground">{skill.description}</p>
         )}
@@ -188,7 +228,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken })
               {t("claudeCodePlugins.skillDetail.overview.title")}
             </h2>
             <p className="m-0 mb-4 text-[13px] text-muted-foreground">
-              {t("claudeCodePlugins.skillDetail.overview.subtitle")}
+              {t(skill.portable ? "skills.detail.subtitle" : "claudeCodePlugins.skillDetail.overview.subtitle")}
             </p>
             <table className="w-full border-collapse text-sm">
               <thead>
@@ -224,7 +264,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken })
               >
                 {skill.enabled
                   ? t("claudeCodePlugins.skillDetail.overview.public")
-                  : t("claudeCodePlugins.skillDetail.overview.draft")}
+                  : t(skill.portable ? "skills.detail.private" : "claudeCodePlugins.skillDetail.overview.draft")}
               </span>
             </div>
 

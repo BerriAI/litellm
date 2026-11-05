@@ -15745,7 +15745,7 @@ export interface paths {
         get: operations["get_skill_skill_hub_skills__name__get"];
         /**
          * Replace Skill Metadata
-         * @description Replace registry metadata, clearing omitted fields and preserving skill files.
+         * @description Replace registry metadata, preserving files. Members submit an immutable proposal for admin review.
          */
         put: operations["replace_skill_metadata_skill_hub_skills__name__put"];
         post?: never;
@@ -15839,6 +15839,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skill-hub/skills/{name}/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace Skill Archive
+         * @description Replace skill files, retaining registry fields. Members propose an update against the original editor timestamp.
+         */
+        put: operations["replace_skill_archive_skill_hub_skills__name__upload_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skill-hub/skills/{name}/versions": {
         parameters: {
             query?: never;
@@ -15892,6 +15912,106 @@ export interface paths {
          */
         get: operations["download_skill_version_skill_hub_skills__name__versions__version_id__archive_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Submissions
+         * @description Read a page of owned proposals. Proxy admins and admin viewers can read every owner's proposals.
+         */
+        get: operations["list_submissions_skill_hub_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Submission
+         * @description Read an immutable proposal and its currently visible published skill.
+         */
+        get: operations["get_submission_skill_hub_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Submission
+         * @description Publish a pending proposal and record its approval atomically. Only proxy admins may review.
+         */
+        put: operations["approve_submission_skill_hub_submissions__submission_id__approve_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Submission
+         * @description Download an owned proposal as a private portable ZIP. Legacy nonportable archives return 404.
+         */
+        get: operations["download_submission_skill_hub_submissions__submission_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Reject Submission
+         * @description Reject a pending proposal without changing the published skill. Only proxy admins may review.
+         */
+        put: operations["reject_submission_skill_hub_submissions__submission_id__reject_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -28296,6 +28416,18 @@ export interface components {
         Body_introspect_endpoint_introspect_post: {
             /** Token */
             token: string;
+        };
+        /** Body_replace_skill_archive_skill_hub_skills__name__upload_put */
+        Body_replace_skill_archive_skill_hub_skills__name__upload_put: {
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
+            /**
+             * File
+             * @description Replacement Agent Skills ZIP with the same declared skill name
+             */
+            file: string;
+            /** Version */
+            version?: string | null;
         };
         /** Body_revoke_endpoint_revoke_post */
         Body_revoke_endpoint_revoke_post: {
@@ -46660,6 +46792,17 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
+        /** SkillHubAgentSkill */
+        SkillHubAgentSkill: {
+            /** Description */
+            description: string;
+            /** Digest */
+            digest: string;
+            /** Name */
+            name: string;
+            /** Origin */
+            origin: string | null;
+        };
         /** SkillHubList */
         SkillHubList: {
             /** Count */
@@ -46690,20 +46833,85 @@ export interface components {
              */
             version?: string | null;
         };
+        /** SkillHubPendingSkill */
+        SkillHubPendingSkill: {
+            /**
+             * Action
+             * @default submitted
+             * @constant
+             */
+            action: "submitted";
+            proposal: components["schemas"]["SkillHubProposal"];
+            /**
+             * Status
+             * @default pending_review
+             * @constant
+             */
+            status: "pending_review";
+            /** Submission Id */
+            submission_id: string;
+        };
+        /** SkillHubProposal */
+        SkillHubProposal: {
+            agent_skill?: components["schemas"]["SkillHubAgentSkill"] | null;
+            /** Description */
+            description: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /** Source */
+            source: {
+                [key: string]: string;
+            };
+            /** Version */
+            version: string | null;
+        };
         /** SkillHubPublication */
         SkillHubPublication: Record<string, never>;
+        /** SkillHubRejection */
+        SkillHubRejection: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /** SkillHubReviewResponse */
+        SkillHubReviewResponse: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "approved" | "rejected";
+            skill: components["schemas"]["SkillHubSkill"] | null;
+            /**
+             * Status
+             * @default success
+             * @constant
+             */
+            status: "success";
+            submission: components["schemas"]["SkillHubSubmission"];
+        };
         /** SkillHubSkill */
         SkillHubSkill: {
             /** Content Url */
             content_url?: string | null;
             /** Description */
             description?: string | null;
+            /** Domain */
+            domain?: string | null;
             /** Download Url */
             download_url?: string | null;
             /** Id */
             id: string;
+            /** Keywords */
+            keywords?: string[] | null;
             /** Name */
             name: string;
+            /** Namespace */
+            namespace?: string | null;
             /** Source */
             source: {
                 [key: string]: string;
@@ -46717,6 +46925,57 @@ export interface components {
              * @enum {string}
              */
             visibility: "public" | "private";
+        };
+        /** SkillHubSubmission */
+        SkillHubSubmission: {
+            /** Base Skill Id */
+            base_skill_id: string | null;
+            /** Base Updated At */
+            base_updated_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Has Archive */
+            has_archive: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "create" | "update";
+            proposal: components["schemas"]["SkillHubProposal"];
+            /** Rejection Reason */
+            rejection_reason: string | null;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Skill Name */
+            skill_name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending_review" | "approved" | "rejected";
+            /** Submitted By */
+            submitted_by: string;
+        };
+        /** SkillHubSubmissionDetail */
+        SkillHubSubmissionDetail: {
+            current_skill: components["schemas"]["SkillHubSkill"] | null;
+            submission: components["schemas"]["SkillHubSubmission"];
+        };
+        /** SkillHubSubmissionList */
+        SkillHubSubmissionList: {
+            /** Count */
+            count: number;
+            /** Has More */
+            has_more: boolean;
+            /** Submissions */
+            submissions: components["schemas"]["SkillHubSubmission"][];
         };
         /** SkillHubVersion */
         SkillHubVersion: {
@@ -73927,7 +74186,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SkillHubSkill"];
+                    "application/json": components["schemas"]["SkillHubSkill"] | components["schemas"]["SkillHubPendingSkill"];
                 };
             };
             /** @description Validation Error */
@@ -73960,7 +74219,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SkillHubSkill"];
+                    "application/json": components["schemas"]["SkillHubSkill"] | components["schemas"]["SkillHubPendingSkill"];
                 };
             };
             /** @description Validation Error */
@@ -74026,7 +74285,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SkillHubSkill"];
+                    "application/json": components["schemas"]["SkillHubSkill"] | components["schemas"]["SkillHubPendingSkill"];
                 };
             };
             /** @description Validation Error */
@@ -74203,6 +74462,41 @@ export interface operations {
             };
         };
     };
+    replace_skill_archive_skill_hub_skills__name__upload_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_replace_skill_archive_skill_hub_skills__name__upload_put"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"] | components["schemas"]["SkillHubPendingSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_skill_versions_skill_hub_skills__name__versions_get: {
         parameters: {
             query?: {
@@ -74288,6 +74582,167 @@ export interface operations {
                 };
                 content: {
                     "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_submissions_skill_hub_submissions_get: {
+        parameters: {
+            query?: {
+                status?: ("pending_review" | "approved" | "rejected") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSubmissionList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_submission_skill_hub_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_submission_skill_hub_submissions__submission_id__approve_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubReviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_submission_skill_hub_submissions__submission_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_submission_skill_hub_submissions__submission_id__reject_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillHubRejection"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubReviewResponse"];
                 };
             };
             /** @description Validation Error */
