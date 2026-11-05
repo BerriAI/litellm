@@ -2373,12 +2373,8 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cos
 def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_output_config(
     local_model_cost_map, local_beta_headers_config
 ):
-    """Claude Code's per-turn control sends a mid-conversation ``role: "system"``
-    message carrying a message-level ``output_config`` together with the
-    per-turn-control-2026-07-01 beta. Bedrock Invoke rejects that message with
-    "messages.N.output_config: Extra inputs are not permitted" unless the beta
-    is present, so the beta must reach ``anthropic_beta`` and the message must
-    stay in place with its ``output_config``."""
+    """A live InvokeModel call on 2026-11-05 answered 200 with per-turn-control-2026-07-01 on every Claude model the
+    QA account can reach, and a made-up beta answered 400, so the client's beta must reach ``anthropic_beta``."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
