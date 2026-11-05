@@ -8,6 +8,7 @@ from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Request
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -32,10 +33,14 @@ from litellm.constants import (
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsMetadataFields, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import get_passthrough_router_request_metadata
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _extract_usage_for_ocr_call,
@@ -209,6 +214,7 @@ def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch
         assert audit["classifier_input"]["system"] == "rubric" * 1000
 
 
+@pytest.mark.parametrize("request_setup", ["standard", "passthrough", "router_passthrough"])
 @pytest.mark.parametrize(
     ("key_setting", "team_setting", "global_store", "stored"),
     [
@@ -227,6 +233,7 @@ def test_tenant_prompt_storage_restrictions_leave_callback_payload_unchanged(
     team_setting: bool | None,
     global_store: bool,
     stored: bool,
+    request_setup: str,
 ) -> None:
     from litellm.proxy import proxy_server
 
@@ -245,12 +252,54 @@ def test_tenant_prompt_storage_restrictions_leave_callback_payload_unchanged(
         choices=[{"message": {"role": "assistant", "content": "tenant-private-response"}}],
         usage=litellm.Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
     )
+    auth: Final = UserAPIKeyAuth(
+        api_key="test-storage-key",
+        metadata={} if key_setting is None else {"store_prompts_in_spend_logs": key_setting},
+        team_metadata={} if team_setting is None else {"store_prompts_in_spend_logs": team_setting},
+    )
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/openai/v1/chat/completions", "headers": [], "query_string": b""}
+    )
+    passthrough_context: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object]).validate_python(
+        HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
+            request=request,
+            user_api_key_dict=auth,
+            passthrough_logging_payload=PassthroughStandardLoggingPayload(
+                url="https://api.openai.com/v1/chat/completions"
+            ),
+            logging_obj=LiteLLMLoggingObj(
+                model="test-model",
+                messages=[],
+                stream=False,
+                call_type="pass_through_endpoint",
+                start_time=now,
+                litellm_call_id="tenant-storage",
+                function_id="tenant-storage",
+            ),
+            _parsed_body={
+                "messages": messages,
+                "metadata": {
+                    "user_api_key_metadata": {"store_prompts_in_spend_logs": not stored},
+                    "user_api_key_team_metadata": {"store_prompts_in_spend_logs": not stored},
+                },
+            },
+        )
+    )
+    logging_params: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object]).validate_python(
+        passthrough_context["litellm_params"]
+        if request_setup == "passthrough"
+        else {
+            "litellm_metadata" if request_setup == "router_passthrough" else "metadata": (
+                dict(get_passthrough_router_request_metadata(auth, request))
+                if request_setup == "router_passthrough"
+                else metadata
+            ),
+            "proxy_server_request": {"body": {"messages": messages}},
+        }
+    )
     kwargs: Final = {
         "model": "gpt-4o-mini",
-        "litellm_params": {
-            "metadata": metadata,
-            "proxy_server_request": {"body": {"messages": messages}},
-        },
+        "litellm_params": dict(logging_params),
         "standard_logging_object": {
             "call_type": "_arealtime",
             "model_map_information": None,
