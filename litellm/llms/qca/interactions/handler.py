@@ -4,14 +4,16 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.exceptions import APIError, AuthenticationError, RateLimitError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.types.interactions import InteractionsAPIResponse, InteractionsAPIStreamingResponse
 
 QCA_DEFAULT_API_BASE: Final = "https://api.qoder.com/api/v1/cloud"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
 
 
 class QCAEventContent(BaseModel):
@@ -116,6 +118,25 @@ def _accepted_event(payload: object) -> QCAEvent:
     return page.data[0]
 
 
+def _provider_error(error: httpx.HTTPStatusError, model: str) -> Exception:
+    response: Final = error.response
+    message: Final = response.text or str(error)
+    match response.status_code:
+        case 401 | 403:
+            return AuthenticationError(message=message, llm_provider="qca", model=model, response=response)
+        case 429:
+            return RateLimitError(message=message, llm_provider="qca", model=model, response=response)
+        case status_code:
+            return APIError(
+                status_code=status_code,
+                message=message,
+                llm_provider="qca",
+                model=model,
+                request=response.request,
+                response=response,
+            )
+
+
 def _interaction_id(session_id: str, input_event_id: str) -> str:
     return f"qca1.{session_id}.{input_event_id}"
 
@@ -138,7 +159,19 @@ def _text_step(event: QCAEvent) -> Mapping[str, object] | None:
     text: Final = "".join(content.text or "" for content in event.content if content.type == "text")
     if event.type != "agent.message" or not text:
         return None
-    return {"type": "message", "id": event.id, "role": "assistant", "content": [{"type": "text", "text": text}]}
+    return {"type": "model_output", "content": [{"type": "text", "text": text}]}
+
+
+def _text_delta(step: Mapping[str, object]) -> Mapping[str, object]:
+    try:
+        content: Final = _JSON_OBJECTS.validate_python(step.get("content"))
+    except ValidationError:
+        return {}
+    return content[0] if content else {}
+
+
+def _step_from_delta(delta: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "model_output", "content": [dict(delta)]}
 
 
 def _terminal_status(event: QCAEvent) -> str | None:
@@ -185,7 +218,7 @@ async def _normalized_stream(
                     event_type="step.delta",
                     interaction_id=interaction_id,
                     index=0,
-                    delta=dict(step),
+                    delta=dict(_text_delta(step)),
                 )
             if status is not None:
                 yield InteractionsAPIStreamingResponse(
@@ -234,6 +267,16 @@ def _response_from_terminal(
     )
 
 
+def _terminal_for_logging(
+    terminal: InteractionsAPIStreamingResponse,
+    interaction_id: str,
+    agent: str,
+    steps: tuple[Mapping[str, object], ...],
+) -> InteractionsAPIStreamingResponse:
+    response: Final = _response_from_terminal(terminal, interaction_id, agent, steps)
+    return terminal.model_copy(update={"interaction": response.model_dump()})
+
+
 async def _observed_stream(
     stream: AsyncIterator[InteractionsAPIStreamingResponse],
     interaction_id: str,
@@ -244,14 +287,13 @@ async def _observed_stream(
     steps: tuple[Mapping[str, object], ...] = ()  # rebind-ok: immutable response accumulation
     async for chunk in stream:
         if chunk.event_type == "step.delta" and chunk.delta is not None:
-            steps = (*steps, chunk.delta)
+            steps = (*steps, _step_from_delta(chunk.delta))
         if chunk.event_type in {"interaction.completed", "interaction.requires_action", "interaction.failed"}:
-            await logging_obj.dispatch_success_handlers(  # pyright: ignore[reportUnknownMemberType]  # old API untyped
-                _response_from_terminal(chunk, interaction_id, agent, steps),
+            await logging_obj.async_success_handler(
+                result=_terminal_for_logging(chunk, interaction_id, agent, steps),
                 start_time=start_time,
                 end_time=datetime.now(timezone.utc),
                 cache_hit=None,
-                prefer_async_handlers=True,
             )
         yield chunk
 
@@ -263,7 +305,7 @@ async def _collect_response(
     terminal: InteractionsAPIStreamingResponse | None = None  # rebind-ok: captures the terminal chunk
     async for chunk in stream:
         if chunk.event_type == "step.delta" and chunk.delta is not None:
-            steps = (*steps, chunk.delta)
+            steps = (*steps, _step_from_delta(chunk.delta))
         if chunk.event_type in {"interaction.completed", "interaction.requires_action", "interaction.failed"}:
             terminal = chunk
     if terminal is None:
@@ -310,7 +352,11 @@ async def create_qca_interaction(
     logging_obj: LiteLLMLoggingObj,
     client: httpx.AsyncClient | None = None,
 ) -> InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]:
-    unsupported: Final = tuple(name for name, value in unsupported_params.items() if value not in (None, False, (), {}))
+    unsupported: Final = tuple(
+        name
+        for name, value in unsupported_params.items()
+        if value not in (None, (), {}) and (name == "store" or value is not False)
+    )
     if unsupported:
         raise ValueError(f"QCA interactions do not support {', '.join(sorted(unsupported))}")
     agent_id: Final = _require_identifier(agent, "agent_", "agent id")
@@ -359,6 +405,10 @@ async def create_qca_interaction(
             observed: Final = _observed_stream(normalized, interaction_id, agent_id, logging_obj, start_time)
             return _closing_stream(observed, http_client) if owns_client else observed
         result: Final = await _collect_response(normalized, interaction_id, agent_id)
+    except httpx.HTTPStatusError as error:
+        if owns_client:
+            await http_client.aclose()
+        raise _provider_error(error, agent_id) from error
     except BaseException:
         if owns_client:
             await http_client.aclose()

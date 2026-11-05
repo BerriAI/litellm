@@ -800,6 +800,7 @@ CallTypesLiteral = Literal[
     "list_mcp_tools",
     "asend_message",
     "send_message",
+    "acreate_interaction",
     "aresponses",
     "responses",
     "acreate_skill",

@@ -144,6 +144,25 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object,
         )
 
 
+def _raise_if_qca_deployment_selectors_are_overridden(
+    llm_router: LitellmRouter, model_name: object, request_data: Mapping[str, object]
+) -> None:
+    if not isinstance(model_name, str):
+        return
+    deployment: Final = llm_router.registry().deployments(model_name, source="first_in_group")
+    configured_model: Final = deployment.litellm_params.model if deployment is not None else model_name
+    if not configured_model.startswith("qca/"):
+        return
+    overridden: Final = tuple(name for name in ("agent", "environment") if request_data.get(name) is not None)
+    if overridden:
+        raise ProxyException(
+            message=f"Qoder Cloud Agents deployment selectors cannot be overridden: {', '.join(overridden)}",
+            type="auth_error",
+            param=overridden[0],
+            code=status.HTTP_403_FORBIDDEN,
+        )
+
+
 ROUTE_ENDPOINT_MAPPING: Final = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
@@ -815,6 +834,12 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.registry().names(kind="group_set") if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
+
+    if route_type == "acreate_interaction" and llm_router is not None:
+        interaction_request: Final = JSON_OBJECT_ADAPTER.validate_python(data)
+        _raise_if_qca_deployment_selectors_are_overridden(
+            llm_router, interaction_request.get("model"), interaction_request
+        )
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:

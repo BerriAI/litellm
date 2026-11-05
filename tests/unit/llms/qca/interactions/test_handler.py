@@ -1,16 +1,47 @@
 import json
+from datetime import datetime
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
+from litellm.exceptions import RateLimitError
 from litellm.llms.qca.interactions.handler import create_qca_interaction
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.interactions import InteractionsAPIResponse
 
 
 def _sse_event(payload: dict[str, object]) -> bytes:
     return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        self.responses: list[object] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.responses.append(response_obj)
+
+
+def _stream_logging(recorder: _SuccessRecorder) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="qca/agent_test",
+        messages=[],
+        stream=True,
+        call_type="acreate_interaction",
+        start_time=datetime.now(),
+        litellm_call_id="qca-test-call",
+        function_id="qca-test-function",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="qca/agent_test", user="", optional_params={}, litellm_params={"api_base": "https://qca.test"}
+    )
+    return logging_obj
 
 
 @pytest.mark.asyncio
@@ -45,7 +76,7 @@ async def test_create_qca_interaction_maps_session_events_to_completed_response(
         return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
-        logging_obj: Final = MagicMock(dispatch_success_handlers=AsyncMock())
+        logging_obj: Final = MagicMock()
         response: Final = await create_qca_interaction(
             agent="agent_test",
             input="finish the task",
@@ -65,9 +96,7 @@ async def test_create_qca_interaction_maps_session_events_to_completed_response(
     assert response.status == "completed"
     assert response.steps == [
         {
-            "type": "message",
-            "id": "evt_answer",
-            "role": "assistant",
+            "type": "model_output",
             "content": [{"type": "text", "text": "done"}],
         }
     ]
@@ -100,9 +129,16 @@ async def test_create_qca_interaction_continues_session_and_streams_normalized_e
             (
                 _sse_event(
                     {
+                        "id": "evt_answer",
+                        "type": "agent.message",
+                        "content": [{"type": "text", "text": "continued"}],
+                    }
+                ),
+                _sse_event(
+                    {
                         "id": "evt_action",
                         "type": "session.status_idle",
-                        "stop_reason": {"type": "requires_action"},
+                            "stop_reason": {"type": "end_turn"},
                     }
                 ),
             )
@@ -110,7 +146,8 @@ async def test_create_qca_interaction_continues_session_and_streams_normalized_e
         return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
-        logging_obj: Final = MagicMock(dispatch_success_handlers=AsyncMock())
+        recorder: Final = _SuccessRecorder()
+        logging_obj: Final = _stream_logging(recorder)
         result: Final = await create_qca_interaction(
             agent="agent_test",
             input="continue",
@@ -127,15 +164,24 @@ async def test_create_qca_interaction_continues_session_and_streams_normalized_e
         assert not isinstance(result, InteractionsAPIResponse)
         chunks: Final = [chunk async for chunk in result]
 
-    assert [chunk.event_type for chunk in chunks] == ["interaction.created", "interaction.requires_action"]
+    assert [chunk.event_type for chunk in chunks] == [
+        "interaction.created",
+        "step.delta",
+        "interaction.completed",
+    ]
+    assert chunks[1].delta == {"type": "text", "text": "continued"}
     assert chunks[-1].interaction_id == "qca1.sess_existing.evt_next"
+    assert len(recorder.responses) == 1
+    logged: Final = recorder.responses[0]
+    assert isinstance(logged, InteractionsAPIResponse)
+    assert logged.steps == [{"type": "model_output", "content": [{"type": "text", "text": "continued"}]}]
     assert all(not request.url.path.endswith("/sessions") for request in requests)
 
 
 @pytest.mark.asyncio
 async def test_create_qca_interaction_rejects_unsupported_features_before_network_call() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(500))) as client:
-        logging_obj: Final = MagicMock(dispatch_success_handlers=AsyncMock())
+        logging_obj: Final = MagicMock()
         with pytest.raises(ValueError, match="background"):
             await create_qca_interaction(
                 agent="agent_test",
@@ -153,6 +199,48 @@ async def test_create_qca_interaction_rejects_unsupported_features_before_networ
 
 
 @pytest.mark.asyncio
+async def test_create_qca_interaction_rejects_store_false_before_network_call() -> None:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(500))) as client:
+        with pytest.raises(ValueError, match="store"):
+            await create_qca_interaction(
+                agent="agent_test",
+                input="hello",
+                environment="env_test",
+                previous_interaction_id=None,
+                stream=False,
+                api_key="secret",
+                api_base=None,
+                timeout=30,
+                unsupported_params={"store": False},
+                logging_obj=MagicMock(),
+                client=client,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_qca_interaction_preserves_rate_limit_status() -> None:
+    def route(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="rate limited", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
+        with pytest.raises(RateLimitError) as error:
+            await create_qca_interaction(
+                agent="agent_test",
+                input="hello",
+                environment="env_test",
+                previous_interaction_id=None,
+                stream=False,
+                api_key="secret",
+                api_base=None,
+                timeout=30,
+                unsupported_params={},
+                logging_obj=MagicMock(),
+                client=client,
+            )
+    assert error.value.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_create_qca_interaction_rejects_continuation_for_another_agent() -> None:
     requests: list[httpx.Request] = []
 
@@ -164,7 +252,7 @@ async def test_create_qca_interaction_rejects_continuation_for_another_agent() -
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
-        logging_obj: Final = MagicMock(dispatch_success_handlers=AsyncMock())
+        logging_obj: Final = MagicMock()
         with pytest.raises(ValueError, match="configured agent and environment"):
             await create_qca_interaction(
                 agent="agent_test",

@@ -23,6 +23,7 @@ from litellm.proxy.hooks.responses_id_security import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.interactions import InteractionsAPIResponse, InteractionsAPIStreamingResponse
 from litellm.types.llms.openai import (
     GenericEvent,
     ResponseAPIUsage,
@@ -801,6 +802,68 @@ def _comparison_options(data: object, nested: bool) -> Mapping[str, str]:
     request: Final = TypeAdapter(dict[str, object]).validate_python(data)
     container: Final = TypeAdapter(dict[str, object]).validate_python(request["extra_body"]) if nested else request
     return TypeAdapter(dict[str, str]).validate_python(container["prompt_cache_options"])
+
+
+@pytest.mark.asyncio
+async def test_interaction_continuation_id_is_bound_to_its_user_and_team(salt_key_env: str) -> None:
+    hook: Final = _hook(signing_key=salt_key_env)
+    owner: Final = _auth()
+    issued: Final = InteractionsAPIResponse.model_validate(
+        await hook.async_post_call_success_hook(  # pyright: ignore[reportArgumentType]  # interactions share this proxy hook
+            data={},
+            user_api_key_dict=owner,
+            response=InteractionsAPIResponse(id="qca1.sess_owner.evt_input", status="completed"),
+        )
+    )
+    assert issued.id is not None
+    assert issued.id != "qca1.sess_owner.evt_input"
+    authorized: Final = TypeAdapter(dict[str, object]).validate_python(
+        await hook.async_pre_call_hook(
+            user_api_key_dict=owner,
+            cache=DualCache(),
+            data={"previous_interaction_id": issued.id},
+            call_type="acreate_interaction",
+        )
+    )
+    assert authorized["previous_interaction_id"] == "qca1.sess_owner.evt_input"
+
+    with pytest.raises(HTTPException) as refusal:
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_auth(user_id="other-user"),
+            cache=DualCache(),
+            data={"previous_interaction_id": issued.id},
+            call_type="acreate_interaction",
+        )
+    assert refusal.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_streamed_interaction_ids_are_bound_to_the_caller(salt_key_env: str) -> None:
+    hook: Final = _hook(signing_key=salt_key_env)
+    caller: Final = _auth().model_copy(update={"request_route": "/interactions"})
+
+    async def chunks():
+        yield InteractionsAPIStreamingResponse(
+            event_type="interaction.created", id="qca1.sess_owner.evt_input", status="in_progress"
+        )
+
+    protected: Final = tuple(
+        [
+            chunk
+            async for chunk in hook.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=caller,
+                response=chunks(),
+                request_data={},
+            )
+        ]
+    )
+    protected_id: Final = protected[0].id
+    assert protected_id is not None
+    assert hook._decrypt_response_id(protected_id) == (  # pyright: ignore[reportPrivateUsage]  # verifies ownership payload
+        "qca1.sess_owner.evt_input",
+        "owner-user",
+        "owner-team",
+    )
 
 
 @pytest.mark.asyncio
