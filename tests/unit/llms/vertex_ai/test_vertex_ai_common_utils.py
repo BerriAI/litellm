@@ -296,6 +296,37 @@ async def test_vertex_gemini_count_applies_the_context_edits_inference_applies()
     assert peer.requests[0].content.decode().count(_TOOL_OUTPUT) == 1
 
 
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_sends_a_union_root_tool_as_parameters_since_vertex_counts_only_that_field() -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Look up Atlas."}],
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+            tools=[
+                {
+                    "name": "lookup",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                        "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+                    },
+                }
+            ],
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.total_tokens == 37
+    sent_tools: Final = _JSON_BODY.validate_json(peer.requests[0].content)["tools"]
+    assert isinstance(sent_tools, list) and isinstance(sent_tools[0], dict)
+    declarations: Final = sent_tools[0]["functionDeclarations"]
+    assert isinstance(declarations, list) and isinstance(declarations[0], dict)
+    assert ("parameters" in declarations[0], "parametersJsonSchema" in declarations[0]) == (True, False)
+
+
 @pytest.mark.parametrize("location", ["us", "eu", "us-central1", "europe-west1", "global"])
 def test_validate_vertex_location_accepts_valid(location):
     assert validate_vertex_location(location) == location

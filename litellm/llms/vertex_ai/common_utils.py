@@ -1636,7 +1636,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             if isinstance(request_view, VertexGeminiCountContextError):
                 return count_context_error_response(request_view, request_model, model_to_use)
             count_context: Final = vertex_gemini_count_context(
-                system=request_view.system, tools=tools, model=model_to_use
+                system=request_view.system, tools=tools, model=model_to_use, allow_parameters_json_schema=False
             )
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)

@@ -537,8 +537,13 @@ def _parameters_json_schema(tool: object) -> Mapping[str, JsonValue] | None:
     return None if parameters is None else parameters_json_schema_for(parameters)
 
 
-def _parameters_json_schemas(tools: object) -> tuple[Mapping[str, JsonValue] | None, ...]:
-    return tuple(_parameters_json_schema(tool) for tool in _CALLER_TOOLS.validate_python(tools))
+def _parameters_json_schemas(
+    tools: object, allow_parameters_json_schema: bool
+) -> tuple[Mapping[str, JsonValue] | None, ...]:
+    return tuple(
+        _parameters_json_schema(tool) if allow_parameters_json_schema else None
+        for tool in _CALLER_TOOLS.validate_python(tools)
+    )
 
 
 class VertexAIBaseConfig:
@@ -1063,7 +1068,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(self, value: list[dict], optional_params: dict, send_integer_enums: bool = False) -> list[Tools]:
+    def _map_function(
+        self,
+        value: list[dict],
+        optional_params: dict,
+        send_integer_enums: bool = False,
+        allow_parameters_json_schema: bool = True,
+    ) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
@@ -1071,6 +1082,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
             send_integer_enums: Whether to send integer enums with string values
+            allow_parameters_json_schema: Whether a tool whose parameters root Vertex cannot take as `parameters`
+                goes as `parametersJsonSchema`
 
         Returns:
             List of mapped tools in Vertex AI format
@@ -1090,7 +1103,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
         schema_value: Final[JsonValue] = deepcopy(cast(JsonValue, value))  # cast-ok: tools are JSON request data
-        parameters_json_schemas: Final = _parameters_json_schemas(schema_value)
+        parameters_json_schemas: Final = _parameters_json_schemas(schema_value, allow_parameters_json_schema)
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
@@ -1257,8 +1270,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         send_integer_enums: bool = False,
+        allow_parameters_json_schema: bool = True,
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return self._map_function(value, optional_params, send_integer_enums)
+        return self._map_function(value, optional_params, send_integer_enums, allow_parameters_json_schema)
 
     def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
         old_schema = deepcopy(value)
@@ -1677,6 +1691,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         drop_params: bool,
         allow_integer_enums: bool = True,
+        allow_parameters_json_schema: bool = True,
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
         supports_sampling_params: Final = self.supports_sampling_params(model)
@@ -1732,7 +1747,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
                 mapped_tools = with_integer_enums_that_fit(
-                    partial(self._map_function, value, optional_params),
+                    partial(
+                        self._map_function,
+                        value,
+                        optional_params,
+                        allow_parameters_json_schema=allow_parameters_json_schema,
+                    ),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
                 )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
