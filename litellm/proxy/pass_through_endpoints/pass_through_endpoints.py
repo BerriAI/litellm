@@ -1198,6 +1198,14 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+def _caller_query_source(
+    keep_target_query: bool, query_params: Mapping[str, object] | None, request: Request
+) -> Mapping[str, object]:
+    if keep_target_query:
+        return MappingProxyType({})
+    return query_params or request.query_params
+
+
 def _json_object(value: object) -> Mapping[str, object]:
     return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})  # cast-ok: json
 
@@ -1278,7 +1286,7 @@ async def pass_through_request(
             general_settings.pass_through_request_timeout, then 600s.
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
         operation: Optional GenAI operation the route reports, unless the upstream names its own
-        keep_target_query: Send the target URL's query exactly as given, merging no caller or default query params
+        keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1318,7 +1326,8 @@ async def pass_through_request(
         )
 
         requested_query_params: dict | None = (
-            None if keep_target_query else query_params or dict(request.query_params) or None
+            dict(_caller_query_source(keep_target_query, query_params, request))  # pyright: ignore[reportUnknownArgumentType]  # query_params keeps its legacy untyped dict annotation
+            or None
         )
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(
@@ -1571,7 +1580,7 @@ async def pass_through_request(
                 )
 
         # Apply default query parameters if provided, regardless of merge_query_params setting
-        if not keep_target_query and (default_query_params or merge_query_params):
+        if default_query_params or merge_query_params:
             # Create a new URL with the merged query params
             url = url.copy_with(
                 query=urlencode(

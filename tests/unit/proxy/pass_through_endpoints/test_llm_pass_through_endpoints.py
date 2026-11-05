@@ -10310,6 +10310,20 @@ class TestOpenSearchProxyRoute:
             pytest.param(
                 "_bulk",
                 NDJSON_TYPE,
+                b'{"index":{"_index":"prod-docs-v2","_id":"1"}}\n{"title":"a"}\n',
+                "'_index'",
+                id="bulk-action-names-the-provider-index",
+            ),
+            pytest.param(
+                "_bulk",
+                NDJSON_TYPE,
+                b'{"index":{"_index":"docs","_index":"hr-private","_id":"1"}}\n{"title":"a"}\n',
+                "'_index'",
+                id="bulk-action-duplicate-index",
+            ),
+            pytest.param(
+                "_bulk",
+                NDJSON_TYPE,
                 b'{"index":{"_id":"1"}}\n\n{"delete":{"_index":"hr-private","_id":"2"}}\n',
                 "'_index'",
                 id="bulk-blank-source-line",
@@ -10351,7 +10365,6 @@ class TestOpenSearchProxyRoute:
                 "source query parameter",
                 id="mget-source-query",
             ),
-            pytest.param("_search?search_pipeline=_none", JSON_TYPE, b"{}", "search_pipeline", id="search-pipeline-query"),
             pytest.param(
                 "_search",
                 "application/x-ndjson; multipart/form-data",
@@ -10422,6 +10435,29 @@ class TestOpenSearchProxyRoute:
         assert (sent.content, sent.headers["content-type"]) == (body, content_type)
         assert _verified_sigv4_scope(sent) == ("aoss", "us-east-1")
 
+    def test_a_bulk_action_naming_the_path_index_is_sent_to_the_mapped_index(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("write"))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_bulk").mock(
+                return_value=httpx.Response(200, json={"errors": False, "items": []})
+            )
+            response = opensearch_client.post(
+                "/opensearch/docs/_bulk",
+                content=b'{"index":{"_index":"docs","_id":"1"}}\n{"title":"a","_index":"docs"}\n'
+                b'{"delete":{"_id":"2"}}\n{"update":{"_id":"3","_index":"docs"}}\n{"doc":{"title":"b"}}\n',
+                headers={"Content-Type": NDJSON_TYPE},
+            )
+
+        assert response.status_code == 200
+        sent: Final = route.calls.last.request
+        assert sent.content == (
+            b'{"index":{"_index":"prod-docs-v2","_id":"1"}}\n{"title":"a","_index":"docs"}\n'
+            b'{"delete":{"_id":"2"}}\n{"update":{"_id":"3","_index":"prod-docs-v2"}}\n{"doc":{"title":"b"}}\n'
+        )
+        assert _verified_sigv4_scope(sent) == ("aoss", "us-east-1")
+
     @pytest.mark.parametrize(
         "method, path, body, sent_query",
         [
@@ -10438,6 +10474,14 @@ class TestOpenSearchProxyRoute:
                 b'{"size":1,"query_params":{"routing":"z"}}',
                 b"",
                 id="body-query-params-ignored",
+            ),
+            pytest.param(
+                "POST",
+                "/opensearch/docs/_search?search_pipeline=hybrid-min-max",
+                b'{"query":{"hybrid":{"queries":[{"match":{"title":"remote"}},'
+                b'{"knn":{"embedding":{"vector":[0.1,0.2],"k":2,"filter":{"term":{"lang":"en"}}}}}]}}}',
+                b"search_pipeline=hybrid-min-max",
+                id="hybrid-query-with-named-search-pipeline",
             ),
         ],
     )

@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 # ``Router(...)``'s parameters, their defaults and its docstring: ``router_arguments`` binds a call
 # against them and ``Router.__init__`` reports them. The body is never run.
 def _router_init(
-    self,
+    self: object,
     model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
     ## ASSISTANTS API ##
     assistants_config: AssistantsTypedDict | None = None,
@@ -222,17 +222,24 @@ def _class_descriptor(cls: type, name: str) -> bool:
 
 
 if TYPE_CHECKING:
-    from typing import overload
+    from typing import ParamSpec, overload
 
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
     from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, ModelResponse
 
+    _InitParams: Final = ParamSpec("_InitParams")
+
+    def _signature_of(
+        source: Callable[_InitParams, None],
+    ) -> Callable[[Callable[..., None]], Callable[_InitParams, None]]: ...
+
     class Router(RustCore, DeprecatedRouterMembers):
         """What type checkers see: the constructor's parameters and the endpoints' return types. The
         endpoints are served by the core at run time (litellm/router_rust/invoke/endpoints.py)."""
 
-        __init__ = _router_init  # pyright: ignore[reportAssignmentType, reportIncompatibleMethodOverride]  # Router(...)'s parameters
+        @_signature_of(_router_init)  # pyright: ignore[reportUnknownArgumentType]  # _router_init keeps untyped dict and list params
+        def __init__(self) -> None: ...  # pyright: ignore[reportMissingSuperCall, reportIncompatibleMethodOverride]  # Router(...)'s parameters
 
         @classmethod
         def from_config(cls, config: RouterConfig, host: PythonHost = python_host) -> "Router": ...

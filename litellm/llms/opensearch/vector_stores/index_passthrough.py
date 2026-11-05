@@ -26,7 +26,7 @@ _ACCEPTED_MEDIA_TYPE_PARAMETERS: Final = frozenset({"", "charset=utf-8"})
 _INDEX_KEYS: Final = frozenset({"index", "_index", "indices"})
 _OUT_OF_INDEX_KEYS: Final = _INDEX_KEYS | {"indexed_shape", "wrapper", "search_pipeline"}
 _BULK_METADATA_KEYS: Final = _INDEX_KEYS | {"pipeline"}
-_OUT_OF_INDEX_QUERY_PARAMETERS: Final = frozenset({"pipeline", "search_pipeline", "source", "source_content_type"})
+_OUT_OF_INDEX_QUERY_PARAMETERS: Final = frozenset({"pipeline", "source", "source_content_type"})
 _BULK_ACTIONS: Final = frozenset({"index", "create", "update", "delete"})
 _JSON_BLANK: Final = b" \t\r\n"
 _PATH_HELP: Final = "Use /opensearch/<index>/<api>, for example /opensearch/<index>/_search."
@@ -131,8 +131,15 @@ class _Json:
 
 @dataclass(frozen=True, slots=True)
 class _BulkAction:
+    name: str
     metadata: _JsonObject
     has_source: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _BulkIndex:
+    name: str
+    provider_name: str
 
 
 def _json_object(pairs: Sequence[tuple[str, object]]) -> _JsonObject:
@@ -171,6 +178,14 @@ def _forbidden_key(level: Sequence[object], forbidden: frozenset[str]) -> str | 
     if key is not None:
         return key
     return _forbidden_key(tuple(chain.from_iterable(map(_children, level))), forbidden)
+
+
+def _dump(value: object) -> str:
+    if isinstance(value, _JsonObject):
+        return "{" + ",".join(f"{json.dumps(key)}:{_dump(child)}" for key, child in value.pairs) + "}"
+    if isinstance(value, list):
+        return "[" + ",".join(map(_dump, _JSON_ARRAY.validate_python(value))) + "]"
+    return json.dumps(value)
 
 
 def _unparseable(api: str) -> IndexRefusal:
@@ -212,48 +227,72 @@ def _bulk_action(line: bytes) -> _BulkAction | None:
         return None
     match parsed.value:
         case _JsonObject(pairs=((name, _JsonObject() as metadata),)) if name in _BULK_ACTIONS:
-            return _BulkAction(metadata=metadata, has_source=name != "delete")
+            return _BulkAction(name=name, metadata=metadata, has_source=name != "delete")
         case _:
             return None
 
 
-def _bulk_actions(lines: Iterator[bytes]) -> Iterator[_BulkAction | None]:
-    for line in lines:
-        if not line.strip(_JSON_BLANK):
-            continue
-        if (action := _bulk_action(line)) is None:
-            yield None
-            return
-        yield action
-        if action.has_source:
-            _ = next(lines, None)
-
-
-def _bulk_action_refusal(action: _BulkAction | None) -> IndexRefusal | None:
+def _bulk_action_line(action: _BulkAction | None, line: bytes, index: _BulkIndex) -> bytes | IndexRefusal:
     if action is None:
         return IndexRefusal(
             400,
             "A _bulk action line must be one JSON object naming index, create, update, or delete. "
             "LiteLLM did not send the request.",
         )
-    return _index_reference(action.metadata, _BULK_METADATA_KEYS)
+    pairs: Final = action.metadata.pairs
+    unnamed: Final = _JsonObject(tuple(pair for pair in pairs if pair[0] != "_index"))
+    refusal: Final = _index_reference(unnamed, _BULK_METADATA_KEYS)
+    if refusal is not None:
+        return refusal
+    named: Final = tuple(value for key, value in pairs if key == "_index")
+    if not named:
+        return line
+    if any(value != index.name for value in named):
+        return IndexRefusal(
+            400,
+            f"A _bulk action line sets '_index' to another index than '{index.name}' in the URL path. "
+            f"Remove '_index' or set it to '{index.name}'.",
+        )
+    rewritten: Final = tuple((key, index.provider_name if key == "_index" else value) for key, value in pairs)
+    return _dump(_JsonObject(((action.name, _JsonObject(rewritten)),))).encode()
 
 
-def _bulk_refusal(body: bytes) -> IndexRefusal | None:
-    actions: Final = _bulk_actions(iter(body.split(b"\n")))
-    return next(filter(None, (_bulk_action_refusal(action) for action in actions)), None)
+def _bulk_entry(line: bytes, lines: Iterator[bytes], index: _BulkIndex) -> tuple[bytes | IndexRefusal, ...]:
+    if not line.strip(_JSON_BLANK):
+        return (line,)
+    action: Final = _bulk_action(line)
+    rendered: Final = _bulk_action_line(action, line, index)
+    if isinstance(rendered, IndexRefusal) or action is None or not action.has_source:
+        return (rendered,)
+    source: Final = next(lines, None)
+    return (rendered,) if source is None else (rendered, source)
 
 
-def _body_refusal(operation: IndexOperation, body: bytes) -> IndexRefusal | None:
+def _bulk_lines(lines: Iterator[bytes], index: _BulkIndex) -> Iterator[bytes | IndexRefusal]:
+    for line in lines:
+        yield from (entry := _bulk_entry(line, lines, index))
+        if isinstance(entry[0], IndexRefusal):
+            return
+
+
+def _bulk_body(body: bytes, index: _BulkIndex) -> bytes | IndexRefusal:
+    rendered: Final = tuple(_bulk_lines(iter(body.split(b"\n")), index))
+    refusal: Final = next((line for line in rendered if isinstance(line, IndexRefusal)), None)
+    if refusal is not None:
+        return refusal
+    return b"\n".join(line for line in rendered if isinstance(line, bytes))
+
+
+def _checked_body(operation: IndexOperation, body: bytes, index: _BulkIndex) -> bytes | IndexRefusal:
     match operation.body:
         case "query" | "mget":
-            return _whole_body_refusal(operation.api, body)
+            return _whole_body_refusal(operation.api, body) or body
         case "msearch":
-            return _msearch_refusal(body)
+            return _msearch_refusal(body) or body
         case "bulk":
-            return _bulk_refusal(body)
+            return _bulk_body(body, index)
         case "unscanned":
-            return None
+            return body
 
 
 def accepted_media_type(content_type: str | None) -> str | None:
@@ -264,18 +303,22 @@ def accepted_media_type(content_type: str | None) -> str | None:
     return None
 
 
-def request_refusal(
-    operation: IndexOperation | None, query: Sequence[tuple[str, str]], body: bytes
-) -> IndexRefusal | None:
+def checked_request_body(
+    operation: IndexOperation | None,
+    query: Sequence[tuple[str, str]],
+    body: bytes,
+    index_name: str,
+    provider_index: str,
+) -> bytes | IndexRefusal:
     if operation is None:
-        return None
+        return body
     parameter: Final = next((key for key, _ in query if key in _OUT_OF_INDEX_QUERY_PARAMETERS), None)
     if parameter is not None:
         return IndexRefusal(
             400, f"The {parameter} query parameter can reach beyond the OpenSearch index in the URL path. Remove it."
         )
     try:
-        return _body_refusal(operation, body)
+        return _checked_body(operation, body, _BulkIndex(name=index_name, provider_name=provider_index))
     except RecursionError:
         return IndexRefusal(400, f"The {operation.api} request body is nested too deeply for LiteLLM to check.")
 
@@ -302,9 +345,9 @@ async def prepare_index_request(
         return IndexRefusal(
             400, "The OpenSearch pass-through takes application/json or application/x-ndjson bodies in UTF-8."
         )
-    refusal: Final = request_refusal(operation, query, body)
-    if refusal is not None:
-        return refusal
+    checked: Final = checked_request_body(operation, query, body, path.index_name, provider_index)
+    if isinstance(checked, IndexRefusal):
+        return checked
     api_base: Final = store_params.get("api_base")
     try:
         url: Final = upstream_url(
@@ -313,9 +356,9 @@ async def prepare_index_request(
             path.api,
             query,
         )
-        signed: Final = await run_aws_signing(config.sign_http_request, method, url, body, media, store_params)
+        signed: Final = await run_aws_signing(config.sign_http_request, method, url, checked, media, store_params)
     except (AuthenticationError, BadRequestError) as error:
         return IndexRefusal(error.status_code, error.message)
     return SignedIndexRequest(
-        url=url, media_type=media, headers=MappingProxyType(dict(signed.headers.items())), body=body
+        url=url, media_type=media, headers=MappingProxyType(dict(signed.headers.items())), body=checked
     )
