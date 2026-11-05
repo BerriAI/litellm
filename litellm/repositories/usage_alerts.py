@@ -103,6 +103,10 @@ class _ModelIdentity(BaseModel, frozen=True):
     model: str
 
 
+class _Identifier(BaseModel, frozen=True):
+    id: str
+
+
 class _Pending(_Record, frozen=True):
     rule: Mapping[str, object]
     notified_channels: tuple[UsageAlertChannel, ...]
