@@ -259,14 +259,19 @@ class ZscalerAIGuard(CustomGuardrail):
         they were sent, the system prompt is the operator's own, and a request that ends on an
         assistant or tool message carries no new user input, so it is not scanned at all.
 
-        A response (OUT), or a request whose route supplies no `structured_messages`, falls back
-        to every extracted text joined with spaces.
+        A response (OUT), a request whose route supplies no `structured_messages`, or a user turn
+        whose text isn't in chat-completions `content` (an A2A message carries `parts`) falls back
+        to every extracted text joined with spaces, so user input is never left unscanned.
         """
-        structured_messages: Final = inputs.get("structured_messages")
-        if input_type == "request" and structured_messages:
-            return get_last_user_message(list(structured_messages))
         texts: Final = inputs.get("texts", [])
-        return " ".join(texts) if texts else None
+        joined: Final = " ".join(texts) if texts else None
+        structured_messages: Final = inputs.get("structured_messages")
+        if input_type != "request" or not structured_messages:
+            return joined
+        messages: Final = list(structured_messages)
+        if messages[-1].get("role") != "user":
+            return None
+        return get_last_user_message(messages) or joined
 
     def extract_blocking_info(self, response):
         """
