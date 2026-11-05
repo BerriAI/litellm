@@ -8,8 +8,8 @@
 
 ## The swap point
 
-- `decision.py` is the interface. `AuthCore.decide(RequestFacts, Settings) -> Outcome` is the only thing a core implements, and `python_core.PythonCore` is the Python one. A Rust core will implement the same protocol through pyo3, and the builder picks one without changing anything else
-- A core does no IO and reads no globals. The same facts and settings always give the same outcome
-- `Defer` means the core does not handle this request yet, and the legacy builder in `litellm/proxy/auth/user_api_key_auth.py` takes it from there. Move one decision at a time out of the builder into the core, and delete the builder code it replaces in the same change
-- Projection stays in the proxy. `Allow` grants become `UserAPIKeyAuth` in the builder, and `litellm/proxy/auth/auth_denial.py` maps every `DenyReason` to the existing error contract
-- When a decision needs a lookup, add it as an effect the core yields and the proxy answers, so both cores share the same IO code
+- `decision.py` is the interface. `AuthCore.start(RequestFacts, Settings, now) -> Step` is the only thing a core implements, and `python_core.PythonCore` is the Python one. A Rust core will implement the same protocol through pyo3, and the builder picks one without changing anything else
+- A core does no IO and reads no globals. The same facts, settings, time and effect answers always give the same outcome
+- A `Step` is either an `Outcome` or an effect. Each effect carries its typed `resume` continuation, and `driver.drive` answers effects through an `EffectHandler` until an outcome comes back. The proxy's handler (`_BuilderEffects` in `litellm/proxy/auth/user_api_key_auth.py`) owns all cache and DB IO, so both cores share it
+- Projection stays in the proxy. `Allow` grants become `UserAPIKeyAuth` in the builder, and `litellm/proxy/auth/auth_denial.py` maps every `Denial` to the existing error contract
+- The checks in `validate_resolved_virtual_key` and the centralized common checks still run as projection after `Allow(VirtualKey(...))`. Move them into the core one at a time, as effects plus pure decisions, and delete the builder code each one replaces in the same change

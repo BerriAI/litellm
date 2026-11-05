@@ -31,16 +31,21 @@ from litellm._auth.credential import (
     select_websocket_api_key,
 )
 from litellm._auth.decision import (
+    AdminKey,
     Allow,
     AuthCore,
-    Defer,
+    CachedAdminKey,
     Deny,
     MasterKey,
     NoMasterKey,
+    NonAdminKey,
+    PresentedKey,
     RequestFacts,
     Settings,
     UserAuthRoute,
+    VirtualKey,
 )
+from litellm._auth.driver import drive
 from litellm._auth.python_core import PythonCore
 from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -49,8 +54,6 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
-    INVALID_VIRTUAL_KEY_ERROR_MARKER,
-    INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
@@ -1555,12 +1558,6 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
 # the lookup and return None (caller proceeds to auth_builder).
 _JWT_PROXY_ADMIN_SENTINEL: Final = "__JWT_PROXY_ADMIN__"
 
-_JWT_AUTH_DISABLED_HINT = (
-    " This key has the structure of a JWT, but JWT auth is not enabled on this proxy, so it was treated as a"
-    " virtual key. Set `enable_jwt_auth: true` under `general_settings` in your proxy config to authenticate"
-    " with JWTs."
-)
-
 
 class _JWTKeyMappingFailure(Enum):
     NO_ELIGIBLE_KEY = "JWT Key Mapping: No eligible existing virtual key for this identity. Access denied."
@@ -2196,7 +2193,7 @@ class _ResolvedEndUser(NamedTuple):
 
 async def _resolve_end_user(
     request: Request,
-    request_data: dict[str, object],
+    request_data: Mapping[str, object],
     token_end_user_id: str | None,
     api_key: str,
     key_is_resolved: bool,
@@ -2289,6 +2286,182 @@ async def _master_key_auth(
     if end_user.end_user_object is not None:
         with_end_user.end_user_object_permission = end_user.end_user_object.object_permission
     return with_end_user
+
+
+_MASTER_KEY_ONLY_ROUTES: Final = frozenset(LiteLLMRoutes.master_key_only_routes.value)
+
+
+def _aware_expiry(expires: datetime | str) -> datetime:
+    expiry: Final = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+    return (
+        expiry if expiry.tzinfo is not None and expiry.utcoffset() is not None else expiry.replace(tzinfo=timezone.utc)
+    )
+
+
+def _presented_key(key: UserAPIKeyAuth) -> PresentedKey:
+    if key.user_role != LitellmUserRoles.PROXY_ADMIN:
+        return NonAdminKey()
+    return AdminKey(expires=None if key.expires is None else _aware_expiry(key.expires))
+
+
+def _with_end_user(key: UserAPIKeyAuth, end_user: _ResolvedEndUser, parent_otel_span: Span | None) -> UserAPIKeyAuth:
+    with_end_user: Final = update_valid_token_with_end_user_params(valid_token=key, end_user_params=end_user.params)
+    with_end_user.parent_otel_span = parent_otel_span
+    if end_user.end_user_object is not None:
+        with_end_user.end_user_object_permission = end_user.end_user_object.object_permission
+    return with_end_user
+
+
+def _reset_end_user_fields(key: UserAPIKeyAuth, end_user: _ResolvedEndUser) -> UserAPIKeyAuth:
+    key.end_user_id = end_user.end_user_id or None
+    key.end_user_tpm_limit = end_user.budget.tpm_limit if end_user.budget is not None else None
+    key.end_user_rpm_limit = end_user.budget.rpm_limit if end_user.budget is not None else None
+    key.end_user_tpd_limit = end_user.budget.tpd_limit if end_user.budget is not None else None
+    key.allowed_model_region = (
+        end_user.end_user_object.allowed_model_region if end_user.end_user_object is not None else None
+    )
+    return key
+
+
+async def _refresh_team_fields_from_cache(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    if valid_token.team_id is None or valid_token.team_id == UI_TEAM_ID:
+        return
+    ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
+    try:
+        team_obj: Final[LiteLLM_TeamTableCachedObj] = await get_team_object(
+            team_id=valid_token.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            check_cache_only=True,
+        )
+
+        if (
+            team_obj.last_refreshed_at is not None
+            and valid_token.last_refreshed_at is not None
+            and team_obj.last_refreshed_at > valid_token.last_refreshed_at
+        ):
+            team_obj_dict: Final[Mapping[str, object]] = MappingProxyType(team_obj.__dict__)
+
+            for k, v in team_obj_dict.items():
+                field_name = f"team_{k}"
+                if field_name in valid_token.__fields__:
+                    setattr(valid_token, field_name, v)
+    except Exception as e:
+        verbose_logger.debug(e)  # moving from .warning to .debug as it spams logs when team missing from cache.
+
+
+class _BuilderEffects:
+    def __init__(
+        self,
+        *,
+        request: Request,
+        request_data: Mapping[str, object],
+        token: str,
+        preresolved_key: UserAPIKeyAuth | None,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+        route: str,
+    ) -> None:
+        self._request: Final = request
+        self._request_data: Final = request_data
+        self._token: Final = token
+        self._preresolved_key: Final = preresolved_key
+        self._prisma_client: Final = prisma_client
+        self._user_api_key_cache: Final = user_api_key_cache
+        self._parent_otel_span: Final = parent_otel_span
+        self._proxy_logging_obj: Final = proxy_logging_obj
+        self._route: Final = route
+        self.end_user: _ResolvedEndUser = _ResolvedEndUser(end_user_id=None, end_user_object=None, budget=None)
+        self.resolved_key: UserAPIKeyAuth | None = preresolved_key
+
+    @property
+    def key(self) -> UserAPIKeyAuth:
+        if self.resolved_key is None:
+            raise RuntimeError("the auth core granted a key it never resolved")
+        return self.resolved_key
+
+    def _identity_store(self, *, check_cache_only: bool) -> IdentityStore:
+        return IdentityStore(
+            self._prisma_client,
+            self._user_api_key_cache,
+            parent_otel_span=self._parent_otel_span,
+            proxy_logging_obj=self._proxy_logging_obj,
+            check_cache_only=check_cache_only,
+        )
+
+    async def resolve_end_user(self, prefetch_key: bool) -> None:
+        self.end_user = await _resolve_end_user(
+            request=self._request,
+            request_data=self._request_data,
+            token_end_user_id=self._preresolved_key.end_user_id if self._preresolved_key is not None else None,
+            api_key=self._token,
+            key_is_resolved=not prefetch_key or self._preresolved_key is not None,
+            prisma_client=self._prisma_client,
+            user_api_key_cache=self._user_api_key_cache,
+            parent_otel_span=self._parent_otel_span,
+            proxy_logging_obj=self._proxy_logging_obj,
+            route=self._route,
+        )
+
+    async def _cached_key(self, hashed_token: str) -> UserAPIKeyAuth | None:
+        try:
+            with tracer.trace("litellm.proxy.auth.get_key_object_check_cache"):
+                cached: Final = IdentityStore.key_from_principal(
+                    await self._identity_store(check_cache_only=True).resolve(hashed_token=hashed_token)
+                )
+        except Exception:
+            verbose_logger.debug("api key not found in cache.")
+            return None
+        # Key-cache entries are written only after the proxy validated a virtual key or the master key, but
+        # via_virtual_key is exclude=True so serialization drops it. Restore it at this trusted boundary.
+        cached.via_virtual_key = True
+        return cached
+
+    def _ui_login_key(self) -> UserAPIKeyAuth | None:
+        # Decryption fails closed for anything that is not a genuine UI login blob.
+        if self._token.startswith("sk-") or get_secret_bool("EXPERIMENTAL_UI_LOGIN") is False:
+            return None
+        return ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(self._token)
+
+    async def resolve_presented_key(self, hashed_token: str) -> PresentedKey | None:
+        found: Final = self._preresolved_key or await self._cached_key(hashed_token) or self._ui_login_key()
+        if found is None:
+            return None
+        self.resolved_key = (
+            await _refresh_session_token_grants(
+                valid_token=found,
+                prisma_client=self._prisma_client,
+                user_api_key_cache=self._user_api_key_cache,
+                parent_otel_span=self._parent_otel_span,
+                proxy_logging_obj=self._proxy_logging_obj,
+            )
+            if found.is_session_token and self._prisma_client is not None
+            else found
+        )
+        return _presented_key(self.resolved_key)
+
+    async def evict_presented_key(self, hashed_token: str) -> None:
+        await delete_cache_key_object(
+            hashed_token=hashed_token,
+            user_api_key_cache=self._user_api_key_cache,
+            proxy_logging_obj=self._proxy_logging_obj,
+        )
+
+    async def load_key(self, hashed_token: str) -> None:
+        with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
+            self.resolved_key = IdentityStore.key_from_principal(
+                await self._identity_store(check_cache_only=False).resolve(hashed_token=hashed_token)
+            )
 
 
 async def user_api_key_auth_builder(
@@ -2701,10 +2874,34 @@ async def user_api_key_auth_builder(
                 status_code=500,
                 detail={f"Master key must be a valid string. Current type={type(master_key)}"},
             )
-        match _AUTH_CORE.decide(
-            RequestFacts(route=route, token=api_key),
-            Settings(master_key=master_key, allow_user_auth=general_settings.get("allow_user_auth", False) is True),
-        ):
+        effects: Final = _BuilderEffects(
+            request=request,
+            request_data=request_data,
+            token=api_key,
+            preresolved_key=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
+        )
+        outcome: Final = await drive(
+            _AUTH_CORE.start(
+                RequestFacts(route=route, token=api_key),
+                Settings(
+                    master_key=master_key,
+                    allow_user_auth=general_settings.get("allow_user_auth", False) is True,
+                    has_db=prisma_client is not None,
+                    master_key_only_routes=_MASTER_KEY_ONLY_ROUTES,
+                ),
+                datetime.now(timezone.utc),
+            ),
+            effects,
+        )
+        valid_token = effects.resolved_key  # rebind-ok: the exception handler below reports the resolved identity
+        match outcome:
+            case Deny(denial=denial):
+                raise denial_exception(denial, token=api_key, route=route, jwt_auth_enabled=enable_jwt_auth)
             case Allow(grant=grant):
                 match grant:
                     case NoMasterKey(token=token):
@@ -2718,18 +2915,7 @@ async def user_api_key_auth_builder(
                     case MasterKey():
                         return await _master_key_auth(
                             token=api_key,
-                            end_user=await _resolve_end_user(
-                                request=request,
-                                request_data=request_data,
-                                token_end_user_id=valid_token.end_user_id if valid_token is not None else None,
-                                api_key=api_key,
-                                key_is_resolved=True,
-                                prisma_client=prisma_client,
-                                user_api_key_cache=user_api_key_cache,
-                                parent_otel_span=parent_otel_span,
-                                proxy_logging_obj=proxy_logging_obj,
-                                route=route,
-                            ),
+                            end_user=effects.end_user,
                             admin_user_id=litellm_proxy_admin_name,
                             parent_otel_span=parent_otel_span,
                             route=route,
@@ -2737,212 +2923,31 @@ async def user_api_key_auth_builder(
                             user_api_key_cache=user_api_key_cache,
                             proxy_logging_obj=proxy_logging_obj,
                         )
-            case Deny(reason=reason):
-                raise denial_exception(reason)
-            case Defer():
-                pass
-
-        end_user: Final = await _resolve_end_user(
-            request=request,
-            request_data=request_data,
-            token_end_user_id=valid_token.end_user_id if valid_token is not None else None,
-            api_key=api_key,
-            key_is_resolved=valid_token is not None,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-            route=route,
-        )
-
-        if valid_token is None:
-            ## Check CACHE
-            try:
-                with tracer.trace("litellm.proxy.auth.get_key_object_check_cache"):
-                    valid_token = IdentityStore.key_from_principal(
-                        await IdentityStore(
-                            prisma_client,
-                            user_api_key_cache,
+                    case CachedAdminKey():
+                        return _with_end_user(effects.key, effects.end_user, parent_otel_span)
+                    case VirtualKey(loaded_from_db=loaded_from_db):
+                        if not loaded_from_db:
+                            await _refresh_team_fields_from_cache(
+                                valid_token=effects.key,
+                                prisma_client=prisma_client,
+                                user_api_key_cache=user_api_key_cache,
+                                parent_otel_span=parent_otel_span,
+                                proxy_logging_obj=proxy_logging_obj,
+                            )
+                        return await validate_resolved_virtual_key(
+                            request=request,
+                            request_data=request_data,
+                            valid_token=(
+                                _reset_end_user_fields(effects.key, effects.end_user) if loaded_from_db else effects.key
+                            ),
+                            api_key=hash_token(api_key) if loaded_from_db else api_key,
+                            route=route,
+                            start_time=start_time,
                             parent_otel_span=parent_otel_span,
-                            proxy_logging_obj=proxy_logging_obj,
-                            check_cache_only=True,
-                        ).resolve(hashed_token=hash_token(api_key))
-                    )
-                # Key-cache entries are written only after the proxy validated a
-                # virtual key or the master key, but via_virtual_key is exclude=True
-                # so serialization drops it; restore it at this trusted boundary.
-                # The UI-login JWT fallback below constructs its token from a
-                # decrypted blob, not this cache, and stays unmarked.
-                if isinstance(valid_token, UserAPIKeyAuth):
-                    valid_token.via_virtual_key = True
-            except Exception:
-                verbose_logger.debug("api key not found in cache.")
-                valid_token = None
-
-            ## Check UI/CLI Hash Key
-            # Attempt decryption for non-sk- tokens unless the operator has
-            # explicitly set EXPERIMENTAL_UI_LOGIN=false to disable it.
-            # Unset (None) keeps the new default of always attempting decryption;
-            # decryption fails closed for anything that is not a genuine blob.
-            if (
-                valid_token is None
-                and not api_key.startswith("sk-")
-                and get_secret_bool("EXPERIMENTAL_UI_LOGIN") is not False
-            ):
-                valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(api_key)
-
-        if valid_token is not None and valid_token.is_session_token and prisma_client is not None:
-            valid_token = await _refresh_session_token_grants(  # rebind-ok: later checks read this name
-                valid_token=valid_token,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-        if (
-            valid_token is not None
-            and isinstance(valid_token, UserAPIKeyAuth)
-            and valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
-        ):
-            if valid_token.expires is not None:
-                current_time = datetime.now(timezone.utc)
-                if isinstance(valid_token.expires, datetime):
-                    expiry_time = valid_token.expires
-                else:
-                    expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
-                if expiry_time < current_time:
-                    await delete_cache_key_object(
-                        hashed_token=hash_token(api_key),
-                        user_api_key_cache=user_api_key_cache,
-                        proxy_logging_obj=proxy_logging_obj,
-                    )
-                    raise ProxyException(
-                        message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
-                        type=ProxyErrorTypes.expired_key,
-                        code=status.HTTP_401_UNAUTHORIZED,
-                        param=abbreviate_api_key(api_key=api_key),
-                    )
-            valid_token = update_valid_token_with_end_user_params(
-                valid_token=valid_token, end_user_params=end_user.params
-            )
-            valid_token.parent_otel_span = parent_otel_span
-            if end_user.end_user_object is not None:
-                valid_token.end_user_object_permission = end_user.end_user_object.object_permission
-
-            return valid_token
-
-        if (
-            valid_token is not None
-            and isinstance(valid_token, UserAPIKeyAuth)
-            and valid_token.team_id is not None
-            and valid_token.team_id != UI_TEAM_ID
-        ):
-            ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
-            try:
-                team_obj: Final[LiteLLM_TeamTableCachedObj] = await get_team_object(
-                    team_id=valid_token.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    check_cache_only=True,
-                )
-
-                if (
-                    team_obj.last_refreshed_at is not None
-                    and valid_token.last_refreshed_at is not None
-                    and team_obj.last_refreshed_at > valid_token.last_refreshed_at
-                ):
-                    team_obj_dict: Final[Mapping[str, object]] = MappingProxyType(team_obj.__dict__)
-
-                    for k, v in team_obj_dict.items():
-                        field_name = f"team_{k}"
-                        if field_name in valid_token.__fields__:
-                            setattr(valid_token, field_name, v)
-            except Exception as e:
-                verbose_logger.debug(e)  # moving from .warning to .debug as it spams logs when team missing from cache.
-
-        ## IF it's not a master key
-        ## Route should not be in master_key_only_routes
-        if route in LiteLLMRoutes.master_key_only_routes.value:
-            raise ProxyException(
-                message=f"Authentication Error, Tried to access route={route}, which is only for MASTER KEY",
-                type=ProxyErrorTypes.auth_error,
-                param=None,
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        ## Check DB
-
-        if (
-            prisma_client is None
-        ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
-            raise ProxyException(
-                message="No connected db.",
-                type=ProxyErrorTypes.no_db_connection,
-                code=400,
-                param=None,
-            )
-
-        if valid_token is None:
-            if isinstance(api_key, str):  # if generated token, make sure it starts with sk-.
-                _masked_key: Final = f"{api_key[:4]}****{api_key[-4:]}" if len(api_key) > 8 else "****"
-                if not api_key.startswith("sk-"):
-                    _hint = _JWT_AUTH_DISABLED_HINT if not enable_jwt_auth and JWTHandler.is_jwt(token=api_key) else ""
-                    _malformed_key_error = HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail=(
-                            f"{INVALID_VIRTUAL_KEY_ERROR_MESSAGE}. Received={_masked_key}, "
-                            f"expected to start with 'sk-'.{_hint}"
-                        ),
-                    )  # prevent token hashes from being used
-                    # Stamp provenance here so log routing classifies this 401 by
-                    # where it was raised, never by its message text.
-                    setattr(_malformed_key_error, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
-                    raise _malformed_key_error
-            else:
-                verbose_logger.warning(
-                    "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key is not a string. Got type={}".format(
-                        type(api_key) if api_key is not None else "None"
-                    )
-                )
-            if api_key.startswith("sk-"):
-                api_key = hash_token(token=api_key)
-
-            with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
-                valid_token = IdentityStore.key_from_principal(
-                    await IdentityStore(
-                        prisma_client,
-                        user_api_key_cache,
-                        parent_otel_span=parent_otel_span,
-                        proxy_logging_obj=proxy_logging_obj,
-                    ).resolve(hashed_token=api_key)
-                )
-            # update end-user params on valid token
-            # These can change per request - it's important to update them here
-            valid_token.end_user_id = end_user.end_user_id or None
-            valid_token.end_user_tpm_limit = end_user.budget.tpm_limit if end_user.budget is not None else None
-            valid_token.end_user_rpm_limit = end_user.budget.rpm_limit if end_user.budget is not None else None
-            valid_token.end_user_tpd_limit = end_user.budget.tpd_limit if end_user.budget is not None else None
-            valid_token.allowed_model_region = (
-                end_user.end_user_object.allowed_model_region if end_user.end_user_object is not None else None
-            )
-
-        return await validate_resolved_virtual_key(
-            request=request,
-            request_data=request_data,
-            valid_token=valid_token,
-            api_key=api_key,
-            route=route,
-            start_time=start_time,
-            parent_otel_span=parent_otel_span,
-            end_user_id=end_user.end_user_id,
-            end_user_params=end_user.params,
-            _end_user_object=end_user.end_user_object,
-        )
+                            end_user_id=effects.end_user.end_user_id,
+                            end_user_params=effects.end_user.params,
+                            _end_user_object=effects.end_user.end_user_object,
+                        )
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
             e=e,
