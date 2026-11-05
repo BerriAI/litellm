@@ -4,6 +4,7 @@ from threading import Event
 from typing import Final
 
 import pytest
+from ldap3.core.exceptions import LDAPInsufficientAccessRightsResult, LDAPNoSuchObjectResult
 from pydantic import ValidationError
 
 from litellm.proxy.common_utils.ldap_directory import (
@@ -45,9 +46,11 @@ class Connection:
         result_code: int = 0,
         tls_ok: bool = True,
         stop_after_search: Event | None = None,
+        raising: Mapping[str, tuple[int, Exception]] | None = None,
     ) -> None:
         self.groups = groups
         self.users = users or {}
+        self.raising = raising or {}
         self.result_code = result_code
         self.result: Mapping[str, object] = {"result": result_code}
         self.response: object = ()
@@ -94,6 +97,10 @@ class Connection:
         time_limit: int,
     ) -> bool:
         self.searches.append((search_base, search_filter, search_scope))
+        if search_base in self.raising:
+            result_code, exception = self.raising[search_base]
+            self.result = {"result": result_code}
+            raise exception
         self.response = self.users.get(search_base if search_scope == "BASE" else search_filter, ())
         self.result = {"result": self.result_code}
         if self.stop_after_search is not None:
@@ -108,6 +115,32 @@ def test_direct_members_resolve_to_user_identities_and_connection_is_closed():
     result = read_directory(SETTINGS, connection)
     assert result == (DirectoryGroup("project-a", "project-a", ("alice@example.org", "bob@example.org")),)
     assert connection.closed
+
+
+def test_deleted_member_entry_skips_only_its_group():
+    connection = Connection(
+        [group("project-a", member=[ALICE, BOB]), group("project-b", member=[ALICE])],
+        {ALICE: [user("alice@example.org")]},
+        raising={BOB: (32, LDAPNoSuchObjectResult(result=32, description="noSuchObject"))},
+    )
+    assert read_directory(SETTINGS, connection) == (
+        DirectoryError("LDAP member entry does not exist", "cn=project-a,ou=groups,dc=example,dc=org"),
+        DirectoryGroup("project-b", "project-b", ("alice@example.org",)),
+    )
+    assert connection.closed
+
+
+def test_unreadable_member_entry_still_aborts_snapshot():
+    connection = Connection(
+        [group("project-a", member=[ALICE, BOB]), group("project-b", member=[ALICE])],
+        {ALICE: [user("alice@example.org")]},
+        raising={
+            BOB: (50, LDAPInsufficientAccessRightsResult(result=50, description="insufficientAccessRights"))
+        },
+    )
+    assert read_directory(SETTINGS, connection) == DirectoryError(
+        "LDAP read failed (LDAPInsufficientAccessRightsResult)"
+    )
 
 
 @pytest.mark.parametrize("membership", [[], ()])

@@ -14,6 +14,7 @@ from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 _ITEMS: Final = TypeAdapter(Iterable[object])
 _STRINGS: Final = TypeAdapter(tuple[StrictStr, ...])
 _GROUP_CLASSES: Final = frozenset({"group", "groupofnames", "groupofuniquenames", "posixgroup"})
+_NO_SUCH_OBJECT: Final = 32
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,15 +185,20 @@ def _resolve_member(
 ) -> str | DirectoryError:
     _check_cancelled(stop)
     usernames: Final = settings.member_attribute.lower() == "memberuid"
-    _ = connection.search(
-        search_base=settings.user_search_base if usernames else value,
-        search_filter=f"({settings.member_lookup_attribute}={_escape_filter(value)})"
-        if usernames
-        else "(objectClass=*)",
-        search_scope="SUBTREE" if usernames else "BASE",
-        attributes=(settings.user_match_attribute, "objectClass"),
-        time_limit=settings.timeout_seconds,
-    )
+    try:
+        _ = connection.search(
+            search_base=settings.user_search_base if usernames else value,
+            search_filter=f"({settings.member_lookup_attribute}={_escape_filter(value)})"
+            if usernames
+            else "(objectClass=*)",
+            search_scope="SUBTREE" if usernames else "BASE",
+            attributes=(settings.user_match_attribute, "objectClass"),
+            time_limit=settings.timeout_seconds,
+        )
+    except Exception:  # noqa: BLE001  # ldap3 raises noSuchObject for a deleted member DN
+        if usernames or connection.result.get("result") != _NO_SUCH_OBJECT:
+            raise
+        return DirectoryError("LDAP member entry does not exist")
     if connection.result.get("result") != 0:
         return DirectoryError("LDAP member lookup did not complete successfully")
     entries: Final = _entries(connection.response)
