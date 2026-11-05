@@ -60,13 +60,16 @@ def _group(group: str, model: str, api_base: str) -> tuple[dict[str, JsonValue],
 
 
 def _config(directory: Path) -> Path:
-    configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    configuration["model_list"] = [
-        *configuration["model_list"],
-        *_group(_ANTHROPIC_GROUP, "anthropic/claude-haiku-5-5", PROVIDER_URL),
-        *_group(_GEMINI_GROUP, "gemini/gemini-3.8-flash", PROVIDER_URL),
-    ]
-    configuration.setdefault("router_settings", {})["routing_strategy"] = "simple-shuffle"
+    shared: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    configuration: Final = {
+        **shared,
+        "model_list": [
+            *shared["model_list"],
+            *_group(_ANTHROPIC_GROUP, "anthropic/claude-haiku-5-5", PROVIDER_URL),
+            *_group(_GEMINI_GROUP, "gemini/gemini-3.8-flash", PROVIDER_URL),
+        ],
+        "router_settings": {**shared.get("router_settings", {}), "routing_strategy": "simple-shuffle"},
+    }
     path: Final = directory / "config-web-search-filter.yaml"
     path.write_text(yaml.safe_dump(configuration))
     return path
