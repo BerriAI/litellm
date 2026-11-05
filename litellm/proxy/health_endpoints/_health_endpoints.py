@@ -16,7 +16,7 @@ from typing import Annotated, Final, Literal, Protocol, TypeAlias, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -123,7 +123,6 @@ from litellm.proxy.utils import check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_api import deployment_usable_by_team
 from litellm.secret_managers.main import get_secret_bool
-from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import Deployment, reject_server_owned_wif_fields
@@ -2739,20 +2738,28 @@ async def _logged_cost(logging_obj: LiteLLMLoggingObj, fallback: float | None) -
     return float(logged) if isinstance(logged, int | float) else fallback
 
 
-_MESSAGES_RESPONSE: Final = TypeAdapter(AnthropicMessagesResponse)
+async def _both_or_neither(provider_call: "asyncio.Task[object]", during: "asyncio.Task[object]") -> object:
+    """Wait for the provider reply and the during-call hook together; when either fails, cancel and await the
+    other so a rejected check does not leave a paid provider call running, then re-raise the failure."""
+    try:
+        response, _ = await asyncio.gather(provider_call, during)
+    except BaseException:
+        provider_call.cancel()
+        during.cancel()
+        await asyncio.gather(provider_call, during, return_exceptions=True)
+        raise
+    return response
 
 
 def _as_llm_response(response: object) -> LLMResponseTypes | None:
     """The reply as the post-call hooks type it: chat and responses replies are pydantic objects, a /v1/messages
-    reply is a plain dict shaped like AnthropicMessagesResponse."""
+    reply is the plain dict AnthropicMessagesResponse describes, handed over as is so its tool-use blocks stay
+    JSON for the turn that echoes them."""
     if isinstance(response, ModelResponse | ResponsesAPIResponse):
         return response
-    if not isinstance(response, dict):
-        return None
-    try:
-        return _MESSAGES_RESPONSE.validate_python(response)
-    except ValidationError:
-        return None
+    if isinstance(response, dict):
+        return dict(_OBJECT_MAPPING.validate_python(response))  # pyright: ignore[reportReturnType]  # the AnthropicMessagesResponse dict litellm.anthropic_messages returns, erased by the getattr dispatch
+    return None
 
 
 class TurnHooks(Protocol):
@@ -2831,13 +2838,15 @@ def _turn_caller(
             await move_guardrails_to_metadata(
                 data=request, _metadata_variable_name=script.metadata_key, user_api_key_dict=user_api_key_dict
             )
-            guarded: Final = check_and_merge_model_level_guardrails(
-                data=_pinned_in_metadata(request, pinned_model_id),
-                llm_router=llm_router,
-                trust_client_model_info=pinned_model_id is not None,
+            guarded: Final = _OBJECT_MAPPING.validate_python(
+                check_and_merge_model_level_guardrails(
+                    data=_pinned_in_metadata(request, pinned_model_id),
+                    llm_router=llm_router,
+                    trust_client_model_info=pinned_model_id is not None,
+                )
             )
             admitted: Final = await hooks.pre_call_hook(
-                user_api_key_dict=user_api_key_dict, data=guarded, call_type=script.route_type
+                user_api_key_dict=user_api_key_dict, data=dict(guarded), call_type=script.route_type
             )
             logging_obj, prepared = litellm.utils.function_setup(
                 original_function=script.route_type,
@@ -2847,12 +2856,13 @@ def _turn_caller(
             )
             prepared["litellm_logging_obj"] = logging_obj
             target: Final = llm_router if pinned_model_id is not None and llm_router is not None else litellm
+            provider_call: Final[asyncio.Task[object]] = asyncio.create_task(
+                asyncio.wait_for(getattr(target, script.route_type)(**prepared), HEALTH_CHECK_TIMEOUT_SECONDS)
+            )
             during: Final = asyncio.create_task(
                 hooks.during_call_hook(data=admitted, user_api_key_dict=user_api_key_dict, call_type=script.route_type)
             )
-            response, _ = await asyncio.gather(
-                asyncio.wait_for(getattr(target, script.route_type)(**prepared), HEALTH_CHECK_TIMEOUT_SECONDS), during
-            )
+            response: Final[object] = await _both_or_neither(provider_call, during)
             llm_response: Final = _as_llm_response(response)
             checked: Final = (
                 await hooks.post_call_success_hook(
