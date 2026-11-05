@@ -207,6 +207,15 @@ class KeenableSearchConfig(BaseSearchConfig):
         Records whether the keyless endpoint answered, so the cost calculator prices only keyed
         searches. Written unconditionally, so a caller-supplied value never sets its own cost.
         """
+        # POST search handlers do not always call raise_for_status, so non-2xx bodies can arrive
+        # here and must surface Keenable's error envelope instead of a schema mismatch.
+        if not (200 <= raw_response.status_code < 300):
+            raise self.get_error_class(
+                error_message=raw_response.text,
+                status_code=raw_response.status_code,
+                headers=dict(raw_response.headers),
+            )
+
         try:
             parsed: Final = _KeenableSearchResponse.model_validate_json(raw_response.content)
         except ValidationError as e:

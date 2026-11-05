@@ -241,6 +241,21 @@ def test_litellm_search_end_to_end(api_key, path: str, auth):
     assert response.results[0].snippet == "Test page text"
 
 
+def test_non_2xx_response_surfaces_the_api_error_message():
+    with pytest.raises(BaseLLMException, match="Public API hourly limit reached") as excinfo:
+        _config().transform_search_response(
+            _resp(
+                {"error": "Rate limit exceeded", "message": "Public API hourly limit reached"},
+                status_code=429,
+            ),
+            logging_obj=Mock(optional_params={}),
+        )
+
+    assert excinfo.value.status_code == 429
+    assert "set KEENABLE_API_KEY" in excinfo.value.message
+    assert "does not match" not in excinfo.value.message
+
+
 def test_litellm_search_surfaces_the_api_error_message():
     # A non-2xx answer must reach the caller as Keenable's own message, never as a schema mismatch.
     request = httpx.Request("POST", f"{DEFAULT_ROOT}/search/public")
