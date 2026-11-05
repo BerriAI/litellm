@@ -949,6 +949,44 @@ async def test_pre_call_block_keeps_request_declared_guardrail_in_applied_guardr
     assert data["metadata"]["applied_guardrails"] == ["blocker", "declared-post-call"]
 
 
+class _RecordsAppliedGuardrails(CustomGuardrail):
+    def __init__(self, record: object) -> None:
+        super().__init__(guardrail_name="recorder", event_hook=GuardrailEventHooks.pre_call, default_on=False)
+        self._record: Final = record
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, dict[str, object]],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, dict[str, object]]:
+        data["metadata"]["applied_guardrails"] = self._record
+        return data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("record", [5, "other", ("other",)], ids=["int", "str", "tuple"])
+async def test_a_non_list_applied_guardrails_record_does_not_fail_the_request(
+    proxy_logging, make_user_api_key_auth, monkeypatch, record: object
+):
+    monkeypatch.setattr(litellm, "callbacks", [_RecordsAppliedGuardrails(record)])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    data: Final = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"guardrails": ["recorder", "declared-post-call"]},
+    }
+
+    out: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert out["metadata"]["applied_guardrails"] == record
+
+
 @pytest.mark.asyncio
 async def test_skip_guardrails_still_runs_non_guardrail_callbacks(proxy_logging, make_user_api_key_auth, monkeypatch):
     accountant = _Accountant()

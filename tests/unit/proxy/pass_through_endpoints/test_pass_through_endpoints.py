@@ -13373,6 +13373,99 @@ class TestInheritAuthGuardrails:
         assert body["metadata"] == {}
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"guardrails": []},
+            {"guardrails": [], "metadata": {"user": "u"}},
+            {"guardrails": [], "metadata": {"guardrails": []}},
+            {"metadata": {"guardrails": []}},
+        ],
+        ids=["guardrails", "with-metadata", "with-metadata-guardrails", "metadata-guardrails-only"],
+    )
+    async def test_an_empty_guardrails_list_on_a_plain_key_keeps_the_body_as_sent(self, extra: dict[str, object]):
+        body: Final[dict[str, object]] = self._chat_body(**extra)
+
+        assert await _inherit_auth_guardrails(body, UserAPIKeyAuth(api_key="sk-test"), None, True) is None
+
+        assert body == self._chat_body(**extra)
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_the_body_turns_off_with_false_stays_out_of_the_merge(self):
+        body: Final[dict[str, object]] = self._chat_body(
+            metadata={"guardrails": {"lak-legacy": False, "body-guard": {}}}
+        )
+
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            await _inherit_auth_guardrails(
+                body, UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]}), None, True
+            )
+
+        assert body == {**self._chat_body(), "metadata": {"guardrails": ["key-guard", "body-guard"]}}
+
+    @staticmethod
+    def _client_values_the_guardrails_cant_read() -> dict[str, object]:
+        return {
+            "litellm_call_id": 5,
+            "litellm_trace_id": 5,
+            "custom_llm_provider": 5,
+            "api_base": 5,
+            "api_key": 5,
+            "proxy_server_request": {"headers": {"user-agent": 7}},
+            "metadata": {
+                "headers": "abc",
+                "requester_metadata": "abc",
+                "user_api_key_alias": "forged",
+                "user_api_key_user_id": 5,
+                "user": "kept",
+            },
+            "litellm_metadata": {"headers": {"x-aim-user-email": 5}, "user_api_key_alias": 5, "tags": ["kept"]},
+        }
+
+    @pytest.mark.asyncio
+    async def test_client_values_the_guardrails_cant_read_are_dropped_when_guardrails_run(self):
+        body: Final[dict[str, object]] = self._chat_body(**self._client_values_the_guardrails_cant_read())
+
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            await _inherit_auth_guardrails(
+                body, UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]}), None, True
+            )
+
+        assert body == {
+            **self._chat_body(),
+            "metadata": {"user": "kept", "guardrails": ["key-guard"]},
+            "litellm_metadata": {"tags": ["kept"]},
+        }
+
+    @pytest.mark.asyncio
+    async def test_client_values_the_guardrails_can_read_are_kept_when_guardrails_run(self):
+        readable: Final[dict[str, object]] = {
+            "litellm_call_id": "call",
+            "litellm_trace_id": "trace",
+            "custom_llm_provider": "openai",
+            "api_base": "https://example.com",
+            "api_key": "sk-client",
+            "proxy_server_request": {"headers": {"user-agent": "ua"}},
+        }
+        client_metadata: Final[dict[str, object]] = {"headers": {"x-aim-user-email": "a@b.c"}, "requester_metadata": {}}
+        body: Final[dict[str, object]] = self._chat_body(**readable, metadata=dict(client_metadata))
+
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            await _inherit_auth_guardrails(
+                body, UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]}), None, True
+            )
+
+        assert body == {**self._chat_body(**readable), "metadata": {**client_metadata, "guardrails": ["key-guard"]}}
+
+    @pytest.mark.asyncio
+    async def test_client_values_stay_as_sent_when_no_guardrail_runs(self):
+        body: Final[dict[str, object]] = self._chat_body(**self._client_values_the_guardrails_cant_read())
+
+        assert await _inherit_auth_guardrails(body, UserAPIKeyAuth(api_key="sk-test"), None, True) is None
+
+        assert body == self._chat_body(**self._client_values_the_guardrails_cant_read())
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("value", [5, "text", ["list"], None])
     async def test_a_proxy_server_request_that_isnt_an_object_never_reaches_the_guardrails(self, value):
         body: Final[dict[str, object]] = self._chat_body(proxy_server_request=value)
