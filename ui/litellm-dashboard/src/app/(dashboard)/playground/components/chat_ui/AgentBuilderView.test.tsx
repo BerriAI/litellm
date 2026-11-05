@@ -1,9 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { modelDeprecationKeys } from "@/app/(dashboard)/hooks/models/useModelDeprecations";
 import AgentBuilderView from "./AgentBuilderView";
 import type { AgentModel } from "../../llm_calls/fetch_agents";
 
@@ -69,41 +67,10 @@ const props = {
   userRole: "Admin",
 };
 
-const modelListKey = ["models", "list"] as const;
-
-const ModelQueryProbe = ({
-  modelListQuery,
-  modelDeprecationQuery,
-}: {
-  modelListQuery: () => Promise<unknown>;
-  modelDeprecationQuery: () => Promise<unknown>;
-}) => {
-  useQuery({ queryKey: modelListKey, queryFn: modelListQuery, staleTime: Infinity });
-  useQuery({ queryKey: modelDeprecationKeys.all, queryFn: modelDeprecationQuery, staleTime: Infinity });
-  return null;
-};
-
 const controlUnder = (label: string): HTMLElement =>
   within(screen.getByText(label).parentElement!).getByRole("combobox");
 
-const renderWithQueryClient = (children: ReactNode, queryClient = new QueryClient()) => {
-  return render(<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>);
-};
-
-const renderView = (queryClient?: QueryClient) => renderWithQueryClient(<AgentBuilderView {...props} />, queryClient);
-
-const renderViewWithModelQueryProbe = (
-  queryClient: QueryClient,
-  modelListQuery: () => Promise<unknown>,
-  modelDeprecationQuery: () => Promise<unknown>,
-) =>
-  renderWithQueryClient(
-    <>
-      <AgentBuilderView {...props} />
-      <ModelQueryProbe modelListQuery={modelListQuery} modelDeprecationQuery={modelDeprecationQuery} />
-    </>,
-    queryClient,
-  );
+const renderView = () => render(<AgentBuilderView {...props} />);
 
 const waitForRoster = async () => {
   await screen.findByRole("button", { name: "support-agent litellm_agent" });
@@ -132,7 +99,7 @@ beforeEach(() => {
 
 describe("AgentBuilderView", () => {
   it("asks the visitor to sign in when there is no session", () => {
-    renderWithQueryClient(<AgentBuilderView accessToken={null} token={null} userID={null} userRole={null} />);
+    render(<AgentBuilderView accessToken={null} token={null} userID={null} userRole={null} />);
 
     expect(screen.getByText("Sign in to use Agent Builder.")).toBeInTheDocument();
     expect(fetchAvailableAgentModels).not.toHaveBeenCalled();
@@ -203,25 +170,6 @@ describe("AgentBuilderView", () => {
     expect(payload.litellm_params.model).toBe("litellm_agent/gpt-4o");
   });
 
-  it("refetches model queries after creating an agent", async () => {
-    const user = userEvent.setup();
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const modelListQuery = vi.fn().mockResolvedValue([]);
-    const modelDeprecationQuery = vi.fn().mockResolvedValue({});
-    renderViewWithModelQueryProbe(queryClient, modelListQuery, modelDeprecationQuery);
-    await waitForRoster();
-    await waitFor(() => expect(modelListQuery).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(modelDeprecationQuery).toHaveBeenCalledTimes(1));
-
-    await user.click(screen.getByRole("button", { name: /New agent/i }));
-    fireEvent.change(screen.getByPlaceholderText("My Agent"), { target: { value: "billing-agent" } });
-    await user.click(screen.getByRole("button", { name: /Save Agent/i }));
-
-    await waitFor(() => expect(modelCreateCall).toHaveBeenCalled());
-    await waitFor(() => expect(modelListQuery).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(modelDeprecationQuery).toHaveBeenCalledTimes(2));
-  });
-
   it("will not save a draft without a name", async () => {
     const user = userEvent.setup();
     renderView();
@@ -245,24 +193,6 @@ describe("AgentBuilderView", () => {
     expect(modelPatchUpdateCall.mock.calls[0][2]).toBe("agent-1");
   });
 
-  it("refetches model queries after updating an agent", async () => {
-    const user = userEvent.setup();
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const modelListQuery = vi.fn().mockResolvedValue([]);
-    const modelDeprecationQuery = vi.fn().mockResolvedValue({});
-    renderViewWithModelQueryProbe(queryClient, modelListQuery, modelDeprecationQuery);
-    await waitForRoster();
-    await screen.findByDisplayValue("support-agent");
-    await waitFor(() => expect(modelListQuery).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(modelDeprecationQuery).toHaveBeenCalledTimes(1));
-
-    await user.click(screen.getByRole("button", { name: /Update Agent/i }));
-
-    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
-    await waitFor(() => expect(modelListQuery).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(modelDeprecationQuery).toHaveBeenCalledTimes(2));
-  });
-
   it("deletes only after the warning is confirmed", async () => {
     const user = userEvent.setup();
     renderView();
@@ -278,27 +208,6 @@ describe("AgentBuilderView", () => {
     await user.click(confirmations[confirmations.length - 1]);
 
     await waitFor(() => expect(modelDeleteCall).toHaveBeenCalledWith("sk-access", "agent-1"));
-  });
-
-  it("refetches model queries after deleting an agent", async () => {
-    const user = userEvent.setup();
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const modelListQuery = vi.fn().mockResolvedValue([]);
-    const modelDeprecationQuery = vi.fn().mockResolvedValue({});
-    renderViewWithModelQueryProbe(queryClient, modelListQuery, modelDeprecationQuery);
-    await waitForRoster();
-    await screen.findByDisplayValue("support-agent");
-    await waitFor(() => expect(modelListQuery).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(modelDeprecationQuery).toHaveBeenCalledTimes(1));
-
-    await user.click(screen.getAllByRole("button", { name: /Delete$/ })[0]);
-    await screen.findByText(/Are you sure you want to delete "support-agent"/);
-    const deleteButtons = screen.getAllByRole("button", { name: /Delete$/ });
-    await user.click(deleteButtons[deleteButtons.length - 1]);
-
-    await waitFor(() => expect(modelDeleteCall).toHaveBeenCalledWith("sk-access", "agent-1"));
-    await waitFor(() => expect(modelListQuery).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(modelDeprecationQuery).toHaveBeenCalledTimes(2));
   });
 
   it("abandons the delete when the warning is dismissed", async () => {

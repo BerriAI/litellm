@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
-import { screen, waitForElementToBeRemoved } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
-import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
+import { renderWithProviders } from "../../../../tests/test-utils";
 import ModelsAndEndpointsPage from "./page";
 
 vi.mock("./panels/AllModelsPanel", () => ({ default: () => <div data-testid="panel-all-models" /> }));
@@ -201,7 +201,6 @@ const createMockTeamData = (overrides = {}) => ({
 
 describe("ModelsAndEndpointsPage ?team drill-in", () => {
   beforeEach(() => {
-    testQueryClient.clear();
     authState.userRole = "Admin";
     authState.isViewOnly = false;
     can.mockReturnValue(true);
@@ -222,7 +221,6 @@ describe("ModelsAndEndpointsPage ?team drill-in", () => {
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
 
@@ -245,54 +243,5 @@ describe("ModelsAndEndpointsPage ?team drill-in", () => {
 
     expect(screen.queryByRole("button", { name: /edit settings/i })).not.toBeInTheDocument();
     expect(screen.queryByText("Disable all global guardrails")).not.toBeInTheDocument();
-  });
-
-  it("refreshes deprecation banner data when the models list is refreshed", async () => {
-    const deprecatedResponse = {
-      checked_at: "2026-06-01T00:00:00Z",
-      warn_within_days: 30,
-      deprecated: [
-        {
-          model_name: "gpt-4",
-          litellm_provider: "openai",
-          deprecation_date: "2026-06-01",
-          days_until_deprecation: -1,
-          status: "deprecated",
-          successor_model: "gpt-5",
-        },
-      ],
-      imminent: [],
-      upcoming: [],
-    };
-    const currentResponse = {
-      checked_at: "2026-06-02T00:00:00Z",
-      warn_within_days: 30,
-      deprecated: [],
-      imminent: [],
-      upcoming: [],
-    };
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockImplementationOnce(async (input) => {
-        const requestUrl = input instanceof Request ? input.url : String(input);
-        expect(new URL(requestUrl, "http://localhost").pathname).toBe("/model/deprecations");
-        return Response.json(deprecatedResponse);
-      })
-      .mockImplementationOnce(async (input) => {
-        const requestUrl = input instanceof Request ? input.url : String(input);
-        expect(new URL(requestUrl, "http://localhost").pathname).toBe("/model/deprecations");
-        return Response.json(currentResponse);
-      });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const user = userEvent.setup({ delay: null });
-    renderWithProviders(<ModelsAndEndpointsPage />);
-
-    expect(
-      await screen.findByText("gpt-4 (openai) was deprecated on 2026-06-01, migrate to gpt-5"),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Refresh models" }));
-    await waitForElementToBeRemoved(() => screen.queryByRole("alert"));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

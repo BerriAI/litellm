@@ -3,8 +3,6 @@
 import { Bot, FlaskConical, Link as LinkIcon, MessageSquare, Plus, Save, Trash2 } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
-import { useQueryClient } from "@tanstack/react-query";
-import { invalidateModelQueries } from "@/app/(dashboard)/hooks/models/invalidateModelQueries";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -205,7 +203,6 @@ export default function AgentBuilderView({
   customProxyBaseUrl,
 }: AgentBuilderViewProps) {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
   const [agentModels, setAgentModels] = useState<AgentModel[]>([]);
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(true);
@@ -361,7 +358,6 @@ export default function AgentBuilderView({
         },
         model_info: {},
       });
-      void invalidateModelQueries(queryClient);
       // /model/new returns the row with `model_id` at the top level.
       // Prefer that id over name-matching so we land on the just-created
       // agent even when its public name collides with another team's.
@@ -401,7 +397,6 @@ export default function AgentBuilderView({
         },
         selectedAgentModelId,
       );
-      void invalidateModelQueries(queryClient);
       toast.success(t("playground.chatUi.agentBuilderView.updated"));
       const list = await loadAgents();
       const stillSelected = list.find((a) => getAgentModelId(a) === selectedAgentModelId);
@@ -447,7 +442,6 @@ export default function AgentBuilderView({
     setDeleting(true);
     try {
       await modelDeleteCall(accessToken, selectedAgentModelId);
-      void invalidateModelQueries(queryClient);
       toast.success(t("playground.chatUi.agentBuilderView.deleted"));
       const list = await loadAgents();
       const remaining = list.filter((a) => getAgentModelId(a) !== selectedAgentModelId);

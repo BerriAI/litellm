@@ -424,6 +424,9 @@ from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
+from litellm.proxy.alerting_endpoints.model_deprecation_alerts import (
+    router as model_deprecation_alerts_router,
+)
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -22434,6 +22437,7 @@ app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(model_deprecation_alerts_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
