@@ -129,12 +129,12 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
       if (!from || !to) return t("shared.advancedDatePicker.selectDateRange");
 
       const formatDateTime = (date: Date) => {
-        return moment(date).format("D MMM, HH:mm");
+        return moment(date).format(showTimeRange ? "D MMM, HH:mm" : "D MMM");
       };
 
       return `${formatDateTime(from)} - ${formatDateTime(to)}`;
     },
-    [t],
+    [showTimeRange, t],
   );
 
   // CRITICAL: Apply the same date adjustment logic as the original component
