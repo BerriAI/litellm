@@ -48,7 +48,7 @@ export function useSkillFilters() {
   };
   return {
     ...table,
-    sortOrder: table.sorting[0].desc ? "desc" as const : "asc" as const,
+    sortOrder: table.sorting[0].desc ? ("desc" as const) : ("asc" as const),
     sortBy: table.sorting[0].id as NonNullable<SkillListQuery["sort_by"]>,
     ...filters,
     setTag: (tag: string) => update({ tag }),

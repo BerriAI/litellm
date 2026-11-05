@@ -100,7 +100,9 @@ export function SkillsPane({ rows, loading, error, onRetry, selected, onSelect }
   const columns: ColumnDef<Plugin>[] = [
     {
       accessorKey: "name",
-      header: ({ column }) => <DataTableSortHeader column={column} title={t("publicModelHub.catalog.skill", { defaultValue: "Skill" })} />,
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={t("publicModelHub.catalog.skill", { defaultValue: "Skill" })} />
+      ),
       meta: { skeleton: "twoLine", className: "min-w-48 whitespace-normal" },
       cell: ({ row }) => <SkillLink skill={row.original} selected={selected} onSelect={onSelect} />,
     },

@@ -54,7 +54,6 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined);
   const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
 
-
   // Derived stats
   const totalSkills = skills.length;
   const domains = useMemo(
