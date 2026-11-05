@@ -210,6 +210,7 @@ class KubernetesPodsResponse(BaseModel):
 
 CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
+_STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 
 
 async def update_team(*args, **kwargs):
@@ -246,12 +247,12 @@ def _model_write_response(
 ) -> _ProxyModelRow | Mapping[str, object]:
     if member_write is None:
         return row
-    payload: Final = TypeAdapter(dict[str, object]).validate_json(row.model_dump_json())
+    payload: Final = _STR_OBJECT_DICT.validate_json(row.model_dump_json())
     stored_params: Final = payload.get("litellm_params")
     params: Final = (
-        TypeAdapter(dict[str, object]).validate_json(stored_params)
+        _STR_OBJECT_DICT.validate_json(stored_params)
         if isinstance(stored_params, str)
-        else TypeAdapter(dict[str, object]).validate_python(stored_params)
+        else _STR_OBJECT_DICT.validate_python(stored_params)
     )
     redacted: Final = redact_credentials_in_payload(params)
     return {
@@ -1347,7 +1348,7 @@ def legacy_update_model_info_changes(
     value that differs from the stored override resets that override (``None``).
     """
     stored: Final = db_model.model_info.model_dump(exclude_none=True)
-    requested: Final = TypeAdapter(dict[str, object]).validate_python(
+    requested: Final = _STR_OBJECT_DICT.validate_python(
         incoming_model_info.model_dump(exclude_unset=True, exclude_none=True)
     )
     sent: Final = {k: v for k, v in requested.items() if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS and v != ""}
@@ -1399,20 +1400,16 @@ async def _locked_legacy_update_model_info_json(
         return None
     stored_model_info: Final[object] = payload.get("model_info")
     stored: Final = (
-        TypeAdapter(dict[str, object]).validate_json(stored_model_info)
+        _STR_OBJECT_DICT.validate_json(stored_model_info)
         if isinstance(stored_model_info, str)
-        else TypeAdapter(dict[str, object]).validate_python(stored_model_info or {})
+        else _STR_OBJECT_DICT.validate_python(stored_model_info or {})
     )
-    return (
-        TypeAdapter(dict[str, object])
-        .dump_json(
-            {
-                **{k: v for k, v in stored.items() if k not in writes},
-                **{k: v for k, v in writes.items() if v is not None},
-            }
-        )
-        .decode()
-    )
+    return _STR_OBJECT_DICT.dump_json(
+        {
+            **{k: v for k, v in stored.items() if k not in writes},
+            **{k: v for k, v in writes.items() if v is not None},
+        }
+    ).decode()
 
 
 def _param_keys_to_remove(patch: updateDeployment) -> tuple[str, ...]:
@@ -1521,7 +1518,7 @@ def update_db_model(
     prisma_compatible_model_dict: Final = PrismaCompatibleUpdateDBModel(
         model_name=merged_model_name,
         litellm_params=json.dumps(merged_litellm_params),
-        model_info=TypeAdapter(dict[str, object]).dump_json(merged_model_info).decode(),
+        model_info=_STR_OBJECT_DICT.dump_json(merged_model_info).decode(),
     )
 
     if updated_patch.blocked is not None:
@@ -2057,7 +2054,7 @@ async def add_model_to_db(
     slot: AbstractAsyncContextManager[_ProxyModelTable] | None = None,
 ) -> "_ProxyModelRow | LiteLLM_ProxyModelTable":
     # encrypt litellm params #
-    _litellm_params_dict: Final = TypeAdapter(dict[str, object]).validate_python(
+    _litellm_params_dict: Final = _STR_OBJECT_DICT.validate_python(
         model_params.litellm_params.model_dump(exclude_none=True)
     )
     if "complexity_router_config" in _litellm_params_dict:
