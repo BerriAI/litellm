@@ -551,7 +551,7 @@ class IssuesRepository:
         await self.database.query_raw(
             """WITH expired AS MATERIALIZED (
                 SELECT id FROM "LiteLLM_Issue" WHERE status<>'open'
-                    AND updated_at<CURRENT_TIMESTAMP-make_interval(days=>$1)
+                    AND updated_at<CURRENT_TIMESTAMP-make_interval(days=>$1::int)
                 ORDER BY updated_at,id LIMIT $2
             ), signals AS (
                 DELETE FROM "LiteLLM_IssueSignal" WHERE (issue_id,source,source_id) IN (
