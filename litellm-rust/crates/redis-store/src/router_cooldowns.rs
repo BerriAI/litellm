@@ -36,10 +36,10 @@ impl Cooldown {
         self.timestamp.as_f64() + self.cooldown_time.as_f64() - now.as_secs_f64()
     }
 
-    /// `str(dict)`, the bytes `RedisCache.set_cache` writes on `main`.
-    pub fn encode(&self) -> String {
+    /// The `CooldownCacheValue` dict the router reads and writes.
+    pub fn to_value(&self) -> Value {
         let field = |name: &str, value: Value| (Value::Str(name.to_owned()), value);
-        repr(&Value::Dict(vec![
+        Value::Dict(vec![
             field(
                 "exception_received",
                 Value::Str(self.exception_received.clone()),
@@ -47,12 +47,11 @@ impl Cooldown {
             field("status_code", Value::Str(self.status_code.clone())),
             field("timestamp", self.timestamp.to_value()),
             field("cooldown_time", self.cooldown_time.to_value()),
-        ]))
+        ])
     }
 
-    /// Reads both `main`'s `str(dict)` and a JSON object, as `RedisCache._get_cache_logic` does.
-    pub fn decode(raw: &[u8]) -> Result<Self, DecodeError> {
-        let Value::Dict(fields) = python_value(raw)? else {
+    pub fn from_value(value: &Value) -> Result<Self, DecodeError> {
+        let Value::Dict(fields) = value else {
             return Err(DecodeError::Shape("a cooldown is a dict"));
         };
         let field = |name: &str| {
@@ -76,6 +75,16 @@ impl Cooldown {
             timestamp: number("timestamp")?,
             cooldown_time: number("cooldown_time")?,
         })
+    }
+
+    /// `str(dict)`, the bytes `RedisCache.set_cache` writes on `main`.
+    pub fn encode(&self) -> String {
+        repr(&self.to_value())
+    }
+
+    /// Reads both `main`'s `str(dict)` and a JSON object, as `RedisCache._get_cache_logic` does.
+    pub fn decode(raw: &[u8]) -> Result<Self, DecodeError> {
+        Self::from_value(&python_value(raw)?)
     }
 }
 

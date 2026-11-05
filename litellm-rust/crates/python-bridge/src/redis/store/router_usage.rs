@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_redis_store::router_usage::{Counter, Kind, RouterUsage};
+use litellm_redis_store::router_usage::{Counter, RouterUsage};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
 use super::{PyNumber, policy::router_tier_policies, redis_async, store_error};
@@ -10,7 +10,7 @@ use crate::redis::client::NativeRedisClient;
 #[pyclass(frozen, name = "NativeRouterUsage")]
 pub(crate) struct NativeRouterUsage(Arc<RouterUsage>);
 
-/// `(deployment_id, model, minute, "tpm" | "rpm")`.
+/// `(deployment_id, model, minute, kind)`, the kind spelled as its key segment.
 pub(crate) struct PyCounter(Counter);
 
 impl<'a, 'py> FromPyObject<'a, 'py> for PyCounter {
@@ -19,15 +19,9 @@ impl<'a, 'py> FromPyObject<'a, 'py> for PyCounter {
     fn extract(value: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         let (deployment_id, model, minute, kind): (String, Option<String>, String, String) =
             value.extract()?;
-        let kind = match kind.as_str() {
-            "tpm" => Kind::Tpm,
-            "rpm" => Kind::Rpm,
-            _ => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown usage counter kind {kind:?}"
-                )));
-            }
-        };
+        let kind = kind
+            .parse()
+            .map_err(|_| PyValueError::new_err(format!("unknown usage counter kind {kind:?}")))?;
         Ok(Self(Counter {
             deployment_id,
             model,

@@ -21,6 +21,21 @@ fn tpm_and_rpm(model: Option<&str>) -> [Counter; 2] {
 }
 
 #[rstest]
+#[case::tpm(Kind::Tpm, "tpm")]
+#[case::rpm(Kind::Rpm, "rpm")]
+fn a_counter_kind_round_trips_through_its_key_segment(#[case] kind: Kind, #[case] segment: &str) {
+    assert_eq!(<&str>::from(kind), segment);
+    assert_eq!(segment.parse::<Kind>().unwrap(), kind);
+}
+
+#[rstest]
+#[case::unknown("tokens")]
+#[case::wrong_case("TPM")]
+fn other_text_is_not_a_counter_kind(#[case] segment: &str) {
+    assert!(segment.parse::<Kind>().is_err());
+}
+
+#[rstest]
 #[tokio::test]
 async fn reads_counters_python_incremented_under_mains_keys(
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,

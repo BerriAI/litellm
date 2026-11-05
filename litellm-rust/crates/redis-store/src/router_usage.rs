@@ -22,9 +22,12 @@ const MEMORY_ENTRIES: usize = 200;
 /// `RoutingArgs.ttl`, the window of a per-minute counter.
 pub const COUNTER_TTL: Duration = Duration::from_secs(60);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A counter's key segment, which is also how the Python router names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
 pub enum Kind {
+    #[strum(serialize = "tpm")]
     Tpm,
+    #[strum(serialize = "rpm")]
     Rpm,
 }
 
@@ -39,10 +42,7 @@ pub struct Counter {
 impl Counter {
     /// `global_router:{id}:{model}:{tpm|rpm}:{HH-MM}`, where Python formats a missing model as `None`.
     fn key(&self) -> String {
-        let kind = match self.kind {
-            Kind::Tpm => "tpm",
-            Kind::Rpm => "rpm",
-        };
+        let kind: &str = self.kind.into();
         let model = self.model.as_deref().unwrap_or("None");
         format!(
             "global_router:{}:{model}:{kind}:{}",

@@ -12,6 +12,7 @@ litellm-cache-memory.workspace = true
 litellm-python-compat.workspace = true
 litellm-redis-client.workspace = true
 serde_json.workspace = true
+strum.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true

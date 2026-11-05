@@ -34,6 +34,7 @@ litellm-redis-client.workspace = true
 litellm-redis-connect.workspace = true
 litellm-redis-store.workspace = true
 litellm-redis-resolve.workspace = true
+litellm-python-compat.workspace = true
 litellm-redis-types.workspace = true
 tracing.workspace = true
 litellm-cache-response.workspace = true

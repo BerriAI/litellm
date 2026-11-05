@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use litellm_redis_store::router_cooldowns::{Cooldown, RouterCooldowns};
 use pyo3::{
+    exceptions::PyValueError,
     prelude::*,
     types::{PyDict, PyTuple},
 };
 
 use super::{
     NativePending, PyNumber, policy::router_tier_policies, redis_async, redis_sync,
-    request::NativeRequestRedis, store_error, ttl,
+    request::NativeRequestRedis, store_error, ttl, value::PyValue,
 };
 use crate::redis::client::NativeRedisClient;
 
@@ -17,35 +18,27 @@ use crate::redis::client::NativeRedisClient;
 #[pyclass(frozen, name = "NativeRouterCooldowns")]
 pub(crate) struct NativeRouterCooldowns(Arc<RouterCooldowns>);
 
+/// A `CooldownCacheValue` dict, whose shape `Cooldown` owns.
 pub(crate) struct PyCooldown(Cooldown);
 
 impl<'a, 'py> FromPyObject<'a, 'py> for PyCooldown {
     type Error = PyErr;
 
     fn extract(value: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let fields = value.cast::<PyDict>()?;
-        let item = |name: &str| fields.as_any().get_item(name);
-        Ok(Self(Cooldown {
-            exception_received: item("exception_received")?.extract()?,
-            status_code: item("status_code")?.extract()?,
-            timestamp: item("timestamp")?.extract::<PyNumber>()?.0,
-            cooldown_time: item("cooldown_time")?.extract::<PyNumber>()?.0,
-        }))
+        let PyValue(value) = value.extract()?;
+        Cooldown::from_value(&value)
+            .map(Self)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 }
 
 impl<'py> IntoPyObject<'py> for PyCooldown {
-    type Target = PyDict;
-    type Output = Bound<'py, PyDict>;
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
-        let fields = PyDict::new(py);
-        fields.set_item("exception_received", self.0.exception_received)?;
-        fields.set_item("status_code", self.0.status_code)?;
-        fields.set_item("timestamp", PyNumber(self.0.timestamp))?;
-        fields.set_item("cooldown_time", PyNumber(self.0.cooldown_time))?;
-        Ok(fields)
+        PyValue(self.0.to_value()).into_pyobject(py)
     }
 }
 
