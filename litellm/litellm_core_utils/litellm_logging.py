@@ -4074,12 +4074,11 @@ class Logging(LiteLLMLoggingBaseClass):
                                 start_time=start_time,
                                 end_time=end_time,
                             )
-                    if (
-                        callable(callback) is True and is_sync_request and customLogger is not None
-                    ):  # custom logger functions
+                    if callable(callback) is True and is_sync_request:  # custom logger functions
+                        function_logger = customLogger if customLogger is not None else CustomLogger()
                         print_verbose(f"success callbacks: Running Custom Callback Function - {callback}")
 
-                        customLogger.log_event(
+                        function_logger.log_event(
                             kwargs=call_details,
                             response_obj=result,
                             start_time=start_time,

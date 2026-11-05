@@ -29,7 +29,7 @@ use crate::{
     host_index::python_str,
     lookup::Lookup,
     mock::MockFailure,
-    outcome::OutcomeWrite,
+    outcome::{OutcomeCallbacks, OutcomeWrite},
     prerouting::{PreRoute, PreRouted},
     registry::{ResolveKind, ResolveScope},
     retry::{RetryContext, resolve_retry_policy, should_retry},
@@ -63,6 +63,12 @@ pub struct RouterResponse {
 struct Failed {
     error: Box<Error>,
     deployment_id: Option<String>,
+    /// The group a pre-routing hook rewrote the level's name to for the failed attempt (an auto
+    /// router's tier), which its order fallbacks and fallback lookup key off
+    /// (`get_pre_routing_selection`).
+    routed: Option<String>,
+    /// The group the host stamped that attempt as served for ([`Candidates::served_as`]).
+    served_as: Option<String>,
 }
 
 impl From<Error> for Failed {
@@ -70,6 +76,8 @@ impl From<Error> for Failed {
         Self {
             error: Box::new(error),
             deployment_id: None,
+            routed: None,
+            served_as: None,
         }
     }
 }
@@ -103,6 +111,8 @@ struct Target {
     /// `_failover_excluded_ids` in the level's metadata: the deployments weighted failover
     /// already excluded on the way here.
     failover_excluded: Arc<[String]>,
+    /// The group a pre-routing hook selected for the level's failed attempt, if it rewrote it.
+    routed: Option<String>,
 }
 
 /// A step of a level's fallback chain: a configured target, or an order level of the group.
@@ -166,10 +176,18 @@ fn unattempted_chain(
     target: &Target,
     at: FallbackHop,
     attempted: &[Tried],
+    served: (Option<&str>, Option<&str>),
 ) -> bool {
-    let mut lookup = vec![target.group.as_str()];
-    if request.model != target.group {
-        lookup.push(request.model.as_str());
+    let (routed, served_as) = served;
+    let mut lookup: Vec<&str> = Vec::new();
+    for group in routed
+        .into_iter()
+        .chain(served_as)
+        .chain([target.group.as_str(), request.model.as_str()])
+    {
+        if !lookup.contains(&group) {
+            lookup.push(group);
+        }
     }
     list.lookup_groups(&lookup, lists.keys)
         .is_some_and(|targets| {
@@ -285,6 +303,7 @@ impl Core {
             params: None,
             excluded: Arc::from([]),
             failover_excluded: Arc::from([]),
+            routed: None,
         };
         let at = FallbackHop::default();
         // A fallbacks mock stands in for the requested group's retry loop: no pick, no attempt.
@@ -343,6 +362,8 @@ impl Core {
         let Failed {
             error,
             deployment_id: failed_id,
+            routed,
+            served_as,
         } = failed;
         let error = *error;
         self.level_failed(at, &target, &error, false);
@@ -360,7 +381,14 @@ impl Core {
             self.level_failed(at, &target, &raised, true);
             return Err(raised);
         }
-        let (targets, order_path) = self.fallback_targets(snapshot, request, &target, &error);
+        let (targets, order_path) = self.fallback_targets(
+            snapshot,
+            request,
+            &target,
+            routed.as_deref(),
+            served_as.as_deref(),
+            &error,
+        );
         if !order_path {
             self.host.observe(&RouterEvent::FallingBack {
                 level: at.level,
@@ -368,6 +396,7 @@ impl Core {
             });
         }
         let mut target = target;
+        target.routed = routed;
         // `_maybe_run_weighted_failover`: its own `run_async_fallback`, before the regular one.
         let failover = if order_path {
             None
@@ -463,7 +492,12 @@ impl Core {
             if at.depth >= max_fallbacks {
                 return Err(None);
             }
-            let failed = Tried::Target(FallbackTarget::Name(target.group.clone()));
+            let failed = Tried::Target(FallbackTarget::Name(
+                target
+                    .routed
+                    .clone()
+                    .unwrap_or_else(|| target.group.clone()),
+            ));
             if !chain.attempted.contains(&failed) {
                 chain.attempted.push(failed);
             }
@@ -488,17 +522,34 @@ impl Core {
             let mut unroutable: Option<Value> = None;
             for next in targets {
                 let (tried, group, order) = match &next {
-                    Next::Order(group, order) => (
-                        Tried::Order(group.clone(), *order),
-                        group.clone(),
-                        Some(*order),
-                    ),
+                    Next::Order(group, order) => {
+                        // An order level of the group a pre-routing hook selected passes the
+                        // fallback gates as any group the level did not serve does.
+                        if *group != target.group {
+                            match self.host.allow_fallback(request, group).await {
+                                Ok(true) => {}
+                                Ok(false) => continue,
+                                Err(raised) => return Err(Some(Error::Attempt(raised))),
+                            }
+                        }
+                        (
+                            Tried::Order(group.clone(), *order),
+                            group.clone(),
+                            Some(*order),
+                        )
+                    }
                     Next::Failover(group, excluded) => {
                         let mut key = excluded.to_vec();
                         key.sort();
                         (Tried::Failover(group.clone(), key), group.clone(), None)
                     }
-                    Next::Fallback(FallbackTarget::Name(name)) if *name == target.group => continue,
+                    // The group that just failed: the pre-routing selection when there was one, so
+                    // a subagent bound to another tier can fall back to the model it asked for.
+                    Next::Fallback(FallbackTarget::Name(name))
+                        if *name == target.routed.as_deref().unwrap_or(&target.group) =>
+                    {
+                        continue;
+                    }
                     // A provider-scoped request never leaves its group; a dict target with no
                     // `model` names no group, so it is skipped too.
                     Next::Fallback(fallback)
@@ -573,6 +624,7 @@ impl Core {
                     params: params.clone(),
                     excluded,
                     failover_excluded: target.failover_excluded.clone(),
+                    routed: None,
                 };
                 let parent = at;
                 let at = FallbackHop {
@@ -704,6 +756,8 @@ impl Core {
         snapshot: &RouterStateSnapshot,
         request: &RouterRequest,
         target: &Target,
+        routed: Option<&str>,
+        served_as: Option<&str>,
         error: &Error,
     ) -> (Option<Vec<Next>>, bool) {
         // A pick's error decides by its exception's classes as an attempt's does: a pre-call
@@ -711,11 +765,19 @@ impl Core {
         let failure = retried_failure(error);
         let is_a = |name: &str| failure.as_ref().is_some_and(|f| f.is_a(name));
         let lists = Lists::of(snapshot, request);
-        // `fallback_lookup_groups`: the group being served, then the group the request was for.
-        let mut lookup = vec![target.group.as_str()];
-        if request.model != target.group {
-            lookup.push(request.model.as_str());
+        // `fallback_lookup_groups`: the group a pre-routing hook selected, the group being served,
+        // then the group the request was for.
+        let mut lookup: Vec<&str> = routed.into_iter().collect();
+        for group in served_as
+            .into_iter()
+            .chain([target.group.as_str(), request.model.as_str()])
+        {
+            if !lookup.contains(&group) {
+                lookup.push(group);
+            }
         }
+        // `order_model_group`: the pre-routing selection's order levels, else the level's own.
+        let order_group = routed.unwrap_or(target.group.as_str());
         let chain = |list: &Fallbacks| {
             if list.is_client_side(lists.keys) {
                 Some(list.as_chain())
@@ -734,7 +796,7 @@ impl Core {
         if !skip_order {
             // A routing group's members, with a priority group's priorities as their order.
             let listing_team = request.listing_team_id.as_deref();
-            let mut orders: Vec<i64> = group_members(snapshot, &target.group, listing_team)
+            let mut orders: Vec<i64> = group_members(snapshot, order_group, listing_team)
                 .iter()
                 .filter(|d| d.listed_for_team(listing_team))
                 .filter_map(|d| d.order())
@@ -742,11 +804,14 @@ impl Core {
             orders.sort_unstable();
             orders.dedup();
             if orders.len() > 1 {
-                let current = target.order.unwrap_or(orders[0]);
+                let current = target
+                    .order
+                    .filter(|_| routed.is_none())
+                    .unwrap_or(orders[0]);
                 let mut targets: Vec<Next> = orders
                     .into_iter()
                     .filter(|order| *order > current)
-                    .map(|order| Next::Order(target.group.clone(), order))
+                    .map(|order| Next::Order(order_group.to_owned(), order))
                     .collect();
                 if let Some(list) = lists.fallbacks {
                     targets.extend(fallbacks_of(chain(list).unwrap_or_default()));
@@ -879,6 +944,8 @@ impl Core {
             return Err(Failed {
                 error: Box::new(Error::Attempt(AttemptError::host_raised(&["Exception"]))),
                 deployment_id: None,
+                routed: None,
+                served_as: None,
             });
         }
         let Some(first_failure) = retried_failure(&failed.error) else {
@@ -965,6 +1032,8 @@ impl Core {
                 return Err(Failed {
                     error: Box::new(Error::Attempt(AttemptError::host_raised(&["Exception"]))),
                     deployment_id: None,
+                    routed: None,
+                    served_as: None,
                 });
             }
             if num_retries == 0 {
@@ -1219,6 +1288,7 @@ impl Core {
             } else {
                 candidates.model_group.clone()
             },
+            routed: routed_name(target, &candidates),
             target_order: target.order,
             candidate_ids: candidates.all.iter().map(|d| d.id.clone()).collect(),
             retry,
@@ -1236,23 +1306,43 @@ impl Core {
         // the stream's end.
         match self.host.invoke(&attempt).await {
             Ok(output) => {
+                // `_should_raise_content_policy_error`: a blocked response is raised only when
+                // a content-policy fallback would serve it, and counts as no failure.
+                let routed = routed_name(target, &candidates);
+                let served = (routed.as_deref(), candidates.served_as.as_deref());
+                let raised = match output.blocked {
+                    Some(Blocked::ContentFilter) => self.has_content_policy_fallback(
+                        snapshot, request, target, at, attempted, served,
+                    ),
+                    Some(Blocked::Refusal) => self.refusal_fallback_available(
+                        snapshot, request, target, at, attempted, served,
+                    ),
+                    None => false,
+                };
                 let tracks = output
                     .tracks_usage
                     .unwrap_or_else(|| deployment.tracks_usage());
+                // A shared logging object logs the success of the response that serves the
+                // request alone, so a raised blocked response counts its request and no success.
+                let callbacks = match raised && request.outcome_callbacks.shared_logging {
+                    true => OutcomeCallbacks {
+                        success: false,
+                        ..request.outcome_callbacks
+                    },
+                    false => request.outcome_callbacks,
+                };
                 let recorded = match (output.deferred, tracks) {
                     (true, true) => {
                         let tokens = output.total_tokens as f64;
-                        self.health.add_usage(&deployment, None, tokens, 1.0).await
+                        self.health
+                            .add_usage(&deployment, None, tokens, 1.0)
+                            .await
+                            .map(|_| ())
                     }
                     (true, false) => Ok(()),
                     (false, _) => {
                         self.health
-                            .record_success(
-                                request.outcome_callbacks,
-                                &deployment,
-                                output.total_tokens,
-                                tracks,
-                            )
+                            .record_success(callbacks, &deployment, output.total_tokens, tracks)
                             .await
                     }
                 };
@@ -1262,16 +1352,6 @@ impl Core {
                 self.host.observe(&RouterEvent::Succeeded {
                     deployment_id: deployment.id.clone(),
                 });
-                // `_should_raise_content_policy_error`: a blocked response is raised only when
-                // a content-policy fallback would serve it, and counts as no failure.
-                let raised =
-                    match output.blocked {
-                        Some(Blocked::ContentFilter) => self
-                            .has_content_policy_fallback(snapshot, request, target, at, attempted),
-                        Some(Blocked::Refusal) => self
-                            .refusal_fallback_available(snapshot, request, target, at, attempted),
-                        None => false,
-                    };
                 if let Some(blocked) = output.blocked.filter(|_| raised) {
                     self.host.observe(&RouterEvent::Blocked {
                         level: at.level,
@@ -1284,6 +1364,8 @@ impl Core {
                     return Err(Failed {
                         error: Box::new(Error::Attempt(failure)),
                         deployment_id: Some(deployment.id.clone()),
+                        routed: routed_name(target, &candidates),
+                        served_as: candidates.served_as.clone(),
                     });
                 }
                 Ok(RouterResponse {
@@ -1303,6 +1385,8 @@ impl Core {
                 Err(Failed {
                     error: Box::new(Error::Attempt(failure)),
                     deployment_id: Some(deployment.id.clone()),
+                    routed: routed_name(target, &candidates),
+                    served_as: candidates.served_as.clone(),
                 })
             }
         }
@@ -1325,6 +1409,9 @@ impl Core {
             &snapshot.settings.routing_strategy,
             request,
         )?;
+        self.host.observe(&RouterEvent::PickStarted {
+            model: target.group.clone(),
+        });
         let routed = self
             .pre_routed(PreRoute {
                 op,
@@ -1334,22 +1421,25 @@ impl Core {
                 retry,
             })
             .await?;
+        let (routed, served_as) = match routed {
+            PreRouted::Bound { model, group } => (PreRouted::Model(model), Some(group)),
+            other => (other, None),
+        };
         match routed {
             PreRouted::Model(name) => {
                 snapshot.missing_routing_group(request, &name)?;
-                let candidates = self
+                let mut candidates = self
                     .candidates(snapshot, op, request, &name, inputs)
                     .await?;
+                candidates.served_as = served_as;
                 if candidates.healthy.is_empty() {
-                    return Err(Error::NoHealthyDeployments {
-                        model: candidates.failed_model(&snapshot.registry),
-                    }
-                    .into());
+                    return Err(candidates.none_healthy(&snapshot.registry).into());
                 }
                 let deployment = self.pick(snapshot, op, request, &candidates).await?;
                 Ok((deployment, candidates))
             }
             // A custom strategy's pick is served as is, for the requested name.
+            PreRouted::Bound { .. } => unreachable!("mapped to a model above"),
             PreRouted::Deployment(deployment) => {
                 let candidates = Candidates {
                     name: target.group.clone(),
@@ -1358,6 +1448,7 @@ impl Core {
                     all: vec![deployment.clone()],
                     healthy: vec![deployment.clone()],
                     wildcard_request: None,
+                    served_as: None,
                 };
                 Ok((deployment, candidates))
             }
@@ -1383,6 +1474,7 @@ impl Core {
             deployment,
             name: target.group.clone(),
             model_group: target.group.clone(),
+            routed: None,
             target_order: target.order,
             candidate_ids: Vec::new(),
             retry,
@@ -1417,10 +1509,11 @@ impl Core {
         target: &Target,
         at: FallbackHop,
         attempted: &[Tried],
+        served: (Option<&str>, Option<&str>),
     ) -> bool {
         let lists = Lists::of(snapshot, request);
         match lists.content_policy {
-            Some(list) => unattempted_chain(list, &lists, request, target, at, attempted),
+            Some(list) => unattempted_chain(list, &lists, request, target, at, attempted, served),
             None => snapshot.settings.dynamic.fallbacks.has_star(),
         }
     }
@@ -1434,20 +1527,22 @@ impl Core {
         target: &Target,
         at: FallbackHop,
         attempted: &[Tried],
+        served: (Option<&str>, Option<&str>),
     ) -> bool {
         if request.disable_fallbacks {
             return false;
         }
         let lists = Lists::of(snapshot, request);
         if lists.content_policy.is_some() {
-            return self.has_content_policy_fallback(snapshot, request, target, at, attempted);
+            return self
+                .has_content_policy_fallback(snapshot, request, target, at, attempted, served);
         }
         if snapshot.settings.dynamic.fallbacks.has_star() {
             return true;
         }
-        lists
-            .fallbacks
-            .is_some_and(|list| unattempted_chain(list, &lists, request, target, at, attempted))
+        lists.fallbacks.is_some_and(|list| {
+            unattempted_chain(list, &lists, request, target, at, attempted, served)
+        })
     }
 
     /// `async_deployment_callback_on_failure`, when it runs for this failure.
@@ -1552,4 +1647,9 @@ impl Core {
         }
         Ok(())
     }
+}
+
+/// The name a pre-routing hook rewrote the level's group to for this pick, if it did.
+fn routed_name(target: &Target, candidates: &Candidates) -> Option<String> {
+    (candidates.name != target.group).then(|| candidates.name.clone())
 }
