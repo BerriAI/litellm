@@ -370,6 +370,27 @@ def test_a_refused_openai_fetch_falls_back_to_the_release_tag_on_github(status: 
     assert tree.calls[0] == _openai_url(RELEASE) and sorted(tree.calls[1:]) == sorted(_tree(RELEASE)), tree.calls
 
 
+def test_an_openai_answer_that_never_finishes_falls_back_to_the_release_tag_within_the_fetch_timeout() -> None:
+    class _NeverFinishingOpenAI(_RawTree):
+        async def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            timeout: float | None = None,
+            max_response_bytes: int | None = None,
+        ) -> httpx.Response:
+            if url == _openai_url(RELEASE):
+                self.calls.append(url)
+                await asyncio.Event().wait()
+            return await super().get(url, headers=headers, timeout=timeout, max_response_bytes=max_response_bytes)
+
+    tree: Final = _NeverFinishingOpenAI(_tree(RELEASE))
+    source: Final = CodexCatalogSource(client=tree, clock=_Clock(), timeout=0.05, response_deadline=30)
+    stock: Final = asyncio.run(asyncio.wait_for(source.stock(RELEASE, openai_api_key=OPENAI_KEY), timeout=5))
+    assert stock.source == f"github rust-v{RELEASE}" and FRESH_SLUG in stock.models
+
+
 def test_an_empty_openai_url_setting_keeps_the_key_home_and_fetches_from_github(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

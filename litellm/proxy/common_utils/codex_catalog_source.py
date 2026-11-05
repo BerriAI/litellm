@@ -346,10 +346,11 @@ class CodexCatalogSource:
     ) -> bytes | _FetchFailed:
         client: Final = self._client if self._client is not None else _default_client()
         try:
-            response: Final = await client.get(
-                url, headers=headers, timeout=self._timeout, max_response_bytes=CODEX_CATALOG_MAX_BYTES
+            response: Final = await asyncio.wait_for(
+                client.get(url, headers=headers, timeout=self._timeout, max_response_bytes=CODEX_CATALOG_MAX_BYTES),
+                self._timeout,
             )
-        except (httpx.HTTPError, httpx.InvalidURL, HTTPResponseLimitError, ValueError) as error:
+        except (httpx.HTTPError, httpx.InvalidURL, HTTPResponseLimitError, ValueError, asyncio.TimeoutError) as error:
             return _FetchFailed(reason=f"{type(error).__name__} fetching {url}")
         if response.status_code != 200:
             return _FetchFailed(reason=f"HTTP {response.status_code} from {url}")

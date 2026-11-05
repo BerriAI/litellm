@@ -591,8 +591,19 @@ _DEPLOYMENT_BASE_PARAMS: Final = ("api_base", "base_url")
 
 
 def _is_openai_host(url: object) -> bool:
-    host: Final = urlparse(url).hostname if isinstance(url, str) else None
+    if not isinstance(url, str):
+        return False
+    try:
+        host: Final = urlparse(url).hostname
+    except ValueError:
+        return False
     return host == OPENAI_API_HOST
+
+
+def _every_call_goes_through_a_litellm_proxy() -> bool:
+    import litellm  # noqa: PLC0415  # litellm imports this module while it is initializing
+
+    return litellm.LiteLLMProxyChatConfig.should_use_litellm_proxy_by_default() is True
 
 
 def _is_openai_origin(bases: Sequence[object]) -> bool:
@@ -637,17 +648,21 @@ def _deployment_provider(params: Mapping[str, object]) -> str:
 
 
 def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
-    """The key a deployment sends OpenAI, its named credential's values overriding its own the way the call
-    path merges them and ``OPENAI_API_KEY`` standing in when neither sets one, when every base either one sets
-    is OpenAI's."""
+    """The key a deployment sends OpenAI, its own values winning over its named credential's the way the call
+    path fills only what the deployment lacks and ``OPENAI_API_KEY`` standing in when neither sets one, when every
+    base either one sets is OpenAI's and the call does not go through a LiteLLM proxy."""
     params: Final = MappingProxyType[str, object](deployment["litellm_params"])
     credential: Final = _credential_values(params.get("litellm_credential_name"))
-    effective: Final = MappingProxyType({**params, **credential})
+    effective: Final = MappingProxyType({**credential, **params})
     bases: Final = (
         *(params.get(key) for key in _DEPLOYMENT_BASE_PARAMS),
         *(credential.get(key) for key in _DEPLOYMENT_BASE_PARAMS),
     )
-    if _deployment_provider(effective) != "openai" or not _is_openai_origin(bases):
+    if (
+        effective.get("use_litellm_proxy") is True
+        or _deployment_provider(effective) != "openai"
+        or not _is_openai_origin(bases)
+    ):
         return None
     key: Final = _resolved_key(effective.get("api_key"))
     return None if key is None or key.startswith(FEDRAMP_KEY_PREFIXES) else key
@@ -656,6 +671,8 @@ def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
 def _resolved_key(api_key: object) -> str | None:
     if not isinstance(api_key, str) or not api_key:
         return os.getenv("OPENAI_API_KEY") or None
+    if api_key.startswith("oidc/"):
+        return None
     from litellm.secret_managers.main import (
         get_secret_str,  # noqa: PLC0415  # secret_managers.main imports litellm, which imports this module
     )
@@ -677,8 +694,8 @@ def codex_catalog_openai_key(
     OpenAI's own, ``OPENAI_API_KEY`` from the environment for one that sets no key. A key for an
     OpenAI-compatible server or a FedRAMP key (Codex sends those to ``gov.chatgpt.com``) never leaves for
     OpenAI's commercial catalog, a listing without an OpenAI deployment sends none, and no key is looked up
-    while the catalog stays local."""
-    if uses_vendored_codex_catalog():
+    while the catalog stays local or calls go through a LiteLLM proxy."""
+    if uses_vendored_codex_catalog() or _every_call_goes_through_a_litellm_proxy():
         return None
     registry: Final = llm_router.registry() if llm_router is not None else None
     deployments: Final = (
