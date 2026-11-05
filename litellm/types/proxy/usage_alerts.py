@@ -36,7 +36,11 @@ class UsageAlertRuleInput(BaseModel):
             raise ValueError("min_history_days must not exceed baseline_days")
         if self.scope_type == "deployment" and self.scope_id is not None:
             raise ValueError("Deployment alerts cover the whole gateway; omit scope_id")
-        if self.scope_type == "key" and self.scope_id is not None and self.scope_id.removeprefix("raw:").startswith("sk-"):
+        if (
+            self.scope_type == "key"
+            and self.scope_id is not None
+            and self.scope_id.removeprefix("raw:").startswith("sk-")
+        ):
             raise ValueError("Use the key's reporting ID, never the secret key")
         if len(set(self.notification_channels)) != len(self.notification_channels):
             raise ValueError("notification_channels must be unique")

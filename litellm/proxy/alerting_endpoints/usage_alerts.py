@@ -101,6 +101,7 @@ async def list_usage_alert_rules(
 
 @router.post("/alert-rules", response_model=UsageAlertRule, status_code=201)
 async def create_usage_alert_rule(data: UsageAlertRuleInput, user: User, repository: Repository) -> UsageAlertRule:
+    """Create a daily usage alert rule for a scope the caller can manage."""
     store: Final = require_repository(repository)
     await require_scope(user, store, data.scope_type, data.scope_id, write=True)
     saved: Final = await store.save_rule(data, user.user_id)

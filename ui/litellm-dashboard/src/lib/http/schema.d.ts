@@ -18844,7 +18844,10 @@ export interface paths {
         /** List Usage Alert Rules */
         get: operations["list_usage_alert_rules_usage_alert_rules_get"];
         put?: never;
-        /** Create Usage Alert Rule */
+        /**
+         * Create Usage Alert Rule
+         * @description Create a daily usage alert rule for a scope the caller can manage.
+         */
         post: operations["create_usage_alert_rule_usage_alert_rules_post"];
         delete?: never;
         options?: never;
