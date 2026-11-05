@@ -241,6 +241,21 @@ class TestTransformResponse:
         with pytest.raises(GeminiError, match="non-JSON"):
             config.transform_audio_transcription_response(raw)
 
+    def test_non_completed_status_error_omits_response_body(self, config):
+        payload = json.loads(json.dumps(COMPLETED_RESPONSE))
+        payload["status"] = "incomplete"
+        payload["steps"][0]["content"][0]["text"] = "sensitive transcript text"
+        with pytest.raises(GeminiError) as excinfo:
+            config.transform_audio_transcription_response(make_response(payload))
+        assert "status=incomplete" in str(excinfo.value)
+        assert "sensitive transcript text" not in str(excinfo.value)
+
+    def test_non_json_error_omits_response_body(self, config):
+        raw = httpx.Response(200, text="sensitive body", request=httpx.Request("POST", "https://example.test"))
+        with pytest.raises(GeminiError) as excinfo:
+            config.transform_audio_transcription_response(raw)
+        assert "sensitive body" not in str(excinfo.value)
+
     def test_word_without_offsets_survives(self, config):
         payload = json.loads(json.dumps(COMPLETED_RESPONSE))
         payload["steps"][0]["content"][0]["annotations"] = [{"type": "word_info", "text": "Hello"}]
