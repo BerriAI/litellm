@@ -203,15 +203,31 @@ class MistralConfig(OpenAIGPTConfig):
         match tool_choice:
             case str(choice) if choice in ("auto", "none"):
                 return choice
+            case "required" | "any":
+                return "any"
             case {"type": "function", "function": {"name": str(name)}} if name:
                 return ChatCompletionToolChoiceObjectParam(
                     type="function", function=ChatCompletionToolChoiceFunctionParam(name=name)
                 )
-            case str():
-                return "any"
             case _:
-                pass
-        return None
+                return None
+
+    def _tool_choice_to_send(
+        self, model: str, tool_choice: object, drop_params: bool
+    ) -> str | ChatCompletionToolChoiceObjectParam | None:
+        mapped: Final = self._map_tool_choice(tool_choice)
+        if mapped is not None or drop_params or litellm.drop_params is True:
+            return mapped
+        raise UnsupportedParamsError(
+            message=(
+                f"{self.custom_llm_provider} does not support tool_choice={tool_choice!r}, for model={model}, "
+                "since the Mistral API takes only 'auto', 'none', 'any', 'required', or "
+                "{'type': 'function', 'function': {'name': <tool name>}}. "
+                "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            llm_provider=self.custom_llm_provider,
+            model=model,
+        )
 
     @staticmethod
     def _get_mistral_reasoning_system_prompt() -> str:
@@ -266,8 +282,10 @@ class MistralConfig(OpenAIGPTConfig):
             if (
                 param == "tool_choice"
                 and (
-                    mapped_tool_choice := self._map_tool_choice(
-                        tool_choice=cast(object, value)  # cast-ok: untyped request params, the match narrows it
+                    mapped_tool_choice := self._tool_choice_to_send(
+                        model,
+                        cast(object, value),  # cast-ok: untyped request params, the match narrows it
+                        drop_params,
                     )
                 )
                 is not None

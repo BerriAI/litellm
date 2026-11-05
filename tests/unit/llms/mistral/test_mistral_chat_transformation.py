@@ -2075,7 +2075,17 @@ class TestMistralToolChoice:
         }
     ]
 
-    def _request_body(self, tool_choice: str | Mapping[str, object]) -> Mapping[str, object]:
+    UNUSABLE_TOOL_CHOICES: Final[Sequence[str | Mapping[str, object]]] = (
+        {"type": "function", "function": {}},
+        {"type": "function", "function": {"name": ""}},
+        {"type": "function", "function": {"name": 123}},
+        {"type": "function"},
+        "foo",
+    )
+
+    def _request_body(
+        self, tool_choice: str | Mapping[str, object], drop_params: bool = False
+    ) -> Mapping[str, object]:
         import litellm
 
         optional_params: Final = litellm.get_optional_params(
@@ -2083,6 +2093,7 @@ class TestMistralToolChoice:
             custom_llm_provider="mistral",
             tools=list(self.TOOLS),
             tool_choice=tool_choice,
+            drop_params=drop_params,
         )
         return MistralConfig().transform_request(
             model="mistral-large-latest",
@@ -2096,6 +2107,24 @@ class TestMistralToolChoice:
         body: Final = self._request_body({"type": "function", "function": {"name": "get_weather"}})
 
         assert body["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
+
+    @pytest.mark.parametrize(
+        "custom_llm_provider, model",
+        [("mistral", "mistral-large-latest"), ("codestral", "codestral-latest"), ("vertex_ai", "mistral-small-2503")],
+    )
+    def test_named_function_is_kept_on_every_mistral_route(
+        self, local_model_cost_map: None, custom_llm_provider: str, model: str
+    ) -> None:
+        import litellm
+
+        optional_params: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            tools=list(self.TOOLS),
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+
+        assert optional_params["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
 
     def test_keys_mistral_does_not_define_are_not_replayed(self, local_model_cost_map: None) -> None:
         body: Final = self._request_body(
@@ -2115,16 +2144,17 @@ class TestMistralToolChoice:
     def test_enum_tool_choice_is_mapped(self, local_model_cost_map: None, tool_choice: str, expected: str) -> None:
         assert self._request_body(tool_choice)["tool_choice"] == expected
 
-    @pytest.mark.parametrize(
-        "tool_choice",
-        [
-            {"type": "function", "function": {}},
-            {"type": "function", "function": {"name": ""}},
-            {"type": "function", "function": {"name": 123}},
-            {"type": "function"},
-        ],
-    )
-    def test_function_objects_without_a_usable_name_are_left_out(
-        self, local_model_cost_map: None, tool_choice: Mapping[str, object]
+    @pytest.mark.parametrize("tool_choice", UNUSABLE_TOOL_CHOICES)
+    def test_unusable_tool_choice_is_rejected_without_drop_params(
+        self, local_model_cost_map: None, tool_choice: str | Mapping[str, object]
     ) -> None:
-        assert "tool_choice" not in self._request_body(tool_choice)
+        import litellm
+
+        with pytest.raises(litellm.UnsupportedParamsError, match="tool_choice"):
+            self._request_body(tool_choice)
+
+    @pytest.mark.parametrize("tool_choice", UNUSABLE_TOOL_CHOICES)
+    def test_unusable_tool_choice_is_dropped_with_drop_params(
+        self, local_model_cost_map: None, tool_choice: str | Mapping[str, object]
+    ) -> None:
+        assert "tool_choice" not in self._request_body(tool_choice, drop_params=True)
