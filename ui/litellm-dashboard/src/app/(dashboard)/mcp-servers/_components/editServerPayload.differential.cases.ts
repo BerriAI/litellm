@@ -87,6 +87,7 @@ const AUTH_TYPES = [
   "oauth2_token_exchange",
   "oauth2_id_jag",
   "aws_sigv4",
+  "secret_headers",
   "true_passthrough",
   "oauth_delegate",
 ] as const;

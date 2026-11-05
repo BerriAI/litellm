@@ -358,6 +358,32 @@ describe("buildEditServerPayload wire contract", () => {
   );
 });
 
+describe("buildEditServerPayload secret headers", () => {
+  const rows = [{ header: "DD-API-KEY", value: "rotated-secret" }];
+  const payloadOf = (values: EditServerFormValues) => {
+    const result = buildEditServerPayload({ ...EDIT_FORM_VALUES, auth_type: "secret_headers", ...values }, baseUi);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
+    return result.payload;
+  };
+
+  it("replaces the stored headers when rows are entered", () => {
+    const payload = payloadOf({ secret_headers: rows });
+    expect(payload.credentials).toEqual({ headers: { "DD-API-KEY": "rotated-secret" } });
+    expect(payload).not.toHaveProperty("secret_headers");
+  });
+
+  it("sends no credentials, so the stored headers are kept, when no rows are entered", () => {
+    expect(payloadOf({ secret_headers: [] })).not.toHaveProperty("credentials");
+  });
+
+  it("ignores rows once the server is switched to another auth type", () => {
+    const payload = payloadOf({ auth_type: "none", secret_headers: rows });
+    expect(payload).not.toHaveProperty("credentials");
+    expect(payload).not.toHaveProperty("secret_headers");
+  });
+});
+
 void ADMIN_CONFIG_CREDENTIAL_KEYS;
 void AUTH_TYPE;
 void AUTH_TYPES_REQUIRING_CREDENTIALS;

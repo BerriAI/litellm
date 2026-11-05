@@ -11776,6 +11776,16 @@
         "placeholder": "litellm-prod (optional, auto-generated if blank)"
       }
     },
+    "secretHeadersFields": {
+      "intro": "Sent with every request to this MCP server. Values are stored encrypted and are not shown again after you save.",
+      "editIntro": "Header names and values are not shown after saving. Add headers here to replace the stored set, or leave this empty to keep it.",
+      "headerNameRequired": "Header name is required",
+      "headerNamePlaceholder": "Header name (e.g., DD-API-KEY)",
+      "headerValueRequired": "Header value is required",
+      "headerValuePlaceholder": "Header value",
+      "remove": "Remove header",
+      "add": "Add Header"
+    },
     "passthroughAuthorizeSection": {
       "description": "Callers bring their own upstream token for this auth type, so LiteLLM never stores tokens. To preview tools and configure the tool allowlist, authorize against the upstream here: the token stays in this browser session only and is never saved to LiteLLM. An OAuth app configured below IS saved with the server, so internal users who authorize from the Tools page go through it.",
       "appMayNotMatchUpstream": "You changed the upstream URL or endpoints; the OAuth app entered here was registered for the previous upstream and may not be valid. Update the client ID, or clear it to use dynamic client registration.",

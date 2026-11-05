@@ -21,7 +21,7 @@ import {
   MCPServerCostInfo,
   TRANSPORT,
   TRANSPORT_ITEMS,
-  AUTH_TYPE_ITEMS,
+  authTypeItemsFor,
   getMcpOAuthMode,
   MCP_OAUTH2_FLOW_M2M,
   isClientForwardedTokenMode,
@@ -40,6 +40,7 @@ import {
 import { DUPLICATE_IDENTIFIER_MESSAGE_KEY, findDuplicateMcpServer, mcpSubmitErrorReason } from "./duplicateServerCheck";
 import { readCreateUiSnapshot, writeCreateUiSnapshot } from "./createOAuthUiState";
 import AwsSigV4Fields from "./AwsSigV4Fields";
+import SecretHeadersFields from "./SecretHeadersFields";
 import OpenApiByokFields from "./OpenApiByokFields";
 import OAuthFormFields from "./OAuthFormFields";
 import TruePassthroughWarning from "./TruePassthroughWarning";
@@ -177,6 +178,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
   const isIdJagAuthType = authType === AUTH_TYPE.OAUTH2_ID_JAG;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
+  const isSecretHeadersAuthType = authType === AUTH_TYPE.SECRET_HEADERS;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
   const persistCreateUiState = () => {
@@ -879,12 +881,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                           }}
                         >
                           {(control) => (
-                            <Select {...selectControl<string>(control)} items={AUTH_TYPE_ITEMS}>
+                            <Select {...selectControl<string>(control)} items={authTypeItemsFor(transportType)}>
                               <SelectTrigger {...selectTriggerControl(control)} className="w-full rounded-lg">
                                 <SelectValue placeholder={t("mcpServers.createMcpServer.auth.typePlaceholder")} />
                               </SelectTrigger>
                               <SelectContent>
-                                {AUTH_TYPE_ITEMS.map((item) => (
+                                {authTypeItemsFor(transportType).map((item) => (
                                   <SelectItem key={item.value} value={item.value}>
                                     {item.label}
                                   </SelectItem>
@@ -957,6 +959,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   )}
 
                   {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && <AwsSigV4Fields />}
+
+                  {transportType !== "stdio" &&
+                    transportType !== "" &&
+                    transportType !== TRANSPORT.OPENAPI &&
+                    isSecretHeadersAuthType && <SecretHeadersFields />}
 
                   {/* Stdio Configuration - only show for stdio transport */}
                   {transportType === "stdio" && !stdioEnabled && <StdioDisabledBanner />}

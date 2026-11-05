@@ -24,6 +24,7 @@ export const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
   AUTH_TYPE.OAUTH2_ID_JAG,
   AUTH_TYPE.AWS_SIGV4,
+  AUTH_TYPE.SECRET_HEADERS,
   AUTH_TYPE.TRUE_PASSTHROUGH,
   AUTH_TYPE.OAUTH_DELEGATE,
 ];
@@ -73,6 +74,15 @@ export const reduceStaticHeaders = (list: unknown): Record<string, string> => {
     if (header) acc[header] = (entry?.value ?? "").trim();
     return acc;
   }, {});
+};
+
+export const withSecretHeaders = (
+  credentials: Readonly<Record<string, unknown>> | undefined,
+  authType: string | undefined,
+  secretHeadersList: unknown,
+): Readonly<Record<string, unknown>> | undefined => {
+  const headers = authType === AUTH_TYPE.SECRET_HEADERS ? reduceStaticHeaders(secretHeadersList) : {};
+  return Object.keys(headers).length > 0 ? { ...credentials, headers } : credentials;
 };
 
 // Accepts both the full `{"mcpServers": {"name": {...}}}` shape a user copies out of a client config
@@ -137,6 +147,7 @@ export const buildCreateServerPayload = (
 
   const {
     static_headers: staticHeadersList,
+    secret_headers: secretHeadersList,
     env_vars: envVarsList,
     stdio_config: rawStdioConfig,
     credentials: credentialValues,
@@ -172,7 +183,7 @@ export const buildCreateServerPayload = (
   const transport = restValues.transport === TRANSPORT.OPENAPI ? "http" : restValues.transport;
   const authType = restValues.auth_type as string | undefined;
 
-  const credentialsPayload = filterCredentials(credentialValues);
+  const credentialsPayload = withSecretHeaders(filterCredentials(credentialValues), authType, secretHeadersList);
   const includeCredentials = authType !== undefined && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(authType);
   // Client-forwarded rows persist ONLY the declared app; strip any token material that lingered in
   // the form (e.g. from a prior oauth2 authorize on the same session) so it can never reach the row.
