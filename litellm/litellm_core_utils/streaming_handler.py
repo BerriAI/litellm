@@ -2562,6 +2562,7 @@ class CustomStreamWrapper:
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
+            self._record_partial_usage_for_failure()
             self._outcome_logged = True
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
             self._release()

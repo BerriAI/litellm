@@ -9659,7 +9659,7 @@ class _StreamOutcomeRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.successes: tuple[_LoggedStreamSuccess, ...] = ()
-        self.failures: tuple[str, ...] = ()
+        self.failures: tuple[_LoggedStreamOutcome, ...] = ()
         self._recording: Final = threading.Lock()
         self.logged: Final = threading.Event()
 
@@ -9672,9 +9672,10 @@ class _StreamOutcomeRecorder(CustomLogger):
             self.successes = (*self.successes, success)
         self.logged.set()
 
-    def _record_failure(self, mode: str) -> None:
+    def _record_failure(self, kwargs: Mapping[str, object]) -> None:
+        failure: Final = TypeAdapter(_LoggedStreamOutcome).validate_python(kwargs["standard_logging_object"])
         with self._recording:
-            self.failures = (*self.failures, mode)
+            self.failures = (*self.failures, failure)
         self.logged.set()
 
     def log_success_event(
@@ -9690,12 +9691,12 @@ class _StreamOutcomeRecorder(CustomLogger):
     def log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        self._record_failure("sync")
+        self._record_failure(kwargs)
 
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        self._record_failure("async")
+        self._record_failure(kwargs)
 
     async def settled(self) -> None:
         assert await asyncio.to_thread(self.logged.wait, 5), "no success or failure was logged"
@@ -9854,7 +9855,7 @@ async def test_stream_read_to_its_end_then_closed_logs_the_provider_usage_once(
         pytest.param(_cut_stream_content_sse(_CUT_STREAM_DELTAS), id="body_ended_before_finish_reason"),
     ],
 )
-async def test_stream_that_broke_mid_flight_logs_no_success_when_closed(
+async def test_stream_that_broke_mid_flight_logs_only_a_failure_carrying_the_streamed_part(
     sync_mode: bool,
     broken_stream: str | _ConnectionResetMidStream,
     stream_outcomes: _StreamOutcomeRecorder,
@@ -9876,6 +9877,14 @@ async def test_stream_that_broke_mid_flight_logs_no_success_when_closed(
 
     assert stream_outcomes.successes == ()
     assert len(stream_outcomes.failures) >= 1
+    streamed_usage: Final = (
+        litellm.token_counter(model=_CUT_STREAM_MODEL, messages=[{"role": "user", "content": _CUT_STREAM_PROMPT}]),
+        litellm.token_counter(model=_CUT_STREAM_MODEL, text="".join(_CUT_STREAM_DELTAS), count_response_tokens=True),
+    )
+    assert {(failure["prompt_tokens"], failure["completion_tokens"]) for failure in stream_outcomes.failures} == {
+        streamed_usage
+    }
+    assert min(failure["response_cost"] for failure in stream_outcomes.failures) > 0
 
 
 @pytest.mark.asyncio
