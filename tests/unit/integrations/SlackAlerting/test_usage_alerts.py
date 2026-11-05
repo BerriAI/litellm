@@ -7,6 +7,7 @@ import pytest
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.usage_alerts import UsageAlertDelivery, activity_url, incident_message
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.proxy.issues import Issue, IssueCohort, IssueDelivery, IssuePendingDelivery
 from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertRule
 
 _NOW: Final = datetime(2026, 10, 20, tzinfo=timezone.utc)
@@ -81,5 +82,53 @@ async def test_slack_ack_requires_successful_http_response(status: int, monkeypa
                 await delivery.send(_ALERT, _RULE, "slack")
         assert len(requests) == 1
         assert b"https://gateway.example.com/ui/api-keys?key=reporting-key&detail_tab=activity" in requests[0].content
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_issue_delivery_links_to_investigation_and_preserves_the_bound_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    requests: Final[list[httpx.Request]] = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200)
+
+    issue: Final = Issue(
+        id="issue-example",
+        cohort_key="cohort-example",
+        kind="performance",
+        family="traffic",
+        title="Traffic increased",
+        cohort=IssueCohort(scope_type="key", scope_id="reporting-key"),
+        observed_on=_ALERT.day,
+        observed_at=_NOW,
+        range_start=_ALERT.baseline_start,
+        range_end=_ALERT.day,
+        grouping_reason="same_resource",
+        status="open",
+        first_seen=_NOW,
+        last_seen=_NOW,
+        updated_at=_NOW,
+    )
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(transport))
+    slack: Final = SlackAlerting(
+        alerting=["slack"], default_webhook_url="https://hooks.example.com/test", async_http_handler=handler
+    )
+    pending: Final = IssuePendingDelivery(
+        issue=issue,
+        rule=_RULE,
+        alert=_ALERT,
+        delivery=IssueDelivery(id="delivery-example", issue_id=issue.id, channel="slack"),
+    )
+    try:
+        assert await UsageAlertDelivery(slack).send_issue(pending)
+        assert len(requests) == 1
+        assert b"https://gateway.example.com/ui/alerts?issue=issue-example" in requests[0].content
+        assert b"https://gateway.example.com/ui/api-keys?key=reporting-key&detail_tab=activity" in requests[0].content
+        assert b"1,000.00; baseline 200.00" in requests[0].content
     finally:
         await handler.close()

@@ -7,8 +7,8 @@ import pytest
 from litellm.proxy.spend_tracking.daily_usage_alerts import DailyComparison, compare_daily_usage
 from litellm.proxy.spend_tracking.usage_alert_job import completed_day
 from litellm.repositories.usage_alert_metrics import DailyAlertMetrics
-from litellm.types.proxy.usage_alert_defaults import default_usage_rules
-from litellm.types.proxy.usage_alerts import UsageAlertRuleInput
+from litellm.types.proxy.usage_alert_defaults import default_usage_rule_id, default_usage_rules
+from litellm.types.proxy.usage_alerts import UsageAlertRule, UsageAlertRuleInput
 
 _DAY: Final = date(2026, 10, 20)
 
@@ -40,18 +40,14 @@ def test_missing_target_is_zero_for_counts_but_never_zero_latency() -> None:
     assert compare_daily_usage(rule.model_copy(update={"metric": "latency"}), history, _DAY) is None
 
 
-def test_low_volume_is_insufficient_and_recorded_zero_baseline_uses_absolute_floor() -> None:
+def test_low_volume_and_recorded_zero_spend_do_not_establish_a_multiplier_baseline() -> None:
     rule: Final = UsageAlertRuleInput(name="spike", scope_type="key", metric="spend", direction="increase")
     history: Final = tuple(_row(_DAY - timedelta(days=days), requests=10, spend=0) for days in (1, 2, 3))
     assert compare_daily_usage(rule, (*history, _row(_DAY, spend=100)), _DAY) is None
     enough_requests: Final = tuple(replace(row, requests=200) for row in history)
-    assert compare_daily_usage(rule, (*enough_requests, _row(_DAY, spend=100)), _DAY) == DailyComparison(
-        3, 100, 0, 0, True
-    )
+    assert compare_daily_usage(rule, (*enough_requests, _row(_DAY, spend=100)), _DAY) is None
     floor: Final = rule.model_copy(update={"min_value": 100})
-    assert compare_daily_usage(floor, (*enough_requests, _row(_DAY, spend=100)), _DAY) == DailyComparison(
-        3, 100, 0, 100, True
-    )
+    assert compare_daily_usage(floor, (*enough_requests, _row(_DAY, spend=100)), _DAY) is None
 
 
 def test_absolute_floor_suppresses_small_changes() -> None:
@@ -243,9 +239,7 @@ def test_error_rate_default_requires_two_percentage_points_as_well_as_the_multip
     rule: Final = next(
         rule for rule in default_usage_rules() if rule.scope_type == "key" and rule.metric == "error_rate"
     )
-    history: Final = tuple(
-        replace(_row(_DAY - timedelta(days=day), requests=1000), errors=5) for day in (1, 2, 3)
-    )
+    history: Final = tuple(replace(_row(_DAY - timedelta(days=day), requests=1000), errors=5) for day in (1, 2, 3))
     current: Final = replace(_row(_DAY, requests=1000), errors=errors)
     assert compare_daily_usage(rule, (*history, current), _DAY) == DailyComparison(3, errors / 10, 0.5, 2.5, breached)
 
@@ -264,15 +258,17 @@ def test_traffic_drop_needs_a_full_recorded_week_and_an_eighty_percent_decline()
     )
     history: Final = tuple(_row(_DAY - timedelta(days=day), requests=500) for day in range(1, 8))
     assert compare_daily_usage(rule, history[:-1], _DAY) is None
-    assert compare_daily_usage(rule, (*history, _row(_DAY, requests=101)), _DAY) == DailyComparison(7, 101, 500, 100, False)
-    assert compare_daily_usage(rule, (*history, _row(_DAY, requests=100)), _DAY) == DailyComparison(7, 100, 500, 100, True)
+    assert compare_daily_usage(rule, (*history, _row(_DAY, requests=101)), _DAY) == DailyComparison(
+        7, 101, 500, 100, False
+    )
+    assert compare_daily_usage(rule, (*history, _row(_DAY, requests=100)), _DAY) == DailyComparison(
+        7, 100, 500, 100, True
+    )
 
 
 def test_latency_default_requires_a_material_change_and_enough_timed_requests() -> None:
     rule: Final = next(rule for rule in default_usage_rules() if rule.scope_type == "key" and rule.metric == "latency")
-    history: Final = tuple(
-        _row(_DAY - timedelta(days=day), requests=500, ms=10_000, timed=100) for day in (1, 2, 3)
-    )
+    history: Final = tuple(_row(_DAY - timedelta(days=day), requests=500, ms=10_000, timed=100) for day in (1, 2, 3))
     assert compare_daily_usage(rule, (*history, _row(_DAY, ms=40_000, timed=100)), _DAY) == DailyComparison(
         3, 400, 100, 600, False
     )
@@ -280,3 +276,68 @@ def test_latency_default_requires_a_material_change_and_enough_timed_requests() 
         3, 600, 100, 600, True
     )
     assert compare_daily_usage(rule, (*history, _row(_DAY, ms=60_000, timed=99)), _DAY) is None
+
+
+@pytest.mark.parametrize("metric", ["spend", "requests", "latency", "errors"])
+def test_multiplier_alerts_need_a_positive_established_baseline(metric: str) -> None:
+    rule: Final = UsageAlertRuleInput.model_validate(
+        {"name": "baseline", "scope_type": "key", "metric": metric, "direction": "increase", "min_requests": 0}
+    )
+    current: Final = replace(_row(_DAY, requests=2000, spend=500), errors=100)
+    assert compare_daily_usage(rule, (current,), _DAY) is None
+    empty: Final = tuple(
+        replace(_row(_DAY - timedelta(days=day), requests=0, spend=0, ms=0, timed=0), errors=0) for day in (1, 2, 3)
+    )
+    assert compare_daily_usage(rule, (*empty, current), _DAY) is None
+
+
+def test_established_healthy_traffic_can_alert_on_new_failures_but_a_new_key_cannot() -> None:
+    rule: Final = next(
+        rule for rule in default_usage_rules() if rule.scope_type == "key" and rule.metric == "error_rate"
+    )
+    history: Final = tuple(replace(_row(_DAY - timedelta(days=day), requests=500), errors=0) for day in (1, 2, 3))
+    current: Final = replace(_row(_DAY, requests=500), errors=10)
+    assert compare_daily_usage(rule, (current,), _DAY) is None
+    assert compare_daily_usage(rule, (*history[:2], current), _DAY) is None
+    assert compare_daily_usage(rule, (*history, current), _DAY) == DailyComparison(3, 2, 0, 2, True)
+    relaxed: Final = rule.model_copy(update={"min_requests": 0, "min_history_days": 1})
+    assert compare_daily_usage(relaxed, (*history[:2], current), _DAY) is None
+    assert compare_daily_usage(relaxed, (*history, replace(current, requests=499)), _DAY) is None
+
+
+def test_default_traffic_drop_does_not_treat_a_normal_quiet_weekend_as_an_outage() -> None:
+    definition: Final = next(
+        rule
+        for rule in default_usage_rules()
+        if (rule.scope_type, rule.metric, rule.direction) == ("key", "requests", "decrease")
+    )
+    rule: Final = UsageAlertRule.model_validate(
+        {
+            **definition.model_dump(),
+            "id": default_usage_rule_id("key", "requests", "decrease"),
+            "created_at": "2026-10-01T00:00:00Z",
+            "updated_at": "2026-10-01T00:00:00Z",
+            "created_by": None,
+        }
+    )
+    busy: Final = tuple(_row(_DAY - timedelta(days=day), requests=1000) for day in range(1, 7))
+    history: Final = (*busy, _row(_DAY - timedelta(days=7), requests=1))
+    current: Final = _row(_DAY, requests=1)
+    assert compare_daily_usage(rule, (*history, current), _DAY) is None
+    custom: Final = rule.model_copy(update={"id": "custom-policy"})
+    custom_result: Final = compare_daily_usage(custom, (*history, current), _DAY)
+    assert custom_result is not None and custom_result.breached
+
+
+def test_error_rate_drop_requires_enough_current_requests() -> None:
+    rule: Final = UsageAlertRuleInput(
+        name="Reliability",
+        scope_type="key",
+        metric="error_rate",
+        direction="decrease",
+        min_requests=500,
+    )
+    history: Final = tuple(replace(_row(_DAY - timedelta(days=day), requests=1000), errors=100) for day in range(1, 8))
+    assert compare_daily_usage(rule, (*history, replace(_row(_DAY, requests=1), errors=0)), _DAY) is None
+    result: Final = compare_daily_usage(rule, (*history, replace(_row(_DAY, requests=500), errors=0)), _DAY)
+    assert result is not None and result.breached

@@ -16,6 +16,9 @@ from uuid import uuid4
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.SlackAlerting.usage_alerts import UsageAlertDelivery, configured_destinations
 from litellm.proxy.spend_tracking.daily_usage_alerts import compare_daily_usage
+from litellm.proxy.spend_tracking.performance_issues import PerformanceIssueProjector
+from litellm.repositories.issues import IssuesRepository
+from litellm.repositories.provider_latency import ProviderLatencyRepository
 from litellm.repositories.usage_alert_health import UsageAlertHealthRepository
 from litellm.repositories.usage_alert_metrics import DailyAlertMetrics, MetricsDatabase, UsageAlertMetricsRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
@@ -79,16 +82,14 @@ def _observations(
             continue
         if rule.scope_id is not None and rule.scope_id != entity:
             continue
-        comparison: Final = compare_daily_usage(rule, tuple(group), target)
-        if comparison is None:
+        if (comparison := compare_daily_usage(rule, tuple(group), target)) is None:
             continue
         evaluated = True
-        identity: Final = None if rule.scope_type == "deployment" else entity
-        if not comparison.breached and identity not in active:
+        if not comparison.breached and (None if rule.scope_type == "deployment" else entity) not in active:
             continue
         changed.append(
             UsageAlertObservation(
-                entity_id=identity,
+                entity_id=None if rule.scope_type == "deployment" else entity,
                 baseline_sample_days=comparison.baseline_sample_days,
                 day=target,
                 observed=comparison.observed,
@@ -125,6 +126,7 @@ class UsageAlertJob:
         defaults: tuple[UsageAlertRuleInput, ...] | None = None,
         *,
         deprecation_projection: Callable[[datetime], Awaitable[None]] | None = None,
+        performance_projection: PerformanceIssueProjector | None = None,
     ) -> None:
         self._store = store
         self._metrics = metrics
@@ -133,6 +135,7 @@ class UsageAlertJob:
         self._defaults = default_usage_rules() if defaults is None else defaults
         self._defaults_registered = False
         self._deprecation_projection = deprecation_projection
+        self._performance_projection = performance_projection
 
     @classmethod
     def from_prisma(
@@ -143,11 +146,13 @@ class UsageAlertJob:
         deprecation_projection: Callable[[datetime], Awaitable[None]] | None = None,
     ) -> "UsageAlertJob":
         database: Final = cast(MetricsDatabase, prisma.writer_db)  # cast-ok: generated Prisma delegate
+        metrics: Final = UsageAlertMetricsRepository(database)
+        delivery: Final = UsageAlertDelivery(slack)
         return cls(
             UsageAlertsRepository.from_prisma(prisma),
-            UsageAlertMetricsRepository(database),
+            metrics,
             UsageAlertHealthRepository(database),
-            UsageAlertDelivery(slack),
+            delivery,
             default_usage_rules(
                 ("slack",)
                 if "slack" in configured_destinations(slack) and AlertType.usage_alerts in slack.alert_types
@@ -155,6 +160,12 @@ class UsageAlertJob:
                 legacy_user_spend_alerts=AlertType.user_spend_anomalies in slack.alert_types,
             ),
             deprecation_projection=deprecation_projection,
+            performance_projection=PerformanceIssueProjector(
+                IssuesRepository.from_prisma(prisma),
+                metrics,
+                ProviderLatencyRepository(database),
+                delivery,
+            ),
         )
 
     async def run(self, now: datetime | None = None) -> None:
@@ -197,7 +208,12 @@ class UsageAlertJob:
         for scoped in (tuple(rule for rule in due if rule.scope_type == scope) for scope in USAGE_ALERT_SCOPES):
             if scoped:
                 await self._scope(scoped, target, rules)
-        await self._notify()
+        if self._performance_projection is not None:
+            for offset in range(0, len(due), 500):
+                complete.update(await self._store.completed_rule_ids(due[offset : offset + 500], target))
+            await self._performance_projection.run(now, target, rules, ready=len(complete) == len(rules))
+        else:
+            await self._notify()
         await self._store.prune()
 
     async def _scope(

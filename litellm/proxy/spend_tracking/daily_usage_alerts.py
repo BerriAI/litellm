@@ -3,9 +3,12 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
+from itertools import groupby
 from typing import Final, Literal, Protocol
 
 from litellm.repositories.usage_alert_metrics import DailyAlertMetrics
+from litellm.types.proxy.usage_alert_defaults import is_default_usage_rule
+from litellm.types.proxy.usage_alerts import UsageAlertRule
 
 
 class ComparisonRule(Protocol):
@@ -68,7 +71,18 @@ def compare_daily_usage(
     current_requests: Final = sum(row.requests for row in current)
     if baseline_requests < rule.min_requests:
         return None
-    if rule.direction == "increase" and current_requests < rule.min_requests:
+    if (rule.direction == "increase" or rule.metric == "error_rate") and current_requests < rule.min_requests:
+        return None
+    if (
+        rule.metric == "requests"
+        and rule.direction == "decrease"
+        and isinstance(rule, UsageAlertRule)
+        and is_default_usage_rule(rule)
+        and any(
+            sum(row.requests for row in group) < rule.min_requests
+            for _, group in groupby(sorted(history, key=lambda row: row.day), lambda row: row.day)
+        )
+    ):
         return None
     if rule.metric == "latency":
         baseline_timed: Final = sum(row.timed_requests for row in history) / sample_days
@@ -79,7 +93,9 @@ def compare_daily_usage(
     if baseline is None or baseline < 0 or observed is None:
         return None
     if baseline == 0:
-        if rule.direction == "decrease":
+        if rule.metric != "error_rate" or rule.direction == "decrease":
+            return None
+        if sample_days < 3 or baseline_requests < 500 or current_requests < 500:
             return None
         return DailyComparison(sample_days, observed, 0, rule.min_value, observed > 0 and observed >= rule.min_value)
     threshold: Final = (

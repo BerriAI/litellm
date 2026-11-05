@@ -164,6 +164,7 @@ def _observation_payload(rule: UsageAlertRule, item: UsageAlertObservation, now:
                     rule.metric,
                     rule.direction,
                     item.day.isoformat(),
+                    rule.updated_at.isoformat(),
                 ]
             ),
         )
@@ -696,7 +697,8 @@ class UsageAlertsRepository:
                 """
             WITH input AS (SELECT * FROM jsonb_to_recordset($2::jsonb) AS x(scope_key text, breached boolean, day text, record jsonb)),
             prior AS (
-                SELECT x.*,p.id AS prior_id,p.evaluation_day,p.breached AS prior_breached,p.record AS prior_record
+                SELECT x.*,p.id AS prior_id,p.evaluation_day,p.evaluation_revision AS prior_revision,
+                    p.breached AS prior_breached,p.record AS prior_record
                 FROM input x LEFT JOIN LATERAL (
                     SELECT * FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 AND scope_key=x.scope_key
                       AND scope_type=x.record->>'scope_type' AND scope_id IS NOT DISTINCT FROM x.record->>'scope_id'
@@ -706,18 +708,21 @@ class UsageAlertsRepository:
                 WHERE EXISTS (SELECT 1 FROM "LiteLLM_UsageAlertRule" WHERE id=$1 AND enabled AND NOT deleted AND (record->>'updated_at')::timestamptz=$3::timestamptz)
             ), updated AS (
                 UPDATE "LiteLLM_UsageAlertIncident" i SET
-                    evaluation_day=p.day, breached=p.breached,
+                    evaluation_day=p.day, evaluation_revision=$3::text, breached=p.breached,
                     record=i.record || jsonb_build_object(
                         'last_seen',CASE WHEN p.breached THEN p.record->'last_seen' ELSE i.record->'last_seen' END,
                         'status',CASE WHEN i.status='open' AND NOT p.breached THEN 'resolved' ELSE i.status END),
                     status=CASE WHEN i.status='open' AND NOT p.breached THEN 'resolved' ELSE i.status END,
                     updated_at=CURRENT_TIMESTAMP
-                FROM prior p WHERE i.id=p.prior_id AND p.evaluation_day<p.day AND (NOT p.breached OR p.prior_breached)
+                FROM prior p WHERE i.id=p.prior_id
+                    AND (p.evaluation_day<p.day OR (p.evaluation_day=p.day AND p.prior_revision IS DISTINCT FROM $3))
+                    AND (NOT p.breached OR p.prior_breached)
                 RETURNING i.record
             ), inserted AS (
-                INSERT INTO "LiteLLM_UsageAlertIncident" (id,rule_id,scope_key,scope_type,scope_id,metric,status,day,evaluation_day,breached,record)
-                SELECT p.record->>'id',$1,p.scope_key,p.record->>'scope_type',p.record->>'scope_id',p.record->>'metric','open',p.day,p.day,true,p.record
-                FROM prior p WHERE p.breached AND (p.prior_id IS NULL OR (NOT p.prior_breached AND p.evaluation_day<p.day))
+                INSERT INTO "LiteLLM_UsageAlertIncident" (id,rule_id,scope_key,scope_type,scope_id,metric,status,day,evaluation_day,evaluation_revision,breached,record)
+                SELECT p.record->>'id',$1,p.scope_key,p.record->>'scope_type',p.record->>'scope_id',p.record->>'metric','open',p.day,p.day,$3,true,p.record
+                FROM prior p WHERE p.breached AND (p.prior_id IS NULL OR (NOT p.prior_breached AND
+                    (p.evaluation_day<p.day OR (p.evaluation_day=p.day AND p.prior_revision IS DISTINCT FROM $3))))
                 ON CONFLICT(id) DO NOTHING RETURNING record
             ) SELECT record FROM updated UNION ALL SELECT record FROM inserted
             """,

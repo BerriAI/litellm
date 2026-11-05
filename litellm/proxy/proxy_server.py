@@ -11679,8 +11679,15 @@ class ProxyStartupEvent:
         )
 
         from litellm.proxy.spend_tracking.usage_alert_job import USAGE_ALERT_JOB_ID, UsageAlertJob
+        from litellm.proxy.spend_tracking.deprecation_issues import DeprecationIssueProjector
 
-        usage_alert_job: Final = UsageAlertJob.from_prisma(prisma_client, proxy_logging_obj.slack_alerting_instance)
+        usage_alert_job: Final = UsageAlertJob.from_prisma(
+            prisma_client,
+            proxy_logging_obj.slack_alerting_instance,
+            deprecation_projection=DeprecationIssueProjector.from_prisma(
+                prisma_client, lambda today: collect_model_deprecations(llm_router, today=today)
+            ).run,
+        )
         scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
             usage_alert_job.run,
             "interval",
