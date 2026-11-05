@@ -14,7 +14,7 @@ from litellm.types.proxy.model_deprecation import ModelDeprecationInfo, ModelDep
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_deprecation_usage_counts_distinct_resources_without_multiplying_requests(db: ManagementDatabase):
+async def test_deprecation_usage_counts_distinct_resources_without_multiplying_requests(db: ManagementDatabase) -> None:
     prefix = f"deprecation-issue-{uuid4()}"
     model = f"example/{prefix}"
     try:
@@ -70,7 +70,7 @@ async def test_deprecation_usage_counts_distinct_resources_without_multiplying_r
 @pytest.mark.asyncio(loop_scope="session")
 async def test_retirement_issue_http_state_survives_replay_and_reopens_only_for_new_usage(
     gateway: Gateway, db: ManagementDatabase
-):
+) -> None:
     prefix = f"retirement-lifecycle-{uuid4()}"
     name = f"example/{prefix}"
     now = datetime(2026, 11, 5, 10, tzinfo=timezone.utc)
@@ -80,7 +80,7 @@ async def test_retirement_issue_http_state_survives_replay_and_reopens_only_for_
     lease = UsageAlertsRepository.from_prisma(db.prisma)
     assert await lease.claim_job(prefix)
 
-    def schedule(today: date):
+    def schedule(today: date) -> ModelDeprecationResponse:
         info = ModelDeprecationInfo(
             model_name=prefix,
             litellm_model=name,
@@ -97,7 +97,7 @@ async def test_retirement_issue_http_state_survives_replay_and_reopens_only_for_
             checked_at=now,
         )
 
-    async def record(day: date, requests: int):
+    async def record(day: date, requests: int) -> None:
         await db.prisma.writer_db.query_raw(
             """INSERT INTO "LiteLLM_DailyUserSpend"
                 (id,user_id,date,api_key,model,api_requests,updated_at)

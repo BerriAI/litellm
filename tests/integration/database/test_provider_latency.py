@@ -48,6 +48,7 @@ async def test_provider_latency_requires_established_within_model_regressions(db
         assert (evidence.impact.keys, evidence.impact.users, evidence.impact.teams) == (2, 1, 2)
         assert (evidence.impact.measured_keys, evidence.impact.measured_models) == (2, 2)
         assert evidence.impact.requests == 400
+        assert not await repository.cohort_recovered(pairs, day, rule)
         assert await repository.source_members(pairs, day, rule, "key", keys) == frozenset(keys)
         models = tuple(pair.model for pair in pairs)
         assert await repository.source_members(pairs, day, rule, "model", models) == frozenset(models)
@@ -58,6 +59,7 @@ async def test_provider_latency_requires_established_within_model_regressions(db
             day.isoformat(),
         )
         assert await repository.latency_cohort(pairs, day, rule) is None
+        assert await repository.cohort_recovered(pairs, day, rule)
         await db.prisma.writer_db.query_raw(
             'UPDATE "LiteLLM_DailyUserSpend" SET total_response_time_ms=total_response_time_ms*5 '
             "WHERE api_key=$1 AND date=$2 RETURNING id",
@@ -82,6 +84,7 @@ async def test_provider_latency_requires_established_within_model_regressions(db
             'UPDATE "LiteLLM_DailyUserSpend" SET timed_requests=51 WHERE api_key=$1 RETURNING id', prefix + "-new-key"
         )
         assert await repository.latency_cohort(pairs, day, rule) is None
+        assert not await repository.cohort_recovered(pairs, day, rule)
         await db.prisma.writer_db.query_raw(
             'DELETE FROM "LiteLLM_DailyUserSpend" WHERE api_key=$1 RETURNING id', prefix + "-new-key"
         )
@@ -110,6 +113,7 @@ async def test_provider_latency_requires_established_within_model_regressions(db
             day.isoformat(),
         )
         assert await repository.latency_cohort(pairs, day, rule) is None
+        assert await repository.cohort_recovered(pairs, day, rule)
         await db.prisma.writer_db.query_raw(
             'UPDATE "LiteLLM_DailyUserSpend" SET total_response_time_ms=total_response_time_ms*5 '
             "WHERE custom_llm_provider=$1 AND date=$2 RETURNING id",
@@ -123,6 +127,7 @@ async def test_provider_latency_requires_established_within_model_regressions(db
             day.isoformat(),
         )
         assert await repository.latency_cohort(pairs, day, rule) is None
+        assert not await repository.cohort_recovered(pairs, day, rule)
         await db.prisma.writer_db.query_raw(
             'UPDATE "LiteLLM_DailyUserSpend" SET total_response_time_ms=timed_requests*'
             "(CASE WHEN model=$1||'-a' THEN 200 ELSE 1000 END) "
@@ -136,6 +141,7 @@ async def test_provider_latency_requires_established_within_model_regressions(db
             day.isoformat(),
         )
         assert await repository.latency_cohort(pairs, day, rule) is None
+        assert not await repository.cohort_recovered(pairs, day, rule)
     finally:
         for table in ('"LiteLLM_DailyUserSpend"', '"LiteLLM_DailyTeamSpend"'):
             await db.prisma.writer_db.query_raw(f"DELETE FROM {table} WHERE id LIKE $1 RETURNING id", prefix + "%")

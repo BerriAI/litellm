@@ -43,6 +43,10 @@ class _Member(BaseModel, frozen=True):
     entity_id: str
 
 
+class _Recovery(BaseModel, frozen=True):
+    recovered: bool
+
+
 _PAIRS: Final = TypeAdapter(tuple[IssueModelPair, ...])
 _COHORTS: Final = TypeAdapter(tuple[_CohortRow, ...])
 _MEMBERS: Final = TypeAdapter(tuple[_Member, ...])
@@ -81,9 +85,7 @@ WITH pairs AS (
     FROM current
 )
 """
-_COHORT: Final = (
-    _LATENCY
-    + """
+_MODEL_SCORES: Final = """
 , model_scores AS (
     SELECT provider,model,SUM(timed)::bigint AS total_timed,
            SUM(timed) FILTER(WHERE comparable)::bigint AS comparable_timed,
@@ -94,7 +96,17 @@ _COHORT: Final = (
     FROM scored GROUP BY provider,model
     HAVING COUNT(DISTINCT api_key) FILTER(WHERE degraded)>=2
        AND SUM(timed) FILTER(WHERE degraded) >= 0.8*SUM(timed)
-), selected AS MATERIALIZED (
+)
+"""
+_SHARED_THRESHOLD: Final = """
+HAVING COUNT(*)>=2 AND SUM(observed_ms)/SUM(comparable_timed) >=
+    GREATEST(SUM(expected_ms)/SUM(comparable_timed)*$7,SUM(expected_ms)/SUM(comparable_timed)+$8)
+"""
+_COHORT: Final = (
+    _LATENCY
+    + _MODEL_SCORES
+    + """
+, selected AS MATERIALIZED (
     SELECT s.* FROM scored s JOIN model_scores USING(provider,model)
 )
 SELECT jsonb_agg(jsonb_build_object('provider',provider,'model',model) ORDER BY provider,model) AS pairs,
@@ -111,10 +123,24 @@ SELECT jsonb_agg(jsonb_build_object('provider',provider,'model',model) ORDER BY 
        (SELECT COUNT(DISTINCT NULLIF(NULLIF(team_id,''),'litellm-dashboard'))::int
         FROM "LiteLLM_DailyTeamSpend" d JOIN model_scores s ON d.custom_llm_provider=s.provider AND d.model=s.model
         WHERE d.date=$2 AND api_requests>0) AS teams
-FROM model_scores HAVING COUNT(*)>=2
-    AND SUM(observed_ms)/SUM(comparable_timed) >=
-        GREATEST(SUM(expected_ms)/SUM(comparable_timed)*$7,SUM(expected_ms)/SUM(comparable_timed)+$8)
+FROM model_scores
 """
+    + _SHARED_THRESHOLD
+)
+_RECOVERY_QUERY: Final = (
+    _LATENCY
+    + _MODEL_SCORES
+    + """
+, covered AS (
+    SELECT provider,model FROM scored GROUP BY provider,model
+    HAVING COUNT(DISTINCT api_key) FILTER(WHERE comparable)>=2
+       AND SUM(timed) FILTER(WHERE comparable)>=0.8*SUM(timed)
+)
+SELECT (SELECT COUNT(*) FROM covered)=cardinality($4::text[]) AND NOT EXISTS (
+    SELECT 1 FROM model_scores
+"""
+    + _SHARED_THRESHOLD
+    + ") AS recovered"
 )
 
 
@@ -232,3 +258,10 @@ class ProviderLatencyRepository:
         )
         rows: Final = _MEMBERS.validate_python(await self._database.query_raw(query, *arguments))
         return frozenset(api_key_bucket(row.entity_id) if scope_type == "key" else row.entity_id for row in rows)
+
+    async def cohort_recovered(self, pairs: tuple[IssueModelPair, ...], day: date, rule: UsageAlertRuleInput) -> bool:
+        arguments: Final = _arguments(pairs, day, rule)
+        rows: Final = TypeAdapter(tuple[_Recovery, ...]).validate_python(
+            await self._database.query_raw(_RECOVERY_QUERY, *arguments)
+        )
+        return rows[0].recovered
