@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict
 from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Final
@@ -6,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from prisma.errors import PrismaError
 
 import litellm.proxy.management_endpoints.common_daily_activity as common_daily_activity_module
 from litellm.constants import USAGE_TOP_API_KEYS_DEFAULT
@@ -32,10 +34,65 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_E
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
+    KeyMetadata,
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
 )
 from litellm.types.repositories.daily_activity import GroupingSetsRow, KeyMetadataRow
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_failure", "user_failure", "empty"),
+    [(False, False, False), (True, False, False), (False, True, False), (True, True, False), (False, False, True)],
+)
+async def test_entity_metadata_outages_preserve_daily_spend_and_other_metadata(
+    key_failure: bool, user_failure: bool, empty: bool
+) -> None:
+    prisma: Final = MagicMock()
+    key: Final = SimpleNamespace(token="key", key_alias="Alias", team_id=None, user_id=None, metadata=None)
+    user: Final = SimpleNamespace(user_id="user", user_email="user@example.com", user_alias="User")
+    main_rows: Final = tuple(
+        asdict(_grouping_row(level, api_key=api_key, spend=2.0))
+        for level, api_key in ((127, None), (63, None), (31, "key"))
+    )
+    entity_rows: Final = tuple(
+        {**asdict(_grouping_row(63, api_key=api_key, spend=2.0)), "entity_id": "user", "api_key_rolled": rolled}
+        for rolled, api_key in ((1, None), (0, "key"))
+    )
+    prisma.db.query_raw = AsyncMock(side_effect=[main_rows, entity_rows])
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        side_effect=[[key], PrismaError("key metadata unavailable") if key_failure else ([] if empty else [key])]
+    )
+    prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_usertable.find_many = AsyncMock(
+        side_effect=PrismaError("user metadata unavailable") if user_failure else None,
+        return_value=[] if empty else [user],
+    )
+
+    result: Final = await get_daily_activity_aggregated(
+        prisma_client=prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        include_entity_breakdown=True,
+    )
+
+    day: Final = result.results[0]
+    entity: Final = day.breakdown.entities["user"]
+    assert result.metadata.total_spend == day.metrics.spend == entity.metrics.spend == 2.0
+    assert day.breakdown.api_keys["key"].metadata.key_alias == "Alias"
+    assert entity.metadata == (
+        {} if user_failure or empty else {"user_email": "user@example.com", "user_alias": "User"}
+    )
+    assert entity.api_key_breakdown["key"].metrics.spend == 2.0
+    assert entity.api_key_breakdown["key"].metadata == KeyMetadata(
+        key_alias=None if key_failure or empty else "Alias", key_exists=not (key_failure or empty)
+    )
 
 
 async def _run_aggregated_daily_activity(

@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Final, Literal, NoReturn, Protocol
 
 from fastapi import HTTPException, status
+from prisma.errors import PrismaError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm import constants
@@ -1117,13 +1118,32 @@ async def _user_entity_metadata(
     repository: DailyActivityRepository, entity_rows: Sequence[EntityRollupRow]
 ) -> Mapping[str, Mapping[str, object]]:
     user_ids: Final = frozenset(row.entity_id for row in entity_rows if row.entity_id)
-    users: Final = await repository.user_metadata(user_ids)
+    try:
+        users: Final = await repository.user_metadata(user_ids)
+    except PrismaError as exc:
+        verbose_proxy_logger.warning("Failed daily activity entity user metadata recovery: %s", exc)
+        return MappingProxyType({})
     return MappingProxyType(
         {
             user_id: MappingProxyType({"user_email": user.user_email, "user_alias": user.user_alias})
             for user_id, user in users.items()
         }
     )
+
+
+async def _entity_key_metadata(
+    repository: DailyActivityRepository, entity_rows: Sequence[EntityRollupRow]
+) -> Mapping[str, KeyMetadataRow]:
+    api_keys: Final = frozenset(
+        row.api_key for row in entity_rows if row.api_key and row.api_key != PTU_SENTINEL_API_KEY
+    )
+    if not api_keys:
+        return MappingProxyType({})
+    try:
+        return await repository.key_metadata(api_keys, spend_logs_window(frozenset(row.date for row in entity_rows)))
+    except PrismaError as exc:
+        verbose_proxy_logger.warning("Failed daily activity entity key metadata recovery: %s", exc)
+        return MappingProxyType({})
 
 
 async def get_daily_activity_aggregated(
@@ -1160,16 +1180,7 @@ async def get_daily_activity_aggregated(
         )
         if aggregated_rows.entity_rows:
             entity_records: Final = aggregated_rows.entity_rows
-            entity_api_keys: Final = frozenset(
-                row.api_key for row in entity_records if row.api_key and row.api_key != PTU_SENTINEL_API_KEY
-            )
-            entity_key_metadata: Final[Mapping[str, KeyMetadataRow]] = (
-                await repository.key_metadata(
-                    entity_api_keys, spend_logs_window(frozenset(row.date for row in entity_records))
-                )
-                if entity_api_keys
-                else MappingProxyType({})
-            )
+            entity_key_metadata: Final = await _entity_key_metadata(repository, entity_records)
             user_entity_metadata: Final[Mapping[str, Mapping[str, object]]] = (
                 await _user_entity_metadata(repository, entity_records)
                 if scope.table is DailyActivityTable.USER
