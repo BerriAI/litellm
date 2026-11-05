@@ -30,7 +30,7 @@ litellm_settings:
     budget_duration: 30d
 ```
 
-The example uses anonymous LDAP reads over TLS. For a service account, add `bind_dn: os.environ/LDAP_BIND_DN` and `bind_password: os.environ/LDAP_BIND_PASSWORD`. Credentials cannot be sent through an unencrypted LDAP connection. With `ldap://`, set `start_tls: true` for a service-account bind. LDAPS and StartTLS verify the server certificate, using the system trust store or the optional `ca_cert_path` CA bundle. Anonymous `ldap://` connections without StartTLS are also supported.
+The example uses anonymous LDAP reads over TLS. For a service account, add `bind_dn: os.environ/LDAP_BIND_DN` and `bind_password: os.environ/LDAP_BIND_PASSWORD`. Every enabled sync requires TLS, including anonymous reads and dry runs. Use `ldaps://` or set `start_tls: true` with `ldap://`. LDAPS and StartTLS verify the server certificate, using the system trust store or the optional `ca_cert_path` CA bundle.
 
 Start with `dry_run: true`, restart the proxy, and review the planned team creation and member additions/removals in its normal logs. Set `dry_run: false` and restart to apply changes. The first run starts shortly after startup and later runs follow `interval_minutes`. Logs also report matched and unmatched users and skipped groups. There is no separate sync UI or run-history table.
 

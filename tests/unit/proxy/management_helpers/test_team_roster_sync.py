@@ -28,6 +28,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     RosterTarget,
     TeamGone,
     sync_team_roster,
+    new_team_request_with_defaults,
 )
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
@@ -1034,3 +1035,24 @@ async def test_cancellation_after_commit_finishes_revoking_cached_team_keys(
         await sync
     assert token not in redis.entries
     assert await cache.async_get_cache(key=token) is None
+
+
+def test_team_defaults_preserve_fields_outside_sso_model_without_mutating_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import litellm
+
+    defaults: Final = {
+        "models": ["allowed-model"],
+        "max_budget": 12.0,
+        "default_team_member_models": ["member-model"],
+        "metadata": {"environment": "production"},
+    }
+    original: Final = copy.deepcopy(defaults)
+    monkeypatch.setattr(litellm, "default_team_params", defaults)
+    request: Final = new_team_request_with_defaults("new-team", "New team", (), {"managed_by": "scim"})
+    assert request.models == ["allowed-model"]
+    assert request.max_budget == 12.0
+    assert request.default_team_member_models == ["member-model"]
+    assert request.metadata == {"environment": "production", "managed_by": "scim"}
+    assert defaults == original

@@ -14,7 +14,6 @@ from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 _ITEMS: Final = TypeAdapter(Iterable[object])
 _STRINGS: Final = TypeAdapter(tuple[StrictStr, ...])
 _GROUP_CLASSES: Final = frozenset({"group", "groupofnames", "groupofuniquenames", "posixgroup"})
-_NO_SUCH_OBJECT: Final = 32
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +99,7 @@ class _LDAPLibrary(Protocol):
         password: str | None,
         authentication: str,
         auto_referrals: bool,
+        auto_range: bool,
         raise_exceptions: bool,
         receive_timeout: int,
         check_names: bool,
@@ -135,6 +135,7 @@ def open_ldap_connection(settings: LDAPSyncSettings) -> LDAPConnection:
         password=_secret(settings.bind_password.get_secret_value()) if settings.bind_password is not None else None,
         authentication="SIMPLE" if settings.bind_dn else "ANONYMOUS",
         auto_referrals=False,
+        auto_range=False,
         raise_exceptions=True,
         receive_timeout=settings.timeout_seconds,
         check_names=False,
@@ -183,6 +184,8 @@ def _checked_items(raw: object, stop: Event) -> Iterable[object]:
 def _resolve_member(
     connection: LDAPConnection, settings: LDAPSyncSettings, value: str, stop: Event
 ) -> str | DirectoryError:
+    from ldap3.core.exceptions import LDAPNoSuchObjectResult
+
     _check_cancelled(stop)
     usernames: Final = settings.member_attribute.lower() == "memberuid"
     try:
@@ -195,8 +198,8 @@ def _resolve_member(
             attributes=(settings.user_match_attribute, "objectClass"),
             time_limit=settings.timeout_seconds,
         )
-    except Exception:  # noqa: BLE001  # ldap3 raises noSuchObject for a deleted member DN
-        if usernames or connection.result.get("result") != _NO_SUCH_OBJECT:
+    except LDAPNoSuchObjectResult:
+        if usernames:
             raise
         return DirectoryError("LDAP member entry does not exist")
     if connection.result.get("result") != 0:

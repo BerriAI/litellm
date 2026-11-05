@@ -61,6 +61,6 @@ class LDAPSyncSettings(BaseModel):
             )
         if bool(self.bind_dn) != bool(self.bind_password):
             raise ValueError("bind_dn and bind_password must be configured together")
-        if self.bind_dn and urlsplit(self.server_url).scheme == "ldap" and not self.start_tls:
-            raise ValueError("Service-account binds require ldaps:// or start_tls: true")
+        if (self.enabled or self.bind_dn) and urlsplit(self.server_url).scheme == "ldap" and not self.start_tls:
+            raise ValueError("LDAP sync and service-account binds require TLS: use ldaps:// or start_tls: true")
         return self

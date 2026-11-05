@@ -64,7 +64,12 @@ def new_team_request_with_defaults(
     members_with_roles: Sequence[Member],
     metadata: Mapping[str, object] | None = None,
 ) -> NewTeamRequest:
-    default_params: Final = _TEAM_DEFAULTS.validate_python(litellm.default_team_params)
+    configured: Final = litellm.default_team_params
+    default_params: Final = (
+        _JSON_OBJECT.validate_python(configured)
+        if isinstance(configured, dict)
+        else _TEAM_DEFAULTS.validate_python(configured)
+    )
     defaults: Final = _JSON_OBJECT.validate_python(
         default_params.model_dump(exclude_none=True)
         if isinstance(default_params, DefaultTeamSSOParams)

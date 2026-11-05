@@ -4,7 +4,7 @@ from threading import Event
 from typing import Final
 
 import pytest
-from ldap3.core.exceptions import LDAPInsufficientAccessRightsResult, LDAPNoSuchObjectResult
+from ldap3.core.exceptions import LDAPInsufficientAccessRightsResult, LDAPNoSuchObjectResult, LDAPSocketReceiveError
 from pydantic import ValidationError
 
 from litellm.proxy.common_utils.ldap_directory import (
@@ -18,6 +18,7 @@ from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 SETTINGS: Final = LDAPSyncSettings(
     enabled=True,
     server_url="ldap://directory.example.org",
+    start_tls=True,
     group_search_base="ou=groups,dc=example,dc=org",
     group_filter="(cn=project-*)",
     user_search_base="ou=people,dc=example,dc=org",
@@ -46,7 +47,7 @@ class Connection:
         result_code: int = 0,
         tls_ok: bool = True,
         stop_after_search: Event | None = None,
-        raising: Mapping[str, tuple[int, Exception]] | None = None,
+        raising: Mapping[str, tuple[int | None, Exception]] | None = None,
     ) -> None:
         self.groups = groups
         self.users = users or {}
@@ -99,7 +100,8 @@ class Connection:
         self.searches.append((search_base, search_filter, search_scope))
         if search_base in self.raising:
             result_code, exception = self.raising[search_base]
-            self.result = {"result": result_code}
+            if result_code is not None:
+                self.result = {"result": result_code}
             raise exception
         self.response = self.users.get(search_base if search_scope == "BASE" else search_filter, ())
         self.result = {"result": self.result_code}
@@ -229,7 +231,7 @@ def test_disabled_configuration_needs_no_connection_details():
     [
         {"server_url": "https://example.org"},
         {"server_url": "ldap://user:password@example.org"},
-        {"bind_dn": "cn=admin", "bind_password": "password"},
+        {"bind_dn": "cn=admin", "bind_password": "password", "start_tls": False},
         {"group_id_attribute": "cn)(uid=*"},
         {"litellm_match_field": "user_role"},
         {"interval_minutes": 0},
@@ -307,3 +309,42 @@ def test_multiple_malformed_group_ids_do_not_block_healthy_groups(invalid_id: tu
     assert all(isinstance(item, DirectoryError) for item in result[:2])
     assert result[2] == DirectoryGroup("healthy", "healthy", ("alice@example.org",))
     assert connection.closed
+
+
+def test_connection_failure_after_deleted_member_aborts_snapshot_instead_of_reusing_old_result():
+    connection: Final = Connection(
+        [group("deleted", member=[ALICE]), group("unreadable", member=[BOB]), group("healthy", member=[])],
+        raising={
+            ALICE: (32, LDAPNoSuchObjectResult(result=32, description="noSuchObject")),
+            BOB: (None, LDAPSocketReceiveError("connection lost")),
+        },
+    )
+    assert read_directory(SETTINGS, connection) == DirectoryError("LDAP read failed (LDAPSocketReceiveError)")
+    assert connection.closed
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_anonymous_sync_rejects_unprotected_directory_responses(dry_run: bool):
+    with pytest.raises(ValidationError, match="TLS"):
+        LDAPSyncSettings.model_validate({**SETTINGS.model_dump(), "start_tls": False, "dry_run": dry_run})
+
+
+@pytest.mark.parametrize(
+    "url,start_tls", [("ldaps://directory.example.org", False), ("ldap://directory.example.org", True)]
+)
+def test_anonymous_sync_accepts_verified_encrypted_transport(url: str, start_tls: bool):
+    settings: Final = LDAPSyncSettings.model_validate(
+        {**SETTINGS.model_dump(), "server_url": url, "start_tls": start_tls}
+    )
+    client: Final = open_ldap_connection(settings)
+    assert client.server.tls.validate == ssl.CERT_REQUIRED
+    assert client.server.ssl or settings.start_tls
+
+
+def test_real_client_leaves_ranged_memberships_for_our_completeness_guard():
+    client: Final = open_ldap_connection(SETTINGS)
+    assert client.auto_range is False
+    connection: Final = Connection([group(**{"member;range=0-1499": [ALICE]})], {ALICE: [user("alice@example.org")]})
+    result: Final = read_directory(SETTINGS, connection)
+    assert isinstance(result, tuple) and isinstance(result[0], DirectoryError)
+    assert connection.searches == []
