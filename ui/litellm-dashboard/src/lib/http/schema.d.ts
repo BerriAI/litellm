@@ -27673,7 +27673,7 @@ export interface components {
             scan_raw_request?: boolean | null;
             /**
              * Scan Tool Descriptions As Text
-             * @description When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Guardrails that already send tools[] to their vendor don't need this and reject it.
+             * @description panw_prisma_airs and presidio only. When True, the guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Other guardrails ignore it; the ones that already send tools[] to their vendor don't need it.
              */
             scan_tool_descriptions_as_text?: boolean | null;
             /**
@@ -37798,7 +37798,7 @@ export interface components {
             scan_raw_request?: boolean | null;
             /**
              * Scan Tool Descriptions As Text
-             * @description When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Guardrails that already send tools[] to their vendor don't need this and reject it.
+             * @description panw_prisma_airs and presidio only. When True, the guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Other guardrails ignore it; the ones that already send tools[] to their vendor don't need it.
              */
             scan_tool_descriptions_as_text?: boolean | null;
             /**

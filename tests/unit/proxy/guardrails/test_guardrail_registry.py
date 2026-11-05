@@ -1,7 +1,7 @@
 import json
 from collections.abc import Iterable, Iterator, Mapping
 from typing import ClassVar, Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
