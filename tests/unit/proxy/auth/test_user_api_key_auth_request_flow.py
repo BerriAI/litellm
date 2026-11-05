@@ -747,6 +747,61 @@ async def _authenticate_through_custom_auth() -> UserAPIKeyAuth:
     )
 
 
+async def _authenticate_master_key(request_data: dict[str, object]) -> UserAPIKeyAuth:
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
+
+    request: Final = Request(scope={"type": "http", "headers": []})
+    request._url = URL(url="/chat/completions")
+    return await user_api_key_auth_builder(
+        request=request,
+        api_key="Bearer sk-master-key",
+        azure_api_key_header=None,
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        request_data=request_data,
+    )
+
+
+@pytest.mark.asyncio
+async def test_master_key_request_does_not_inherit_previous_requests_end_user_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    proxy_attrs: Final = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
+    for attr, val in proxy_attrs.items():
+        monkeypatch.setattr(_proxy_server_mod, attr, val, raising=False)
+    monkeypatch.setattr(_proxy_server_mod, "user_api_key_cache", UserApiKeyCache())
+    capped: Final = LiteLLM_EndUserTable(
+        user_id="eu-capped",
+        blocked=False,
+        litellm_budget_table=LiteLLM_BudgetTable(tpm_limit=5, rpm_limit=7),
+    )
+
+    async def end_user_object(end_user_id: str, **_: object) -> LiteLLM_EndUserTable | None:
+        return capped if end_user_id == "eu-capped" else None
+
+    with patch("litellm.proxy.auth.user_api_key_auth.get_end_user_object", side_effect=end_user_object):
+        capped_request: Final = await _authenticate_master_key({"user": "eu-capped"})
+        await asyncio.sleep(0.05)
+        next_request: Final = await _authenticate_master_key({})
+
+    assert (capped_request.end_user_id, capped_request.end_user_tpm_limit, capped_request.end_user_rpm_limit) == (
+        "eu-capped",
+        5,
+        7,
+    )
+    assert (next_request.end_user_id, next_request.end_user_tpm_limit, next_request.end_user_rpm_limit) == (
+        None,
+        None,
+        None,
+    )
+    assert next_request.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
 @pytest.mark.asyncio
 async def test_user_custom_auth_returning_one_shared_token_keeps_each_requests_end_user_apart(
     monkeypatch: pytest.MonkeyPatch,
@@ -5479,8 +5534,6 @@ async def _run_centralized_checks_for_end_user(
     finally:
         for attribute, value in originals.items():
             setattr(_proxy_server_mod, attribute, value)
-
-
 
 
 @pytest.mark.parametrize(

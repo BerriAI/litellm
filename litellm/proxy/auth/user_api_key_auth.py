@@ -30,7 +30,18 @@ from litellm._auth.credential import (
     select_api_key,
     select_websocket_api_key,
 )
-from litellm._auth.key import is_master_key
+from litellm._auth.decision import (
+    Allow,
+    AuthCore,
+    Defer,
+    Deny,
+    MasterKey,
+    NoMasterKey,
+    RequestFacts,
+    Settings,
+    UserAuthRoute,
+)
+from litellm._auth.python_core import PythonCore
 from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
@@ -77,6 +88,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     check_end_user_budget,
     common_checks,
     delete_cache_key_object,
+    get_default_end_user_budget,
     get_end_user_object,
     get_jwt_key_mapping_object,
     get_key_end_user_budget_id,
@@ -105,6 +117,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     virtual_key_max_budget_check,
     virtual_key_soft_budget_check,
 )
+from litellm.proxy.auth.auth_denial import denial_exception
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.auth_object_prefetch import (
@@ -2158,6 +2171,126 @@ def _custom_auth_token_for_this_request(response: object) -> UserAPIKeyAuth:
     return UserAPIKeyAuth.model_validate(response).model_copy()
 
 
+_AUTH_CORE: Final[AuthCore] = PythonCore()
+
+
+class _ResolvedEndUser(NamedTuple):
+    end_user_id: str | None
+    end_user_object: LiteLLM_EndUserTable | None
+    budget: LiteLLM_BudgetTable | None
+
+    @property
+    def params(self) -> dict[str, object]:
+        if not self.end_user_id:
+            return {}
+        region: Final = (
+            {} if self.end_user_object is None else {"allowed_model_region": self.end_user_object.allowed_model_region}
+        )
+        params: Final[dict[str, object]] = {"end_user_id": self.end_user_id, **region}
+        if self.budget is not None:
+            _apply_budget_limits_to_end_user_params(
+                end_user_params=params, budget_info=self.budget, end_user_id=self.end_user_id
+            )
+        return params
+
+
+async def _resolve_end_user(
+    request: Request,
+    request_data: dict[str, object],
+    token_end_user_id: str | None,
+    api_key: str,
+    key_is_resolved: bool,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+    route: str,
+) -> _ResolvedEndUser:
+    raw_end_user_id: Final = token_end_user_id or get_end_user_id_from_request_body(
+        request_data, safe_get_request_headers(request)
+    )
+    end_user_id: Final = await resolve_and_validate_end_user_id(
+        raw_end_user_id=raw_end_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+        route=route,
+    )
+    if prisma_client is not None:
+        await prefetch_identity_keys(
+            _identity_cache_keys(api_key, end_user_id=end_user_id, key_is_resolved=key_is_resolved),
+            user_api_key_cache=user_api_key_cache,
+        )
+    if not end_user_id:
+        return _ResolvedEndUser(end_user_id=end_user_id, end_user_object=None, budget=None)
+    try:
+        with tracer.trace("litellm.proxy.auth.get_end_user_object"):
+            end_user_object: Final = await get_end_user_object(
+                end_user_id=end_user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                route=route,
+            )
+        if end_user_object is not None:
+            return _ResolvedEndUser(
+                end_user_id=end_user_id, end_user_object=end_user_object, budget=end_user_object.litellm_budget_table
+            )
+        if litellm.max_end_user_budget_id is None:
+            return _ResolvedEndUser(end_user_id=end_user_id, end_user_object=None, budget=None)
+        default_budget: Final = await get_default_end_user_budget(
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+        )
+        return _ResolvedEndUser(end_user_id=end_user_id, end_user_object=None, budget=default_budget)
+    except litellm.BudgetExceededError:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
+        return _ResolvedEndUser(end_user_id=end_user_id, end_user_object=None, budget=None)
+
+
+async def _master_key_auth(
+    token: str,
+    end_user: _ResolvedEndUser,
+    admin_user_id: str,
+    parent_otel_span: Span | None,
+    route: str,
+    start_time: datetime,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> UserAPIKeyAuth:
+    # A stable alias replaces the raw master key so neither the key nor its hash reaches spend logs,
+    # metrics labels, audit trails or rate-limit buckets.
+    master_key_auth: Final = await _return_user_api_key_auth_obj(
+        user_obj=None,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
+        parent_otel_span=parent_otel_span,
+        valid_token_dict={**end_user.params, "user_id": admin_user_id},
+        route=route,
+        start_time=start_time,
+    )
+    asyncio.create_task(
+        cache_key_object(
+            hashed_token=hash_token(token),
+            user_api_key_obj=master_key_auth,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    )
+    with_end_user: Final = update_valid_token_with_end_user_params(
+        valid_token=master_key_auth, end_user_params=end_user.params
+    )
+    with_end_user.via_virtual_key = True
+    if end_user.end_user_object is not None:
+        with_end_user.end_user_object_permission = end_user.end_user_object.object_permission
+    return with_end_user
+
+
 async def user_api_key_auth_builder(
     request: Request,
     api_key: str,
@@ -2563,105 +2696,64 @@ async def user_api_key_auth_builder(
                 api_key = response
             elif isinstance(response, UserAPIKeyAuth):
                 return response
-        if master_key is None:
-            if isinstance(api_key, str):
-                return UserAPIKeyAuth(
-                    api_key=api_key,
-                    user_role=LitellmUserRoles.INTERNAL_USER,
-                    parent_otel_span=parent_otel_span,
-                )
-            else:
-                return UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.INTERNAL_USER,
-                    parent_otel_span=parent_otel_span,
-                )
-        elif api_key is None:  # only require api key if master key is set
-            raise ProxyException(
-                message="Authentication Error, No api key passed in.",
-                type=ProxyErrorTypes.auth_error,
-                param=None,
-                code=status.HTTP_401_UNAUTHORIZED,
+        if master_key is not None and not isinstance(master_key, str):
+            raise HTTPException(
+                status_code=500,
+                detail={f"Master key must be a valid string. Current type={type(master_key)}"},
             )
-        elif api_key == "":
-            # missing 'Bearer ' prefix
-            raise ProxyException(
-                message="Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix.",
-                type=ProxyErrorTypes.auth_error,
-                param=None,
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
+        match _AUTH_CORE.decide(
+            RequestFacts(route=route, token=api_key),
+            Settings(master_key=master_key, allow_user_auth=general_settings.get("allow_user_auth", False) is True),
+        ):
+            case Allow(grant=grant):
+                match grant:
+                    case NoMasterKey(token=token):
+                        return UserAPIKeyAuth(
+                            api_key=token,
+                            user_role=LitellmUserRoles.INTERNAL_USER,
+                            parent_otel_span=parent_otel_span,
+                        )
+                    case UserAuthRoute():
+                        return UserAPIKeyAuth()
+                    case MasterKey():
+                        return await _master_key_auth(
+                            token=api_key,
+                            end_user=await _resolve_end_user(
+                                request=request,
+                                request_data=request_data,
+                                token_end_user_id=valid_token.end_user_id if valid_token is not None else None,
+                                api_key=api_key,
+                                key_is_resolved=True,
+                                prisma_client=prisma_client,
+                                user_api_key_cache=user_api_key_cache,
+                                parent_otel_span=parent_otel_span,
+                                proxy_logging_obj=proxy_logging_obj,
+                                route=route,
+                            ),
+                            admin_user_id=litellm_proxy_admin_name,
+                            parent_otel_span=parent_otel_span,
+                            route=route,
+                            start_time=start_time,
+                            user_api_key_cache=user_api_key_cache,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+            case Deny(reason=reason):
+                raise denial_exception(reason)
+            case Defer():
+                pass
 
-        if route == "/user/auth":
-            if general_settings.get("allow_user_auth", False) is True:
-                return UserAPIKeyAuth()
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="'allow_user_auth' not set or set to False",
-                )
-
-        ## Check END-USER OBJECT
-        _end_user_object = None
-        end_user_params: Final = {}
-
-        raw_end_user_id: Final = (
-            valid_token.end_user_id if valid_token is not None else None
-        ) or get_end_user_id_from_request_body(request_data, safe_get_request_headers(request))
-        end_user_id = await resolve_and_validate_end_user_id(
-            raw_end_user_id=raw_end_user_id,
+        end_user: Final = await _resolve_end_user(
+            request=request,
+            request_data=request_data,
+            token_end_user_id=valid_token.end_user_id if valid_token is not None else None,
+            api_key=api_key,
+            key_is_resolved=valid_token is not None,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
             route=route,
         )
-        if prisma_client is not None:
-            await prefetch_identity_keys(
-                _identity_cache_keys(api_key, end_user_id=end_user_id, key_is_resolved=valid_token is not None),
-                user_api_key_cache=user_api_key_cache,
-            )
-        if end_user_id:
-            try:
-                end_user_params["end_user_id"] = end_user_id
-
-                with tracer.trace("litellm.proxy.auth.get_end_user_object"):
-                    _end_user_object = await get_end_user_object(
-                        end_user_id=end_user_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=parent_otel_span,
-                        proxy_logging_obj=proxy_logging_obj,
-                        route=route,
-                    )
-                if _end_user_object is not None:
-                    end_user_params["allowed_model_region"] = _end_user_object.allowed_model_region
-                    if _end_user_object.litellm_budget_table is not None:
-                        _apply_budget_limits_to_end_user_params(
-                            end_user_params=end_user_params,
-                            budget_info=_end_user_object.litellm_budget_table,
-                            end_user_id=end_user_id,
-                        )
-                elif litellm.max_end_user_budget_id is not None:
-                    # End user doesn't exist yet, but apply default budget limits if configured
-                    from litellm.proxy.auth.auth_checks import (
-                        get_default_end_user_budget,
-                    )
-
-                    default_budget: Final = await get_default_end_user_budget(
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=parent_otel_span,
-                    )
-                    if default_budget is not None:
-                        _apply_budget_limits_to_end_user_params(
-                            end_user_params=end_user_params,
-                            budget_info=default_budget,
-                            end_user_id=end_user_id,
-                        )
-            except Exception as e:
-                if isinstance(e, litellm.BudgetExceededError):
-                    raise e
-                verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
 
         if valid_token is None:
             ## Check CACHE
@@ -2734,11 +2826,11 @@ async def user_api_key_auth_builder(
                         param=abbreviate_api_key(api_key=api_key),
                     )
             valid_token = update_valid_token_with_end_user_params(
-                valid_token=valid_token, end_user_params=end_user_params
+                valid_token=valid_token, end_user_params=end_user.params
             )
             valid_token.parent_otel_span = parent_otel_span
-            if _end_user_object is not None:
-                valid_token.end_user_object_permission = _end_user_object.object_permission
+            if end_user.end_user_object is not None:
+                valid_token.end_user_object_permission = end_user.end_user_object.object_permission
 
             return valid_token
 
@@ -2772,45 +2864,6 @@ async def user_api_key_auth_builder(
                             setattr(valid_token, field_name, v)
             except Exception as e:
                 verbose_logger.debug(e)  # moving from .warning to .debug as it spams logs when team missing from cache.
-
-        if not isinstance(master_key, str):
-            raise HTTPException(
-                status_code=500,
-                detail={f"Master key must be a valid string. Current type={type(master_key)}"},
-            )
-
-        if is_master_key(api_key, master_key):
-            # Substitute a stable alias for the raw master key so neither the
-            # master key nor its hash propagates into spend logs, Prometheus
-            # /metrics labels, audit trails, rate-limit buckets, or any other
-            # downstream consumer of UserAPIKeyAuth.api_key.
-            _user_api_key_obj = await _return_user_api_key_auth_obj(
-                user_obj=None,
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
-                parent_otel_span=parent_otel_span,
-                valid_token_dict={
-                    **end_user_params,
-                    "user_id": litellm_proxy_admin_name,
-                },
-                route=route,
-                start_time=start_time,
-            )
-            asyncio.create_task(
-                cache_key_object(
-                    hashed_token=hash_token(master_key),
-                    user_api_key_obj=_user_api_key_obj,
-                    user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-            )
-
-            _user_api_key_obj = update_valid_token_with_end_user_params(
-                valid_token=_user_api_key_obj, end_user_params=end_user_params
-            )
-            _user_api_key_obj.via_virtual_key = True
-
-            return _user_api_key_obj
 
         ## IF it's not a master key
         ## Route should not be in master_key_only_routes
@@ -2870,11 +2923,13 @@ async def user_api_key_auth_builder(
                 )
             # update end-user params on valid token
             # These can change per request - it's important to update them here
-            valid_token.end_user_id = end_user_params.get("end_user_id")
-            valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
-            valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
-            valid_token.end_user_tpd_limit = end_user_params.get("end_user_tpd_limit")
-            valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
+            valid_token.end_user_id = end_user.end_user_id or None
+            valid_token.end_user_tpm_limit = end_user.budget.tpm_limit if end_user.budget is not None else None
+            valid_token.end_user_rpm_limit = end_user.budget.rpm_limit if end_user.budget is not None else None
+            valid_token.end_user_tpd_limit = end_user.budget.tpd_limit if end_user.budget is not None else None
+            valid_token.allowed_model_region = (
+                end_user.end_user_object.allowed_model_region if end_user.end_user_object is not None else None
+            )
 
         return await validate_resolved_virtual_key(
             request=request,
@@ -2884,11 +2939,9 @@ async def user_api_key_auth_builder(
             route=route,
             start_time=start_time,
             parent_otel_span=parent_otel_span,
-            end_user_id=end_user_id,
-            end_user_params=cast(  # cast-ok: builder assembles this dict from validated end-user fields
-                dict[str, object], end_user_params
-            ),
-            _end_user_object=_end_user_object,
+            end_user_id=end_user.end_user_id,
+            end_user_params=end_user.params,
+            _end_user_object=end_user.end_user_object,
         )
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
