@@ -2803,6 +2803,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if self.cost_breakdown is not None:
             self.cost_breakdown = _with_failed_attempts_cost(self.cost_breakdown, own_cost, failed_attempts_cost)
 
+    @property
+    def stream_failure_claimed(self) -> bool:
+        return self._stream_failure_claimed
+
     def claim_stream_failure_report(self) -> bool:
         if self._stream_failure_claimed:
             return False

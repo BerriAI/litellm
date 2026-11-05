@@ -341,6 +341,21 @@ class _VertexChunkLike(Protocol):
     candidates: Sequence[_VertexCandidateLike]
 
 
+class _DispatchesSuccessHandlers(Protocol):
+    async def dispatch_success_handlers(
+        self,
+        result: object = None,
+        start_time: object = None,
+        end_time: object = None,
+        cache_hit: object = None,
+        prefer_async_handlers: bool = False,
+    ) -> None: ...
+
+
+def _success_dispatcher(logging_obj: _DispatchesSuccessHandlers) -> _DispatchesSuccessHandlers:
+    return logging_obj
+
+
 class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
     upstream_provider: str | None = None
@@ -429,6 +444,8 @@ class CustomStreamWrapper:
         self.sent_last_chunk = False
         self._openai_handler_receives_chat_chunks = False
         self._failure_logging: asyncio.Task[None] | None = None
+        self._outcome_logged = False
+        self._iterated_provider_stream = False
         self._closed = False
         self._stream_created_time: float = time.time()
 
@@ -613,6 +630,54 @@ class CustomStreamWrapper:
         self._restore_consumer_correlation_context(guarded=True)
 
     def close(self) -> None:
+        self._log_abandoned_stream()
+        self._release()
+
+    async def aclose(self) -> None:
+        with anyio.CancelScope(shield=True):
+            await self._alog_abandoned_stream()
+        await self._arelease()
+
+    def _claim_abandoned_stream_log(self) -> bool:
+        if (
+            self._outcome_logged
+            or not self._iterated_provider_stream
+            or litellm.disable_streaming_logging is True
+            or self.logging_obj.stream_failure_claimed
+        ):
+            return False
+        self._outcome_logged = True
+        return True
+
+    def _log_abandoned_stream(self) -> None:
+        if self._claim_abandoned_stream_log():
+            executor.submit(self._log_streamed_part)
+
+    def _log_streamed_part(self) -> None:
+        partial: Final = self.partial_response()
+        if partial is not None:
+            self.logging_obj.success_handler(partial, None, None, self._is_cache_hit())
+
+    async def _alog_abandoned_stream(self) -> None:
+        if not self._claim_abandoned_stream_log():
+            return
+        try:
+            partial: Final = await asyncify(self.partial_response)()
+            if partial is not None:
+                await _success_dispatcher(self.logging_obj).dispatch_success_handlers(
+                    partial,
+                    cache_hit=self._is_cache_hit(),
+                    start_time=None,
+                    end_time=None,
+                    prefer_async_handlers=True,
+                )
+        except Exception as e:  # noqa: BLE001  # best-effort usage logging; closing must not raise into the caller
+            verbose_logger.debug("CustomStreamWrapper.aclose: could not log the abandoned stream's usage: %s", e)
+
+    def _is_cache_hit(self) -> bool:
+        return self.custom_llm_provider == "cached_response"
+
+    def _release(self) -> None:
         stream_to_close: Final = cast(object, self.completion_stream)  # cast-ok: completion_stream is untyped
         self.completion_stream = None
         self._closed = True
@@ -626,7 +691,7 @@ class CustomStreamWrapper:
                 verbose_logger.debug("CustomStreamWrapper.close: error closing completion_stream: %s", e)
         self._restore_consumer_correlation_context()
 
-    async def aclose(self):
+    async def _arelease(self) -> None:
         # Restore the consumer's outer context only after the underlying
         # provider stream's own close (and its diagnostic logging below, if
         # closing fails) completes - not before - so those log lines still
@@ -2313,9 +2378,8 @@ class CustomStreamWrapper:
     def __next__(self) -> "ModelResponseStream":
         if self._closed:
             raise StopIteration
-        cache_hit = False
-        if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
-            cache_hit = True
+        self._iterated_provider_stream = True
+        cache_hit: Final = self._is_cache_hit()
         self._check_max_streaming_duration()
         try:
             if self.completion_stream is None:
@@ -2401,12 +2465,14 @@ class CustomStreamWrapper:
                 error: Final = self._stream_eof_error()
                 eof_traceback: Final = traceback.format_exc()
                 self._record_partial_usage_for_failure()
+                self._outcome_logged = True
                 threading.Thread(target=self.logging_obj.failure_handler, args=(error, eof_traceback)).start()
-                self.close()
+                self._release()
                 self._handle_stream_fallback_error(error)
             if self.sent_last_chunk is True:
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
+                self._outcome_logged = True
                 if complete_streaming_response is not None:
                     self._propagate_usage_cost_to_hidden_params(
                         complete_streaming_response, self.custom_llm_provider, self.chunks
@@ -2463,7 +2529,7 @@ class CustomStreamWrapper:
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
-                self.close()
+                self._release()
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
@@ -2496,8 +2562,9 @@ class CustomStreamWrapper:
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
+            self._outcome_logged = True
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
-            self.close()
+            self._release()
             self._handle_stream_fallback_error(e)
 
     def fetch_sync_stream(self):
@@ -2519,9 +2586,8 @@ class CustomStreamWrapper:
     async def __anext__(self) -> "ModelResponseStream":
         if self._closed:
             raise StopAsyncIteration
-        cache_hit = False
-        if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
-            cache_hit = True
+        self._iterated_provider_stream = True
+        cache_hit: Final = self._is_cache_hit()
         try:
             # Inside the try (not before it) so a raised litellm.Timeout flows
             # through the same except Exception -> _handle_stream_fallback_error
@@ -2608,7 +2674,7 @@ class CustomStreamWrapper:
                         return usage_free_chunk
         except (StopAsyncIteration, StopIteration):
             if self._should_fail_on_clean_eof():
-                await self.aclose()
+                await self._arelease()
                 self._log_stream_failure_and_raise(self._stream_eof_error())
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
@@ -2616,15 +2682,15 @@ class CustomStreamWrapper:
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
             traceback_exception += f"\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
             self._dispatch_stream_failure(e, traceback_exception)
-            await self.aclose()
+            await self._arelease()
             self._handle_stream_fallback_error(e)
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             if self.received_finish_reason is None:
-                await self.aclose()
+                await self._arelease()
                 self._log_stream_failure_and_raise(e)
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
-            await self.aclose()
+            await self._arelease()
             self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
@@ -2668,6 +2734,7 @@ class CustomStreamWrapper:
                 self.sent_stream_usage = True
                 return response
 
+            self._outcome_logged = True
             _deferred_cb: Final = getattr(
                 self.logging_obj,
                 "_on_deferred_stream_complete",
@@ -2690,7 +2757,7 @@ class CustomStreamWrapper:
                 # when consumers use ``async for`` on sync-SDK streams. Legacy string
                 # callbacks still run via executor.submit inside dispatch_success_handlers.
                 asyncio.create_task(
-                    self.logging_obj.dispatch_success_handlers(
+                    _success_dispatcher(self.logging_obj).dispatch_success_handlers(
                         complete_streaming_response,
                         cache_hit=cache_hit,
                         start_time=None,
@@ -2699,7 +2766,7 @@ class CustomStreamWrapper:
                     )
                 )
 
-            await self.aclose()
+            await self._arelease()
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
             self.sent_last_chunk = True
@@ -2722,6 +2789,7 @@ class CustomStreamWrapper:
         self._handle_stream_fallback_error(e)
 
     def _dispatch_stream_failure(self, e: Exception, traceback_exception: str) -> None:
+        self._outcome_logged = True
         self._record_partial_usage_for_failure()
         self._failure_logging = asyncio.create_task(
             self.logging_obj.dispatch_attempt_failure_handlers(e, traceback_exception)

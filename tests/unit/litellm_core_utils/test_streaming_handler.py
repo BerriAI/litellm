@@ -13,14 +13,16 @@ from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, TracebackType
-from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
+from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, TypeAlias, TypedDict, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, TypeAdapter
+from typing_extensions import ReadOnly
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
@@ -47,6 +49,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
     ChoiceLogprobs,
+    Choices,
     CompletionTokensDetailsWrapper,
     Delta,
     ModelResponse,
@@ -9571,3 +9574,463 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+_CUT_STREAM_URL: Final = "https://api.openai.com/v1/chat/completions"
+_CUT_STREAM_MODEL: Final = "gpt-5.6"
+_CUT_STREAM_PROMPT: Final = "Write a story about a lighthouse keeper."
+_CUT_STREAM_DELTAS: Final = ("Once", " upon", " a", " time", " a", " keeper", " lit", " the", " lamp", ".")
+_CUT_STREAM_PROMPT_TOKENS: Final = 431
+_CUT_STREAM_COMPLETION_TOKENS: Final = 57
+_CloseWith: TypeAlias = Literal["aclose", "async_with", "close", "with"]
+
+
+def _cut_stream_event(fields: Mapping[str, object]) -> str:
+    chunk: Final = {
+        "id": "chatcmpl-cut-stream",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": _CUT_STREAM_MODEL,
+        **fields,
+    }
+    return f"data: {json.dumps(chunk)}\n\n"
+
+
+def _cut_stream_content(position: int, text: str) -> str:
+    delta: Final = {"role": "assistant", "content": text} if position == 0 else {"content": text}
+    return _cut_stream_event({"choices": [{"index": 0, "delta": delta, "finish_reason": None}]})
+
+
+def _cut_stream_content_sse(deltas: Sequence[str]) -> str:
+    return "".join(_cut_stream_content(position, text) for position, text in enumerate(deltas))
+
+
+def _cut_stream_sse(deltas: Sequence[str]) -> str:
+    return (
+        _cut_stream_content_sse(deltas)
+        + _cut_stream_event({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+        + _cut_stream_event(
+            {
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": _CUT_STREAM_PROMPT_TOKENS,
+                    "completion_tokens": _CUT_STREAM_COMPLETION_TOKENS,
+                    "total_tokens": _CUT_STREAM_PROMPT_TOKENS + _CUT_STREAM_COMPLETION_TOKENS,
+                },
+            }
+        )
+        + "data: [DONE]\n\n"
+    )
+
+
+_CUT_STREAM_SSE: Final = _cut_stream_sse(_CUT_STREAM_DELTAS)
+
+
+class _ConnectionResetMidStream(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __iter__(self) -> Iterator[bytes]:
+        yield _cut_stream_content_sse(_CUT_STREAM_DELTAS).encode()
+        raise httpx.ReadError("connection reset by peer")
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _cut_stream_content_sse(_CUT_STREAM_DELTAS).encode()
+        raise httpx.ReadError("connection reset by peer")
+
+
+class _LoggedStreamOutcome(TypedDict):
+    model: ReadOnly[str]
+    response_cost: ReadOnly[float]
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+
+
+@dataclass(frozen=True, slots=True)
+class _LoggedStreamSuccess:
+    outcome: _LoggedStreamOutcome
+    text: str
+
+
+def _logged_text(response_obj: object) -> str:
+    choices: Final = response_obj.choices if isinstance(response_obj, ModelResponse) else []
+    first: Final = choices[0] if choices else None
+    return (first.message.content or "") if isinstance(first, Choices) else ""
+
+
+class _StreamOutcomeRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.successes: tuple[_LoggedStreamSuccess, ...] = ()
+        self.failures: tuple[str, ...] = ()
+        self._recording: Final = threading.Lock()
+        self.logged: Final = threading.Event()
+
+    def _record_success(self, kwargs: Mapping[str, object], response_obj: object) -> None:
+        success: Final = _LoggedStreamSuccess(
+            outcome=TypeAdapter(_LoggedStreamOutcome).validate_python(kwargs["standard_logging_object"]),
+            text=_logged_text(response_obj),
+        )
+        with self._recording:
+            self.successes = (*self.successes, success)
+        self.logged.set()
+
+    def _record_failure(self, mode: str) -> None:
+        with self._recording:
+            self.failures = (*self.failures, mode)
+        self.logged.set()
+
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record_success(kwargs, response_obj)
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record_success(kwargs, response_obj)
+
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record_failure("sync")
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record_failure("async")
+
+    async def settled(self) -> None:
+        assert await asyncio.to_thread(self.logged.wait, 5), "no success or failure was logged"
+        await asyncio.sleep(0.5)
+
+
+@pytest.fixture
+def stream_outcomes(monkeypatch: pytest.MonkeyPatch) -> _StreamOutcomeRecorder:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _StreamOutcomeRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    return recorder
+
+
+def _serve_openai_stream(respx_mock: respx.MockRouter, stream: str | _ConnectionResetMidStream) -> None:
+    headers: Final = {"content-type": "text/event-stream"}
+    response: Final = (
+        httpx.Response(200, text=stream, headers=headers)
+        if isinstance(stream, str)
+        else httpx.Response(200, stream=stream, headers=headers)
+    )
+    respx_mock.post(_CUT_STREAM_URL).mock(return_value=response)
+
+
+def _open_sync_stream() -> CustomStreamWrapper:
+    stream: Final = litellm.completion(
+        model=_CUT_STREAM_MODEL,
+        messages=[{"role": "user", "content": _CUT_STREAM_PROMPT}],
+        stream=True,
+        stream_options={"include_usage": True},
+        api_key="sk-unit-test",
+    )
+    assert isinstance(stream, CustomStreamWrapper)
+    return stream
+
+
+async def _open_async_stream() -> CustomStreamWrapper:
+    stream: Final = await litellm.acompletion(
+        model=_CUT_STREAM_MODEL,
+        messages=[{"role": "user", "content": _CUT_STREAM_PROMPT}],
+        stream=True,
+        stream_options={"include_usage": True},
+        api_key="sk-unit-test",
+    )
+    assert isinstance(stream, CustomStreamWrapper)
+    return stream
+
+
+def _text_of(chunks: Sequence[ModelResponseStream]) -> str:
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+
+
+async def _read_async(stream: CustomStreamWrapper, chunks: int) -> str:
+    return _text_of([await stream.__anext__() for _ in range(chunks)])
+
+
+async def _read_two_chunks_then_close(close_with: _CloseWith) -> str:
+    if close_with == "close":
+        sync_stream: Final = _open_sync_stream()
+        sync_seen: Final = _text_of(tuple(itertools.islice(sync_stream, 2)))
+        sync_stream.close()
+        return sync_seen
+    if close_with == "with":
+        with _open_sync_stream() as managed_sync_stream:
+            return _text_of(tuple(itertools.islice(managed_sync_stream, 2)))
+    if close_with == "async_with":
+        async with await _open_async_stream() as managed_stream:
+            return await _read_async(managed_stream, 2)
+    stream: Final = await _open_async_stream()
+    seen: Final = await _read_async(stream, 2)
+    await stream.aclose()
+    return seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_with", ["aclose", "async_with", "close", "with"])
+async def test_stream_closed_by_its_consumer_before_the_end_logs_the_streamed_part_once(
+    close_with: _CloseWith, stream_outcomes: _StreamOutcomeRecorder, respx_mock: respx.MockRouter
+) -> None:
+    _serve_openai_stream(respx_mock, _CUT_STREAM_SSE)
+
+    seen: Final = await _read_two_chunks_then_close(close_with)
+    await stream_outcomes.settled()
+
+    assert seen == "".join(_CUT_STREAM_DELTAS[:2])
+    assert stream_outcomes.failures == ()
+    assert len(stream_outcomes.successes) == 1
+    logged: Final = stream_outcomes.successes[0]
+    assert logged.text == seen
+    assert logged.outcome["prompt_tokens"] == litellm.token_counter(
+        model=_CUT_STREAM_MODEL, messages=[{"role": "user", "content": _CUT_STREAM_PROMPT}]
+    )
+    assert logged.outcome["completion_tokens"] == litellm.token_counter(
+        model=_CUT_STREAM_MODEL, text=seen, count_response_tokens=True
+    )
+    assert logged.outcome["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_async_stream_closed_right_after_its_usage_chunk_logs_the_provider_usage(
+    stream_outcomes: _StreamOutcomeRecorder, respx_mock: respx.MockRouter
+) -> None:
+    _serve_openai_stream(respx_mock, _CUT_STREAM_SSE)
+    stream: Final = await _open_async_stream()
+
+    received: Final = []
+    async for chunk in stream:
+        received.append(chunk)
+        if isinstance(getattr(chunk, "usage", None), Usage):
+            break
+    await stream.aclose()
+    await stream_outcomes.settled()
+
+    assert _text_of(received) == "".join(_CUT_STREAM_DELTAS)
+    assert len(stream_outcomes.successes) == 1
+    logged: Final = stream_outcomes.successes[0]
+    assert logged.text == "".join(_CUT_STREAM_DELTAS)
+    assert (logged.outcome["prompt_tokens"], logged.outcome["completion_tokens"]) == (
+        _CUT_STREAM_PROMPT_TOKENS,
+        _CUT_STREAM_COMPLETION_TOKENS,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_stream_read_to_its_end_then_closed_logs_the_provider_usage_once(
+    sync_mode: bool, stream_outcomes: _StreamOutcomeRecorder, respx_mock: respx.MockRouter
+) -> None:
+    _serve_openai_stream(respx_mock, _CUT_STREAM_SSE)
+
+    if sync_mode:
+        sync_stream: Final = _open_sync_stream()
+        sync_seen: Final = _text_of(tuple(sync_stream))
+        sync_stream.close()
+    else:
+        stream: Final = await _open_async_stream()
+        seen: Final = _text_of([chunk async for chunk in stream])
+        await stream.aclose()
+    await stream_outcomes.settled()
+
+    assert (sync_seen if sync_mode else seen) == "".join(_CUT_STREAM_DELTAS)
+    assert len(stream_outcomes.successes) == 1
+    logged: Final = stream_outcomes.successes[0]
+    assert (logged.outcome["prompt_tokens"], logged.outcome["completion_tokens"]) == (
+        _CUT_STREAM_PROMPT_TOKENS,
+        _CUT_STREAM_COMPLETION_TOKENS,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "broken_stream",
+    [
+        pytest.param(_ConnectionResetMidStream(), id="connection_reset"),
+        pytest.param(_cut_stream_content_sse(_CUT_STREAM_DELTAS), id="body_ended_before_finish_reason"),
+    ],
+)
+async def test_stream_that_broke_mid_flight_logs_no_success_when_closed(
+    sync_mode: bool,
+    broken_stream: str | _ConnectionResetMidStream,
+    stream_outcomes: _StreamOutcomeRecorder,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _serve_openai_stream(respx_mock, broken_stream)
+
+    if sync_mode:
+        sync_stream: Final = _open_sync_stream()
+        with pytest.raises(MidStreamFallbackError):
+            tuple(sync_stream)
+        sync_stream.close()
+    else:
+        stream: Final = await _open_async_stream()
+        with pytest.raises(MidStreamFallbackError):
+            [chunk async for chunk in stream]
+        await stream.aclose()
+    await stream_outcomes.settled()
+
+    assert stream_outcomes.successes == ()
+    assert len(stream_outcomes.failures) >= 1
+
+
+@pytest.mark.asyncio
+async def test_stream_whose_failure_was_already_reported_logs_no_success_when_closed(
+    stream_outcomes: _StreamOutcomeRecorder, respx_mock: respx.MockRouter
+) -> None:
+    _serve_openai_stream(respx_mock, _CUT_STREAM_SSE)
+    stream: Final = await _open_async_stream()
+    await _read_async(stream, 2)
+
+    assert stream.logging_obj.claim_stream_failure_report() is True
+    await stream.aclose()
+    await asyncio.sleep(0.5)
+
+    assert stream_outcomes.successes == ()
+
+
+@pytest.mark.asyncio
+async def test_router_stream_closed_by_its_consumer_before_the_end_logs_the_streamed_part_once(
+    stream_outcomes: _StreamOutcomeRecorder, respx_mock: respx.MockRouter
+) -> None:
+    _serve_openai_stream(respx_mock, _CUT_STREAM_SSE)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "story-writer",
+                "litellm_params": {"model": f"openai/{_CUT_STREAM_MODEL}", "api_key": "sk-unit-test"},
+            }
+        ]
+    )
+    stream: Final = await router.acompletion(
+        model="story-writer",
+        messages=[{"role": "user", "content": _CUT_STREAM_PROMPT}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    assert isinstance(stream, CustomStreamWrapper)
+
+    seen: Final = await _read_async(stream, 2)
+    await stream.aclose()
+    await stream_outcomes.settled()
+
+    assert seen == "".join(_CUT_STREAM_DELTAS[:2])
+    assert len(stream_outcomes.successes) == 1
+    logged: Final = stream_outcomes.successes[0]
+    assert logged.text == seen
+    assert logged.outcome["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_router_stream_closed_after_a_mid_stream_fallback_logs_only_the_fallback_part(
+    stream_outcomes: _StreamOutcomeRecorder, respx_mock: respx.MockRouter
+) -> None:
+    backup_api_base: Final = "https://backup.openai.test/v1"
+    backup_deltas: Final = (" Then", " the", " storm", " came", ".")
+    _serve_openai_stream(respx_mock, _ConnectionResetMidStream())
+    respx_mock.post(f"{backup_api_base}/chat/completions").mock(
+        return_value=httpx.Response(
+            200, text=_cut_stream_sse(backup_deltas), headers={"content-type": "text/event-stream"}
+        )
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "story-writer",
+                "litellm_params": {"model": f"openai/{_CUT_STREAM_MODEL}", "api_key": "sk-unit-test"},
+            },
+            {
+                "model_name": "story-writer-backup",
+                "litellm_params": {
+                    "model": f"openai/{_CUT_STREAM_MODEL}",
+                    "api_key": "sk-unit-test",
+                    "api_base": backup_api_base,
+                },
+                "model_info": {"supports_assistant_prefill": True},
+            },
+        ],
+        fallbacks=[{"story-writer": ["story-writer-backup"]}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+    stream: Final = await router.acompletion(
+        model="story-writer",
+        messages=[{"role": "user", "content": _CUT_STREAM_PROMPT}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    assert isinstance(stream, CustomStreamWrapper)
+
+    primary_part: Final = await _read_async(stream, len(_CUT_STREAM_DELTAS))
+    fallback_part: Final = await _read_async(stream, 2)
+    await stream.aclose()
+    await stream_outcomes.settled()
+
+    assert primary_part == "".join(_CUT_STREAM_DELTAS)
+    assert fallback_part == "".join(backup_deltas[:2])
+    assert [logged.text for logged in stream_outcomes.successes] == [fallback_part]
+
+
+@pytest.mark.asyncio
+async def test_stream_closed_early_logs_nothing_while_streaming_logging_is_disabled(
+    stream_outcomes: _StreamOutcomeRecorder, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_streaming_logging", True)
+    _serve_openai_stream(respx_mock, _CUT_STREAM_SSE)
+    stream: Final = await _open_async_stream()
+    await _read_async(stream, 2)
+
+    await stream.aclose()
+    await asyncio.sleep(0.5)
+
+    assert stream_outcomes.successes == ()
+
+
+class _SuccessLoggingDown(Logging):
+    async def dispatch_success_handlers(self, *args: object, **kwargs: object) -> None:
+        raise RuntimeError("success logging is down")
+
+
+class _ProviderChunks:
+    def __init__(self, chunks: Sequence[ModelResponseStream]) -> None:
+        self._chunks: Final = iter(chunks)
+        self.closed = False
+
+    def __aiter__(self) -> "_ProviderChunks":
+        return self
+
+    async def __anext__(self) -> ModelResponseStream:
+        chunk: Final = next(self._chunks, None)
+        if chunk is None:
+            raise StopAsyncIteration
+        return chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_async_stream_closed_early_still_closes_the_provider_stream_when_logging_its_part_fails() -> None:
+    provider_stream: Final = _ProviderChunks(tuple(_stream_chunk({"content": text}) for text in _CUT_STREAM_DELTAS))
+    stream: Final = CustomStreamWrapper(
+        completion_stream=provider_stream,
+        model=_CUT_STREAM_MODEL,
+        logging_obj=_SuccessLoggingDown(
+            model=_CUT_STREAM_MODEL,
+            messages=[{"role": "user", "content": _CUT_STREAM_PROMPT}],
+            stream=True,
+            call_type="acompletion",
+            start_time=time.time(),
+            litellm_call_id="cut-stream-logging-down",
+            function_id="cut-stream-logging-down",
+        ),
+    )
+    seen: Final = await _read_async(stream, 2)
+
+    await stream.aclose()
+
+    assert seen == "".join(_CUT_STREAM_DELTAS[:2])
+    assert provider_stream.closed
