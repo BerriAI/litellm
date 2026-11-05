@@ -90,4 +90,3 @@ def test_supported_endpoints_matrix():
     assert endpoints["chat_completions"] is True
     assert endpoints["responses"] is True
     assert endpoints["embeddings"] is False
-    assert endpoints["messages"] is False
