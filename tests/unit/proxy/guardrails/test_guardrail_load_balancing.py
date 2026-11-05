@@ -2,25 +2,26 @@
 Test guardrail load balancing through the Router and ProxyLogging.
 """
 
-from unittest.mock import MagicMock, patch, AsyncMock
-from typing import Final
 from collections.abc import AsyncIterator
 from queue import SimpleQueue
-
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-import litellm
 import pytest
+
+import litellm
 from litellm import Router
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy.utils import ProxyLogging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails import guardrail_registry
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
-from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks, GuardrailStreamScope
 from litellm.types.utils import ModelResponseStream
 
 
@@ -29,13 +30,19 @@ class MockGuardrail(CustomGuardrail):
 
     call_count = 0
 
-    def __init__(self, guardrail_name: str, guardrail_id: str):
-        super().__init__(guardrail_name=guardrail_name)
+    def __init__(
+        self,
+        guardrail_name: str,
+        guardrail_id: str,
+        event_hook: GuardrailEventHooks | None = None,
+        default_on: bool = False,
+        stream_scope: GuardrailStreamScope = "both",
+    ):
+        super().__init__(
+            guardrail_name=guardrail_name, event_hook=event_hook, default_on=default_on, stream_scope=stream_scope
+        )
         self.guardrail_id = guardrail_id
         self.calls = 0
-
-    def should_run_guardrail(self, data, event_type) -> bool:
-        return True
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         self.calls += 1
@@ -59,6 +66,10 @@ class MockGuardrail(CustomGuardrail):
 
 
 class InheritedIteratorGuardrail(MockGuardrail):
+    pass
+
+
+class NonIteratorGuardrail(CustomGuardrail):
     pass
 
 
@@ -270,3 +281,93 @@ async def test_iterator_uses_selected_generic_deployments_cached_kind(monkeypatc
         assert native.calls > 0
     finally:
         await handler.close()
+
+
+async def _dispatch_scoped_hook(logging: ProxyLogging, hook: str) -> None:
+    auth: Final = UserAPIKeyAuth(request_route="/v1/chat/completions")
+    data: Final = {"messages": [{"role": "user", "content": "raw"}], "stream": hook in ("streaming", "iterator")}
+    response: Final = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "raw"}}])
+    if hook == "pre_call":
+        await logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="completion")
+    elif hook == "during_call":
+        await logging.during_call_hook(user_api_key_dict=auth, data=data, call_type="completion")
+    elif hook == "post_call":
+        await logging.post_call_success_hook(user_api_key_dict=auth, data=data, response=response)
+    elif hook == "streaming":
+        await logging.async_post_call_streaming_hook(user_api_key_dict=auth, data=data, response=response)
+    else:
+        async for _chunk in logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=auth, request_data=data, response=_output_chunks()
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook", ("pre_call", "during_call", "post_call", "streaming", "iterator"))
+@pytest.mark.parametrize("mismatch", ("mode", "default_on", "stream_scope", "none_eligible", "weights"))
+async def test_load_balancing_selects_only_hook_eligible_deployments(
+    hook: str, mismatch: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event: Final = GuardrailEventHooks(hook if hook in ("pre_call", "during_call") else "post_call")
+    other_event: Final = (
+        GuardrailEventHooks.post_call if event == GuardrailEventHooks.pre_call else GuardrailEventHooks.pre_call
+    )
+    eligible: Final = MockGuardrail("scoped-lb", "eligible", event_hook=event, default_on=mismatch != "none_eligible")
+    ineligible: Final = MockGuardrail(
+        "scoped-lb",
+        "other",
+        event_hook=other_event if mismatch == "mode" else event,
+        default_on=mismatch not in ("default_on", "none_eligible"),
+        stream_scope=("non_streaming" if hook in ("streaming", "iterator") else "streaming")
+        if mismatch == "stream_scope"
+        else "both",
+    )
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "scoped-lb",
+                "id": str(index),
+                "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "post_call", "weight": weight},
+            }
+            for index, (cb, weight) in enumerate(
+                ((eligible, 1 if mismatch == "weights" else 0), (ineligible, 0 if mismatch == "weights" else 1))
+            )
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [ineligible, eligible])
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    for request_index in range(20):
+        await _dispatch_scoped_hook(logging, hook)
+        assert eligible.calls == (0 if mismatch == "none_eligible" else request_index + 1)
+        assert ineligible.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_selects_iterator_capable_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
+    eligible: Final = MockGuardrail(
+        "iterator-lb", "iterator", event_hook=GuardrailEventHooks.post_call, default_on=True
+    )
+    unsupported: Final = NonIteratorGuardrail(
+        guardrail_name="iterator-lb", event_hook=GuardrailEventHooks.post_call, default_on=True
+    )
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "iterator-lb",
+                "id": str(index),
+                "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "post_call", "weight": weight},
+            }
+            for index, (cb, weight) in enumerate(((eligible, 0), (unsupported, 1)))
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [unsupported, eligible])
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    for request_index in range(20):
+        await _dispatch_scoped_hook(logging, "iterator")
+        assert eligible.calls == request_index + 1
