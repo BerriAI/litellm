@@ -3,7 +3,7 @@
 import json
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
-from typing import (  # PrismaWrapper forwards generated client methods dynamically
+from typing import (
     TYPE_CHECKING,
     Final,
     Protocol,
@@ -92,7 +92,20 @@ def activity_path(
 
 def _observation_payload(rule: UsageAlertRule, item: UsageAlertObservation, now: datetime) -> Mapping[str, object]:
     alert_id: Final = str(
-        uuid5(NAMESPACE_URL, f"litellm:usage-alert:{rule.id}:{item.entity_id or ''}:{item.day.isoformat()}")
+        uuid5(
+            NAMESPACE_URL,
+            json.dumps(
+                [
+                    "litellm:usage-alert",
+                    rule.id,
+                    rule.scope_type,
+                    item.entity_id,
+                    rule.metric,
+                    rule.direction,
+                    item.day.isoformat(),
+                ]
+            ),
+        )
     )
     incident: Final = UsageAlert(
         id=alert_id,
@@ -329,7 +342,7 @@ class UsageAlertsRepository:
     async def list_breached_entity_ids(self, rule_id: str, limit: int = 500, offset: int = 0) -> tuple[str | None, ...]:
         rows: Final = TypeAdapter(tuple[Mapping[str, str | None], ...]).validate_python(
             await self.database.query_raw(
-                'SELECT DISTINCT scope_id FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 AND breached ORDER BY scope_id NULLS FIRST LIMIT $2 OFFSET $3',
+                """SELECT DISTINCT i.scope_id FROM "LiteLLM_UsageAlertIncident" i JOIN "LiteLLM_UsageAlertRule" r ON r.id=i.rule_id WHERE i.rule_id=$1 AND i.breached AND i.scope_type=r.scope_type AND i.metric=r.record->>'metric' AND i.record->>'direction'=r.record->>'direction' AND (r.scope_id IS NULL OR i.scope_id=r.scope_id) ORDER BY i.scope_id NULLS FIRST LIMIT $2 OFFSET $3""",
                 rule_id,
                 limit,
                 offset,
@@ -366,9 +379,12 @@ class UsageAlertsRepository:
             return changed[0]
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
             await self.database.query_raw(
-                'SELECT record FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 AND scope_key=$2 ORDER BY evaluation_day DESC,id DESC LIMIT 1',
+                """SELECT record FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 AND scope_key=$2 AND scope_type=$3 AND metric=$4 AND record->>'direction'=$5 ORDER BY evaluation_day DESC,id DESC LIMIT 1""",
                 rule.id,
                 entity_id or "",
+                rule.scope_type,
+                rule.metric,
+                rule.direction,
             )
         )
         return UsageAlert.model_validate(rows[0].record) if rows else None
@@ -389,7 +405,10 @@ class UsageAlertsRepository:
             prior AS (
                 SELECT x.*,p.id AS prior_id,p.evaluation_day,p.breached AS prior_breached,p.record AS prior_record
                 FROM input x LEFT JOIN LATERAL (
-                    SELECT * FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 AND scope_key=x.scope_key ORDER BY evaluation_day DESC,id DESC LIMIT 1
+                    SELECT * FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 AND scope_key=x.scope_key
+                      AND scope_type=x.record->>'scope_type' AND scope_id IS NOT DISTINCT FROM x.record->>'scope_id'
+                      AND metric=x.record->>'metric' AND record->>'direction'=x.record->>'direction'
+                    ORDER BY evaluation_day DESC,id DESC LIMIT 1
                 ) p ON true
                 WHERE EXISTS (SELECT 1 FROM "LiteLLM_UsageAlertRule" WHERE id=$1 AND enabled AND NOT deleted AND (record->>'updated_at')::timestamptz=$3::timestamptz)
             ), updated AS (

@@ -1,7 +1,13 @@
+from datetime import date
 from hashlib import sha256
 from typing import Final
 
+import pytest
+from integration._support.actors import ManagementDatabase
 from integration._support.client import Gateway, string_value
+
+from litellm.repositories.usage_alerts import UsageAlertsRepository
+from litellm.types.proxy.usage_alerts import UsageAlertObservation, UsageAlertRuleInput
 
 
 def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gateway: Gateway) -> None:
@@ -78,3 +84,55 @@ def test_team_admin_can_manage_team_alerts_but_member_can_only_read(gateway: Gat
             assert gateway.request("DELETE", path, key=member_key).status_code == 403
         finally:
             assert gateway.request("DELETE", path, key=admin_key).status_code == 204
+
+
+@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.parametrize(
+    "changed_field,new_value",
+    [("metric", "latency"), ("direction", "decrease"), ("scope_type", "user"), ("scope_id", "semantic-other")],
+)
+async def test_rule_identity_edits_preserve_old_incident_and_filter_consistency(
+    db: ManagementDatabase, changed_field: str, new_value: str
+) -> None:
+    repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    definition: Final = UsageAlertRuleInput(
+        name="Semantic identity",
+        scope_type="team",
+        scope_id="semantic-example",
+        metric="spend",
+        direction="increase",
+        notification_channels=("slack",),
+    )
+    rule: Final = await repository.save_rule(definition, "qa-admin")
+    assert rule is not None
+    initial: Final = UsageAlertObservation(
+        entity_id=rule.scope_id, day=date(2026, 11, 4), observed=40, baseline=5, threshold=15, breached=True
+    )
+    try:
+        original: Final = (await repository.record_observations(rule, (initial,)))[0]
+        edited: Final = await repository.save_rule(
+            UsageAlertRuleInput.model_validate({**definition.model_dump(), changed_field: new_value}), "qa-admin", rule
+        )
+        assert edited is not None
+        observation: Final = initial.model_copy(update={"entity_id": edited.scope_id})
+        replacement: Final = (await repository.record_observations(edited, (observation,)))[0]
+        assert replacement.id != original.id
+        assert await repository.get_alert(original.id) == original
+        before_page: Final = await repository.list_alerts(
+            scope_type=original.scope_type, scope_id=original.scope_id, metric=original.metric
+        )
+        after_page: Final = await repository.list_alerts(
+            scope_type=replacement.scope_type, scope_id=replacement.scope_id, metric=replacement.metric
+        )
+        assert original.id in {item.id for item in before_page.data}
+        assert replacement.id in {item.id for item in after_page.data}
+        assert all(
+            item.scope_type == original.scope_type and item.metric == original.metric for item in before_page.data
+        )
+        healthy: Final = observation.model_copy(update={"day": date(2026, 11, 5), "breached": False})
+        await repository.record_observations(edited, (healthy,))
+        assert (await repository.get_alert(original.id)) == original
+        resolved: Final = await repository.get_alert(replacement.id)
+        assert resolved is not None and resolved.status == "resolved"
+    finally:
+        await repository.delete_rule(rule.id)
