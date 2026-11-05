@@ -100,6 +100,26 @@ class RelayGuardrail(CustomGuardrail):
         return inputs
 
 
+class LegacyPostCallGuardrail(CustomGuardrail):
+    def __init__(self, fail: bool):
+        super().__init__(guardrail_name="relay-lb", event_hook="post_call", default_on=True)
+        self.calls = 0
+        self.response: object = None
+        self.fail = fail
+
+    async def async_post_call_success_hook(
+        self,
+        data: Mapping[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
+    ) -> object:
+        self.calls += 1
+        self.response = response
+        if response is not None and self.fail:
+            raise RuntimeError("guardrail offline")
+        return response
+
+
 class GuardrailActivator(CustomLogger):
     def __init__(self, action: str):
         super().__init__()
@@ -687,6 +707,69 @@ async def test_streamed_pipeline_selects_supported_replica_and_preserves_errors(
             assert "".join(_chunk_text(chunk) for chunk in chunks) == "raw"
         assert supported.calls == index + 1
         assert unsupported.calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", (False, True))
+@pytest.mark.parametrize("empty", (False, True))
+@pytest.mark.parametrize("route", ("/v1/chat/completions", "/v1beta/models/gemini-2.5-flash:streamGenerateContent"))
+async def test_streamed_pipeline_selects_replica_compatible_with_endpoint(route, empty, fail, monkeypatch):
+    legacy: Final = LegacyPostCallGuardrail(fail=fail)
+    unified: Final = RelayGuardrail("unified", fail=fail)
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "relay-lb",
+                "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "post_call", "weight": weight},
+            }
+            for cb, weight in ((legacy, 1), (unified, 0))
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [legacy, unified])
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    gemini: Final = route.endswith(":streamGenerateContent")
+    payload: Final = (
+        ({"candidates": [{"content": {"parts": [{"text": "raw"}]}, "finishReason": "STOP"}]},)
+        if gemini
+        else tuple([chunk async for chunk in _output_chunks()])
+    )
+    source: Final = () if empty else payload
+
+    async def response_chunks() -> AsyncIterator[object]:
+        for chunk in source:
+            yield chunk
+
+    for index in range(3):
+        with pytest.raises(RuntimeError, match="guardrail offline") if fail and not empty else nullcontext():
+            delivered = [
+                chunk
+                async for chunk in logging.async_post_call_streaming_iterator_hook(
+                    response=response_chunks(),
+                    user_api_key_dict=UserAPIKeyAuth(request_route=route),
+                    request_data={
+                        "model": "test-model",
+                        "stream": True,
+                        "metadata": {
+                            "_guardrail_pipelines": [
+                                (
+                                    "streamed-pipeline",
+                                    GuardrailPipeline(
+                                        mode="post_call",
+                                        steps=[PipelineStep(guardrail="relay-lb")],
+                                    ),
+                                )
+                            ],
+                        },
+                    },
+                )
+            ]
+            assert delivered == list(source)
+        assert unified.calls == (index + 1 if gemini and not empty else 0)
+        assert legacy.calls == (index + 1 if not gemini and not empty else 0)
+        assert isinstance(legacy.response, litellm.ModelResponse) is (not gemini and not empty)
 
 
 @pytest.mark.asyncio
