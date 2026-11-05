@@ -14,7 +14,7 @@ def test_token_kiosk_resolves_environment_and_explicit_credentials(monkeypatch: 
         "claude-3-5-sonnet",
         "token_kiosk",
         "fake-token-kiosk-key",
-        "https://agent-router.gaib.ai/v1",
+        "https://api-token-kiosk.gaib.ai/v1",
     )
     assert get_llm_provider(
         model="token_kiosk/claude-3-5-sonnet",
@@ -30,7 +30,7 @@ def test_token_kiosk_resolves_environment_and_explicit_credentials(monkeypatch: 
 
 def test_token_kiosk_chat_completion_dispatch() -> None:
     with respx.mock() as upstream:
-        route: Final = upstream.post("https://agent-router.gaib.ai/v1/chat/completions").respond(
+        route: Final = upstream.post("https://api-token-kiosk.gaib.ai/v1/chat/completions").respond(
             200,
             json={
                 "id": "chatcmpl-token-kiosk-test",
