@@ -314,5 +314,10 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "hopbase": {
+    "base_url": "https://api.hop-base.com/v1",
+    "api_key_env": "HOPBASE_API_KEY",
+    "api_base_env": "HOPBASE_API_BASE"
   }
 }

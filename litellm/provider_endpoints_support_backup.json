@@ -2084,6 +2084,32 @@
         "generateContent": true
       }
     },
+    "hopbase": {
+      "display_name": "HopBase (`hopbase`)",
+      "url": "https://docs.litellm.ai/docs/providers/hopbase",
+      "endpoints": {
+          "chat_completions": true,
+          "responses": true,
+          "text_completion": true,
+          "embeddings": false,
+          "image_generations": false,
+          "image_edits": false,
+          "audio_transcriptions": false,
+          "audio_speech": false,
+          "rerank": false,
+          "ocr": false,
+          "search": false,
+          "moderations": false,
+          "realtime": false,
+          "video_generations": false,
+          "batches": false,
+          "messages": true,
+          "interactions": true,
+          "systemone": false,
+          "a2a": true,
+          "generateContent": true
+      }
+    },
     "hosted_vllm": {
       "display_name": "Hosted VLLM (`hosted_vllm`)",
       "url": "https://docs.litellm.ai/docs/providers/vllm",
