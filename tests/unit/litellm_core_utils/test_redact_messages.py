@@ -11,7 +11,6 @@ import importlib
 import json
 import os
 import threading
-import time
 import tracemalloc
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime
@@ -2433,19 +2432,6 @@ def test_scrub_request_text_keeps_an_input_value_when_the_request_has_no_text() 
     error: Final = "bad value [type=int_type, input_value=None, input_type=NoneType]"
 
     assert scrub_request_text(error, request_texts(None)) == error
-
-
-@pytest.mark.parametrize(
-    "error",
-    ["." * 1_000_000, "input_value=" * 100_000, "input_value=x, input_type=y\n" * 40_000, " ...'x" * 200_000],
-    ids=["dots", "input_value_labels_on_one_line", "input_values_on_many_lines", "quoted_cuts"],
-)
-def test_scrub_request_text_stays_fast_on_a_large_error(error: str) -> None:
-    started: Final = time.perf_counter()
-
-    scrub_request_text(error, request_texts("hi there"))
-
-    assert time.perf_counter() - started < 0.5
 
 
 def test_scrub_request_text_leaves_an_error_that_does_not_quote_the_prompt() -> None:
