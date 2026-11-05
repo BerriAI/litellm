@@ -4,7 +4,7 @@ from datetime import date
 from typing import Annotated, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.models.usage_alerts import UsageAlertStore
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
@@ -57,10 +57,14 @@ def _allows_write(grant: str, route: str) -> bool:
     return RouteChecks.check_route_access(route, paths)
 
 
+class _WriteGrants(BaseModel, frozen=True):
+    allowed_routes: tuple[str, ...] | None = None
+
+
 def require_write_access(user: UserAPIKeyAuth, route: str) -> None:
-    if not user.allowed_routes:
+    grants: Final = _WriteGrants.model_validate(user, from_attributes=True).allowed_routes
+    if not grants:
         return
-    grants: Final = TypeAdapter(tuple[str, ...]).validate_python(user.allowed_routes)
     if not any(_allows_write(grant, route) for grant in grants):
         raise HTTPException(status_code=403, detail="This credential does not grant alert write access")
 
