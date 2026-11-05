@@ -1533,7 +1533,7 @@ def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, 
 def test_create_interaction_accepts_input_or_a_continuation_token(data: dict[str, object]) -> None:
     from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 
-    raise_if_required_body_param_missing(route_type="acreate_interaction", data=data, llm_router=None)
+    assert raise_if_required_body_param_missing(route_type="acreate_interaction", data=data, llm_router=None) is None
 
 
 def test_create_interaction_without_input_or_continuation_token_names_input() -> None:
