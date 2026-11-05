@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo } from "react";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
@@ -22,16 +23,16 @@ import { Segmented } from "./Primitives";
 import { providerForModel } from "./modelProvider";
 
 const METRIC_OPTIONS = [
-  { value: "spend", label: "Spend" },
-  { value: "tokens", label: "Tokens" },
-  { value: "requests", label: "Requests" },
-] as const satisfies readonly { value: UsageMetric; label: string }[];
+  { value: "spend", labelKey: "usage.breakdown.metricOptions.spend" },
+  { value: "tokens", labelKey: "usage.breakdown.metricOptions.tokens" },
+  { value: "requests", labelKey: "usage.breakdown.metricOptions.requests" },
+] as const satisfies readonly { value: UsageMetric; labelKey: ParseKeys }[];
 
 const DIMENSION_OPTIONS = [
-  { value: "model_groups", label: "Model" },
-  { value: "models", label: "Deployment" },
-  { value: "providers", label: "Provider" },
-] as const satisfies readonly { value: BreakdownDimension; label: string }[];
+  { value: "model_groups", labelKey: "usage.breakdown.dimensionOptions.modelGroups" },
+  { value: "models", labelKey: "usage.breakdown.dimensionOptions.models" },
+  { value: "providers", labelKey: "usage.breakdown.dimensionOptions.providers" },
+] as const satisfies readonly { value: BreakdownDimension; labelKey: ParseKeys }[];
 
 export interface BreakdownState {
   metric: UsageMetric;
@@ -67,14 +68,14 @@ export function BreakdownControls({
       <Segmented
         label={t("usage.breakdown.metricLabel")}
         value={state.metric}
-        options={METRIC_OPTIONS}
+        options={METRIC_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
         onChange={(metric) => onChange({ ...state, metric })}
       />
       {showDimension && (
         <Segmented
           label={t("usage.breakdown.groupByLabel")}
           value={state.dimension}
-          options={DIMENSION_OPTIONS}
+          options={DIMENSION_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
           onChange={(dimension) => onChange({ ...state, dimension })}
         />
       )}

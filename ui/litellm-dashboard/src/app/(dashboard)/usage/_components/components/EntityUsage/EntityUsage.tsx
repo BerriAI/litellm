@@ -7,6 +7,7 @@ import {
   buildSummaryTiles,
   hasFlatCost,
   hasPtuHours,
+  SUMMARY_TILE_LABELS,
   type SummaryTile,
 } from "./entityUsageSummary";
 import { MoneyCell } from "@/components/shared/table_cells";
@@ -74,13 +75,13 @@ const TILE_TRENDS: Readonly<Record<string, string>> = {
   "Total Tokens": "tokens",
 };
 const GRANULARITY_OPTIONS = [
-  { value: "day", label: "Daily" },
-  { value: "week", label: "Weekly" },
-] as const satisfies readonly { value: Granularity; label: string }[];
+  { value: "day", labelKey: "usage.entityUsage.chart.granularityOptions.day" },
+  { value: "week", labelKey: "usage.entityUsage.chart.granularityOptions.week" },
+] as const satisfies readonly { value: Granularity; labelKey: ParseKeys }[];
 const SCALE_OPTIONS = [
-  { value: "linear", label: "Linear" },
-  { value: "log", label: "Log" },
-] as const satisfies readonly { value: StackedUsageScale; label: string }[];
+  { value: "linear", labelKey: "usage.entityUsage.chart.scaleOptions.linear" },
+  { value: "log", labelKey: "usage.entityUsage.chart.scaleOptions.log" },
+] as const satisfies readonly { value: StackedUsageScale; labelKey: ParseKeys }[];
 const QUIET_HEADER = { headerClassName: "font-normal" };
 const FLAT_COST_KEY = "flat_cost";
 
@@ -433,7 +434,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const tileLabel = ({ title, tooltip, expandable }: SummaryTile) => (
     <>
-      <span>{title}</span>
+      <span>{Object.hasOwn(SUMMARY_TILE_LABELS, title) ? t(SUMMARY_TILE_LABELS[title]) : title}</span>
       {tooltip ? (
         <Tooltip>
           <TooltipTrigger render={<Info className="size-3.5 text-muted-foreground hover:text-foreground" />} />
@@ -540,13 +541,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             <Segmented
               label={t("usage.entityUsage.chart.bucketSize")}
               value={granularity}
-              options={GRANULARITY_OPTIONS}
+              options={GRANULARITY_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
               onChange={setGranularity}
             />
             <Segmented
               label={t("usage.entityUsage.chart.scaleLabel")}
               value={scale}
-              options={SCALE_OPTIONS}
+              options={SCALE_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
               onChange={setScale}
             />
           </div>
