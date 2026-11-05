@@ -63,11 +63,13 @@ def _published_entry() -> dict[str, JsonValue]:
 
 
 def _openai_entry() -> dict[str, JsonValue]:
+    published: Final = _published_entry()
     return {
-        **_published_entry(),
+        **published,
         "slug": OPENAI_SLUG,
         "display_name": "OpenAI Release",
         "base_instructions": OPENAI_PROMPT,
+        "model_messages": {**object_value(published["model_messages"]), "instructions_template": OPENAI_PROMPT},
     }
 
 
@@ -140,6 +142,7 @@ def test_a_release_openai_serves_is_fetched_from_openai_with_the_deployment_key_
         listing: Final = _catalog_listing(gateway, OPENAI_VERSION, OPENAI_SLUG)
         expected: Final = {
             **_openai_entry(),
+            "base_instructions": "",
             "priority": listing[OPENAI_SLUG]["priority"],
             "visibility": "list",
             "supported_in_api": True,
