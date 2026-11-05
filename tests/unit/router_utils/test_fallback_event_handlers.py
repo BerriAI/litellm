@@ -257,23 +257,22 @@ _FIRST_HOP_FAILURE_MARKER: Final = datetime(2026, 1, 2)
 _FINAL_HOP_FAILURE_MARKER: Final = datetime(2026, 1, 3)
 
 
-class _TwoFailureFallbackRouter(Router):
-    def __init__(self) -> None:
-        super().__init__(
-            model_list=[
-                {
-                    "model_name": "fallback-model",
-                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
-                    "model_info": {"id": f"fallback-dep-{index}"},
-                }
-                for index in (1, 2)
-            ],
-            allowed_fails=0,
-            cooldown_time=60,
-            num_retries=0,
-        )
+def _two_failure_fallback_router() -> Router:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
+                "model_info": {"id": f"fallback-dep-{index}"},
+            }
+            for index in (1, 2)
+        ],
+        allowed_fails=0,
+        cooldown_time=60,
+        num_retries=0,
+    )
 
-    async def async_function_with_fallbacks(self, *args: object, **kwargs: object) -> NoReturn:
+    async def fail_both_hops(*args: object, **kwargs: object) -> NoReturn:
         logging_obj: Final[object] = kwargs["litellm_logging_obj"]
         assert isinstance(logging_obj, Logging)
         assert logging_obj.model_call_details.get("has_logged_async_failure", False) is False
@@ -286,6 +285,9 @@ class _TwoFailureFallbackRouter(Router):
 
         logging_obj.model_call_details["current_attempt_api_call_start_time"] = _FINAL_HOP_FAILURE_MARKER
         raise _RateLimitedHop("fallback-dep-2")
+
+    router.async_function_with_fallbacks = fail_both_hops
+    return router
 
 
 def _two_deployment_router() -> Router:
@@ -397,8 +399,9 @@ async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_l
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("python_router_core")  # the Rust core walks fallbacks in Rust, so it has no such member
 async def test_run_async_fallback_cools_down_the_final_deployment_after_retry_failure_logging() -> None:
-    router: Final = _TwoFailureFallbackRouter()
+    router: Final = _two_failure_fallback_router()
     logging_obj: Final = _request_logging_obj()
     assert logging_obj.model_call_details.get("has_logged_async_failure", False) is False
 
