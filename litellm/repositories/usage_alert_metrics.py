@@ -8,6 +8,7 @@ from typing import Final, Literal, Protocol, TypeAlias
 from pydantic import TypeAdapter
 
 from litellm.repositories.daily_activity_buckets import api_key_bucket, model_bucket
+from litellm.types.proxy.model_deprecation import ModelDeprecationUsage
 
 Scope: TypeAlias = Literal["deployment", "key", "user", "team", "model"]
 
@@ -29,6 +30,31 @@ class MetricsDatabase(Protocol):
 
 _ROWS: Final = TypeAdapter(tuple[DailyAlertMetrics, ...])
 _BATCH_SIZE: Final = 500
+_DEPRECATION_USAGE: Final = TypeAdapter(tuple[ModelDeprecationUsage, ...])
+
+_DEPRECATION_USAGE_QUERY: Final = """
+WITH activity AS MATERIALIZED (
+    SELECT model, date, api_key, user_id, api_requests FROM "LiteLLM_DailyUserSpend"
+    WHERE date >= $1 AND date <= $2 AND model = ANY($3::text[]) AND api_requests > 0
+), daily AS (
+    SELECT model, date, SUM(api_requests)::bigint AS requests FROM activity GROUP BY model, date
+), latest AS (
+    SELECT DISTINCT ON (model) model, date AS last_used_date, requests AS last_day_requests
+    FROM daily ORDER BY model, date DESC
+), totals AS (
+    SELECT model, SUM(api_requests)::bigint AS requests,
+           COUNT(DISTINCT NULLIF(api_key, ''))::int AS keys,
+           COUNT(DISTINCT NULLIF(NULLIF(user_id, ''), 'default_user_id'))::int AS users
+    FROM activity GROUP BY model
+), teams AS (
+    SELECT model, COUNT(DISTINCT NULLIF(NULLIF(team_id, ''), 'litellm-dashboard'))::int AS teams
+    FROM "LiteLLM_DailyTeamSpend"
+    WHERE date >= $1 AND date <= $2 AND model = ANY($3::text[]) AND api_requests > 0
+    GROUP BY model
+)
+SELECT totals.*, latest.last_used_date, latest.last_day_requests, COALESCE(teams.teams, 0) AS teams
+FROM totals JOIN latest USING (model) LEFT JOIN teams USING (model) ORDER BY model
+"""
 
 
 def _source(scope: Scope) -> tuple[str, str]:
@@ -78,6 +104,17 @@ def _reporting_id(scope: Scope, row: DailyAlertMetrics) -> DailyAlertMetrics:
 class UsageAlertMetricsRepository:
     def __init__(self, database: MetricsDatabase) -> None:
         self._database = database
+
+    async def deprecation_usage(
+        self, models: tuple[str, ...], start: date, end: date
+    ) -> tuple[ModelDeprecationUsage, ...]:
+        if not models:
+            return ()
+        if len(models) > _BATCH_SIZE or not 0 <= (end - start).days < 30:
+            raise ValueError("Deprecation usage accepts at most 500 models and 30 consecutive dates")
+        return _DEPRECATION_USAGE.validate_python(
+            await self._database.query_raw(_DEPRECATION_USAGE_QUERY, start.isoformat(), end.isoformat(), models)
+        )
 
     async def batches(
         self, scope: Scope, target: date, baseline_days: int
