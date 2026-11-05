@@ -1,6 +1,6 @@
-# Alerts and daily Performance alerts
+# Alerts
 
-The Alerts page combines model retirements with daily Performance alerts. Open an issue to inspect its saved comparison, supporting signals, and Activity for the affected resource or provider/model cohort. Related signals can share one investigation without discarding their individual records. Grouping describes observed relationships; it does not establish a root cause.
+The Alerts page combines model retirements with daily Performance alerts. Open an alert to inspect its saved comparison, supporting signals, and Activity for the affected resource or provider/model cohort. Related signals can share one investigation without discarding their individual records. Grouping describes observed relationships; it does not establish a root cause.
 
 Performance comparisons cover completed UTC days. Retirement issues show recent model usage and the provider's retirement schedule, including today's usage when present.
 
@@ -20,15 +20,23 @@ Daily Performance defaults cover spend, latency, reliability, and traffic across
 
 New resources need history before they can produce a default spike. A zero spend, request, or latency baseline does not establish a spike. A zero error-rate baseline is usable only after sufficient historical traffic has been observed; the percentage-point floor still applies.
 
-Use the family settings to enable or disable a family or adjust its thresholds across the five scopes. Existing custom rules remain independent. An enabled custom rule replaces the matching default for its scope, metric, and direction. A custom wildcard rule replaces that default for every entity. Deleted defaults stay deleted.
+Open **Alerts → Settings** to enable or disable a family or adjust its thresholds across the five scopes. Only enabled custom rules managed by a gateway administrator replace matching defaults for their scope, metric, and direction. An administrator-managed wildcard rule replaces that default for every entity. Rules created by scoped non-admins add alerts without suppressing defaults. Deleted defaults stay deleted.
 
-The scheduler wakes hourly and evaluates the latest completed UTC day after a one-hour grace period. A successful aggregate flush after the grace period is required before either direction is finalized. Completed rule versions are skipped on later ticks. The evaluator reads existing daily aggregates in pages of 500 entities; it adds no request-time counters or per-request database writes.
+## When checks run
+
+An initial check is scheduled shortly after startup, followed by hourly wakeups. The evaluator checks the latest completed UTC day after a one-hour grace period. A successful aggregate flush after the grace period is required before either direction is finalized. Completed rule versions are skipped on later wakeups. These are daily comparisons, not rolling hourly alerts.
+
+Each run has a shared 60-second work budget, including up to five seconds for model-retirement checks. Performance evaluation reads existing daily aggregates in pages of 10 entities, with a short pause between pages. Proxy replicas share a database lease for this job. It adds no request-time counters or per-request database writes.
+
+Completed pages save a checkpoint. When time or database capacity runs out, unfinished work resumes from its saved position on a later wakeup. A page interrupted before its checkpoint can be repeated safely. This is best-effort progress: a large or busy deployment can need several hourly wakeups, and repeated query timeouts can prevent a page from advancing. The hourly schedule does not guarantee that every resource or notification finishes within an hour.
+
+Completed key alerts can appear while other resources are still being checked or related signals are being grouped. **Monitoring** shows **Catching up** for unfinished work and explains that it resumes automatically. Rule status `delayed` means work remains; `insufficient_history` means a completed comparison lacked usable baseline data, while `insufficient_coverage` means the required usage-data coverage is missing. A partial pass is not reported as a completed scan.
 
 Decrease rules need a successful background aggregate-flush sample for every hour of the target day and another sample after the grace period. Until that coverage exists, their status is `insufficient_coverage`. A key with no requests can then produce a request or spend drop; missing latency samples never become zero latency. Coverage shows that an aggregate writer was healthy each hour, not that every replica delivered every request.
 
 The baseline averages recorded reference days; it does not turn missing reference days into zero. Average latency is weighted by timed request count, using the same successful-request duration totals as Activity. `baseline_sample_days` records how many reference days contributed. Cost, traffic, and latency comparisons require a positive baseline. Reliability can compare against a recorded 0% error rate when historical and current request volume meet the rule's minimum. Missing history and low-volume comparisons remain `insufficient_history`.
 
-## How related signals form one issue
+## How related signals form one alert
 
 A key with unusually high spend gets a spend issue, including when it makes only a few expensive requests. Its comparison includes request volume so you can distinguish more traffic from more expensive traffic. A traffic-increase signal joins that spend issue when both increases use the same reference window and their ratios are within 20% of each other.
 
@@ -36,7 +44,7 @@ Default user, team, model, and gateway signals can join a key issue when they de
 
 Provider latency grouping requires measured deterioration within established key/model traffic: at least two keys per model, two models, and 80% coverage of current timed requests. A change in the mix of fast and slow models alone is insufficient. A source joins only when at least 80% of its timed traffic independently meets the shared pattern; a source with more than twice the provider cohort's latency ratio stays separate. The issue keeps its original provider/model cohort until recovery. These relationships are evidence for a shared investigation, not proof of a provider outage or root cause. Custom rules retain their configured resource scope.
 
-## Read and investigate issues
+## Read and investigate alerts
 
 Set `LITELLM_API_BASE` to your gateway's base URL and `LITELLM_MANAGEMENT_KEY` to a management-capable credential. Keep the credential in your environment.
 
@@ -86,7 +94,7 @@ The issue-detail response includes `can_update_status` and `can_view_activity` f
 
 ## Configure default families
 
-`GET /issues/families` returns the four Performance families, their enabled counts, and common policy values. A null common value means the underlying scopes have different settings. This is separate from custom rules and the model-retirement warning window.
+`GET /issues/families` returns the four Performance families, their enabled counts, common policy values, and `evaluation_status_counts` for enabled rules. A null common value means the underlying scopes have different settings. The top-level `projection_pending` flag indicates that alert grouping has unfinished work, even if no rule is currently `delayed`. This is separate from custom rules and the model-retirement warning window.
 
 This example sets the spend family to a 5× threshold and a $25 minimum absolute increase:
 
@@ -156,7 +164,7 @@ curl "$LITELLM_API_BASE/usage/alert-rules" \
   }'
 ```
 
-The baseline is the mean across recorded days in the preceding window. Missing reference days are unknown. At least `min_history_days` recorded days are required. A decrease uses `baseline / multiplier`; a multiplier of 2 detects a value at or below half the baseline. `min_value` is the minimum absolute difference in the metric's own units.
+The baseline is the mean across recorded days in the preceding window. Missing reference days are unknown. At least `min_history_days` recorded days are required. A decrease uses `baseline / multiplier`; a multiplier of 2 detects a value at most half the baseline. `min_value` is the minimum absolute difference in the metric's own units.
 
 | Metric | Unit |
 | --- | --- |
@@ -168,7 +176,7 @@ The baseline is the mean across recorded days in the preceding window. Missing r
 
 Counts come from the existing Activity/spend aggregates, rather than every gateway HTTP outcome. Latency averages successful timed, non-internal requests; it is not time to first token and does not include failed requests. Issue Activity and gateway source incidents use the same aggregates. An error-rate `min_value` of 2 means two percentage points, such as 1% to 3%, not a 2% relative increase.
 
-The evaluator runs against daily aggregates. An hourly scheduler does not make these rolling hourly alerts. A complete UTC day and sufficient ingestion coverage are required before detecting drops; a missing flush must not become a false traffic-drop incident. Rule responses expose `last_evaluated_day` and `evaluation_status` so you can distinguish a completed evaluation from insufficient history or coverage.
+The evaluator runs against daily aggregates. An hourly scheduler does not make these rolling hourly alerts. A complete UTC day and sufficient ingestion coverage are required before detecting drops; a missing flush must not become a false traffic-drop incident. Rule responses expose `last_evaluated_day` and `evaluation_status` so you can distinguish a completed evaluation from delayed work, insufficient history, or missing coverage.
 
 Use `scope_type: "deployment"` with no `scope_id` for the gateway. For `model`, use the underlying model identity recorded in Activity. For `key`, use its reporting ID, never the secret API key. Omitting `scope_id` for key, user, team, or model evaluates all entities of that type and requires a gateway administrator.
 
@@ -183,12 +191,26 @@ Use `scope_type: "deployment"` with no `scope_id` for the gateway. For `model`, 
 
 Consecutive breached days keep one incident. Its original day, comparison values, and Activity link stay fixed; `last_seen` advances. Re-evaluating the same day does not reopen a dismissed or resolved incident. After recovery, a later breach starts a new incident. Editing a rule does not rewrite historical comparisons.
 
-Rules can specify `notification_channels: ["slack", "email"]` and `email_recipients: ["alerts@example.com"]`. Notification transports must already be configured on the gateway. An empty channel list keeps incidents available through the API and dashboard. Issue delivery is recorded per channel and destination. A repeated projection does not resend a successful delivery. Failed deliveries retry in the background, and the worker rechecks the issue, source signal, and current rule immediately before transport. Disabling a rule or acknowledging an issue cannot recall a send already in flight. Delivery is at least once: an ambiguous transport timeout, or partial success across several configured Slack webhooks, can cause a retry after a destination accepted a message. Configure `PROXY_BASE_URL` for clickable links in email and Slack. Default rules notify through Slack only when `usage_alerts` is explicitly enabled in the gateway's alert types when those rules are first registered. Otherwise they start with in-app/API incidents. To enable notifications after the defaults already exist, edit their channels through the API or dashboard; changing the gateway alert types does not rewrite saved rules. Explicit rule channels use the configured transport without an additional alert-type switch. If legacy `user_spend_anomalies` notifications are enabled, the default daily user-spend increase rule stays in-app to avoid overlapping notifications. Email requires recipients on the rule.
+Rules can specify `notification_channels: ["slack", "email"]` and `email_recipients: ["alerts@example.com"]`. Notification transports must already be configured on the gateway. An empty channel list keeps incidents available through the API and dashboard.
+
+Issue delivery is recorded per channel and destination. A repeated projection does not resend a successful delivery. Failed or unconfigured deliveries become eligible for retry after one hour and are retried on a later background pass with available capacity. Delivery pages contain at most 10 entries, and each transport attempt is limited by the remaining run budget, up to 30 seconds. The worker rechecks the issue, source signal, and current rule immediately before transport. Disabling a rule or acknowledging an issue cannot recall a send already in flight. Delivery is at least once: an ambiguous transport timeout, or partial success across several configured Slack webhooks, can cause a retry after a destination accepted a message.
+
+Configure `PROXY_BASE_URL` for clickable links in email and Slack. Default rules notify through Slack only when `usage_alerts` is explicitly enabled in the gateway's alert types when those rules are first registered. Otherwise they start with in-app/API incidents. To enable notifications after the defaults already exist, edit their channels through the API or dashboard; changing the gateway alert types does not rewrite saved rules. Explicit rule channels use the configured transport without an additional alert-type switch.
+
+If legacy `user_spend_anomalies` notifications are enabled, the default daily user-spend increase rule stays in-app to avoid overlapping notifications. Email requires recipients on the rule.
+
+## Resource limits and delayed work
+
+Alert investigations and resource-page Activity tabs limit returned rows before loading results into the application. For a key, these views show exact totals and a bounded model breakdown: 20 named models by default, at most 100, plus a separate **Other** aggregate for the remaining models. Activity ranges span at most 366 days. A small result page can still require reading many aggregate rows; page size is not a database scan limit.
+
+Guarded queries allow at most two foreground queries and one background query at a time, coordinated across workers sharing the database. They do not build an unbounded waiting queue. Each query has a statement timeout of at most five seconds, a lock wait of at most 100 ms, and a 1 MiB PostgreSQL `work_mem` setting, with stricter existing limits preserved. Background query deadlines also shrink to the remaining run budget. PostgreSQL `work_mem` applies per operation, not to total application or database memory.
+
+When an Activity query is busy or exceeds its budget, the API returns `503` with `Retry-After: 5`. Background work keeps its checkpoint and tries again on a later wakeup. These limits bound work per attempt; database size, query plans, existing gateway memory, and concurrent serving traffic still affect overhead and completion time. Persistent **Catching up** means monitoring has not finished, not that the remaining resources are healthy.
 
 ## Access
 
-Gateway administrators can manage every scope. Admin viewers can read every scope. Internal users can manage their own user and key scopes; team administrators can manage their team's scope and keys. Team members can read their team's incidents. Read-only users cannot change rules or incident state, and inference-only keys cannot access these endpoints.
+Gateway administrators can manage every scope. Admin viewers can read every scope. Internal users can manage their own user and key scopes; team administrators can manage their team's scope and keys. Scoped non-admins can create additive rules without notification delivery. Only gateway administrators can configure notification destinations or change operator-managed rules. Team members can read their team's incidents. Team-wide Activity requires team-administrator access or the existing team daily-activity permission. Read-only users cannot change rules or incident state, and inference-only keys cannot access these endpoints. Read-only `info_routes` grants do not authorize mutations.
 
-Non-admin list requests must specify a scope they can access, for example `?scope_type=user&scope_id=user-example`. A `403` indicates that the credential or scope lacks access. A `503` can indicate an unavailable database or exhausted analytics capacity; a `Retry-After` header indicates that the client should retry later.
+Non-admin list requests must specify a scope they can access, for example `?scope_type=user&scope_id=user-example`. A `403` indicates that the credential or scope lacks access. A `503` can indicate a missing database connection or unavailable analytics capacity; capacity responses include `Retry-After`.
 
 The dashboard's Alerts page is available to administrators and admin viewers. Other authorized roles can use the scoped API.
