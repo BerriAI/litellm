@@ -1616,9 +1616,27 @@ model LiteLLM_ClaudeCodePluginTable {
   created_by    String?
 
   uploaded_archive LiteLLM_ClaudeCodePluginUpload?
+  versions LiteLLM_ClaudeCodePluginVersion[]
 
   @@map("LiteLLM_ClaudeCodePluginTable")
 }
+
+model LiteLLM_ClaudeCodePluginVersion {
+  id                String @id @default(uuid())
+  plugin_id         String
+  version           String?
+  description       String?
+  manifest_json     String?
+  published_at      DateTime?
+  published_by      String?
+  archive_available Boolean @default(false)
+  content           Bytes?
+  plugin            LiteLLM_ClaudeCodePluginTable @relation(fields: [plugin_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([plugin_id, version])
+  @@index([plugin_id, published_at])
+}
+
 
 model LiteLLM_ClaudeCodePluginUpload {
   plugin_name String @id

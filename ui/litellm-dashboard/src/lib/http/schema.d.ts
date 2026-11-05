@@ -2611,7 +2611,8 @@ export interface paths {
          *     The plugin is identified by its name in the path, which is the resource
          *     identity and cannot be changed here. This is a full replace, not a merge:
          *     the manifest is rebuilt from the request body, so any optional field left
-         *     out is reset to its default (e.g. an omitted version is cleared, not kept).
+         *     out is reset to its default, except version which automatically increments
+         *     the published patch version when omitted or null.
          *     Send the full desired state.
          *
          *     Returns 404 if no plugin with the given name exists; use
@@ -15832,6 +15833,66 @@ export interface paths {
          * @description Remove a skill from public discovery while retaining explicit grants.
          */
         post: operations["unpublish_skill_skill_hub_skills__name__unpublish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skill Versions
+         * @description Read published metadata history. External references are not retained artifacts.
+         */
+        get: operations["list_skill_versions_skill_hub_skills__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skill Version
+         * @description Read a retained publication under the current skill's visibility policy.
+         */
+        get: operations["get_skill_version_skill_hub_skills__name__versions__version_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/versions/{version_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Skill Version
+         * @description Download a retained publication as a portable ZIP with SKILL.md at its root.
+         */
+        get: operations["download_skill_version_skill_hub_skills__name__versions__version_id__archive_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -34400,7 +34461,7 @@ export interface components {
             url: string;
             /**
              * Version
-             * @description Version label for the imported snapshot
+             * @description Semantic version, or omit/null to start at 1.0.0
              */
             version?: string | null;
         };
@@ -43322,7 +43383,7 @@ export interface components {
             };
             /**
              * Version
-             * @description Semantic version
+             * @description Semantic version, defaults to 1.0.0 on creation
              * @default 1.0.0
              */
             version: string | null;
@@ -46614,11 +46675,19 @@ export interface components {
             description?: string | null;
             /** Domain */
             domain?: string | null;
+            /**
+             * Expected Updated At
+             * @description Published updated_at read by the editor. A stale value returns 409
+             */
+            expected_updated_at?: string | null;
             /** Keywords */
             keywords?: string[] | null;
             /** Namespace */
             namespace?: string | null;
-            /** Version */
+            /**
+             * Version
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             */
             version?: string | null;
         };
         /** SkillHubPublication */
@@ -46639,6 +46708,8 @@ export interface components {
             source: {
                 [key: string]: string;
             };
+            /** Updated At */
+            updated_at?: string | null;
             /** Version */
             version?: string | null;
             /**
@@ -46646,6 +46717,37 @@ export interface components {
              * @enum {string}
              */
             visibility: "public" | "private";
+        };
+        /** SkillHubVersion */
+        SkillHubVersion: {
+            /**
+             * Content Kind
+             * @enum {string}
+             */
+            content_kind: "stored_archive" | "source_reference";
+            /** Description */
+            description: string | null;
+            /** Download Url */
+            download_url: string | null;
+            /** Id */
+            id: string;
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Published At */
+            published_at: string | null;
+            /** Published By */
+            published_by: string | null;
+            /** Version */
+            version: string | null;
+        };
+        /** SkillHubVersions */
+        SkillHubVersions: {
+            /** Next Offset */
+            next_offset: number | null;
+            /** Versions */
+            versions: components["schemas"]["SkillHubVersion"][];
         };
         /** SkillReference */
         SkillReference: {
@@ -49689,8 +49791,8 @@ export interface components {
          *
          *     The plugin name is the resource identity and is supplied as the path
          *     parameter, so it cannot be changed here. This is a full replace: omitted
-         *     fields reset to their defaults, so version is cleared rather than
-         *     defaulting to the create-time "1.0.0".
+         *     fields reset to their defaults, except version which automatically increments
+         *     the published patch version when omitted or null.
          */
         UpdatePluginRequest: {
             /** @description Plugin author */
@@ -49710,6 +49812,11 @@ export interface components {
              * @description Skill domain (e.g., 'Productivity')
              */
             domain?: string | null;
+            /**
+             * Expected Updated At
+             * @description Published updated_at read by the editor. A stale value returns 409
+             */
+            expected_updated_at?: string | null;
             /**
              * Homepage
              * @description Plugin homepage URL
@@ -49743,7 +49850,7 @@ export interface components {
             };
             /**
              * Version
-             * @description Semantic version; cleared if omitted
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
              */
             version?: string | null;
         };
@@ -50326,7 +50433,7 @@ export interface components {
             namespace?: string | null;
             /**
              * Version
-             * @description Semantic version
+             * @description Semantic version, defaults to 1.0.0 on creation
              * @default 1.0.0
              */
             version: string | null;
@@ -74083,6 +74190,104 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_skill_versions_skill_hub_skills__name__versions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubVersions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_version_skill_hub_skills__name__versions__version_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubVersion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_skill_version_skill_hub_skills__name__versions__version_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */
