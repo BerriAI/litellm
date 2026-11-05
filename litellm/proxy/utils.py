@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from functools import partial
+from functools import partial, reduce
 from itertools import takewhile
 from operator import attrgetter
 from types import MappingProxyType
@@ -168,7 +168,6 @@ from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
     Logging,
-    UsageObservation,
     deployment_pricing_model_info,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -214,6 +213,7 @@ from litellm.proxy.db.db_url_settings import (
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
+    db_write_never_sent,
 )
 from litellm.proxy.db.health_check_latest import (
     LatestHealthCheckRow,
@@ -278,6 +278,7 @@ from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.spend_log_insert import RejectedSpendLogRow
 from litellm.repositories.table_repositories import (
     EndUserRepository,
     HealthCheckRepository,
@@ -1681,14 +1682,17 @@ _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "updat
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
 
 
+def _extended_exception_chain(chain: tuple[BaseException, ...], iteration: int) -> tuple[BaseException, ...]:
+    if len(chain) != iteration + 1:
+        return chain
+    following: Final = chain[-1].__cause__ or chain[-1].__context__
+    if following is None or following in chain:
+        return chain
+    return (*chain, following)
+
+
 def _exception_chain(exception: BaseException) -> tuple[BaseException, ...]:
-    chain: Final[list[BaseException]] = [exception]  # mutable-ok: built once, returned frozen
-    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
-        following = chain[-1].__cause__ or chain[-1].__context__
-        if following is None or following in chain:
-            break
-        chain.append(following)
-    return tuple(chain)
+    return reduce(_extended_exception_chain, range(_EXCEPTION_CHAIN_MAX_DEPTH), (exception,))
 
 
 def _timed_out_reading_from_provider(exception: Exception) -> bool:
@@ -1802,39 +1806,6 @@ def _failure_fields_to_lift(
         if _prompt_estimate is not None
         else ()
     )
-    from litellm.litellm_core_utils.litellm_logging import UsageCaptureObservation
-
-    _recorded_observation: Final[object] = _model_call_details.get("_accounting_usage_observed")
-    _current_usage: Final = (
-        _current_failure_usage_to_lift(
-            _model_call_details,
-            request_data,
-            _model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
-            _billed,
-            _deployment_id,
-            _base_model,
-            _estimate_call_type,
-        )
-        if Logging.usage_capture_callback is not None
-        and (_billed or _model_call_details.get("combined_usage_object") is not None)
-        else None
-    )
-    _current_observation: Final = (
-        _recorded_observation
-        if isinstance(_recorded_observation, UsageObservation)
-        else UsageObservation.UNKNOWN
-        if _current_usage is None
-        else UsageObservation.KNOWN
-        if _model_call_details.get("combined_usage_object") is not None
-        else UsageObservation.ESTIMATED
-    )
-    _capture_observation: Final = UsageCaptureObservation.from_usage(
-        _current_usage[0] if _current_usage is not None and isinstance(_current_usage[0], Usage) else None,
-        _current_observation,
-        float(_current_usage[1])
-        if _current_usage is not None and isinstance(_current_usage[1], (int, float))
-        else None,
-    )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
         ("first_api_call_start_time", _first_handoff),
@@ -1843,16 +1814,12 @@ def _failure_fields_to_lift(
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
         ("billed_failed_attempts", _earlier_attempts or None),
-        ("_accounting_capture", _model_call_details.get("_accounting_capture")),
         ("_accounting_pricing_snapshot", _model_call_details.get("_accounting_pricing_snapshot")),
         ("_accounting_finalized_cost", _logging_obj.finalized_cost if isinstance(_logging_obj, Logging) else None),
         (
             "_accounting_allocation",
             _logging_obj.cost_allowance_allocation if isinstance(_logging_obj, Logging) else None,
         ),
-        ("_accounting_usage_observed", _current_observation if Logging.usage_capture_callback is not None else None),
-        ("_accounting_usage_snapshot", _capture_observation if Logging.usage_capture_callback is not None else None),
-        ("_accounting_prior_captures", _model_call_details.get("_accounting_prior_captures")),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 
@@ -8452,14 +8419,17 @@ async def enqueue_spend_logs(
     """
     added: Final = sum(spend_log_row_bytes(row) for row in logs)
     async with prisma_client._spend_log_transactions_lock:
-        queued: Final = (
+        queued: Final[tuple[Mapping[str, object], ...]] = (
             tuple(logs) + tuple(prisma_client.spend_log_transactions)
             if at_head
             else tuple(prisma_client.spend_log_transactions) + tuple(logs)
         )
         kept, kept_bytes = spend_log_queue_within_budget(queued, PrismaClient.spend_log_queue_bytes + added, max_bytes)
-        prisma_client.spend_log_transactions[:] = kept
-        PrismaClient.spend_log_queue_bytes = kept_bytes
+        rescued: Final = tuple(
+            accounting_only_spend_log(row) for row in queued[: len(queued) - len(kept)] if _carries_a_charge(row)
+        )
+        prisma_client.spend_log_transactions[:] = (*rescued, *kept)
+        PrismaClient.spend_log_queue_bytes = kept_bytes + sum(spend_log_row_bytes(row) for row in rescued)
     if len(kept) < len(queued):
         verbose_proxy_logger.error(
             "Spend tracking - spend log queue is at its %d byte budget; dropped the %d oldest spend logs",
@@ -8514,13 +8484,18 @@ class ProxyUpdateSpend:
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
         end_user_list_transactions: dict[str, float],
+        outer_transaction: _EndUserSpendTransaction | None = None,
     ):
         for i in range(n_retry_times + 1):
             start_time = time.time()
             try:
                 async with (
                     db_span("update_end_user_spend", "LiteLLM_EndUserTable"),
-                    _end_user_spend_transaction(prisma_client.db, timedelta(seconds=60)) as transaction,
+                    (
+                        contextlib.nullcontext(outer_transaction)
+                        if outer_transaction is not None
+                        else _end_user_spend_transaction(prisma_client.db, timedelta(seconds=60))
+                    ) as transaction,
                 ):
                     batcher: _EndUserSpendBatch
                     async with transaction.batch_() as batcher:
@@ -8542,6 +8517,8 @@ class ProxyUpdateSpend:
 
                 break
             except Exception as e:
+                if outer_transaction is not None:
+                    raise
                 await DBSpendUpdateWriter.handle_spend_update_failure(
                     e=e,
                     attempt=i,
@@ -8581,11 +8558,18 @@ class ProxyUpdateSpend:
             for i in range(n_retry_times + 1):
                 try:
                     base_url = os.getenv("SPEND_LOGS_URL", None)
-                    if len(logs_to_process) > 0 and base_url is not None and db_writer_client is not None:
+                    await _commit_export_accounting(
+                        prisma_client, rows_to_write, base_url if db_writer_client is not None else None
+                    )
+                    if (
+                        base_url is not None
+                        and db_writer_client is not None
+                        and any(row.get("accounting_log_disabled") is not True for row in rows_to_write)
+                    ):
                         if not base_url.endswith("/"):
                             base_url += "/"
                         verbose_proxy_logger.debug("base_url: %s", base_url)
-                        json_data = json.dumps(rows_to_write)
+                        json_data = json.dumps(_spend_log_export_rows(rows_to_write))
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
                             data=json_data,
@@ -8661,6 +8645,28 @@ class ProxyUpdateSpend:
         if general_settings.get("disable_spend_updates") is True:
             return True
         return False
+
+
+def _spend_log_export_rows(rows: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {
+            key: value
+            for key, value in row.items()
+            if key not in {"accounting_payload", "accounting_log_disabled", "accounting_delivery_id"}
+        }
+        for row in rows
+        if row.get("accounting_log_disabled") is not True
+    )
+
+
+async def _commit_export_accounting(
+    prisma_client: PrismaClient, rows: Sequence[Mapping[str, object]], base_url: str | None
+) -> None:
+    if base_url is None:
+        return
+    await SpendLogsRepository(prisma_client).insert_with_deliveries(
+        tuple(row for row in rows if "accounting_payload" in row), write_spend_logs=False
+    )
 
 
 async def commit_tool_discoveries(prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging) -> None:
@@ -8838,9 +8844,20 @@ async def update_daily_tag_spend(
 
 def _rollup_batch_never_applied(e: Exception) -> bool:
     """True when a drained rollup batch provably never reached its rows: Postgres had no
-    connection for it (53300) or cancelled it under ``lock_timeout`` before it took the row
-    lock (55P03). Either way re-sending the batch cannot double-count, so it is requeued."""
-    return PrismaDBExceptionHandler.is_database_capacity_error(e) or PrismaDBExceptionHandler.is_lock_timeout_error(e)
+    connection for it (53300), was unreachable or refusing connections (P1001, 57P03), or
+    cancelled it under ``lock_timeout`` before it took the row lock (55P03). In each case
+    re-sending the batch cannot double-count, so it is requeued."""
+    return (
+        PrismaDBExceptionHandler.is_database_capacity_error(e)
+        or db_write_never_sent(e)
+        or PrismaDBExceptionHandler.is_lock_timeout_error(e)
+    )
+
+
+def _rollup_failure_stops_job(e: Exception) -> bool:
+    """True when the database cannot take any write, so the job stops instead of draining
+    the queues after this one into the same failure."""
+    return PrismaDBExceptionHandler.is_database_capacity_error(e) or db_write_never_sent(e)
 
 
 async def update_spend_logs_job(
@@ -8931,12 +8948,12 @@ async def _run_spend_logs_job(
                     *prisma_client.tool_usage_transactions,
                 ]
             verbose_proxy_logger.warning(
-                "Spend tracking - database out of connections or rollup row lock timed out during tool usage "
+                "Spend tracking - database unavailable or rollup row lock timed out during tool usage "
                 "flush, requeued %s tool usage transactions for the next flush: %s",
                 len(tool_usage_to_process),
                 tool_tracking_err,
             )
-            if PrismaDBExceptionHandler.is_database_capacity_error(tool_tracking_err):
+            if _rollup_failure_stops_job(tool_tracking_err):
                 raise
         else:
             verbose_proxy_logger.error(
@@ -8963,12 +8980,12 @@ async def _run_spend_logs_job(
                     *prisma_client.model_usage_transactions,
                 ]
             verbose_proxy_logger.warning(
-                "Spend tracking - database out of connections or rollup row lock timed out during model usage "
+                "Spend tracking - database unavailable or rollup row lock timed out during model usage "
                 "flush, requeued %s model usage transactions for the next flush: %s",
                 len(model_usage_to_process),
                 model_usage_err,
             )
-            if PrismaDBExceptionHandler.is_database_capacity_error(model_usage_err):
+            if _rollup_failure_stops_job(model_usage_err):
                 raise
         else:
             verbose_proxy_logger.error(
@@ -9145,8 +9162,43 @@ def _is_transient_spend_log_write_error(e: Exception) -> bool:
     return (
         PrismaDBExceptionHandler.is_database_transport_error(e)
         or PrismaDBExceptionHandler.is_prisma_engine_internal_error(e)
+        or PrismaDBExceptionHandler.is_database_lifecycle_error(e)
         or PrismaDBExceptionHandler.is_deadlock_error(e)
     )
+
+
+_ACCOUNTING_ONLY_KEYS: Final = frozenset({"request_id", "call_type", "accounting_payload", "accounting_delivery_id"})
+
+
+def _carries_a_charge(row: Mapping[str, object]) -> bool:
+    return "accounting_payload" in row
+
+
+def accounting_only_spend_log(row: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{key: value for key, value in row.items() if key in _ACCOUNTING_ONLY_KEYS},
+        "accounting_log_disabled": True,
+    }
+
+
+async def _keep_charges_of_dropped_logs(repo: SpendLogsRepository, rows: Sequence[Mapping[str, object]]) -> None:
+    charged: Final = tuple(accounting_only_spend_log(row) for row in rows if _carries_a_charge(row))
+    if not charged:
+        return
+    try:
+        await repo.insert_with_deliveries(charged)
+    except Exception as e:  # noqa: BLE001  # the request log is already lost; keep the flush going for other rows
+        if not (
+            PrismaDBExceptionHandler.is_rejected_row_error(e)
+            or isinstance(e, (UnicodeEncodeError, RejectedSpendLogRow))
+        ):
+            raise
+        spend_log_error(
+            "Spend tracking - could not keep the charges of %d dropped spend log rows. error=%s",
+            len(charged),
+            str(e),
+            exc=e,
+        )
 
 
 async def _create_spend_logs_with_poison_isolation(
@@ -9177,10 +9229,13 @@ async def _create_spend_logs_with_poison_isolation(
     persist. Returns the budget left after this subtree.
     """
     try:
-        await repo.table.create_many(data=rows, skip_duplicates=True)
+        await repo.insert_with_deliveries(rows)
         return failure_budget
     except Exception as e:
-        if not (PrismaDBExceptionHandler.is_prisma_data_error(e) or isinstance(e, UnicodeEncodeError)):
+        if not (
+            PrismaDBExceptionHandler.is_rejected_row_error(e)
+            or isinstance(e, (UnicodeEncodeError, RejectedSpendLogRow))
+        ):
             raise
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
             raise
@@ -9195,6 +9250,7 @@ async def _create_spend_logs_with_poison_isolation(
                 str(e),
                 exc=e,
             )
+            await _keep_charges_of_dropped_logs(repo, rows)
             return budget_left
         if budget_left <= 0:
             spend_log_error(
@@ -9202,6 +9258,7 @@ async def _create_spend_logs_with_poison_isolation(
                 "isolation failure budget exhausted for this flush",
                 len(rows),
             )
+            await _keep_charges_of_dropped_logs(repo, rows)
             return 0
         mid: Final = len(rows) // 2
         remaining: Final = await _create_spend_logs_with_poison_isolation(repo, rows[:mid], budget_left)
@@ -9211,6 +9268,7 @@ async def _create_spend_logs_with_poison_isolation(
                 "isolation failure budget exhausted for this flush",
                 len(rows) - mid,
             )
+            await _keep_charges_of_dropped_logs(repo, rows[mid:])
             return 0
         return await _create_spend_logs_with_poison_isolation(repo, rows[mid:], remaining)
 

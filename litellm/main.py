@@ -81,11 +81,13 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_for_health_check,
 )
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    bill_first_round_on_failure,
     maybe_run_chat_completion_agentic_loop,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
+    AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
@@ -954,26 +956,31 @@ async def acompletion(
         # no equivalent: every provider already funnels through one shared
         # handler where the loop is dispatched.
         if isinstance(response, litellm.ModelResponse):
-            looped: Final = await maybe_run_chat_completion_agentic_loop(
-                response=response,
-                model=model,
-                messages=messages,
-                optional_params={
-                    k: v
-                    for k, v in completion_kwargs.items()
-                    if v is not None
-                    and k
-                    not in (
-                        "model",
-                        "messages",
-                        "stream",
-                        "acompletion",
-                        "deployment_id",
-                    )
-                },
-                kwargs=kwargs,
+            looped: Final = await bill_first_round_on_failure(
+                maybe_run_chat_completion_agentic_loop(
+                    response=response,
+                    model=model,
+                    messages=messages,
+                    optional_params={
+                        k: v
+                        for k, v in completion_kwargs.items()
+                        if v is not None
+                        and k
+                        not in (
+                            "model",
+                            "messages",
+                            "stream",
+                            "acompletion",
+                            "deployment_id",
+                        )
+                    },
+                    kwargs=kwargs,
+                    logging_obj=kwargs.get("litellm_logging_obj"),
+                    custom_llm_provider=custom_llm_provider,
+                    stream=bool(stream),
+                ),
                 logging_obj=kwargs.get("litellm_logging_obj"),
-                custom_llm_provider=custom_llm_provider,
+                response=response,
                 stream=bool(stream),
             )
             if looped is not None:
@@ -6062,7 +6069,6 @@ def completion(
                 return resolve_timeout(stream_kind=StreamKind.NOT_STREAMED)
             return resolve_timeout(stream_kind=StreamKind.FAKED if fakes_stream(attempt_params) else StreamKind.LIVE)
 
-        ### TIMEOUT LOGIC ###
         timeout = timeout_for_optional_params(optional_params)
         logging.record_applied_timeout(timeout)
         processed_non_default_params: Final = pre_process_non_default_params(
@@ -6105,6 +6111,11 @@ def completion(
             messages if readable_messages is None else list(readable_messages)
         )
 
+        supplied_client_api_base: Final = (
+            str(client.base_url)
+            if custom_llm_provider == "openai" and isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            else None
+        )
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,
@@ -6113,7 +6124,7 @@ def completion(
             logger_fn=logger_fn,
             verbose=verbose,
             custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
+            api_base=supplied_client_api_base or api_base,
             litellm_call_id=kwargs.get("litellm_call_id", None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,
@@ -6169,6 +6180,7 @@ def completion(
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
+                    *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
                     "github_copilot_auth_type",
                     "github_copilot_host",
                     "github_copilot_user_session",

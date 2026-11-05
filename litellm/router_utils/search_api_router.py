@@ -52,7 +52,7 @@ class SearchAPIRouter:
 
     @staticmethod
     @renamed_router_param("router_instance")
-    async def update_router_search_tools(ctx: "RoutingContext", search_tools: list):
+    async def update_router_search_tools(ctx: "RoutingContext", search_tools: list) -> None:
         """
         Update the router with search tools from the database.
 
@@ -143,7 +143,6 @@ class SearchAPIRouter:
             # Set up kwargs for the fallback system
             kwargs["model"] = search_tool_name  # Use model field for compatibility with fallback system
             kwargs["original_generic_function"] = original_function
-            # Bind ctx to the helper method using partial
             kwargs["original_function"] = partial(
                 SearchAPIRouter.async_search_with_fallbacks_helper,
                 litellm_routing_ctx=ctx,

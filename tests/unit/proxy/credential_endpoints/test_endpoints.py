@@ -3166,18 +3166,34 @@ class TestCredentialDisplayName:
         repository.update_by_name.assert_not_awaited()
         assert litellm.credential_list == [_labeled_credential()]
 
-    def test_patch_accepts_the_same_credential_name_echoed_back(self, restore_credential_list, monkeypatch):
+    @pytest.mark.parametrize(
+        ("patch_info", "expected_info"),
+        [
+            ({}, {"custom_llm_provider": "openai"}),
+            ({"description": "y"}, {"custom_llm_provider": "openai", "description": "y"}),
+            ({"custom_llm_provider": "anthropic"}, {"custom_llm_provider": "anthropic"}),
+        ],
+    )
+    def test_patch_accepts_the_same_credential_name_echoed_back(
+        self, restore_credential_list, monkeypatch, patch_info: dict[str, str], expected_info: dict[str, str]
+    ):
         monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
         with _repository_holding(_labeled_credential()) as repository:
             response = _patch_credential(
                 "openai-prod",
-                {"credential_name": "openai-prod", "credential_values": {"api_key": "sk-new"}, "credential_info": {}},
+                {
+                    "credential_name": "openai-prod",
+                    "credential_values": {"api_key": "sk-new"},
+                    "credential_info": patch_info,
+                },
             )
 
         assert response.status_code == 200, response.text
         assert [(c.credential_name, c.credential_values) for c in litellm.credential_list] == [
             ("openai-prod", {"api_key": "sk-new"})
         ]
+        assert json.loads(repository.update_by_name.await_args.kwargs["data"]["credential_info"]) == expected_info
+        assert litellm.credential_list[0].credential_info == expected_info
 
     def test_patch_on_a_config_credential_is_rejected_as_config_owned(self, restore_credential_list, monkeypatch):
         config_credential = _labeled_credential(display_name=None).model_copy(update={"source": "config"})
