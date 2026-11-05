@@ -5,8 +5,14 @@ type Recommendation = Pick<
   "successor_model" | "successor_model_source" | "deprecation_source"
 >;
 
+const SOURCE_LABELS = {
+  model_cost_map: "LiteLLM model cost map",
+  deployment_config: "Deployment configuration",
+} as const;
+
 export default function RecommendedReplacement({ recommendation }: { recommendation: Recommendation }) {
   const { successor_model: model, successor_model_source: source, deprecation_source: notice } = recommendation;
+  const sourceLabel = (source && SOURCE_LABELS[source]) || "Not provided";
   const noticeUrl = notice && /^https?:\/\//i.test(notice) ? notice : null;
 
   return (
@@ -26,12 +32,10 @@ export default function RecommendedReplacement({ recommendation }: { recommendat
                 rel="noopener noreferrer"
                 className="underline underline-offset-2"
               >
-                LiteLLM model cost map
+                {sourceLabel}
               </a>
-            ) : source === "deployment_config" ? (
-              "Deployment configuration"
             ) : (
-              "Not provided"
+              sourceLabel
             )}
           </span>
           {noticeUrl && (
