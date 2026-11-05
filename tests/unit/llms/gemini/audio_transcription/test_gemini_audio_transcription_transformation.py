@@ -3,6 +3,7 @@ import json
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.gemini.audio_transcription.transformation import (
@@ -262,6 +263,52 @@ class TestTransformResponse:
         response = config.transform_audio_transcription_response(make_response(payload))
         assert response["words"] == [{"word": "Hello"}]
         assert response.get("duration") is None
+
+
+
+class TestNonCompletedInteractionThroughRouter:
+    @pytest.fixture
+    def router(self, monkeypatch):
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "transcribe",
+                    "litellm_params": {"model": "gemini/gemini-3.5-transcribe", "api_key": "test-gemini-key"},
+                }
+            ],
+            num_retries=2,
+        )
+
+    def _interaction(self, status):
+        payload = json.loads(json.dumps(COMPLETED_RESPONSE))
+        payload["status"] = status
+        payload["steps"][0]["content"][0]["text"] = "sensitive transcript text"
+        return payload
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_incomplete_interaction_fails_once_as_bad_request_without_transcript(self, router):
+        route = respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(200, json=self._interaction("incomplete"))
+        )
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))
+        assert route.call_count == 1
+        assert excinfo.value.status_code == 400
+        assert "status=incomplete" in str(excinfo.value)
+        assert "sensitive transcript text" not in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_failed_interaction_is_retried(self, router):
+        route = respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(200, json=self._interaction("failed"))
+        )
+        with pytest.raises(litellm.InternalServerError) as excinfo:
+            await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))
+        assert route.call_count == 3
+        assert "sensitive transcript text" not in str(excinfo.value)
 
 
 class TestSubtitleSynthesisThroughHandler:

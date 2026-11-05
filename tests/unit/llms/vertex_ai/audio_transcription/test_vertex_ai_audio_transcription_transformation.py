@@ -208,6 +208,12 @@ class TestTransformResponse:
         response = config.transform_audio_transcription_response(raw_response)
         assert response.text == ""
 
+    def test_non_json_error_omits_response_body(self, config):
+        raw_response = httpx.Response(status_code=200, text='{"results": [{"alternatives": [{"transcript": "sensitive')
+        with pytest.raises(VertexAIError, match="non-JSON") as excinfo:
+            config.transform_audio_transcription_response(raw_response)
+        assert "sensitive" not in str(excinfo.value)
+
     def test_fractional_billed_duration(self, config):
         raw_response = httpx.Response(
             status_code=200,

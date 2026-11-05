@@ -38,6 +38,7 @@ from litellm.types.utils import (
 INTERACTIONS_API_REVISION: Final = "2026-05-20"
 WORD_INFO_ANNOTATION_TYPE: Final = "word_info"
 _DECODED_JSON: Final = TypeAdapter(object)
+_RETRYABLE_INTERACTION_STATUSES: Final = frozenset({"failed"})
 
 
 class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -143,7 +144,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         parsed: Final = GeminiTranscriptionInteractionResponse.model_validate(response_json)
         if parsed.status != "completed":
             raise GeminiError(
-                status_code=raw_response.status_code,
+                status_code=500 if parsed.status in _RETRYABLE_INTERACTION_STATUSES else 400,
                 message=f"Gemini transcription interaction did not complete (status={parsed.status})",
             )
         text_contents: Final = tuple(
