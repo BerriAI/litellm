@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, contextmanager
 from contextvars import ContextVar
 from datetime import timedelta
@@ -48,7 +48,7 @@ SELECT
 
 
 @contextmanager
-def analytics_deadline(deadline: float) -> Iterator[None]:
+def analytics_deadline(deadline: float) -> Generator[None, None, None]:
     current: Final = _DEADLINE.get()
     token: Final = _DEADLINE.set(deadline if current is None else min(current, deadline))
     try:
@@ -91,7 +91,7 @@ class BoundedAnalyticsDatabase:
         except (
             TransactionExpiredError,
             TransactionNotStartedError,
-            asyncio.TimeoutError,  # pyright: ignore[reportDeprecated]  # Python 3.10 uses a distinct asyncio timeout class
+            asyncio.TimeoutError,
         ) as error:
             raise AnalyticsCapacityError("Analytics exceeded its connection budget. Try again shortly") from error
         finally:
