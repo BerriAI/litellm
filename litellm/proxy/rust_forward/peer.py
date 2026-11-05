@@ -1,16 +1,27 @@
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    TypeAlias,
+    cast,  # noqa: TID251  # the one Starlette-to-uvicorn ASGI conversion in served
+)
 
 from typing_extensions import assert_never
 
 from litellm.proxy.rust_forward.mode import RUST_HOP, Disabled, RustForwardMode, Supervised, Supervisor
 
 if TYPE_CHECKING:
-    from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, Scope, WWWScope
+    import starlette.types
+    from uvicorn._types import ASGI3Application, ASGIReceiveCallable, ASGISendCallable, Scope, WWWScope
 
 PEER_HEADER: Final = b"x-litellm-rust-peer"
 
-ASGIApp: TypeAlias = Callable[..., Awaitable[None]]
+ASGIApp: TypeAlias = "ASGI3Application"
+
+
+def served(app: "starlette.types.ASGIApp") -> ASGIApp:
+    return cast(  # cast-ok: Starlette and uvicorn type the same ASGI 3 callable with unassignable scope/receive/send
+        "ASGI3Application", app
+    )
 
 
 def _restore_peer(scope: "WWWScope") -> None:
@@ -47,11 +58,12 @@ class RustPeerMiddleware:
         await self.app(scope, receive, send)
 
 
-def wrap(app: ASGIApp, mode: RustForwardMode) -> ASGIApp:
+def wrap(app: "starlette.types.ASGIApp", mode: RustForwardMode) -> ASGIApp:
+    converted: Final = served(app)
     match mode:
         case Supervised():
-            return RustPeerMiddleware(app, mode)
+            return RustPeerMiddleware(converted, mode)
         case Disabled() | Supervisor():
-            return app
+            return converted
         case _:
             assert_never(mode)

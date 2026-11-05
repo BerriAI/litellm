@@ -21,8 +21,7 @@ if TYPE_CHECKING:
 
 from litellm.proxy.proxy_server import app as proxy_app
 from litellm.proxy.rust_forward.mode import InheritedFd, Supervised
-from litellm.proxy.rust_forward.peer import wrap
-
+from litellm.proxy.rust_forward.peer import RustPeerMiddleware
 
 Headers = tuple[tuple[bytes, bytes], ...]
 
@@ -47,7 +46,7 @@ async def _seen_by_app(
         seen.set_result((scope["client"], scope["scheme"], tuple(scope["headers"])))
 
     direct: Final = ProxyHeadersMiddleware(probe, mode.trusted_proxies) if mode.proxy_headers else probe
-    app: Final = wrap(probe, mode) if behind_rust else direct
+    app: Final = RustPeerMiddleware(probe, mode) if behind_rust else direct
     scope: Final[HTTPScope] = {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.3"},
