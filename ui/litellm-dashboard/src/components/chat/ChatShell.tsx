@@ -205,7 +205,7 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           enableSearchShortcut={false}
         />
       </div>
-      <SidebarFooter>
+      <SidebarFooter className="mt-auto">
         <ChatAccountMenu
           onLogout={handleLogout}
           collapsed={collapsed}

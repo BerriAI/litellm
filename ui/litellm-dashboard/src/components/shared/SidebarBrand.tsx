@@ -14,7 +14,7 @@ import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 
 const LOGO_CLASS_NAME =
-  "h-5 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:h-7 group-data-[collapsed=true]/sidebar:w-7";
+  "h-5 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:h-6 group-data-[collapsed=true]/sidebar:w-6";
 
 function bundledLogoSrc(baseUrl: string, { dark, monogram }: { dark: boolean; monogram: boolean }): string {
   const query = [dark && "theme=dark", monogram && "variant=monogram"].filter(Boolean).join("&");
@@ -46,8 +46,8 @@ export function SidebarBrand({
   const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
   const darkLogoSrc = reachableDarkLogo || logoUrl || bundledLogoSrc(baseUrl, { dark: true, monogram: collapsed });
   return (
-    <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
-      <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
+    <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto group-data-[collapsed=true]/sidebar:py-2">
+      <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col group-data-[collapsed=true]/sidebar:gap-1">
         <div className="flex min-w-0 items-center gap-2">
           <Link href={homeHref} onClick={onHomeClick} className="flex min-w-0 items-center" aria-label={homeLabel}>
             <img src={logoSrc} alt="LiteLLM" className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
@@ -76,7 +76,7 @@ export function SidebarBrand({
             onClick={onToggleCollapsed}
             aria-expanded={!collapsed}
             aria-label={collapsed ? t("shell.navbar.expandSidebar") : t("shell.navbar.collapseSidebar")}
-            className="flex-none text-muted-foreground"
+            className="flex-none text-muted-foreground group-data-[collapsed=true]/sidebar:size-9"
           >
             {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
           </Button>
