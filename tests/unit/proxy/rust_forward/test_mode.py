@@ -1,3 +1,5 @@
+import os
+import threading
 from typing import Final
 
 import pytest
@@ -15,6 +17,7 @@ from litellm.proxy.rust_forward.mode import (
     gunicorn_bind,
     rust_forward_mode,
     server_proxy_headers,
+    stop_with_supervisor,
     supervised_environment,
     uvicorn_options,
 )
@@ -110,3 +113,19 @@ def test_assigned_port_serves_only_the_loopback_hop_without_trusting_it() -> Non
     assert (config.host, config.port, config.fd, config.proxy_headers) == ("127.0.0.1", 45556, None, False)
     assert gunicorn_bind(mode, "0.0.0.0:4000") == "127.0.0.1:45556"
     assert server_proxy_headers(mode) is False
+
+
+@pytest.mark.parametrize(
+    ("mode", "stops"),
+    [(Supervised(InheritedFd(17), False, "127.0.0.1"), True), (Disabled(), False), (Supervisor(), False)],
+)
+def test_only_a_supervised_server_stops_once_its_supervisor_is_gone(mode: RustForwardMode, stops: bool) -> None:
+    read_end, write_end = os.pipe()
+    stopped: Final = threading.Event()
+    try:
+        stop_with_supervisor(mode, read_end, stopped.set)
+        assert not stopped.wait(0.2)
+        os.close(write_end)
+        assert stopped.wait(5 if stops else 0.5) is stops
+    finally:
+        os.close(read_end)

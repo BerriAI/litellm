@@ -131,7 +131,14 @@ def configure_database() -> None:
 
 
 def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
-    from litellm.proxy.rust_forward.mode import Disabled, Supervised, Supervisor, rust_forward_mode, uvicorn_flags
+    from litellm.proxy.rust_forward.mode import (
+        Disabled,
+        Supervised,
+        Supervisor,
+        rust_forward_mode,
+        stop_with_supervisor,
+        uvicorn_flags,
+    )
     from litellm.proxy.rust_forward.supervisor import StartupError, supervise
 
     mode: Final = rust_forward_mode(os.environ)
@@ -147,6 +154,7 @@ def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -
             configure_database()
             serve(uvicorn_argv(argv, os.environ))
         case Supervised():
+            stop_with_supervisor(mode)
             serve((*uvicorn_argv(argv, os.environ), *uvicorn_flags(mode)))
         case _:
             assert_never(mode)

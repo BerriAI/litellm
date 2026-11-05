@@ -13,6 +13,7 @@
 - Pooled upstream connections are retired well before Python's keep-alive timeout, so a request never lands on a connection Python is closing
 - Idle client connections close after Python's keep-alive timeout, as uvicorn closed them, so a client that vanishes cannot hold a socket forever. Only the wait for the next request is timed, never an exchange in progress
 - WebSocket is the one protocol switch Python serves. Upgrades are relayed as raw bytes after the 101 and drained on shutdown
+- Drain on EOF of stdin exactly as on SIGTERM. The supervisor holds the only write end, so EOF means it is gone and nobody is left to stop the gateway. `input_closed` reads on a plain thread, since a read blocked on tokio's blocking pool would hold up the runtime's exit
 
 ## Layout
 

@@ -4349,6 +4349,15 @@ class TestRustForwardServer:
         assert mock_uvicorn_run.call_args.kwargs["ssl_keyfile"] == "key.pem"
         assert mock_uvicorn_run.call_args.kwargs["port"] == 45999
 
+    def test_an_invalid_rust_switch_stops_startup_with_one_line_naming_it(self) -> None:
+        from click.testing import CliRunner
+
+        with patch.dict(os.environ, {"LITELLM_RUST": "sometimes"}):
+            result: Final = CliRunner().invoke(run_server, ["--port", "45999"])
+        lines: Final = result.output.splitlines()
+        assert (result.exit_code, len(lines)) == (1, 1)
+        assert lines[0].startswith("Error: LITELLM_RUST is invalid: ")
+
     @pytest.mark.parametrize(
         ("argv", "environ"),
         [(["--keepalive_timeout", "2"], {}), ([], {"KEEPALIVE_TIMEOUT": "7"}), ([], {})],

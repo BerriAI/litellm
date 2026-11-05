@@ -41,13 +41,24 @@ class WindowsPlatform:
     def spawn_options(self, pass_fds: tuple[int, ...]) -> SpawnOptions:
         return SpawnOptions(pass_fds=pass_fds, start_new_session=False, creationflags=CREATE_NEW_PROCESS_GROUP)
 
-    def catch_stop(self, loop: asyncio.AbstractEventLoop, on_stop: Callable[[signal.Signals], None]) -> None:
-        def handle(signum: int, _frame: FrameType | None) -> None:
-            loop.call_soon_threadsafe(on_stop, signal.Signals(signum))
+    @property
+    def relayed_signals(self) -> tuple[signal.Signals, ...]:
+        return (signal.SIGINT, signal.Signals(SIGBREAK))
 
-        for signum in (signal.SIGINT, SIGBREAK):
+    @property
+    def stop_signals(self) -> frozenset[signal.Signals]:
+        return frozenset(self.relayed_signals)
+
+    def catch(self, loop: asyncio.AbstractEventLoop, on_signal: Callable[[signal.Signals], None]) -> None:
+        def handle(signum: int, _frame: FrameType | None) -> None:
+            loop.call_soon_threadsafe(on_signal, signal.Signals(signum))
+
+        for signum in self.relayed_signals:
             signal.signal(signum, handle)
 
+    # A child in its own process group can only be sent CTRL_BREAK_EVENT, since Windows never delivers CTRL_C_EVENT
+    # to a new group. Both children shut down on it as on Ctrl-C, but uvicorn force-exits only on a repeated SIGINT,
+    # so a second Ctrl-C does not cut a Windows shutdown short the way it does on POSIX.
     def signal_child(self, process: asyncio.subprocess.Process, signum: signal.Signals) -> None:
         self.stop_group(process)
 

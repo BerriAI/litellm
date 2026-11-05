@@ -32,9 +32,27 @@ class PosixPlatform:
     def spawn_options(self, pass_fds: tuple[int, ...]) -> SpawnOptions:
         return SpawnOptions(pass_fds=pass_fds, start_new_session=True, creationflags=0)
 
-    def catch_stop(self, loop: asyncio.AbstractEventLoop, on_stop: Callable[[signal.Signals], None]) -> None:
-        for signum in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(signum, on_stop, signum)
+    @property
+    def relayed_signals(self) -> tuple[signal.Signals, ...]:
+        return (
+            signal.SIGTERM,
+            signal.SIGINT,
+            signal.SIGHUP,
+            signal.SIGQUIT,
+            signal.SIGUSR1,
+            signal.SIGUSR2,
+            signal.SIGTTIN,
+            signal.SIGTTOU,
+            signal.SIGWINCH,
+        )
+
+    @property
+    def stop_signals(self) -> frozenset[signal.Signals]:
+        return frozenset({signal.SIGTERM, signal.SIGINT, signal.SIGQUIT})
+
+    def catch(self, loop: asyncio.AbstractEventLoop, on_signal: Callable[[signal.Signals], None]) -> None:
+        for signum in self.relayed_signals:
+            loop.add_signal_handler(signum, on_signal, signum)
 
     def signal_child(self, process: asyncio.subprocess.Process, signum: signal.Signals) -> None:
         with contextlib.suppress(ProcessLookupError):

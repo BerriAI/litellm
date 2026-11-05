@@ -1,12 +1,17 @@
-from collections.abc import Mapping
+import contextlib
+import os
+import signal
+import threading
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
-from typing import Annotated, Final, TypeAlias
+from typing import Final, TypeAlias
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import assert_never
 
-from litellm.rust_bridge.configuration import ENV_NAME
+from litellm.rust_bridge.configuration import ENV_NAME, RustSwitch
 
 GATEWAY_FD: Final = "_LITELLM_GATEWAY_FD"
 GATEWAY_PORT: Final = "_LITELLM_GATEWAY_PORT"
@@ -16,18 +21,10 @@ DEFAULT_TRUSTED_PROXIES: Final = "127.0.0.1"
 RUST_HOP: Final = "127.0.0.1"
 
 
-def _blank_as_unset(value: object) -> object:
-    stripped: Final = value.strip() if isinstance(value, str) else value
-    return None if stripped == "" else stripped
-
-
-_Switch: TypeAlias = Annotated[bool | None, BeforeValidator(_blank_as_unset)]
-
-
 class _ForwardEnvironment(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    rust: _Switch = Field(None, validation_alias=ENV_NAME)
+    rust: RustSwitch = Field(None, validation_alias=ENV_NAME)
     listener_fd: int | None = Field(None, validation_alias=GATEWAY_FD)
     listener_port: int | None = Field(None, validation_alias=GATEWAY_PORT)
     proxy_headers: bool = Field(True, validation_alias=PROXY_HEADERS)
@@ -99,6 +96,40 @@ def rust_forward_mode(environ: Mapping[str, str]) -> RustForwardMode:
     if parsed.rust:
         return Supervisor()
     return Disabled()
+
+
+def _wait_for_eof(fd: int) -> None:
+    with contextlib.suppress(OSError):
+        while os.read(fd, 4096):
+            pass
+
+
+def _stop_when_closed(fd: int, stop: Callable[[], None]) -> None:
+    _wait_for_eof(fd)
+    stop()
+
+
+def stop_with_supervisor(
+    mode: RustForwardMode,
+    fd: int = 0,
+    stop: Callable[[], None] = partial(signal.raise_signal, signal.SIGTERM),
+) -> None:
+    """Shut the supervised server down gracefully once the supervisor's end of its stdin closes, so it never outlives
+    a supervisor that was killed. Call it only in the process the supervisor started, not in its workers."""
+    match mode:
+        case Supervised():
+            threading.Thread(target=_stop_when_closed, args=(fd, stop), name="supervisor-stdin", daemon=True).start()
+        case Disabled() | Supervisor():
+            pass
+        case _:
+            assert_never(mode)
+
+
+def environment_error(error: ValidationError) -> str:
+    return "; ".join(
+        f"{'.'.join(str(part) for part in detail['loc'])} is invalid: {detail['msg']}"
+        for detail in error.errors(include_url=False)
+    )
 
 
 # A supervised server's TCP peer is always Rust on loopback, so server-level proxy headers would trust any

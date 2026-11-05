@@ -2,14 +2,26 @@ from __future__ import annotations
 
 import os
 from enum import Enum, auto
-from functools import lru_cache
-from typing import Final
+from typing import Annotated, Final, TypeAlias
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BeforeValidator, TypeAdapter
 from typing_extensions import assert_never
 
 ENV_NAME: Final = "LITELLM_RUST"
-_ENV_BOOL: Final = TypeAdapter(bool)
+
+
+def _blank_as_unset(value: object) -> object:
+    stripped: Final = value.strip() if isinstance(value, str) else value
+    return None if stripped == "" else stripped
+
+
+RustSwitch: TypeAlias = Annotated[bool | None, BeforeValidator(_blank_as_unset)]
+_RUST_SWITCH: Final = TypeAdapter[bool | None](RustSwitch)
+
+
+def rust_switch(raw: str | None) -> bool | None:
+    """``LITELLM_RUST`` as a switch, unset when absent or blank. Raises ``ValidationError`` on any other value."""
+    return _RUST_SWITCH.validate_python(raw)
 
 
 class Rollout(Enum):
@@ -31,17 +43,6 @@ class _RustConfiguration:
 
 
 _CONFIGURATION: Final = _RustConfiguration()
-
-
-@lru_cache(maxsize=16)
-def _parse_env_bool(value: str | None) -> bool | None:
-    """`LITELLM_RUST` as a bool; cached by raw value because `decision` runs per tokenizer call."""
-    if value is None:
-        return None
-    try:
-        return _ENV_BOOL.validate_python(value.strip())
-    except ValidationError:
-        return None
 
 
 def decide(
@@ -72,7 +73,7 @@ def decision(rollout: Rollout) -> Decision:
     return decide(
         rollout,
         process_override=_CONFIGURATION.override,
-        environment_override=_parse_env_bool(os.getenv(ENV_NAME)),
+        environment_override=rust_switch(os.getenv(ENV_NAME)),
     )
 
 

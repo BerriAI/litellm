@@ -7,9 +7,11 @@ use std::{
 
 use axum::{Router, body::Body, extract::Request, http::StatusCode, response::Response};
 use http_body_util::BodyExt;
+use litellm_gateway_forward::input_closed;
 use rstest::rstest;
 use support::{
-    DRAIN, Gateway, Raw, client, raw_upstream, recording, serve, unreachable_upstream, within,
+    DRAIN, Gateway, Raw, UVICORN_KEEPALIVE, client, raw_upstream, recording, serve, serve_until,
+    unreachable_upstream, within,
 };
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -277,6 +279,55 @@ async fn shutdown_lets_an_in_flight_stream_finish() {
             .unwrap();
     let server = gateway.shutdown();
     tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!server.is_finished());
+    release.notify_one();
+    let body = within(response.into_body().collect())
+        .await
+        .unwrap()
+        .to_bytes();
+    assert_eq!(body, "firstlast");
+    within(server).await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_supervisor_closing_stdin_drains_like_a_stop_signal() {
+    let release = Arc::new(Notify::new());
+    let released = release.clone();
+    let upstream = raw_upstream(move |mut python: Raw| {
+        let released = released.clone();
+        async move {
+            python.request_head().await.unwrap();
+            python
+                .send("HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n5\r\nfirst\r\n")
+                .await;
+            released.notified().await;
+            python.send("4\r\nlast\r\n0\r\n\r\n").await;
+        }
+    })
+    .await;
+    let (stdin, supervisor) = std::io::pipe().unwrap();
+    let (address, server) = serve_until(upstream, UVICORN_KEEPALIVE, input_closed(stdin)).await;
+    let response = within(
+        client().request(
+            Request::get(format!("http://{address}/"))
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(TcpStream::connect(address).await.is_ok());
+
+    drop(supervisor);
+
+    within(async {
+        while TcpStream::connect(address).await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
     assert!(!server.is_finished());
     release.notify_one();
     let body = within(response.into_body().collect())

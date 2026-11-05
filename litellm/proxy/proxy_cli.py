@@ -1356,15 +1356,23 @@ def run_server(
         run_setup_wizard()
         return
 
+    from pydantic import ValidationError
+
     from litellm.proxy.rust_forward.mode import (
         Supervisor,
+        environment_error,
         gunicorn_bind,
         rust_forward_mode,
         server_proxy_headers,
+        stop_with_supervisor,
         uvicorn_options,
     )
 
-    forward_mode: Final = rust_forward_mode(os.environ)
+    try:
+        forward_mode: Final = rust_forward_mode(os.environ)
+    except ValidationError as error:
+        raise click.ClickException(environment_error(error)) from None
+    stop_with_supervisor(forward_mode)
     if isinstance(forward_mode, Supervisor) and not any(
         (version, validate_config, health, test, skip_server_startup, check_migrations_against_existing_data)
     ):
