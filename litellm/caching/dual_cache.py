@@ -598,15 +598,14 @@ class DualCache(BaseCache):
                 result = await self.redis_cache.async_increment_count(
                     key, value, ttl=ttl, parent_otel_span=parent_otel_span
                 )
-            return result
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # same tolerance as async_increment_cache: a Redis failure keeps the in-memory count
             log_redis_failure(
                 verbose_logger,
                 logging.WARNING,
                 "Redis async_increment_count failed, falling back to in-memory result",
                 e,
             )
-            return result
+        return result
 
     async def async_increment_cache_post_call(
         self,
