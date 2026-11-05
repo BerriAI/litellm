@@ -11,7 +11,7 @@ outside code used before the entry points live in ``DeprecatedRouterMembers`` un
 import inspect
 import weakref
 from collections.abc import Mapping
-from types import CellType, FunctionType, MappingProxyType
+from types import FunctionType, MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm import router_python_core
@@ -35,7 +35,7 @@ from litellm.types.router import (
     RetryPolicy,
 )
 
-_CORE_SIGNATURE: Final = inspect.signature(PythonCore.__init__)
+_CORE_SIGNATURE: Final = inspect.signature(PythonCore.__init__)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # reflection reads only the parameters' names
 
 
 def router_arguments(
@@ -65,142 +65,40 @@ else:
     _replaced_core_members: Final[  # mutable-ok: originals of patched core members, restored on delete
         dict[tuple[type, str], list[object]]
     ] = {}
-    _FACADE_ONLY: Final = frozenset(
-        {
-            "__module__",
-            "__qualname__",
-            "__doc__",
-            "__dict__",
-            "__weakref__",
-            "__init__",
-            "__init_subclass__",
-            "__annotations__",
-            "__firstlineno__",
-            "__static_attributes__",
-            "__classcell__",
-            "_core_class",
-        }
-    )
-
-    def _with_class_cell(value: object, cell: "CellType") -> object:
-        """``value`` with its ``__class__`` cell (what zero-argument ``super()`` reads) replaced by ``cell``."""
-        if isinstance(value, staticmethod | classmethod):
-            return type(value)(_function_with_class_cell(value.__func__, cell))
-        if isinstance(value, property):
-            return property(
-                *(
-                    None if f is None else _function_with_class_cell(f, cell)
-                    for f in (value.fget, value.fset, value.fdel)
-                ),
-                value.__doc__,
-            )
-        return _function_with_class_cell(value, cell)
-
-    def _function_with_class_cell(value: object, cell: "CellType") -> object:
-        """A plain function with its ``__class__`` cell replaced by ``cell``; anything else unchanged."""
-        if not isinstance(value, FunctionType) or "__class__" not in value.__code__.co_freevars:
-            return value
-        closure: Final = tuple(
-            cell if name == "__class__" else original
-            for name, original in zip(value.__code__.co_freevars, value.__closure__ or (), strict=True)
-        )
-        rebound: Final = FunctionType(value.__code__, value.__globals__, value.__name__, value.__defaults__, closure)
-        rebound.__kwdefaults__ = value.__kwdefaults__
-        rebound.__qualname__ = value.__qualname__
-        rebound.__dict__.update(value.__dict__)
-        return rebound
-
-    class _Absent:
-        """A facade-only member, hidden from the core class: reading it raises the usual AttributeError."""
-
-        def __set_name__(self, owner: type, name: str) -> None:
-            self._name = name
-
-        def __get__(self, instance: object, owner: type | None = None) -> object:
-            if instance is None:
-                raise AttributeError(
-                    f"type object {getattr(owner, '__name__', owner)!r} has no attribute {self._name!r}"
-                )
-            raise AttributeError(f"{type(instance).__name__!r} object has no attribute {self._name!r}")
-
-    def _core_class_for(facade: type, parent: type) -> type:
-        """
-        A core class carrying a Router subclass's own members, so the core runs its overrides. It
-        subclasses the facade too, so an override's ``super(Sub, self)`` finds the core it runs on.
-        """
-        cell: Final = CellType()
-        members: Final = {
-            name: _with_class_cell(value, cell) for name, value in vars(facade).items() if name not in _FACADE_ONLY
-        }
-        namespace: Final = {
-            # The facade's own plumbing sits in the core class's MRO ahead of the parent core: put
-            # the parent core's versions back, and hide the facade-only members.
-            "__init__": parent.__init__,
-            "__getattribute__": object.__getattribute__,
-            "__setattr__": parent.__setattr__,
-            "__delattr__": parent.__delattr__,
-            "__dir__": parent.__dir__,
-            **{name: _Absent() for name in ("_attach", "_core", "from_config", "_core_class")},
-            **members,
-            "__module__": facade.__module__,
-        }
-        core_class: Final = _CoreType(f"{facade.__name__}Core", (facade, parent), namespace)
-        cell.cell_contents = core_class
-        for name in members:
-            type.__delattr__(facade, name)
-        return core_class
 
     class _RouterType(type):
         """
-        Class-level reads of core members (``Router._helper(...)``) go to the router's core class, and
-        so do class-level patches, which put the original back when the patch is removed.
-        ``isinstance`` and ``dir`` see the core class too.
+        Class-level reads of core members (``Router._helper(...)``) go to ``PythonCore``, and so do
+        class-level patches, which put the original back when the patch is removed.
+        ``isinstance`` and ``dir`` see ``PythonCore`` too.
         """
 
         def __getattr__(cls, name: str) -> object:
-            if name == "_core_class":
-                raise AttributeError(name)
-            return getattr(cls._core_class, name)
+            return getattr(PythonCore, name)
 
         def __setattr__(cls, name: str, value: object) -> None:
-            core_class: Final = vars(cls).get("_core_class") or getattr(cls, "_core_class", None)
-            if core_class is None or any(name in vars(base) for base in cls.__mro__) or not hasattr(core_class, name):
+            if any(name in vars(base) for base in cls.__mro__) or not hasattr(PythonCore, name):
                 super().__setattr__(name, value)
                 return
-            _replaced_core_members.setdefault((core_class, name), []).append(vars(core_class).get(name, _MISSING))
-            setattr(core_class, name, value)
+            _replaced_core_members.setdefault((PythonCore, name), []).append(vars(PythonCore).get(name, _MISSING))
+            setattr(PythonCore, name, value)
 
         def __delattr__(cls, name: str) -> None:
-            core_class: Final = getattr(cls, "_core_class", None)
-            replaced: Final = _replaced_core_members.get((core_class, name)) if core_class is not None else None
+            replaced: Final = _replaced_core_members.get((PythonCore, name))
             if not replaced or any(name in vars(base) for base in cls.__mro__):
                 super().__delattr__(name)
                 return
             original: Final = replaced.pop()
             if original is _MISSING:
-                delattr(core_class, name)
+                delattr(PythonCore, name)
                 return
-            setattr(core_class, name, original)
+            setattr(PythonCore, name, original)
 
         def __instancecheck__(cls, instance: object) -> bool:
-            return type.__instancecheck__(cls, instance) or isinstance(instance, cls._core_class)
+            return type.__instancecheck__(cls, instance) or isinstance(instance, PythonCore)
 
         def __dir__(cls) -> list[str]:  # mutable-ok: dir() returns a list
-            return sorted({*type.__dir__(cls), *dir(cls._core_class)})
-
-    class _CoreType(_RouterType):
-        """The metaclass of a Router subclass's core class: a plain class, none of the facade's redirects."""
-
-        def __getattr__(cls, name: str) -> object:
-            raise AttributeError(f"type object {cls.__name__!r} has no attribute {name!r}")
-
-        __setattr__ = type.__setattr__
-        __delattr__ = type.__delattr__
-        __instancecheck__ = type.__instancecheck__
-        __dir__ = type.__dir__
-
-    def _is_core(instance: object) -> bool:
-        return isinstance(type(instance), _CoreType)
+            return sorted({*type.__dir__(cls), *dir(PythonCore)})
 
     def _patchable_method(core: object, name: str) -> bool:
         """A method of the core: an instance-level replacement of it is also kept on the facade, so
@@ -212,27 +110,20 @@ else:
         return hasattr(type(core), "__getattr__") and inspect.ismethod(getattr(core, name, None))
 
     class Router(DeprecatedRouterMembers, metaclass=_RouterType):
-        _core_class: type[PythonCore] = PythonCore
-
-        def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: class keywords, passed on to super()
-            if isinstance(cls, _CoreType):
-                # A core class built below: the parent core's hooks wire it, as for any core class.
-                super().__init_subclass__(**kwargs)
-                return
-            # DeprecatedRouterMembers wires a subclass's overrides of old members; here that runs
-            # on the core class built from it, which is where the router's own calls land.
-            super(DeprecatedRouterMembers, cls).__init_subclass__(**kwargs)
-            type.__setattr__(cls, "_core_class", _core_class_for(cls, cls._core_class))
+        def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: class keywords, refused with the class
+            raise TypeError(
+                "litellm.Router cannot be subclassed. Use the router's entry points instead: "
+                "register_plugin() for custom routing, apply() for settings, observe() for outcomes. "
+                "See https://docs.litellm.ai/docs/routing_plugins."
+            )
 
         def __init__(self, *args: object, **kwargs: object) -> None:  # kwargs-ok: Router's constructor arguments
-            self._attach(
-                make_core(build_router_config(router_arguments(*args, **kwargs)), python_host, type(self)._core_class)
-            )
+            self._attach(make_core(build_router_config(router_arguments(*args, **kwargs)), python_host))
 
         @classmethod
         def from_config(cls, config: RouterConfig, host: PythonHost = python_host) -> "Router":
             router: Final = cls.__new__(cls)
-            router._attach(make_core(config, host, cls._core_class))
+            router._attach(make_core(config, host))
             return router
 
         def _attach(self, core: RouterCore) -> None:
@@ -253,8 +144,7 @@ else:
             try:
                 return object.__getattribute__(self, name)
             except AttributeError:
-                if _is_core(self):
-                    raise
+                pass
             facade: Final = object.__getattribute__(self, "__dict__")
             core: Final = facade.get("_core")
             if core is None:
@@ -273,9 +163,6 @@ else:
                 ) from None
 
         def __setattr__(self, name: str, value: object) -> None:
-            if _is_core(self):
-                super().__setattr__(name, value)
-                return
             if _class_descriptor(type(self), name):
                 object.__setattr__(self, name, value)
                 return
@@ -289,9 +176,6 @@ else:
                 self.__dict__[name] = value
 
         def __delattr__(self, name: str) -> None:
-            if _is_core(self):
-                super().__delattr__(name)
-                return
             if _class_descriptor(type(self), name):
                 object.__delattr__(self, name)
                 return
@@ -299,9 +183,7 @@ else:
             delattr(self._core, name)
 
         def __dir__(self) -> list[str]:  # mutable-ok: dir() returns a list
-            if _is_core(self):
-                return super().__dir__()
-            return sorted({*super().__dir__(), *dir(self.__dict__.get("_core", type(self)._core_class))})
+            return sorted({*super().__dir__(), *dir(self.__dict__.get("_core", PythonCore))})
 
     Router.__init__.__signature__ = _CORE_SIGNATURE.replace(  # pyright: ignore[reportFunctionMemberAccess]  # inspect reads it
         parameters=[parameter for parameter in _CORE_SIGNATURE.parameters.values() if parameter.name != "_host"]

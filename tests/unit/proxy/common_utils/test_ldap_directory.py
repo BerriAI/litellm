@@ -134,9 +134,7 @@ def test_unreadable_member_entry_still_aborts_snapshot():
     connection = Connection(
         [group("project-a", member=[ALICE, BOB]), group("project-b", member=[ALICE])],
         {ALICE: [user("alice@example.org")]},
-        raising={
-            BOB: (50, LDAPInsufficientAccessRightsResult(result=50, description="insufficientAccessRights"))
-        },
+        raising={BOB: (50, LDAPInsufficientAccessRightsResult(result=50, description="insufficientAccessRights"))},
     )
     assert read_directory(SETTINGS, connection) == DirectoryError(
         "LDAP read failed (LDAPInsufficientAccessRightsResult)"
@@ -291,3 +289,21 @@ def test_real_ldap_client_constructor_verifies_tls_and_disables_referrals(url: s
     assert client.server.ssl is ssl_enabled
     assert client.server.port == port
     assert client.auto_referrals is False
+
+
+@pytest.mark.parametrize("invalid_id", [(), ("",), ("one", "two")])
+def test_multiple_malformed_group_ids_do_not_block_healthy_groups(invalid_id: tuple[str, ...]):
+    connection: Final = Connection(
+        [
+            entry("cn=broken-a", cn=invalid_id, member=[ALICE]),
+            entry("cn=broken-b", cn=invalid_id, member=[ALICE]),
+            group("healthy", member=[ALICE]),
+        ],
+        {ALICE: [user("alice@example.org")]},
+    )
+    result: Final = read_directory(SETTINGS, connection)
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+    assert all(isinstance(item, DirectoryError) for item in result[:2])
+    assert result[2] == DirectoryGroup("healthy", "healthy", ("alice@example.org",))
+    assert connection.closed

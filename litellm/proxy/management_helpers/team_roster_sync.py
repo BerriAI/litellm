@@ -384,7 +384,22 @@ async def sync_team_roster(
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=None,
         )
-    await _settle_caches(synced, sorted(to_add | to_remove), removal, user_api_key_cache, proxy_logging_obj)
+    cleanup: Final = asyncio.create_task(
+        _settle_caches(synced, sorted(to_add | to_remove), removal, user_api_key_cache, proxy_logging_obj)
+    )
+    try:
+        await asyncio.shield(cleanup)
+    except asyncio.CancelledError as cancellation:
+        # The transaction committed. Finish revocation before propagating cancellation.
+        try:
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            cleanup.result()
+        finally:
+            raise cancellation
     _emit_team_members_metric(synced)
     _schedule_team_membership_audit_log(
         team_id=team_id,

@@ -7703,6 +7703,7 @@ async def test_bedrock_converse_parses_scripted_response(
     assert json.loads(route.calls[0].request.content) == {
         "messages": [{"role": "user", "content": [{"text": "hello"}]}],
         "inferenceConfig": {},
+        "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
     }
     assert response.choices[0].message.content == "Hello from Bedrock."
     assert response.usage.prompt_tokens == 8

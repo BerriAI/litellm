@@ -264,7 +264,9 @@ def read_directory(
             entries: Final = _entries(items)
             if isinstance(entries, DirectoryError):
                 return entries
-            group_ids: Final = tuple(_one(entry, settings.group_id_attribute) for entry in entries)
+            group_ids: Final = tuple(
+                group_id for entry in entries if (group_id := _one(entry, settings.group_id_attribute)) is not None
+            )
             if len(group_ids) != len(frozenset(group_ids)):
                 return DirectoryError("LDAP group IDs are not unique within the selected groups")
             groups: Final = tuple(_read_group(client, settings, entry, cancellation) for entry in entries)

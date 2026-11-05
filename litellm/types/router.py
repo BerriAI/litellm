@@ -1154,9 +1154,9 @@ class CustomRoutingStrategyBase:
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ) -> None:
         """
         Asynchronously retrieves the available deployment based on the given parameters.
@@ -1177,9 +1177,9 @@ class CustomRoutingStrategyBase:
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ) -> None:
         """
         Synchronously retrieves the available deployment based on the given parameters.

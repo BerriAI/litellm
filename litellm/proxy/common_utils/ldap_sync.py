@@ -10,7 +10,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.common_utils.ldap_directory import DirectoryError, DirectoryGroup, read_directory
+from litellm.proxy.common_utils.ldap_directory import DirectoryError, DirectoryGroup, LDAPConnection, read_directory
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.management_endpoints.team_endpoints import new_team
@@ -89,8 +89,11 @@ class LDAPSync:
         prisma_client: PrismaClient,
         pod_lock_manager: PodLockManager,
         user_api_key_cache: UserApiKeyCache,
-        proxy_logging_obj: ProxyLogging,
+        proxy_logging_obj: ProxyLogging | None,
+        *,
+        directory_connection: LDAPConnection | None = None,
     ) -> None:
+        self.directory_connection = directory_connection
         self.settings = settings
         self.lease_seconds = math.ceil(settings.interval_minutes * 60) - 1
         self.prisma_client = prisma_client
@@ -157,7 +160,9 @@ class LDAPSync:
             update={"timeout_seconds": min(self.settings.timeout_seconds, max(1, self.lease_seconds // 4))}
         )
         try:
-            snapshot: Final = await asyncio.to_thread(read_directory, directory_settings, stop=cancellation)
+            snapshot: Final = await asyncio.to_thread(
+                read_directory, directory_settings, connection=self.directory_connection, stop=cancellation
+            )
         finally:
             cancellation.set()
         if isinstance(snapshot, DirectoryError):
