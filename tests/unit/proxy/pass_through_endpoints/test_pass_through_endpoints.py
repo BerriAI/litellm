@@ -13380,10 +13380,21 @@ class TestInheritAuthGuardrails:
             {"guardrails": [], "metadata": {"user": "u"}},
             {"guardrails": [], "metadata": {"guardrails": []}},
             {"metadata": {"guardrails": []}},
+            {"guardrails": {"g": {}}},
+            {"guardrails": {"g": {}}, "metadata": {"headers": 5}},
+            {"guardrails": {"g": {}}, "metadata": {"guardrails": {"h": {}}}},
         ],
-        ids=["guardrails", "with-metadata", "with-metadata-guardrails", "metadata-guardrails-only"],
+        ids=[
+            "guardrails",
+            "with-metadata",
+            "with-metadata-guardrails",
+            "metadata-guardrails-only",
+            "object-form",
+            "object-form-with-metadata",
+            "object-form-with-metadata-object-form",
+        ],
     )
-    async def test_an_empty_guardrails_list_on_a_plain_key_keeps_the_body_as_sent(self, extra: dict[str, object]):
+    async def test_guardrails_that_merge_to_no_list_on_a_plain_key_keep_the_body_as_sent(self, extra: dict[str, object]):
         body: Final[dict[str, object]] = self._chat_body(**extra)
 
         assert await _inherit_auth_guardrails(body, UserAPIKeyAuth(api_key="sk-test"), None, True) is None
