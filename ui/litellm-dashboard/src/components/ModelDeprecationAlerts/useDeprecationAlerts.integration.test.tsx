@@ -42,4 +42,33 @@ describe("deprecation alert API wiring", () => {
       expect.objectContaining({ params: { query: { warn_within_days: 30 } } }),
     );
   });
+  it("should load acknowledgement state from the alerting API for models with observed usage", async () => {
+    vi.mocked(useCurrentUser).mockReturnValue({ data: { user_id: "admin", user_role: "proxy_admin" } } as ReturnType<
+      typeof useCurrentUser
+    >);
+    const model = {
+      model_name: "support",
+      litellm_model: "anthropic/claude-sonnet-4-5",
+      deprecation_date: "2026-11-30",
+      status: "imminent",
+    };
+    const schedule = { deprecated: [], imminent: [model], upcoming: [] };
+    const activity = {
+      results: [
+        { date: "2026-11-04", breakdown: { models: { [model.litellm_model]: { metrics: { api_requests: 10 } } } } },
+      ],
+    };
+    vi.mocked(backgroundFetchClient.GET)
+      .mockResolvedValueOnce({ data: schedule } as never)
+      .mockResolvedValueOnce({ data: activity } as never)
+      .mockResolvedValueOnce({ data: { status: "open" } } as never);
+    renderWithProviders(<AlertsHost />);
+    expect(await screen.findByText("1 alerts")).toBeInTheDocument();
+    expect(backgroundFetchClient.GET).toHaveBeenLastCalledWith(
+      "/alerting/model-deprecations/state",
+      expect.objectContaining({
+        params: { query: { model: model.litellm_model, deprecation_date: model.deprecation_date } },
+      }),
+    );
+  });
 });
