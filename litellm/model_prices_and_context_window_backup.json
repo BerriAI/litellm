@@ -60266,6 +60266,7 @@
         "rpm": 10,
         "gemini_audio_only_live": true,
         "input_cost_per_second": 8.33333333333e-05,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "supports_response_schema": false,
         "supports_reasoning": true
     },
@@ -72146,6 +72147,7 @@
         "supports_audio_input": true,
         "tpm": 250000,
         "rpm": 10,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_vision": true,
@@ -72167,6 +72169,7 @@
         "supports_audio_input": true,
         "tpm": 250000,
         "rpm": 10,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_vision": true,
