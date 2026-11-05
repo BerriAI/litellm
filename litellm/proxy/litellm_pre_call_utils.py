@@ -39,6 +39,7 @@ from litellm.constants import (
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
@@ -1077,6 +1078,13 @@ def _is_llm_inference_route(request: Request) -> bool:
     return RouteChecks.is_llm_api_route(route=route) and not RouteChecks.check_route_access(
         route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
     )
+
+
+def return_raw_model_name_enabled(general_settings: Mapping[str, object] | None) -> bool:
+    """`general_settings.return_raw_model_name: true` makes every response report the model that
+    served it instead of the alias the client called. It is stamped as the same metadata key the
+    auto-router's `return_raw_model_name` option and the per-request opt-out use."""
+    return general_settings is not None and general_settings.get("return_raw_model_name") is True
 
 
 def apply_missing_session_id_policy(
@@ -2754,6 +2762,8 @@ async def add_litellm_data_to_request(
         general_settings=general_settings,
         request=request,
     )
+    if return_raw_model_name_enabled(general_settings):
+        data[_metadata_variable_name][RETURN_RAW_MODEL_NAME_METADATA_KEY] = True
 
     # Expose request headers under the metadata field for guardrails (fixes #17477)
     if _metadata_variable_name in data and isinstance(data[_metadata_variable_name], dict):

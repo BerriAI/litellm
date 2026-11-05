@@ -9421,6 +9421,34 @@ async def test_missing_session_id_unset_keeps_legacy_divergence():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/v1/chat/completions", {"model": "my-alias", "messages": [{"role": "user", "content": "hi"}]}),
+        ("/v1/messages", {"model": "my-alias", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}),
+    ],
+)
+@pytest.mark.parametrize("flag", [True, False, None])
+async def test_general_settings_return_raw_model_name_sets_the_restamp_opt_out(
+    path: str, body: dict[str, object], flag: bool | None
+):
+    """`general_settings.return_raw_model_name: true` must reach `should_return_raw_model_name`, the
+    predicate every response-model restamp consults, on both metadata spellings. Anything else leaves
+    the restamp on."""
+    from litellm.proxy.common_request_processing import should_return_raw_model_name
+
+    updated = await add_litellm_data_to_request(
+        data=dict(body),
+        request=_request_for(path),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={} if flag is None else {"return_raw_model_name": flag},
+    )
+
+    assert should_return_raw_model_name(updated) is (flag is True)
+
+
+@pytest.mark.asyncio
 async def test_missing_session_id_omit_leaves_spend_log_session_id_null():
     """Under `omit` a traceparent still becomes the trace id but never a session id, so SpendLogs and
     Langfuse agree on having no session."""
