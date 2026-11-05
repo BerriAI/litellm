@@ -451,7 +451,7 @@ class UsageAlertsRepository:
 
     async def finish_projection_work(self, work: UsageAlertProjectionWork) -> None:
         await self.database.query_raw(
-            """WITH finished AS (UPDATE "LiteLLM_UsageAlertCheckpoint" SET completed=true
+            """WITH finished AS (UPDATE "LiteLLM_UsageAlertCheckpoint" SET completed=true,expires_at=CURRENT_TIMESTAMP
                 WHERE id=$1 AND owner=$2 RETURNING id)
             DELETE FROM "LiteLLM_Config" WHERE param_name='usage_issue_projection_cursor'
                 AND param_value->>'version'=$2 AND EXISTS(SELECT 1 FROM finished) RETURNING param_name""",
