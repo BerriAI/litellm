@@ -5246,14 +5246,16 @@ def test_models_whose_thinking_stops_under_native_output_keep_the_json_tool_only
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("model", "thinking_params"),
+    ("model", "thinking_params", "native"),
     [
-        ("us.anthropic.claude-opus-5", None),
-        ("us.anthropic.claude-opus-5", {"thinking": {"type": "adaptive"}}),
-        ("us.anthropic.claude-opus-5", {"thinking": {"type": "disabled"}}),
-        ("us.anthropic.claude-opus-4-8", None),
-        ("us.anthropic.claude-opus-4-8", {"thinking": {"type": "adaptive"}}),
-        ("us.anthropic.claude-opus-4-8", {"thinking": {"type": "disabled"}}),
+        ("us.anthropic.claude-opus-5", None, True),
+        ("us.anthropic.claude-opus-5", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-5", {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-opus-4-8", None, True),
+        ("us.anthropic.claude-opus-4-8", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-4-8", {"thinking": {"type": "disabled"}}, True),
+        ("us-gov.anthropic.claude-opus-5", None, False),
+        ("us-gov.anthropic.claude-opus-4-8", None, False),
     ],
     ids=[
         "opus-5-unset",
@@ -5262,15 +5264,22 @@ def test_models_whose_thinking_stops_under_native_output_keep_the_json_tool_only
         "opus-4-8-unset",
         "opus-4-8-adaptive",
         "opus-4-8-disabled",
+        "opus-5-us-gov",
+        "opus-4-8-us-gov",
     ],
 )
 def test_opus_5_and_4_8_cost_map_defaults_use_native_output_across_thinking_modes(
-    model: str, thinking_params: Mapping[str, object] | None
+    model: str, thinking_params: Mapping[str, object] | None, native: bool
 ) -> None:
     _, request = _converse_request_for_json_schema(model, False, thinking_params)
 
-    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
-    assert "toolConfig" not in request
+    if native:
+        assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+        assert "toolConfig" not in request
+        return
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
 
 
 def _converse_capital_answer(request: httpx.Request) -> httpx.Response:
