@@ -101,7 +101,7 @@
     {
       "name": "jwt_token",
       "display_name": "JWT / Bearer Token",
-      "pattern": "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_\\-]{10,}",
+      "pattern": "(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_\\-]{10,}",
       "category": "Credential Patterns",
       "description": "Detects JSON Web Tokens (JWTs) in standard three-part base64url format (header.payload.signature)"
     },

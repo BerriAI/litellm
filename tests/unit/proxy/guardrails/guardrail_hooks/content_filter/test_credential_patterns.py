@@ -52,6 +52,7 @@ def test_jwt_token_detected(text: str) -> None:
         "normal sentence with no token at all",
         "eyJ alone does not make a JWT without three parts",
         "some.dotted.text that is not base64url encoded properly",
+        "eyJ" * 8000,
     ],
 )
 def test_jwt_token_not_false_positive(text: str) -> None:
