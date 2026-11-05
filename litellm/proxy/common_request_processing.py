@@ -4314,6 +4314,7 @@ class ProxyBaseLLMRequestProcessing:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
             from litellm.proxy.utils import (
                 check_and_merge_model_level_guardrails,
+                load_balanced_callbacks,
                 stream_gated_guardrail_names,
             )
 
@@ -4321,37 +4322,24 @@ class ProxyBaseLLMRequestProcessing:
                 data=captured_data, llm_router=_global_llm_router
             )
             stream_gated: Final = stream_gated_guardrail_names(captured_data, captured_user_api_key_dict)
-            for cb in litellm.callbacks:
-                if not isinstance(cb, CustomGuardrail):
-                    continue
-                if cb.guardrail_name in stream_gated:
-                    continue
-                if not cb.should_run_guardrail(
-                    data=guardrail_data,
-                    event_type=GuardrailEventHooks.post_call,
-                ):
+
+            def runs_after_stream(cb: CustomGuardrail) -> bool:
+                return (
+                    cb.guardrail_name not in stream_gated
+                    and cb.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is True
+                    and ("apply_guardrail" not in type(cb).__dict__ or cb.use_native_lifecycle_hooks)
+                    and "async_post_call_streaming_iterator_hook" not in type(cb).__dict__
+                )
+
+            for cb in load_balanced_callbacks(tuple(litellm.callbacks), runs_after_stream, eligible_only=True):
+                if not isinstance(cb, CustomGuardrail) or not runs_after_stream(cb):
                     continue
                 try:
-                    guardrail_result = None
-                    if "apply_guardrail" in type(cb).__dict__ and not cb.use_native_lifecycle_hooks:
-                        # Skip — unified-routed guardrails already ran via
-                        # unified_guardrail's end-of-stream block in the
-                        # streaming iterator pipeline.  Running them again
-                        # here would duplicate the guardrail API call
-                        # (e.g. double OpenAI Moderation charges).
-                        continue
-                    if "async_post_call_streaming_iterator_hook" in type(cb).__dict__:
-                        # Skip — the guardrail already scanned the assembled
-                        # response via its own streaming iterator hook in the
-                        # streaming pipeline. re running this function async_post_call_success_hook
-                        # here would duplicate the scan and can spuriously block the guardrail that already passed / failed.
-                        continue
-                    else:
-                        guardrail_result = await cb.async_post_call_success_hook(
-                            user_api_key_dict=captured_user_api_key_dict,
-                            data=guardrail_data,
-                            response=_response,
-                        )
+                    guardrail_result = await cb.async_post_call_success_hook(
+                        user_api_key_dict=captured_user_api_key_dict,
+                        data=guardrail_data,
+                        response=_response,
+                    )
                     if guardrail_result is not None:
                         _response = guardrail_result
                 except Exception as e:

@@ -939,6 +939,14 @@ def _post_call_guardrail_eligible(
     )
 
 
+def _post_mcp_call_guardrail_eligible(callback: CustomGuardrail, data: Mapping[str, object]) -> bool:
+    return (
+        "apply_guardrail" in type(callback).__dict__
+        and not callback.use_native_lifecycle_hooks
+        and callback.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_mcp_call) is True
+    )
+
+
 def _deployment_callbacks(deployment: "GuardrailTypedDict") -> tuple[CustomGuardrail, ...]:
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
@@ -956,18 +964,18 @@ def _deployment_callbacks(deployment: "GuardrailTypedDict") -> tuple[CustomGuard
 
 
 @overload
-def _load_balanced_callbacks(
+def load_balanced_callbacks(
     callbacks: Sequence[CustomLogger], eligible: Callable[[CustomGuardrail], bool], *, eligible_only: bool = False
 ) -> tuple[CustomLogger, ...]: ...
 
 
 @overload
-def _load_balanced_callbacks(
+def load_balanced_callbacks(
     callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool], *, eligible_only: bool = False
 ) -> tuple[object, ...]: ...
 
 
-def _load_balanced_callbacks(
+def load_balanced_callbacks(
     callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool], *, eligible_only: bool = False
 ) -> tuple[object, ...]:
     return tuple(_iter_load_balanced_callbacks(callbacks, eligible, eligible_only=eligible_only))
@@ -1046,9 +1054,7 @@ def _partition_post_call_callbacks(
         else callback
         for callback in litellm.callbacks
     )
-    present: Final = _load_balanced_callbacks(
-        tuple(callback for callback in resolved if callback is not None), eligible
-    )
+    present: Final = load_balanced_callbacks(tuple(callback for callback in resolved if callback is not None), eligible)
     guardrails: Final = tuple(callback for callback in present if isinstance(callback, CustomGuardrail))
     others: Final = cast(  # cast-ok: mirrors the legacy loop, which treated every non-guardrail entry as a CustomLogger
         "tuple[CustomLogger, ...]",
@@ -3480,7 +3486,7 @@ class ProxyLogging:
                 if skip_guardrails
                 else tuple(
                     cb
-                    for cb in _load_balanced_callbacks(
+                    for cb in load_balanced_callbacks(
                         tuple(
                             cb
                             for cb in caps.resolved_callbacks
@@ -3896,7 +3902,7 @@ class ProxyLogging:
         guardrail_tasks: Final = []
         eligibility_data: Final = _GUARDRAIL_ELIGIBILITY_DATA.validate_python(data)
 
-        for callback in _load_balanced_callbacks(
+        for callback in load_balanced_callbacks(
             tuple(litellm.callbacks),
             lambda cb: _during_call_guardrail_eligible(cb, eligibility_data, call_type),
         ):
@@ -4701,14 +4707,13 @@ class ProxyLogging:
             verbose_proxy_logger.debug("MCP guardrail translation handler unavailable; skipping post_mcp_call hook")
             return response
 
-        for callback in caps.resolved_callbacks:
-            if not isinstance(callback, CustomGuardrail):
-                continue
-            if "apply_guardrail" not in type(callback).__dict__ or callback.use_native_lifecycle_hooks:
-                continue
-            if (
-                callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call)
-                is not True
+        for callback in load_balanced_callbacks(
+            caps.resolved_callbacks,
+            lambda cb: _post_mcp_call_guardrail_eligible(cb, request_data),
+            eligible_only=True,
+        ):
+            if not isinstance(callback, CustomGuardrail) or not _post_mcp_call_guardrail_eligible(
+                callback, request_data
             ):
                 continue
             response = await self._run_guardrail_with_metrics(
@@ -4867,7 +4872,7 @@ class ProxyLogging:
                 stream_gated_guardrail_names(data, user_api_key_dict) if caps.has_guardrail else frozenset()
             )
 
-            for callback in _load_balanced_callbacks(
+            for callback in load_balanced_callbacks(
                 tuple(litellm.callbacks),
                 lambda cb: _post_call_guardrail_eligible(cb, _cached_guardrail_data, pipeline_gated),
             ):
@@ -4951,7 +4956,7 @@ class ProxyLogging:
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
         eligibility_data: Final = _GUARDRAIL_ELIGIBILITY_DATA.validate_python(request_data)
-        selected_iterator_callbacks: Final = _load_balanced_callbacks(
+        selected_iterator_callbacks: Final = load_balanced_callbacks(
             tuple(cb for cb, _ in caps.iterator_overrides),
             lambda cb: (
                 _iterator_callback_kind(cb, caps.iterator_overrides) is not None
@@ -5077,7 +5082,7 @@ class ProxyLogging:
         )
         current_response: AsyncIterable[object] = response  # rebind-ok: each guardrail wraps the previous layer
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
-        for guardrail in _load_balanced_callbacks(
+        for guardrail in load_balanced_callbacks(
             tuple(cb for cb, _ in guardrails),
             lambda cb: (
                 any(cb is original for original, _ in guardrails)

@@ -630,15 +630,13 @@ class PipelineExecutor:
         str | None,
         Exception | None,
     ]:
-        from litellm.proxy.utils import (
-            _load_balanced_callbacks,  # pyright: ignore[reportPrivateUsage]  # same deployment selection as the proxy hook walks
-        )
+        from litellm.proxy.utils import load_balanced_callbacks
 
         callback: Final = PipelineExecutor.find_guardrail_callback(step.guardrail)
         if callback is None:
             verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
-        callbacks: Final = _load_balanced_callbacks(
+        callbacks: Final = load_balanced_callbacks(
             (callback,),
             lambda cb: pipeline_callback_eligible(
                 cb, step, data, raw_request_snapshot, mode, streaming_chunks, endpoint_translation

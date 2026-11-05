@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from mcp.types import CallToolResult, TextContent
 
 import litellm
 from litellm import Router
@@ -19,6 +20,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.guardrails import guardrail_registry
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
@@ -136,6 +138,16 @@ class FallbackIteratorGuardrail(CustomGuardrail):
             raise RuntimeError("guardrail offline")
         async for chunk in response:
             yield chunk
+
+
+class McpResultGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="relay-lb", event_hook=GuardrailEventHooks.post_mcp_call, default_on=True)
+        self.calls = 0
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        self.calls += 1
+        return inputs
 
 
 class GuardrailActivator(CustomLogger):
@@ -1039,3 +1051,43 @@ async def test_passthrough_balancing_respects_eligible_layers_and_weights(scenar
         assert "".join(_chunk_text(chunk) for chunk in chunks) == "raw"
     assert first.calls == (20 if scenario == "single" else 0)
     assert second.calls == (0 if scenario in ("none", "single") else 20)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook", ("post_mcp_call", "deferred_stream"))
+async def test_result_hooks_run_one_balanced_copy_per_request(hook, monkeypatch):
+    copies: Final = tuple(
+        McpResultGuardrail() if hook == "post_mcp_call" else LegacyPostCallGuardrail(fail=False) for _ in range(2)
+    )
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "relay-lb",
+                "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "post_call"},
+            }
+            for cb in copies
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", list(copies))
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    for index in range(50):
+        if hook == "post_mcp_call":
+            await logging.post_mcp_call_hook(
+                response=CallToolResult(content=[TextContent(type="text", text="result")], isError=False),
+                request_data={"mcp_tool_name": "echo"},
+            )
+        else:
+            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                captured_data={"messages": [{"role": "user", "content": "hi"}]},
+                captured_user_api_key_dict=UserAPIKeyAuth(),
+                captured_logging_obj=MagicMock(),
+                assembled_response=litellm.ModelResponse(
+                    choices=[{"message": {"content": "hello", "role": "assistant"}}]
+                ),
+                cache_hit=False,
+            )
+        assert sum(cb.calls for cb in copies) == index + 1
+    assert all(cb.calls > 0 for cb in copies)
