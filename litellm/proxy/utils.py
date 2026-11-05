@@ -898,6 +898,7 @@ def _load_balanced_callbacks(callbacks: Sequence[object]) -> tuple[object, ...]:
 
 
 def _load_balanced_callbacks(callbacks: Sequence[object]) -> tuple[object, ...]:
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None or not llm_router.settings().is_set("guardrail_list"):
@@ -921,7 +922,14 @@ def _load_balanced_callbacks(callbacks: Sequence[object]) -> tuple[object, ...]:
         target: Final = deployment.get("callback")
         if target is None:
             raise ValueError(f"No callback found for guardrail: {callback.guardrail_name}")
-        return (target,)
+        deployment_id: Final = deployment.get("id")
+        siblings: Final = (
+            IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_sibling_callbacks.get(deployment_id, ())
+            if deployment_id is not None
+            and IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.get(deployment_id) is target
+            else ()
+        )
+        return (target, *siblings)
 
     return tuple(chain.from_iterable(selected(index, callback) for index, callback in enumerate(callbacks)))
 
@@ -1896,6 +1904,21 @@ def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
 
 def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
+
+
+def _iterator_callback_kind(callback: CustomLogger, cached_entries: Sequence[tuple[CustomLogger, str]]) -> str | None:
+    cached: Final = next((kind for original, kind in cached_entries if original is callback), None)
+    if cached is not None:
+        return cached
+    if _overrides_hook(callback, "async_post_call_streaming_iterator_hook"):
+        return "override"
+    if (
+        isinstance(callback, CustomGuardrail)
+        and callback.uses_apply_guardrail_interface()
+        and not callback.use_native_lifecycle_hooks
+    ):
+        return "apply_guardrail"
+    return None
 
 
 _LISTED_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
@@ -4780,21 +4803,11 @@ class ProxyLogging:
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
         selected_iterator_callbacks: Final = _load_balanced_callbacks(tuple(cb for cb, _ in caps.iterator_overrides))
+
         selected_iterator_overrides: Final = tuple(
-            (
-                cb,
-                next(
-                    kind
-                    for original, kind in caps.iterator_overrides
-                    if original is cb
-                    or (
-                        isinstance(original, CustomGuardrail)
-                        and isinstance(cb, CustomGuardrail)
-                        and original.guardrail_name == cb.guardrail_name
-                    )
-                ),
-            )
+            (cb, kind)
             for cb in selected_iterator_callbacks
+            if (kind := _iterator_callback_kind(cb, caps.iterator_overrides)) is not None
         )
         running_overrides: Final = tuple(
             (callback, kind)
