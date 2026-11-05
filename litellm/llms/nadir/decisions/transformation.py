@@ -142,8 +142,9 @@ class NadirDecisionsConfig(BaseDecisionsConfig):
     """Nadir as a Decisions provider: ``/v1/bucket`` answers a single simple/medium/complex choice question.
 
     Nadir is a tier classifier, not a general judge, so any other question set is rejected before a call.
-    ``NADIR_API_KEY`` is only sent to ``NADIR_API_BASE`` or the hosted API, the same scoping as the ``nadir``
-    chat provider; with no key the call is anonymous, which Nadir serves on a per-IP rate-limited tier.
+    ``NADIR_API_KEY`` is only sent to ``NADIR_API_BASE`` (the hosted API when unset), whether the provider is named
+    or inferred from the base, the same scoping as the ``nadir`` chat provider; with no key the call is anonymous,
+    which Nadir serves on a per-IP rate-limited tier.
     """
 
     path = "/v1/bucket"

@@ -728,6 +728,28 @@ async def test_nadir_answers_a_tier_question_from_its_bucket_verdict_and_keeps_i
 
 
 @pytest.mark.asyncio
+async def test_nadir_inferred_from_the_hosted_base_sends_only_a_hosted_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("NADIR_API_KEY", "ndr-env")
+    verdict: Final = {"routing_tier": "simple", "confidence": 0.8}
+    hosted: Final = respx_mock.post("https://api.getnadir.com/v1/bucket").respond(json=verdict)
+    questions: Final = {"tier": {"type": "choice", "criteria": {"simple": None, "medium": None, "complex": None}}}
+
+    monkeypatch.delenv("NADIR_API_BASE", raising=False)
+    _ = await litellm.asystemone(
+        model="bucket", state="hi", questions=questions, api_base="https://api.getnadir.com/v1"
+    )
+    monkeypatch.setenv("NADIR_API_BASE", "https://nadir.internal/v1")
+    _ = await litellm.asystemone(
+        model="bucket", state="hi", questions=questions, api_base="https://api.getnadir.com/v1"
+    )
+
+    assert hosted.calls[0].request.headers["authorization"] == "Bearer ndr-env"
+    assert "authorization" not in hosted.calls[1].request.headers
+
+
+@pytest.mark.asyncio
 async def test_nadir_refuses_a_question_it_cannot_answer_before_any_call(respx_mock: respx.MockRouter) -> None:
     upstream: Final = respx_mock.post("https://api.getnadir.com/v1/bucket")
     with pytest.raises(litellm.BadRequestError, match="cannot serve this request"):
