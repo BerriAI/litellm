@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
-from dataclasses import replace
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Annotated, Final
 from urllib.parse import quote
@@ -14,6 +15,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.models.plugin_upload import (
     PluginArchiveMetadata,
+    PluginDownloader,
+    PluginDownloadsResponse,
     PluginPublication,
     PluginSnapshot,
     PluginUploadStore,
@@ -28,10 +31,13 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
     delete_plugin,
     disable_plugin,
     enable_plugin,
+    get_plugin_downloads,
     header_key_caller,
     list_plugins,
     plugin_archive_source_matches,
     plugin_archive_url,
+    plugin_downloader,
+    require_download_recorded,
 )
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import resolve_skill_visibility
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.skill_upload_archive import build_uploaded_skill_archive
@@ -76,6 +82,16 @@ from litellm.types.proxy.skill_hub import (
 
 router: Final = APIRouter(prefix="/skill-hub/skills", tags=["Skills Hub"])
 _EDITABLE_METADATA: Final = frozenset(SkillHubMetadata.model_fields)
+router.add_api_route(
+    "/{plugin_name}/downloads", get_plugin_downloads, methods=["GET"], response_model=PluginDownloadsResponse
+)
+
+
+@dataclass(frozen=True, slots=True)
+class VisibleSkillArchive:
+    archive: SkillArchive
+    metadata: PluginArchiveMetadata
+    downloader: PluginDownloader
 
 
 def _url(request: Request, route: str) -> str:
@@ -88,7 +104,7 @@ def _download_url(request: Request, name: str) -> str:
     return _url(request, f"skill-hub/skills/{quote(name, safe='')}/archive")
 
 
-def _skill_response(request: Request, plugin: PluginListItem) -> SkillHubSkill:
+def _skill_response(request: Request, plugin: PluginListItem, download_count: int | None = None) -> SkillHubSkill:
     local_archive: Final = plugin_archive_source_matches(
         request,
         plugin.name,
@@ -109,12 +125,14 @@ def _skill_response(request: Request, plugin: PluginListItem) -> SkillHubSkill:
         source={"source": "archive", "url": _download_url(request, plugin.name)} if local_archive else plugin.source,
         download_url=_download_url(request, plugin.name) if local_archive else None,
         content_url=_url(request, f"skill-hub/skills/{quote(plugin.name, safe='')}/content") if local_archive else None,
+        download_count=download_count,
     )
 
 
 @router.get("", response_model=SkillHubList)
 async def list_skills(
     request: Request,
+    uploads: PluginUploadRepositoryDep,
     caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     query: str = "",
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -128,8 +146,14 @@ async def list_skills(
         for plugin in sorted(catalog.plugins, key=lambda item: item.name)
         if needle in " ".join((plugin.name, plugin.description or "", *(plugin.keywords or ()))).casefold()
     )
+    page: Final = matched[offset : offset + limit]
+    counts: Final[Mapping[str, int]] = (
+        await _require_store(uploads).download_counts(tuple(plugin.id for plugin in page))
+        if is_proxy_admin(caller)
+        else {}
+    )
     return SkillHubList(
-        skills=tuple(_skill_response(request, plugin) for plugin in matched[offset : offset + limit]),
+        skills=tuple(_skill_response(request, plugin, counts.get(plugin.id)) for plugin in page),
         count=len(matched),
         next_offset=offset + limit if offset + limit < len(matched) else None,
     )
@@ -520,14 +544,22 @@ async def download_skill_version(
     """Download a retained publication as a portable ZIP with SKILL.md at its root."""
     store: Final = _require_store(uploads)
     metadata: Final = await _version_metadata(name, store, caller)
-    if metadata.id is None:
-        raise HTTPException(404, "Skill not found")
+    version: Final = await store.version(metadata, version_id)
+    if version is None:
+        raise HTTPException(404, "Skill version not found")
     content: Final = await store.version_content(metadata, version_id)
     archive: Final = (
         await asyncio.to_thread(build_agent_skill_archive, content, plugin_name=name) if content is not None else None
     )
     if archive is None:
         raise HTTPException(404, "This version has no retained Agent Skills archive")
+    require_download_recorded(
+        await store.record_download(
+            replace(metadata, version=version.version),
+            archive.digest.removeprefix("sha256:"),
+            plugin_downloader(caller),
+        )
+    )
     return Response(
         archive.content,
         media_type="application/zip",
@@ -540,7 +572,7 @@ async def download_skill_version(
     )
 
 
-async def _visible_archive(request: Request, name: str, uploads: PluginUploadStore | None) -> SkillArchive:
+async def _visible_archive(request: Request, name: str, uploads: PluginUploadStore | None) -> VisibleSkillArchive:
     anonymous_allowed: Final = litellm.public_skills_index is True and not marketplace_auth_required()
     caller: Final = (
         await header_key_caller(request) if marketplace_key_header_present(request) or not anonymous_allowed else None
@@ -563,7 +595,7 @@ async def _visible_archive(request: Request, name: str, uploads: PluginUploadSto
     )
     if archive is None:
         raise HTTPException(404, "This skill has no stored Agent Skills archive")
-    return archive
+    return VisibleSkillArchive(archive, metadata, plugin_downloader(caller))
 
 
 @router.get(
@@ -575,9 +607,15 @@ async def download_skill(
     request: Request, name: str, uploads: PluginUploadRepositoryDep, digest: str | None = None
 ) -> Response:
     """Download the complete portable skill, with SKILL.md at the ZIP root."""
-    archive: Final = await _visible_archive(request, name, uploads)
+    visible: Final = await _visible_archive(request, name, uploads)
+    archive: Final = visible.archive
     if digest is not None and digest != archive.digest:
         raise HTTPException(404, "Skill archive version not found")
+    require_download_recorded(
+        await _require_store(uploads).record_download(
+            visible.metadata, archive.digest.removeprefix("sha256:"), visible.downloader
+        )
+    )
     return Response(
         archive.content,
         media_type="application/zip",
@@ -593,9 +631,9 @@ async def download_skill(
 @router.get("/{name}/content", response_class=Response, responses={200: {"content": {"text/markdown": {}}}})
 async def skill_content(request: Request, name: str, uploads: PluginUploadRepositoryDep) -> Response:
     """Read the original SKILL.md without downloading supporting files."""
-    archive: Final = await _visible_archive(request, name, uploads)
+    visible: Final = await _visible_archive(request, name, uploads)
     return Response(
-        archive.manifest_content,
+        visible.archive.manifest_content,
         media_type="text/markdown",
         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )

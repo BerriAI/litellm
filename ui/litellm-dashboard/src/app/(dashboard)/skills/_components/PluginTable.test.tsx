@@ -42,11 +42,16 @@ describe("PluginTable", () => {
     vi.clearAllMocks();
   });
 
-  it("should render every column header", () => {
-    render(<PluginTable {...defaultProps} />);
-    for (const header of ["Skill Name", "Version", "Description", "Domain", "Public", "Updated at"]) {
+  it.each([
+    [null, "—"],
+    [0, "0"],
+    [12345, "12,345"],
+  ] as const)("renders headers and download count %s", (download_count, display) => {
+    render(<PluginTable {...defaultProps} pluginsList={[{ ...mockPlugins[0], download_count }]} />);
+    for (const header of ["Skill Name", "Version", "Description", "Domain", "Public", "Updated at", "Downloads"]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
+    expect(within(screen.getByRole("row", { name: /newer-skill/ })).getByText(display)).toBeInTheDocument();
   });
 
   it("should display the empty state when data is empty", () => {
@@ -106,6 +111,7 @@ describe("PluginTable", () => {
   it("should hide the delete action for non-admins but keep copy available", async () => {
     const user = userEvent.setup();
     render(<PluginTable {...defaultProps} isAdmin={false} />);
+    expect(screen.queryByRole("columnheader", { name: "Downloads" })).not.toBeInTheDocument();
     await user.click(screen.getByTestId("plugin-actions-newer-skill"));
     expect(await screen.findByTestId("plugin-action-copy")).toBeInTheDocument();
     expect(screen.queryByTestId("plugin-action-delete")).not.toBeInTheDocument();

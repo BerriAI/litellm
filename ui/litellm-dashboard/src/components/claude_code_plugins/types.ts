@@ -18,6 +18,8 @@ export type PluginAuthor = components["schemas"]["PluginAuthor"];
 export type Plugin = components["schemas"]["PluginListItem"];
 export type PluginListItem = Plugin;
 export type ListPluginsResponse = components["schemas"]["ListPluginsResponse"];
+export type PluginDownloadEvent = components["schemas"]["PluginDownloadEvent"];
+export type PluginDownloadsResponse = components["schemas"]["PluginDownloadsResponse"];
 
 export type SkillRegisterRequest = Omit<components["schemas"]["RegisterPluginRequest"], "version"> & {
   version?: components["schemas"]["RegisterPluginRequest"]["version"];

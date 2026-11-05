@@ -7541,6 +7541,145 @@
           "title": "PluginAuthor",
           "type": "object"
         },
+        "PluginDownloadEvent": {
+          "properties": {
+            "authenticated": {
+              "title": "Authenticated",
+              "type": "boolean"
+            },
+            "digest": {
+              "title": "Digest",
+              "type": "string"
+            },
+            "downloaded_at": {
+              "format": "date-time",
+              "title": "Downloaded At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "key_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Alias"
+            },
+            "team_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Alias"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "required": [
+            "id",
+            "downloaded_at",
+            "version",
+            "digest",
+            "authenticated",
+            "user_id",
+            "user_email",
+            "key_alias",
+            "team_id",
+            "team_alias"
+          ],
+          "title": "PluginDownloadEvent",
+          "type": "object"
+        },
+        "PluginDownloadsResponse": {
+          "properties": {
+            "anonymous_downloads": {
+              "title": "Anonymous Downloads",
+              "type": "integer"
+            },
+            "downloads": {
+              "items": {
+                "$ref": "#/components/schemas/PluginDownloadEvent"
+              },
+              "title": "Downloads",
+              "type": "array"
+            },
+            "next_cursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Cursor"
+            },
+            "total_downloads": {
+              "title": "Total Downloads",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total_downloads",
+            "anonymous_downloads",
+            "downloads",
+            "next_cursor"
+          ],
+          "title": "PluginDownloadsResponse",
+          "type": "object"
+        },
         "PluginListItem": {
           "description": "Plugin item in list responses.",
           "properties": {
@@ -8698,6 +8837,87 @@
             }
           ],
           "summary": "Disable Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/plugins/{plugin_name}/downloads": {
+        "get": {
+          "description": "Admin-only ZIP download totals and authenticated downloader history.\n\nAnonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,\nstarting when tracking is deployed. External sources and installation completion are not observed.",
+          "operationId": "get_plugin_downloads_claude_code_plugins__plugin_name__downloads_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            },
+            {
+              "description": "Maximum number of download events",
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 25,
+                "description": "Maximum number of download events",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "description": "Previous next_cursor",
+              "in": "query",
+              "name": "cursor",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "pattern": "^[1-9][0-9]{0,18}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Previous next_cursor",
+                "title": "Cursor"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/PluginDownloadsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Plugin Downloads",
           "tags": [
             "claude_code_marketplace"
           ]
@@ -58998,6 +59218,145 @@
           "title": "ImportSkillRequest",
           "type": "object"
         },
+        "PluginDownloadEvent": {
+          "properties": {
+            "authenticated": {
+              "title": "Authenticated",
+              "type": "boolean"
+            },
+            "digest": {
+              "title": "Digest",
+              "type": "string"
+            },
+            "downloaded_at": {
+              "format": "date-time",
+              "title": "Downloaded At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "key_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Alias"
+            },
+            "team_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Alias"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "required": [
+            "id",
+            "downloaded_at",
+            "version",
+            "digest",
+            "authenticated",
+            "user_id",
+            "user_email",
+            "key_alias",
+            "team_id",
+            "team_alias"
+          ],
+          "title": "PluginDownloadEvent",
+          "type": "object"
+        },
+        "PluginDownloadsResponse": {
+          "properties": {
+            "anonymous_downloads": {
+              "title": "Anonymous Downloads",
+              "type": "integer"
+            },
+            "downloads": {
+              "items": {
+                "$ref": "#/components/schemas/PluginDownloadEvent"
+              },
+              "title": "Downloads",
+              "type": "array"
+            },
+            "next_cursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Cursor"
+            },
+            "total_downloads": {
+              "title": "Total Downloads",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total_downloads",
+            "anonymous_downloads",
+            "downloads",
+            "next_cursor"
+          ],
+          "title": "PluginDownloadsResponse",
+          "type": "object"
+        },
         "SkillHubAgentSkill": {
           "properties": {
             "description": {
@@ -59363,6 +59722,18 @@
                 }
               ],
               "title": "Domain"
+            },
+            "download_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Gateway ZIP downloads, included in proxy-admin catalog listings",
+              "title": "Download Count"
             },
             "download_url": {
               "anyOf": [
@@ -60835,6 +61206,87 @@
             }
           ],
           "summary": "Download Skill Version",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{plugin_name}/downloads": {
+        "get": {
+          "description": "Admin-only ZIP download totals and authenticated downloader history.\n\nAnonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,\nstarting when tracking is deployed. External sources and installation completion are not observed.",
+          "operationId": "get_plugin_downloads_skill_hub_skills__plugin_name__downloads_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            },
+            {
+              "description": "Maximum number of download events",
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 25,
+                "description": "Maximum number of download events",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "description": "Previous next_cursor",
+              "in": "query",
+              "name": "cursor",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "pattern": "^[1-9][0-9]{0,18}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Previous next_cursor",
+                "title": "Cursor"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/PluginDownloadsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Plugin Downloads",
           "tags": [
             "skill_hub"
           ]

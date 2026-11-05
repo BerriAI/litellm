@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { downloadBlob } from "@/components/EntityUsageExport/utils";
@@ -20,6 +20,7 @@ function VersionArchive({
   accessToken: string;
 }) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const download = async () => {
@@ -32,6 +33,7 @@ function VersionArchive({
         { accessToken, redirect: "error" },
       );
       downloadBlob(content, `skill-${version.version ?? "legacy"}.zip`);
+      await queryClient.invalidateQueries({ queryKey: ["skill-hub", accessToken] });
     } catch {
       setError(t("claudeCodePlugins.skillDetail.history.downloadFailed"));
     } finally {
