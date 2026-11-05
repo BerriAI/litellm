@@ -85244,6 +85244,24 @@
         "output_cost_per_token": 6.09e-07,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
+    "gmi/XiaomiMiMo/MiMo-V2.6-Flash": {
+        "cache_read_input_token_cost": 2.24e-09,
+        "input_cost_per_token": 1.12e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 2.24e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/XiaomiMiMo/MiMo-V2.6-Pro": {
+        "cache_read_input_token_cost": 2.88e-09,
+        "input_cost_per_token": 3.48e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 6.96e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
     "gmi/deepseek-ai/DeepSeek-Prover-V2-671B": {
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gmi",
@@ -85359,6 +85377,15 @@
         "output_cost_per_token": 8.58e-07,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
+    "gmi/deepseek-ai/DeepSeek-V4-Pro": {
+        "cache_read_input_token_cost": 7.975e-08,
+        "input_cost_per_token": 9.57e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.914e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
     "gmi/deepseek-ai/DeepSeek-V4-Pro-0813": {
         "cache_read_input_token_cost": 3.52e-08,
         "input_cost_per_token": 1.056e-06,
@@ -85368,6 +85395,15 @@
         "output_cost_per_token": 3.168e-06,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
+    "gmi/deepseek-ai/DeepSeek-V4.1-Flash": {
+        "cache_read_input_token_cost": 3.6e-09,
+        "input_cost_per_token": 1.8e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 7.2e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
     "gmi/deepseek-ai/deepseek-v4-flash-vision-exp": {
         "cache_read_input_token_cost": 1.4e-08,
         "input_cost_per_token": 4.4e-07,
@@ -85375,6 +85411,24 @@
         "max_input_tokens": 1048575,
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/deepseek-ai/deepseek-v4.1-flash-1017": {
+        "cache_read_input_token_cost": 3.6e-09,
+        "input_cost_per_token": 1.8e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048575,
+        "mode": "chat",
+        "output_cost_per_token": 7.2e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/gmicloud/Ripple-65B-Preview": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
     "gmi/google/gemini-3.1-flash-lite-preview": {
@@ -85693,6 +85747,14 @@
         "output_cost_per_token": 2.5e-07,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
+    "gmi/openai/gpt-oss-20b": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
     "gmi/stepfun-ai/Step-3.7-Flash": {
         "cache_read_input_token_cost": 4e-08,
         "input_cost_per_token": 2e-07,
@@ -85735,6 +85797,15 @@
         "max_input_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
+    },
+    "gmi/tencent/hy4": {
+        "cache_read_input_token_cost": 2.1e-08,
+        "input_cost_per_token": 4.17e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2505e-06,
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
     "gmi/tencent/hy4-preview": {
