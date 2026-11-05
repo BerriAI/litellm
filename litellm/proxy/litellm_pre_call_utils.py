@@ -3986,6 +3986,11 @@ def add_guardrails_from_key_or_team_metadata(
 _add_guardrails_from_key_or_team_metadata: Final = add_guardrails_from_key_or_team_metadata
 
 
+def _string_policy_names(policies: Sequence[object]) -> tuple[str, ...]:
+    """The policy names in a key, team or project ``policies`` list, less an entry that isn't a name"""
+    return tuple(name for name in policies if isinstance(name, str))
+
+
 def _add_guardrails_from_policies_in_metadata(
     key_metadata: dict | None,
     team_metadata: dict | None,
@@ -4021,19 +4026,25 @@ def _add_guardrails_from_policies_in_metadata(
     if key_metadata and "policies" in key_metadata:
         if isinstance(key_metadata["policies"], list) and len(key_metadata["policies"]) > 0:
             premium_user_check()
-            policy_names.update(key_metadata["policies"])
+            policy_names.update(
+                _string_policy_names(cast("Sequence[object]", key_metadata["policies"]))  # cast-ok: checked list
+            )
 
     # Add team-level policies
     if team_metadata and "policies" in team_metadata:
         if isinstance(team_metadata["policies"], list) and len(team_metadata["policies"]) > 0:
             premium_user_check()
-            policy_names.update(team_metadata["policies"])
+            policy_names.update(
+                _string_policy_names(cast("Sequence[object]", team_metadata["policies"]))  # cast-ok: checked list
+            )
 
     # Add project-level policies
     if project_metadata and "policies" in project_metadata:
         if isinstance(project_metadata["policies"], list) and len(project_metadata["policies"]) > 0:
             premium_user_check()
-            policy_names.update(project_metadata["policies"])
+            policy_names.update(
+                _string_policy_names(cast("Sequence[object]", project_metadata["policies"]))  # cast-ok: checked list
+            )
 
     if not policy_names:
         return
@@ -4377,11 +4388,12 @@ async def add_guardrails_from_policy_engine(
     all_tags: Final = _policy_match_tags(data, metadata_variable_name)
     _team_alias: Final = user_api_key_dict.team_alias
     _key_alias: Final = user_api_key_dict.key_alias
+    _model: Final = data.get("model")
     context: Final = PolicyMatchContext.model_validate(
         {
             "team_alias": _team_alias if isinstance(_team_alias, str) else None,
             "key_alias": _key_alias if isinstance(_key_alias, str) else None,
-            "model": data.get("model"),
+            "model": _model if isinstance(_model, str) else None,
             "tags": all_tags,
         }
     )

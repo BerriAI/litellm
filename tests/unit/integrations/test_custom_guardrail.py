@@ -5,7 +5,7 @@ import json
 import pickle
 import threading
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -3800,6 +3800,30 @@ def test_default_on_guardrail() -> None:
         )
         is True
     )
+
+
+def test_merged_guardrail_entries_dedupes_an_all_plain_list():
+    from litellm.integrations.custom_guardrail import merged_guardrail_entries
+
+    names: Final = [f"g{index % 500}" for index in range(1000)]
+
+    assert merged_guardrail_entries(names) == [f"g{index}" for index in range(500)]
+
+
+def test_merged_guardrail_entries_reads_each_entry_of_a_mixed_list_a_fixed_number_of_times():
+    from litellm.integrations import custom_guardrail
+
+    entries: Final = [*(f"g{index}" for index in range(1000)), {"g1": {"threshold": 1}}]
+
+    with patch.object(
+        custom_guardrail, "guardrail_entry_names", wraps=custom_guardrail.guardrail_entry_names
+    ) as entry_names:
+        merged: Final = custom_guardrail.merged_guardrail_entries(entries)
+
+    assert "g1" not in merged
+    assert merged[-1] == {"g1": {"threshold": 1}}
+    assert len(merged) == 1000
+    assert entry_names.call_count <= 2 * len(entries)
 
 
 def test_merged_guardrail_entries_names_each_guardrail_once_preferring_its_first_entry_with_settings():

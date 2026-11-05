@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import (
@@ -61,6 +62,11 @@ class _Action(str, enum.Enum):
     BLOCKED = "BLOCKED"
     NONE = "NONE"
     GUARDRAIL_INTERVENED = "GUARDRAIL_INTERVENED"
+
+
+def _user_api_key_alias(request_data: Mapping[str, object], metadata_key: str) -> object:
+    """The key alias recorded under ``metadata_key``, which a pass-through client can set to anything."""
+    return (as_str_mapping(request_data.get(metadata_key)) or {}).get("user_api_key_alias")
 
 
 class NomaV2Guardrail(CustomGuardrail):
@@ -336,8 +342,8 @@ class NomaV2Guardrail(CustomGuardrail):
         # (ports v1 fallback from PR #16832).
         if application_id is None:
             application_id = self._get_non_empty_str(
-                request_data.get("litellm_metadata", {}).get("user_api_key_alias")
-            ) or self._get_non_empty_str(request_data.get("metadata", {}).get("user_api_key_alias"))
+                _user_api_key_alias(request_data, "litellm_metadata")
+            ) or self._get_non_empty_str(_user_api_key_alias(request_data, "metadata"))
 
         try:
             payload: Final = self._build_scan_payload(

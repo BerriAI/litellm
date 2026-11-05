@@ -443,6 +443,7 @@ async def gemini_proxy_route(
         custom_llm_provider="gemini",
         is_streaming_request=is_streaming_request,
         query_params=merged_params,
+        inherit_auth_guardrails=True,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(
         request,
@@ -1108,6 +1109,7 @@ async def anthropic_proxy_route(
         target=str(updated_url),
         custom_headers=_upstream_headers_for_anthropic_route(request, user_api_key_dict, auth_header),
         is_streaming_request=is_streaming_request,
+        inherit_auth_guardrails=True,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(
         request,
@@ -3230,6 +3232,7 @@ async def _base_vertex_proxy_route(
         upstream_headers_filter=partial(
             _without_dropped_anthropic_betas, _vertex_dropped_anthropic_betas(general_settings, request.headers)
         ),
+        inherit_auth_guardrails=True,
     )  # dynamically construct pass-through endpoint based on incoming path
 
     try:
@@ -3832,6 +3835,7 @@ class BaseOpenAIPassThroughHandler:
                 if custom_llm_provider
                 else None
             ),
+            inherit_auth_guardrails=True,
         )  # dynamically construct pass-through endpoint based on incoming path
         received_value: Final = await endpoint_func(
             request,

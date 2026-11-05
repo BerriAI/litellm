@@ -158,6 +158,7 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     coerce_token_limit,
     get_or_create_metadata_bucket,
     independent_snapshot,
@@ -775,6 +776,20 @@ def pipeline_managed_guardrail_names(
     )
 
 
+def _runs_after_the_provider(pipeline_entry: object) -> bool:
+    if not isinstance(pipeline_entry, tuple):
+        return False
+    pipeline: Final = cast("tuple[object, ...]", pipeline_entry)[-1]  # cast-ok: the policy engine's (name, pipeline)
+    return getattr(pipeline, "mode", None) == "post_call"
+
+
+def _holds_pipeline_before_the_provider(pipelines: object) -> bool:
+    if not pipelines:
+        return False
+    entries: Final = as_object_list(pipelines)
+    return entries is None or not all(map(_runs_after_the_provider, entries))
+
+
 def _ran_or_runs_outside_pipelines(
     callback: CustomGuardrail | None,
     data: Mapping[str, object],
@@ -874,6 +889,26 @@ def _drop_response_steps_that_did_not_run(
         return
     for bucket_key in ("metadata", "litellm_metadata"):
         _drop_applied_guardrails_in_place(data.get(bucket_key), not_run)
+
+
+def _add_applied_guardrails_in_place(
+    data: dict[str, object],  # mutable-ok: the names are recorded in the live request body's metadata
+    names: Sequence[str],
+) -> None:
+    """Adds each name the way add_guardrail_to_applied_guardrails_header does, in time linear in the names. A record a
+    guardrail left that isn't a list stays as it is, so the request doesn't fail on it."""
+    if not names:
+        return
+    metadata: Final = cast("dict[str, object]", get_or_create_metadata_bucket(data)[1])  # cast-ok: str-keyed bucket
+    if "applied_guardrails" not in metadata:
+        metadata["applied_guardrails"] = list(dict.fromkeys(names))
+        return
+    applied: Final = metadata["applied_guardrails"]
+    if not isinstance(applied, list):
+        return
+    entries: Final = cast("list[object]", applied)  # cast-ok: entries are only compared with names
+    present: Final = frozenset(name for name in entries if isinstance(name, str))
+    entries.extend(dict.fromkeys(name for name in names if name not in present))
 
 
 def _drop_applied_guardrails_in_place(bucket: object, names: frozenset[str]) -> None:
@@ -2921,10 +2956,6 @@ class ProxyLogging:
         policy pipeline steps that have not run. With ``skip_guardrails`` the pipelines run on
         another request, so every step is added.
         """
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
-
         metadata_standard: Final = data.get("metadata") or {}
         metadata_litellm: Final = data.get("litellm_metadata") or {}
 
@@ -2944,18 +2975,21 @@ class ProxyLogging:
             if not isinstance(applied_guardrails, list):
                 applied_guardrails = []
 
-            not_run: Final = (
-                frozenset[str]()
-                if skip_guardrails
-                else _request_steps_that_have_not_run(cast(dict[str, object], data))  # cast-ok: request payload
+            request: Final = cast("dict[str, object]", data)  # cast-ok: request payload
+            not_run: Final = frozenset[str]() if skip_guardrails else _request_steps_that_have_not_run(request)
+            already_applied: Final = frozenset(
+                name
+                for name in cast("Sequence[object]", applied_guardrails)  # cast-ok: checked to be a list above
+                if isinstance(name, str)
             )
-            for guardrail_name in guardrails_in_metadata:
-                if (
-                    isinstance(guardrail_name, str)
-                    and guardrail_name not in applied_guardrails
-                    and guardrail_name not in not_run
-                ):
-                    add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_name)
+            _add_applied_guardrails_in_place(
+                request,
+                [
+                    name
+                    for name in guardrails_in_metadata
+                    if isinstance(name, str) and name not in already_applied and name not in not_run
+                ],
+            )
 
     async def _maybe_execute_pipelines(
         self,
@@ -3128,8 +3162,18 @@ class ProxyLogging:
         request_data: Mapping[str, object],
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
     ) -> bool:
-        if _policy_state_metadata(request_data).get("_guardrail_pipelines"):
-            return True
+        return bool(_policy_state_metadata(request_data).get("_guardrail_pipelines")) or (
+            self._request_has_guardrail_callback(request_data, event_type)
+        )
+
+    def request_is_scanned_before_the_provider(self, request_data: Mapping[str, object]) -> bool:
+        """``request_has_pre_call_guardrails``, except that a resolved policy pipeline running post_call doesn't count"""
+        return _holds_pipeline_before_the_provider(
+            _policy_state_metadata(request_data).get("_guardrail_pipelines")
+        ) or self._request_has_guardrail_callback(request_data, GuardrailEventHooks.pre_call)
+
+    @staticmethod
+    def _request_has_guardrail_callback(request_data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
         caps: Final = ProxyLogging.callback_capabilities()
         if caps.has_content_enforcer:
             return True
@@ -4366,6 +4410,7 @@ class ProxyLogging:
         data: dict,
         response: LLMResponseTypes,
         user_api_key_dict: UserAPIKeyAuth,
+        guardrails_only: bool = False,
     ):
         """
         Allow user to modify outgoing data
@@ -4375,6 +4420,10 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
         4. /files
+
+        ``guardrails_only`` is for a relayed response that never reached a router deployment and isn't in the shape the
+        other hooks expect: only the guardrails the request selected run, not the guardrails of a model that merely
+        shares the body's ``model`` name, nor the callbacks that aren't guardrails.
         """
 
         from litellm.proxy.proxy_server import llm_router
@@ -4392,7 +4441,9 @@ class ProxyLogging:
         guardrail_callbacks, other_callbacks = _partition_post_call_callbacks()
         try:
             # Merge model-level guardrails before checking which guardrails to run
-            guardrail_data: Final = check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
+            guardrail_data: Final = (
+                data if guardrails_only else check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
+            )
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = tuple(
                 callback
@@ -4460,7 +4511,7 @@ class ProxyLogging:
             ############ Handle CustomLogger ###############################
             #################################################################
 
-            for callback in other_callbacks:
+            for callback in () if guardrails_only else other_callbacks:
                 callback_response: LLMResponseTypes | None = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )

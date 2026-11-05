@@ -832,6 +832,28 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "blocked model output" in sent_texts[0]
 
+    @pytest.mark.asyncio
+    async def test_non_converse_response_is_read_whole_with_its_envelope(self):
+        response = {
+            "id": "msg_marker",
+            "type": "message",
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "stop_sequence": "stop-marker",
+            "content": [{"type": "text", "text": "model output"}],
+            "usage": {"input_tokens": 5551234},
+        }
+        guardrail = _make_guardrail({"texts": []})
+
+        await BedrockPassthroughGuardrailHandler().process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data={"endpoint": "model/anthropic.claude-3-sonnet/invoke"},
+        )
+
+        sent_text = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"][0]
+        assert all(part in sent_text for part in ("msg_marker", "stop-marker", "5551234", "model output"))
+
 
 def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
     import json

@@ -211,44 +211,32 @@ def guardrail_request_data_with_streaming(
     }
 
 
-_GUARDRAIL_ENTRY_WITH_SETTINGS: Final = TypeAdapter(Mapping[str, object])
-
-
 def merged_guardrail_entries(*entry_lists: Iterable[object]) -> list[object]:
     """Merges guardrail lists so each guardrail is named once: the first ``{name: settings}`` entry naming it wins over
     any plain name in either order, else its first plain name stays"""
     entries: Final = tuple(chain.from_iterable(entry_lists))
-    settings_names: Final = tuple(_settings_entry_names(entry) for entry in entries)
-    named_with_settings: Final = frozenset[str]().union(*settings_names)
-    return [
-        entry
-        for index, entry in enumerate(entries)
-        if not _superseded_guardrail_entry(entries, settings_names, named_with_settings, index)
-    ]
+    if all(isinstance(entry, str) for entry in entries):
+        return list(dict.fromkeys(entries))
+    named_with_settings: Final = frozenset(
+        chain.from_iterable(guardrail_entry_names(entry) for entry in entries if isinstance(entry, dict))
+    )
+    seen: Final[set[str]] = set()  # mutable-ok: local to this walk
+    merged: Final[list[object]] = []  # mutable-ok: local to this walk
+    for entry in entries:
+        names = guardrail_entry_names(entry)
+        if (names and seen.issuperset(names)) or (isinstance(entry, str) and entry in named_with_settings):
+            continue
+        merged.append(entry)
+        seen.update(names)
+    return merged
 
 
 def guardrail_entry_names(entry: object) -> tuple[str, ...]:
     if isinstance(entry, str):
         return (entry,)
     if isinstance(entry, dict):
-        return tuple(_GUARDRAIL_ENTRY_WITH_SETTINGS.validate_python(entry))
+        return tuple(cast("Mapping[str, object]", entry))  # cast-ok: a guardrail settings entry is keyed by name
     return ()
-
-
-def _settings_entry_names(entry: object) -> frozenset[str]:
-    return frozenset(guardrail_entry_names(entry)) if isinstance(entry, dict) else frozenset()
-
-
-def _superseded_guardrail_entry(
-    entries: tuple[object, ...],
-    settings_names: tuple[frozenset[str], ...],
-    named_with_settings: frozenset[str],
-    index: int,
-) -> bool:
-    entry: Final = entries[index]
-    if isinstance(entry, str):
-        return entry in named_with_settings or entry in entries[:index]
-    return bool(settings_names[index]) and settings_names[index] <= frozenset[str]().union(*settings_names[:index])
 
 
 def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None = None) -> bool:
