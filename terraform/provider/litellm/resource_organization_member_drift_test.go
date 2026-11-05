@@ -329,23 +329,26 @@ func TestOrganizationMemberAddReadKeepsEmailOnlyMemberAfterEmailChange(t *testin
 	}
 }
 
-func TestOrganizationMemberAddReadFollowsEmailWhenResolvedIDIsGone(t *testing.T) {
+func TestOrganizationMemberAddReadDoesNotRebindResolvedIDByEmail(t *testing.T) {
 	proxy := &fakeOrgProxy{t: t, orgID: "org-1", orgExists: true, members: []map[string]interface{}{
-		orgMemberRow("old-id", "bob@example.com", "internal_user"),
+		orgMemberRow("old-id", "bob@example.com", "org_admin"),
 	}}
 	srv := proxy.serve()
 	defer srv.Close()
 	client := NewClient(srv.URL, "test-key", true)
 
-	state := refreshedEmailOnlyState(t, client, emailOnlyMember("bob@example.com", "internal_user"))
-	proxy.members = []map[string]interface{}{orgMemberRow("new-id", "bob@example.com", "internal_user")}
+	state := refreshedEmailOnlyState(t, client, emailOnlyMember("bob@example.com", "org_admin"))
+	proxy.members = []map[string]interface{}{orgMemberRow("other-id", "BOB@example.com", "internal_user")}
 
 	d := orgMemberAddDataFromState(t, state)
 	if err := resourceLiteLLMOrganizationMemberAddRead(d, client); err != nil {
 		t.Fatalf("read failed: %v", err)
 	}
-	if got := d.Get("member_user_ids").(map[string]interface{})["bob@example.com"]; got != "new-id" {
-		t.Fatalf("resolved user_id = %v, want new-id", got)
+	if got := d.Get("member").(*schema.Set).Len(); got != 0 {
+		t.Fatalf("member whose resolved user_id is gone should leave state, %d left", got)
+	}
+	if got := d.Get("member_user_ids").(map[string]interface{}); len(got) != 0 {
+		t.Fatalf("another membership with the same email must not be tracked, got %v", got)
 	}
 }
 

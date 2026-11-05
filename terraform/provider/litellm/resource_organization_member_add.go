@@ -125,9 +125,6 @@ func resourceLiteLLMOrganizationMemberAddRead(d *schema.ResourceData, m interfac
 
 		userID, userEmail := orgMemberIdentity(configured, resolvedUserIDs)
 		existing, ok := findOrgMember(members, userID, userEmail)
-		if !ok && configuredID == "" {
-			existing, ok = findOrgMember(members, "", configuredEmail)
-		}
 		if !ok {
 			log.Printf("[WARN] Organization member (user_id=%q, user_email=%q) not found in organization %s", configuredID, configuredEmail, orgID)
 			continue
