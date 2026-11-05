@@ -627,10 +627,25 @@ async def test_projection_resume_keeps_spend_and_traffic_in_one_episode(db: Mana
         await job._store.save_projection_cursor(position)
         before: Final = await IssuesRepository.from_prisma(prisma).list_issues()
         assert len(before.data) == 1 and before.data[0].family == "spend"
+        added: Final = await job._store.save_rule(
+            UsageAlertRuleInput(
+                name="Later policy", scope_type="key", scope_id=_KEY_B, metric="latency", direction="increase"
+            ),
+            None,
+        )
+        assert added is not None
+        await job._scope_page((added,), _DAY, False)
+        latest: Final = await job._store.pending_projection_work()
+        assert latest is not None and latest.version != work.version
+        retained: Final = await job._store.projection_cursor(latest)
+        assert retained.step == 21 and retained.version == work.version
         restarted: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
         assert restarted._performance_projection is not None
+        assert not await restarted._performance_projection.run_pending(
+            _NOW + timedelta(hours=1), latest, restarted._store, asyncio.get_running_loop().time() + 10
+        )
         assert await restarted._performance_projection.run_pending(
-            _NOW + timedelta(hours=1), work, restarted._store, asyncio.get_running_loop().time() + 10
+            _NOW + timedelta(hours=2), latest, restarted._store, asyncio.get_running_loop().time() + 10
         )
         after: Final = await IssuesRepository.from_prisma(prisma).list_issues()
         assert tuple(item.id for item in after.data) == tuple(item.id for item in before.data)

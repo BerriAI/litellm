@@ -227,7 +227,7 @@ class UsageAlertJob:
                 if await self._performance_projection.run_pending(now, work, self._store, deadline):
                     await self._store.finish_projection_work(work)
         else:
-            await self._notify()
+            await self._notify(deadline)
         await self._store.prune()
 
     @staticmethod
@@ -424,9 +424,14 @@ class UsageAlertJob:
             await self._store.record_observations(rule, observations.changed)
         return observations.evaluated
 
-    async def _deliver_channel(self, alert: UsageAlert, rule: UsageAlertRule, channel: UsageAlertChannel) -> str | None:
+    async def _deliver_channel(
+        self, alert: UsageAlert, rule: UsageAlertRule, channel: UsageAlertChannel, deadline: float
+    ) -> str | None:
         try:
-            delivered: Final = await asyncio.wait_for(self._delivery.send(alert, rule, channel), timeout=30)
+            delivered: Final = await asyncio.wait_for(
+                self._delivery.send(alert, rule, channel),
+                timeout=min(30, max(0, deadline - asyncio.get_running_loop().time() - 1)),
+            )
             if not delivered:
                 return "transport_not_configured"
             await self._store.mark_notified(alert.id, channel)
@@ -435,18 +440,22 @@ class UsageAlertJob:
             return "delivery_failed"
         return None
 
-    async def _notify(self) -> None:
-        while page := await self._store.pending_notifications(limit=10):
+    async def _notify(self, deadline: float) -> None:
+        while asyncio.get_running_loop().time() + 2 < deadline and (
+            page := await self._store.pending_notifications(limit=10)
+        ):
             for pending in page:
-                await self._notify_incident(pending)
+                if asyncio.get_running_loop().time() + 2 >= deadline:
+                    return
+                await self._notify_incident(pending, deadline)
 
-    async def _notify_incident(self, pending: UsageAlertNotification) -> None:
+    async def _notify_incident(self, pending: UsageAlertNotification, deadline: float) -> None:
         current: Final = await self._store.get_rule(pending.rule.id)
         if current is None or not current.enabled or current.updated_at != pending.rule.updated_at:
             return
         failures: Final = tuple(
             [
-                await self._deliver_channel(pending.incident, pending.rule, channel)
+                await self._deliver_channel(pending.incident, pending.rule, channel, deadline)
                 for channel in pending.pending_channels
             ]
         )

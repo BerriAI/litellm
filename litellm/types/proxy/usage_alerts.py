@@ -77,6 +77,7 @@ class UsageAlertProjectionWork(BaseModel, frozen=True):
 
 class UsageAlertProjectionCursor(BaseModel, frozen=True):
     version: str
+    day: date | None = None
     step: int = Field(default=0, ge=0, le=26)
     after_id: str | None = None
     observed_at: datetime | None = None

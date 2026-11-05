@@ -438,8 +438,8 @@ class UsageAlertsRepository:
         current: Final = UsageAlertProjectionCursor.model_validate(rows[0].record) if rows else None
         return (
             current
-            if current is not None and current.version == work.version
-            else UsageAlertProjectionCursor(version=work.version)
+            if current is not None and (current.day == work.day or current.version == work.version)
+            else UsageAlertProjectionCursor(version=work.version, day=work.day)
         )
 
     async def save_projection_cursor(self, cursor: UsageAlertProjectionCursor) -> None:
@@ -451,7 +451,10 @@ class UsageAlertsRepository:
 
     async def finish_projection_work(self, work: UsageAlertProjectionWork) -> None:
         await self.database.query_raw(
-            'UPDATE "LiteLLM_UsageAlertCheckpoint" SET completed=true WHERE id=$1 AND owner=$2 RETURNING id',
+            """WITH finished AS (UPDATE "LiteLLM_UsageAlertCheckpoint" SET completed=true
+                WHERE id=$1 AND owner=$2 RETURNING id)
+            DELETE FROM "LiteLLM_Config" WHERE param_name='usage_issue_projection_cursor'
+                AND param_value->>'version'=$2 AND EXISTS(SELECT 1 FROM finished) RETURNING param_name""",
             "performance-dirty:" + work.day.isoformat(),
             work.version,
         )
