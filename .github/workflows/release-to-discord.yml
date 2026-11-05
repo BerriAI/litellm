@@ -1,0 +1,18 @@
+name: Release to Discord
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  notify:
+    name: Publish release to Discord
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send release to Discord
+        uses: SethCohen/github-releases-to-discord@24d166886aee4646d448c8a389ff9e1ebcab3682
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
