@@ -8567,7 +8567,7 @@ class TestAccessGroupModelSync:
                 return [{"deployment_count": deployment_count}]
             if sql.startswith('UPDATE "LiteLLM_AccessGroupTable"'):
                 return [{"access_group_id": "ag-1"}]
-            if sql.startswith("SELECT 1 AS locked FROM"):
+            if sql.startswith(("SELECT 1 AS locked FROM", 'SELECT team_id FROM "LiteLLM_TeamTable"')):
                 return []
             assert sql.startswith("WITH ")
             return TestAccessGroupModelSync._ALLOWLIST_ROWS

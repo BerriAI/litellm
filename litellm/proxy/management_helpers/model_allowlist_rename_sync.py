@@ -11,11 +11,20 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import ConfigDict
+
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.access_group_model_sync import raw_executor, raw_transactions, still_backed
+from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
+
+
+class _ListingTeam(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str
 
 
 class _TouchedRow(LiteLLMBaseModel):
@@ -80,6 +89,8 @@ def _rewrite_sql(set_clause: str, where_clause: str) -> str:
     return f"WITH {ctes} {rows}"
 
 
+_TEAMS_LISTING_SQL: Final = 'SELECT team_id FROM "LiteLLM_TeamTable" WHERE $1 = ANY("models") ORDER BY team_id COLLATE "C"'
+
 _LOCK_ORGS_LISTING_SQL: Final = (
     'SELECT 1 AS locked FROM "LiteLLM_OrganizationTable" WHERE $1 = ANY("models") '
     'ORDER BY organization_id COLLATE "C" FOR UPDATE'
@@ -116,6 +127,8 @@ async def sync_model_allowlists_for_renamed_model(
     executor: Final = raw_executor(prisma_client)
     old_name_still_backed: Final = await still_backed(executor, llm_router, old_name, model_id)
     async with raw_transactions(prisma_client).tx() as transaction:
+        for team in await transaction.query_raw(_TEAMS_LISTING_SQL, old_name):
+            _ = await transaction.query_raw(TEAM_ADVISORY_LOCK_SQL, _ListingTeam.model_validate(team).team_id)
         _ = await transaction.query_raw(_LOCK_ORGS_LISTING_SQL, old_name)
         _ = await transaction.query_raw(_LOCK_TEAMS_LISTING_SQL, old_name)
         _ = await transaction.query_raw(_LOCK_USERS_LISTING_SQL, old_name)
