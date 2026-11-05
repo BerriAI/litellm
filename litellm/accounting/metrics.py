@@ -19,6 +19,7 @@ class _Instruments:
 
 def _instruments() -> _Instruments | None:
     try:
+        # prometheus-client ships only in the proxy-runtime extra, so a plain litellm[proxy] install lands here
         from prometheus_client import Gauge, Histogram
     except ImportError:
         return None
