@@ -299,7 +299,6 @@ class CustomGuardrail(CustomLogger):
 
     records_own_guardrail_information: ClassVar[bool] = False
 
-    # If True, apply_guardrail already sends inputs["tools"] to the vendor, so tool descriptions are not also sent as texts.
     natively_scans_tool_definitions: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool

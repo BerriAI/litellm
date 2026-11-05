@@ -64,6 +64,8 @@ class _Action(str, enum.Enum):
 
 
 class NomaV2Guardrail(CustomGuardrail):
+    natively_scans_tool_definitions = True
+
     reads_stream_marks: ClassVar[bool] = True
     """Noma keeps one record per streamed reply when every scan carries ``stream`` and only the last one carries the
     finished ``response``, as chat completions sends them, so provider streams relayed on the passthrough route mark

@@ -254,6 +254,8 @@ INPUT_HOOKS: Final = MappingProxyType(
 
 
 class AktoGuardrail(CustomGuardrail):
+    natively_scans_tool_definitions = True
+
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"]:
         from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
