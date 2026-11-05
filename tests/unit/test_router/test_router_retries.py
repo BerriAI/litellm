@@ -923,10 +923,11 @@ async def test_a_create_that_times_out_on_a_fallback_is_not_sent_to_the_next_fal
         )
     )
 
-    with pytest.raises(openai.APITimeoutError):
+    with pytest.raises(openai.APITimeoutError) as raised:
         await _create(_batch_router(api_bases, num_retries=0), create)
 
     assert [route.call_count for route in routes] == [1, 1, 0]
+    assert "No fallback was attempted" not in raised.value.message
 
 
 @pytest.mark.parametrize("unsent_timeout", [httpx.ConnectTimeout, httpx.PoolTimeout])
