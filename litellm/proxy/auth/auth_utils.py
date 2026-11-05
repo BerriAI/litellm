@@ -388,6 +388,11 @@ def _check_banned_params(
     Shared between the root-level check and the nested-config check so a
     new banned param only needs to be added in one place.
     """
+    if "chatgpt_auth_file" in body:
+        raise ValueError(
+            "Rejected Request: chatgpt_auth_file is not allowed in request body. It makes the proxy read an "
+            "auth.json from its own host, so only the deployment config may name one."
+        )
     for param in _BANNED_REQUEST_BODY_PARAMS:
         if param not in body:
             continue

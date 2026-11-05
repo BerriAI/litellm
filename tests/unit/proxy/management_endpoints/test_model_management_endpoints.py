@@ -507,6 +507,67 @@ class TestModelManagementAuthChecks:
             )
         assert exc_info.value.code == "403"
 
+    def _check_chatgpt_auth_file(self, requested: str | None, existing: str | None, admin: bool) -> object:
+        return ModelManagementAuthChecks.can_user_set_chatgpt_auth_file(
+            litellm_params=LiteLLM_Params(model="chatgpt/gpt-6.1-sol", chatgpt_auth_file=requested),
+            user_api_key_dict=self.admin_user if admin else self.team_admin_user,
+            existing_litellm_params=(
+                None if existing is None else LiteLLM_Params(model="chatgpt/gpt-6.1-sol", chatgpt_auth_file=existing)
+            ),
+        )
+
+    @pytest.mark.parametrize(
+        "requested, existing, admin",
+        [
+            ("/srv/acct-a/auth.json", None, True),
+            ("/srv/acct-a/auth.json", "/srv/acct-a/auth.json", False),
+            (None, "/srv/acct-a/auth.json", False),
+        ],
+    )
+    def test_chatgpt_auth_file_is_allowed_for_admins_or_when_unchanged(self, requested, existing, admin):
+        assert self._check_chatgpt_auth_file(requested, existing, admin) is True
+
+    @pytest.mark.parametrize("existing", [None, "/srv/acct-a/auth.json"])
+    def test_team_admin_cannot_point_a_model_at_another_chatgpt_auth_file(self, existing):
+        from litellm.proxy._types import ProxyException
+
+        with pytest.raises(ProxyException) as exc_info:
+            self._check_chatgpt_auth_file("/srv/acct-b/auth.json", existing, admin=False)
+        assert exc_info.value.code == "403"
+        assert exc_info.value.param == "chatgpt_auth_file"
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_rejects_chatgpt_auth_file_for_team_admin(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        mock_prisma = MagicMock()
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch(  # test-quality-ok: prior auth check needs a live DB; only the auth file check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="team-subscription",
+                        litellm_params=LiteLLM_Params(
+                            model="chatgpt/gpt-6.1-sol", chatgpt_auth_file="/srv/other-account/auth.json"
+                        ),
+                        model_info={"id": "chatgpt-auth-file-create-test", "team_id": "test_team"},
+                    ),
+                    user_api_key_dict=self.team_admin_user,
+                )
+            assert exc_info.value.code == "403"
+            assert exc_info.value.param == "chatgpt_auth_file"
+            mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_add_new_model_rejects_aws_session_tags_for_non_admin(self):
         from litellm.proxy._types import ProxyException

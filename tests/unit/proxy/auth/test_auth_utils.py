@@ -2812,6 +2812,18 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         )
 
 
+@pytest.mark.parametrize("allow_client_side_credentials", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+def test_request_cannot_select_chatgpt_auth_file(allow_client_side_credentials: bool, nested: bool) -> None:
+    selector: Final = {"chatgpt_auth_file": "/tokens/account-b/auth.json"}
+    with pytest.raises(ValueError, match="chatgpt_auth_file"):
+        is_request_body_safe(
+            request_body={"model": "chatgpt-account-a", **({"extra_body": selector} if nested else selector)},
+            general_settings={"allow_client_side_credentials": allow_client_side_credentials},
+            llm_router=None,
+            model="chatgpt-account-a",
+        )
+
 class TestIsRequestBodySafeBlocksBedrockProjectOverride:
     """``aws_bedrock_project_id`` pins a deployment to a Bedrock project so
     that project's data-retention policy applies to its requests. A

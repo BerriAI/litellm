@@ -1216,6 +1216,12 @@ async def patch_model(
             existing_litellm_params=db_model.litellm_params,
         )
 
+        ModelManagementAuthChecks.can_user_set_chatgpt_auth_file(
+            litellm_params=patch_data.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=db_model.litellm_params,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
@@ -2064,6 +2070,28 @@ class ModelManagementAuthChecks:
         )
 
     @staticmethod
+    def can_user_set_chatgpt_auth_file(
+        litellm_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        existing_litellm_params: GenericLiteLLMParams | None = None,
+    ) -> Literal[True]:
+        if litellm_params is None or litellm_params.chatgpt_auth_file is None:
+            return True
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return True
+        existing_auth_file: Final = (
+            existing_litellm_params.chatgpt_auth_file if existing_litellm_params is not None else None
+        )
+        if existing_auth_file == litellm_params.chatgpt_auth_file:
+            return True
+        raise ProxyException(
+            message=f"Only a proxy admin can set chatgpt_auth_file on a model. Your role={user_api_key_dict.user_role}.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="chatgpt_auth_file",
+        )
+
+    @staticmethod
     async def allow_team_model_action(
         model_params: Deployment | updateDeployment,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2430,6 +2458,11 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
         )
 
+        ModelManagementAuthChecks.can_user_set_chatgpt_auth_file(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=None,
@@ -2629,6 +2662,12 @@ async def update_model(
         )
 
         ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=deployment.litellm_params,
+        )
+
+        ModelManagementAuthChecks.can_user_set_chatgpt_auth_file(
             litellm_params=model_params.litellm_params,
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=deployment.litellm_params,
