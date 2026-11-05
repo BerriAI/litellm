@@ -1,23 +1,35 @@
 package litellm
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 // fakeOrgProxy serves GET /organization/info and DELETE /organization/member_delete
 // for a single organization, so Read and Delete can be checked against drift.
 type fakeOrgProxy struct {
-	t            *testing.T
-	orgID        string
-	orgExists    bool
-	members      []map[string]interface{}
-	deleteStatus int
-	deleteCalls  int
+	t             *testing.T
+	orgID         string
+	orgExists     bool
+	members       []map[string]interface{}
+	deleteStatus  int
+	deleteCalls   int
+	deleteBodies  []map[string]interface{}
+	updatedBodies []map[string]interface{}
+}
+
+func decodeBody(t *testing.T, r *http.Request) map[string]interface{} {
+	var body map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		t.Errorf("decoding %s body: %v", r.URL.Path, err)
+	}
+	return body
 }
 
 func (p *fakeOrgProxy) serve() *httptest.Server {
@@ -39,11 +51,15 @@ func (p *fakeOrgProxy) serve() *httptest.Server {
 			})
 		case r.Method == http.MethodDelete && r.URL.Path == "/organization/member_delete":
 			p.deleteCalls++
+			p.deleteBodies = append(p.deleteBodies, decodeBody(p.t, r))
 			status := p.deleteStatus
 			if status == 0 {
 				status = http.StatusOK
 			}
 			w.WriteHeader(status)
+			w.Write([]byte(`{}`))
+		case r.Method == http.MethodPatch && r.URL.Path == "/organization/member_update":
+			p.updatedBodies = append(p.updatedBodies, decodeBody(p.t, r))
 			w.Write([]byte(`{}`))
 		default:
 			p.t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -244,5 +260,214 @@ func TestOrganizationMemberAddDeleteSkipsMembersAlreadyRemoved(t *testing.T) {
 	}
 	if proxy.deleteCalls != 2 {
 		t.Fatalf("expected 2 member_delete calls, got %d", proxy.deleteCalls)
+	}
+}
+
+func emailOnlyMember(email, role string) map[string]interface{} {
+	return map[string]interface{}{"user_email": email, "role": role}
+}
+
+// refreshedEmailOnlyState applies the config, reads it back from the proxy, and
+// returns the state Terraform would persist.
+func refreshedEmailOnlyState(t *testing.T, client *Client, members ...interface{}) *terraform.InstanceState {
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMOrganizationMemberAdd().Schema, map[string]interface{}{
+		"organization_id": "org-1",
+		"member":          members,
+	})
+	d.SetId("org-1")
+	if err := resourceLiteLLMOrganizationMemberAddRead(d, client); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	return d.State()
+}
+
+func orgMemberAddDataFromState(t *testing.T, state *terraform.InstanceState) *schema.ResourceData {
+	d, err := schema.InternalMap(resourceLiteLLMOrganizationMemberAdd().Schema).Data(state, nil)
+	if err != nil {
+		t.Fatalf("loading state: %v", err)
+	}
+	return d
+}
+
+func orgMemberAddDataWithConfig(t *testing.T, state *terraform.InstanceState, members ...interface{}) *schema.ResourceData {
+	internal := schema.InternalMap(resourceLiteLLMOrganizationMemberAdd().Schema)
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"organization_id": "org-1", "member": members})
+	diff, err := internal.Diff(context.Background(), state, config, nil, nil, true)
+	if err != nil {
+		t.Fatalf("diffing config: %v", err)
+	}
+	d, err := internal.Data(state, diff)
+	if err != nil {
+		t.Fatalf("loading state with diff: %v", err)
+	}
+	return d
+}
+
+func TestOrganizationMemberAddReadKeepsEmailOnlyMemberAfterEmailChange(t *testing.T) {
+	proxy := &fakeOrgProxy{t: t, orgID: "org-1", orgExists: true, members: []map[string]interface{}{
+		orgMemberRow("generated-id", "bob@example.com", "internal_user"),
+	}}
+	srv := proxy.serve()
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	state := refreshedEmailOnlyState(t, client, emailOnlyMember("Bob@Example.com", "internal_user"))
+	proxy.members = []map[string]interface{}{orgMemberRow("generated-id", "bob-new@example.com", "internal_user_viewer")}
+
+	d := orgMemberAddDataFromState(t, state)
+	if err := resourceLiteLLMOrganizationMemberAddRead(d, client); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	list := d.Get("member").(*schema.Set).List()
+	if len(list) != 1 {
+		t.Fatalf("member whose email changed should stay in state, got %v", list)
+	}
+	member := list[0].(map[string]interface{})
+	if member["user_email"] != "Bob@Example.com" || member["role"] != "internal_user_viewer" {
+		t.Fatalf("member = %v, want the configured email with the proxy's role", member)
+	}
+}
+
+func TestOrganizationMemberAddReadFollowsEmailWhenResolvedIDIsGone(t *testing.T) {
+	proxy := &fakeOrgProxy{t: t, orgID: "org-1", orgExists: true, members: []map[string]interface{}{
+		orgMemberRow("old-id", "bob@example.com", "internal_user"),
+	}}
+	srv := proxy.serve()
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	state := refreshedEmailOnlyState(t, client, emailOnlyMember("bob@example.com", "internal_user"))
+	proxy.members = []map[string]interface{}{orgMemberRow("new-id", "bob@example.com", "internal_user")}
+
+	d := orgMemberAddDataFromState(t, state)
+	if err := resourceLiteLLMOrganizationMemberAddRead(d, client); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if got := d.Get("member_user_ids").(map[string]interface{})["bob@example.com"]; got != "new-id" {
+		t.Fatalf("resolved user_id = %v, want new-id", got)
+	}
+}
+
+func TestOrganizationMemberAddReadDropsEmailOnlyMemberRemovedOutOfBand(t *testing.T) {
+	proxy := &fakeOrgProxy{t: t, orgID: "org-1", orgExists: true, members: []map[string]interface{}{
+		orgMemberRow("generated-id", "bob@example.com", "internal_user"),
+	}}
+	srv := proxy.serve()
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	state := refreshedEmailOnlyState(t, client, emailOnlyMember("bob@example.com", "internal_user"))
+	proxy.members = nil
+
+	d := orgMemberAddDataFromState(t, state)
+	if err := resourceLiteLLMOrganizationMemberAddRead(d, client); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if got := d.Get("member").(*schema.Set).Len(); got != 0 {
+		t.Fatalf("member removed out of band should leave state, %d left", got)
+	}
+	if got := d.Get("member_user_ids").(map[string]interface{}); len(got) != 0 {
+		t.Fatalf("resolved user_ids of a removed member should be dropped, got %v", got)
+	}
+}
+
+func TestOrganizationMemberAddDeleteRevokesByResolvedIDAfterEmailChange(t *testing.T) {
+	proxy := &fakeOrgProxy{t: t, orgID: "org-1", orgExists: true, members: []map[string]interface{}{
+		orgMemberRow("generated-id", "bob@example.com", "internal_user"),
+	}}
+	srv := proxy.serve()
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	state := refreshedEmailOnlyState(t, client, emailOnlyMember("bob@example.com", "internal_user"))
+	proxy.members = []map[string]interface{}{orgMemberRow("generated-id", "bob-new@example.com", "internal_user")}
+
+	if err := resourceLiteLLMOrganizationMemberAddDelete(orgMemberAddDataFromState(t, state), client); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if len(proxy.deleteBodies) != 1 || proxy.deleteBodies[0]["user_id"] != "generated-id" {
+		t.Fatalf("delete bodies = %v, want one delete by generated-id", proxy.deleteBodies)
+	}
+	if _, sent := proxy.deleteBodies[0]["user_email"]; sent {
+		t.Fatalf("delete should not send the stale email, got %v", proxy.deleteBodies[0])
+	}
+}
+
+func TestOrganizationMemberAddDeleteKeepsErrorWhenEmailChangedMemberStillPresent(t *testing.T) {
+	proxy := &fakeOrgProxy{t: t, orgID: "org-1", orgExists: true, members: []map[string]interface{}{
+		orgMemberRow("generated-id", "bob@example.com", "internal_user"),
+	}}
+	srv := proxy.serve()
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	state := refreshedEmailOnlyState(t, client, emailOnlyMember("bob@example.com", "internal_user"))
+	proxy.members = []map[string]interface{}{orgMemberRow("generated-id", "bob-new@example.com", "internal_user")}
+	proxy.deleteStatus = http.StatusInternalServerError
+
+	if err := resourceLiteLLMOrganizationMemberAddDelete(orgMemberAddDataFromState(t, state), client); err == nil {
+		t.Fatalf("a failed delete of a member still in the organization must return an error")
+	}
+}
+
+func TestOrganizationMemberAddUpdateUsesResolvedIDAfterEmailChange(t *testing.T) {
+	proxy := &fakeOrgProxy{t: t, orgID: "org-1", orgExists: true, members: []map[string]interface{}{
+		orgMemberRow("generated-id", "bob@example.com", "internal_user"),
+		orgMemberRow("generated-id-2", "carol@example.com", "internal_user"),
+	}}
+	srv := proxy.serve()
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	state := refreshedEmailOnlyState(t, client,
+		emailOnlyMember("bob@example.com", "internal_user"),
+		emailOnlyMember("carol@example.com", "internal_user"),
+	)
+	proxy.members = []map[string]interface{}{
+		orgMemberRow("generated-id", "bob-new@example.com", "internal_user"),
+		orgMemberRow("generated-id-2", "carol-new@example.com", "internal_user"),
+	}
+
+	d := orgMemberAddDataWithConfig(t, state, emailOnlyMember("carol@example.com", "org_admin"))
+	if err := resourceLiteLLMOrganizationMemberAddUpdate(d, client); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	if len(proxy.deleteBodies) != 1 || proxy.deleteBodies[0]["user_id"] != "generated-id" {
+		t.Fatalf("delete bodies = %v, want one delete by generated-id", proxy.deleteBodies)
+	}
+	if len(proxy.updatedBodies) != 1 || proxy.updatedBodies[0]["user_id"] != "generated-id-2" {
+		t.Fatalf("update bodies = %v, want one update by generated-id-2", proxy.updatedBodies)
+	}
+}
+
+func TestOrganizationMemberAddPlansNoChangesAfterEmailChange(t *testing.T) {
+	proxy := &fakeOrgProxy{t: t, orgID: "org-1", orgExists: true, members: []map[string]interface{}{
+		orgMemberRow("generated-id", "bob@example.com", "internal_user"),
+	}}
+	srv := proxy.serve()
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	state := refreshedEmailOnlyState(t, client, emailOnlyMember("bob@example.com", "internal_user"))
+	proxy.members = []map[string]interface{}{orgMemberRow("generated-id", "bob-new@example.com", "internal_user")}
+
+	d := orgMemberAddDataFromState(t, state)
+	if err := resourceLiteLLMOrganizationMemberAddRead(d, client); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"organization_id": "org-1",
+		"member":          []interface{}{emailOnlyMember("bob@example.com", "internal_user")},
+	})
+	internal := schema.InternalMap(resourceLiteLLMOrganizationMemberAdd().Schema)
+	diff, err := internal.Diff(context.Background(), d.State(), config, nil, nil, true)
+	if err != nil {
+		t.Fatalf("diffing config: %v", err)
+	}
+	if diff != nil && !diff.Empty() {
+		t.Fatalf("plan after an email change should be empty, got %v", diff)
 	}
 }

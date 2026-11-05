@@ -59,6 +59,21 @@ func findOrgMember(members []orgMembership, userID, userEmail string) (orgMember
 	return orgMembership{}, false
 }
 
+// orgMemberIdentity returns how to address a configured member on the proxy.
+// An email-only member is addressed by the user_id the proxy resolved, because
+// the email can change while the user_id and the membership stay the same.
+func orgMemberIdentity(member, resolvedUserIDs map[string]interface{}) (userID, userEmail string) {
+	userID, _ = member["user_id"].(string)
+	userEmail, _ = member["user_email"].(string)
+	if userID != "" {
+		return userID, userEmail
+	}
+	if resolved, ok := resolvedUserIDs[strings.ToLower(userEmail)].(string); ok && resolved != "" {
+		return resolved, ""
+	}
+	return "", userEmail
+}
+
 // deleteOrganizationMember removes a member and treats a member (or
 // organization) that is already gone as deleted. The proxy fails the delete
 // in that case, which would otherwise block every destroy until the resource
