@@ -177,6 +177,7 @@ class AlertType(str, Enum):
     failed_tracking_spend = "failed_tracking_spend"
     user_spend_thresholds = "user_spend_thresholds"
     user_spend_anomalies = "user_spend_anomalies"
+    usage_alerts = "usage_alerts"
 
     # Database alerts
     db_exceptions = "db_exceptions"

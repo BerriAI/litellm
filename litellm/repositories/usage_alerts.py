@@ -3,6 +3,7 @@
 import json
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
+from itertools import groupby
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -13,7 +14,7 @@ from typing import (
 from urllib.parse import urlencode
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.types.proxy.usage_alert_defaults import DEFAULT_USAGE_RULE_IDS
@@ -43,6 +44,12 @@ from litellm.types.proxy.usage_alerts import (
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
+
+
+class _BreachedEntity(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    rule_id: str
+    scope_id: str | None
 
 
 class AlertDatabase(Protocol):
@@ -672,7 +679,9 @@ class UsageAlertsRepository:
         rows: Final = TypeAdapter(tuple[_Pending, ...]).validate_python(
             await self.database.query_raw(
                 """SELECT i.record,r.record AS rule,i.notified_channels FROM "LiteLLM_UsageAlertIncident" i JOIN "LiteLLM_UsageAlertRule" r ON r.id=i.rule_id
-            WHERE i.status='open' AND r.enabled AND NOT r.deleted AND EXISTS (
+            WHERE i.status='open' AND r.enabled AND NOT r.deleted
+              AND COALESCE((i.record->>'next_notification_attempt')::timestamptz,'-infinity'::timestamptz)<=CURRENT_TIMESTAMP
+              AND EXISTS (
                 SELECT 1 FROM jsonb_array_elements_text(r.record->'notification_channels') channel WHERE NOT (channel=ANY(i.notified_channels)))
             ORDER BY i.updated_at,i.id LIMIT $1""",
                 limit,
@@ -693,7 +702,16 @@ class UsageAlertsRepository:
 
     async def mark_notified(self, incident_id: str, channel: UsageAlertChannel) -> None:
         await self.database.query_raw(
-            'UPDATE "LiteLLM_UsageAlertIncident" SET notified_channels=array_append(notified_channels,$2::text) WHERE id=$1 AND NOT ($2::text=ANY(notified_channels)) RETURNING id',
+            """UPDATE "LiteLLM_UsageAlertIncident" i SET
+            notified_channels=array_append(i.notified_channels,$2::text),
+            record=i.record || jsonb_build_object('notified_channels',array_append(i.notified_channels,$2::text), 'last_notification_attempt',CURRENT_TIMESTAMP) ||
+                CASE WHEN NOT EXISTS (
+                    SELECT 1 FROM "LiteLLM_UsageAlertRule" r,
+                    jsonb_array_elements_text(r.record->'notification_channels') channel
+                    WHERE r.id=i.rule_id AND NOT (channel=ANY(array_append(i.notified_channels,$2::text)))
+                ) THEN jsonb_build_object('notification_error',NULL,'next_notification_attempt',NULL)
+                  ELSE '{}'::jsonb END
+            WHERE i.id=$1 AND NOT ($2::text=ANY(i.notified_channels)) RETURNING i.id""",
             incident_id,
             channel,
         )
@@ -718,3 +736,35 @@ class UsageAlertsRepository:
             )
         )
         return rows[0]["role"] if rows else None
+
+    async def breached_entities(
+        self, rule_ids: tuple[str, ...], entity_ids: tuple[str | None, ...]
+    ) -> Mapping[str, frozenset[str | None]]:
+        rows: Final = TypeAdapter(tuple[_BreachedEntity, ...]).validate_python(
+            await self.database.query_raw(
+                'SELECT DISTINCT rule_id,scope_id FROM "LiteLLM_UsageAlertIncident" '
+                "WHERE rule_id=ANY($1::text[]) AND scope_key=ANY($2::text[]) AND breached ORDER BY rule_id",
+                rule_ids,
+                tuple(entity or "" for entity in entity_ids),
+            )
+        )
+        return MappingProxyType(
+            {
+                rule_id: frozenset(row.scope_id for row in group)
+                for rule_id, group in groupby(rows, lambda row: row.rule_id)
+            }
+        )
+
+    async def defer_notification(self, incident_id: str, error: str) -> None:
+        await self.database.query_raw(
+            """UPDATE "LiteLLM_UsageAlertIncident" SET updated_at=CURRENT_TIMESTAMP,
+            record=record || jsonb_build_object(
+                'notification_error',$2::text,
+                'notification_attempts',COALESCE((record->>'notification_attempts')::int,0)+1,
+                'last_notification_attempt',CURRENT_TIMESTAMP,
+                'next_notification_attempt',CURRENT_TIMESTAMP + make_interval(secs =>
+                    LEAST(86400,3600*power(2,LEAST(5,COALESCE((record->>'notification_attempts')::int,0)))::int))
+            ) WHERE id=$1 RETURNING id""",
+            incident_id,
+            error,
+        )

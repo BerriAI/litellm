@@ -85,6 +85,11 @@ class UsageAlert(BaseModel):
     first_seen: datetime
     last_seen: datetime
     activity_path: str
+    notified_channels: tuple[UsageAlertChannel, ...] = ()
+    notification_attempts: int = 0
+    last_notification_attempt: datetime | None = None
+    next_notification_attempt: datetime | None = None
+    notification_error: Literal["delivery_failed", "transport_not_configured"] | None = None
 
 
 class UsageAlertUpdate(BaseModel):

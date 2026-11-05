@@ -665,6 +665,9 @@ class DBSpendUpdateWriter:
         self,
         redis_cache: RedisCache | None = None,
     ):
+        from litellm.repositories.usage_alert_health import UsageAlertFlushRecorder
+
+        self.usage_alert_flush_recorder = UsageAlertFlushRecorder()
         self.redis_cache = redis_cache
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
         self.pod_lock_manager = PodLockManager()
@@ -1879,6 +1882,7 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_spend_update_transactions,
                     )
                 uncommitted.pop("daily_spend_update_transactions", None)
+                await self.usage_alert_flush_recorder.record(prisma_client, "user")
 
                 if daily_team_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_team_spend(
@@ -1888,6 +1892,7 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_team_spend_update_transactions,
                     )
                 uncommitted.pop("daily_team_spend_update_transactions", None)
+                await self.usage_alert_flush_recorder.record(prisma_client, "team")
 
                 if daily_org_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_org_spend(
@@ -1970,6 +1975,8 @@ class DBSpendUpdateWriter:
         )
         try:
             await asyncio.shield(commit_task)
+            if entity_type in ("user", "team"):
+                await self.usage_alert_flush_recorder.record(prisma_client, entity_type)
         except asyncio.CancelledError:
             if commit_started.is_set():
                 queue.track_interrupted_commit(

@@ -2203,3 +2203,12 @@ model LiteLLM_IssueDeliveryRule {
 
   @@id([delivery_id, rule_id, source_id])
 }
+
+// Hourly samples of successful background daily-aggregate flushes, retained for 35 days.
+model LiteLLM_UsageAlertFlush {
+  source      String
+  hour        DateTime
+  observed_at DateTime
+
+  @@id([source, hour])
+}
