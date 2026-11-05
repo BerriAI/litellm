@@ -20,15 +20,12 @@ from collections.abc import Mapping
 from typing import Final, cast
 
 from opentelemetry.context import Context, get_value
-
-# TODO: Import ContextData from the public opentelemetry.util.genai.invocation
-# module once exposed in the next opentelemetry-util-genai release.
-from opentelemetry.util.genai._invocation import _ContextData
 from opentelemetry.util.genai.invocation import (
     CLIENT_EMBEDDING_CONTEXT_KEY,
     CLIENT_FETCH_RESPONSE_CONTEXT_KEY,
     CLIENT_INFERENCE_CONTEXT_KEY,
     CLIENT_RETRIEVAL_CONTEXT_KEY,
+    ContextData,
     EmbeddingData,
     FetchResponseData,
     InferenceData,
@@ -44,6 +41,7 @@ __all__ = [
     "CLIENT_FETCH_RESPONSE_CONTEXT_KEY",
     "CLIENT_INFERENCE_CONTEXT_KEY",
     "CLIENT_RETRIEVAL_CONTEXT_KEY",
+    "ContextData",
     "EmbeddingData",
     "FetchResponseData",
     "InferenceData",
@@ -97,7 +95,7 @@ def _is_content_attribute(key: str) -> bool:
 def context_spec_for_operation(
     operation: GenAIOperation | str | None,
     call_type: str | None = None,
-) -> tuple[str, type[_ContextData]] | None:
+) -> tuple[str, type[ContextData]] | None:
     """Return ``(context_key, dataclass_type)`` for a GenAI client operation, or ``None``."""
     op_str: Final = operation.value if isinstance(operation, GenAIOperation) else (operation or "")
     if call_type and call_type.lower() in _FETCH_RESPONSE_CALL_TYPES:
@@ -118,7 +116,7 @@ def get_active_genai_context_data(
     *,
     call_type: str | None = None,
     context: Context | None = None,
-) -> _ContextData | None:
+) -> ContextData | None:
     """Return the active outer ``<Op>Data`` from ``opentelemetry.context`` if present."""
     spec: Final = context_spec_for_operation(operation, call_type=call_type)
     if spec is None:
@@ -134,7 +132,7 @@ def get_active_genai_context_data(
 
 
 def publish_to_genai_context(
-    ctx_data: _ContextData,
+    ctx_data: ContextData,
     data: LLMCallSpanData,
     span_attrs: Mapping[str, object],
     metric_attrs: Mapping[str, object] | None = None,
