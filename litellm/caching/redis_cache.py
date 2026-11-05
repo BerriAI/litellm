@@ -1528,6 +1528,22 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    @staticmethod
+    async def _incrby_with_ttl(
+        _redis_client: "Redis",  # pyright: ignore[reportUnknownParameterType, reportMissingTypeArgument]  # redis-py's Redis is generic over an untyped response
+        key: str,
+        value: int,
+        ttl: int | None,
+    ) -> int:
+        """INCRBY and the key's TTL in one round trip; an EXPIRE only when the key has none."""
+        async with _redis_client.pipeline(transaction=False) as pipe:  # pyright: ignore[reportUnknownVariableType]  # redis-py's Pipeline is generic over an untyped response
+            pipe.incrby(name=key, amount=value)
+            pipe.ttl(key)
+            result, current_ttl = await pipe.execute()  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # see above
+        if ttl is not None and current_ttl == -1:
+            await _redis_client.expire(key, ttl)
+        return int(result)  # pyright: ignore[reportUnknownArgumentType]  # INCRBY replies with an int
+
     @_redis_circuit_breaker_guard
     async def async_increment_count(
         self,
@@ -1539,20 +1555,17 @@ class RedisCache(BaseCache):
         """INCRBY, for counters that hold whole numbers (the router's allowed-fails counts), so the key
         stays an integer the way the sync ``increment_cache`` leaves it. The TTL is set only when the key
         has none."""
-        _redis_client: Final = self.init_async_client()
+        from redis.asyncio import Redis
+
+        _redis_client: Final[Redis] = self.init_async_client()  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType, reportAssignmentType, reportMissingTypeArgument]  # as in async_increment: the cluster client serves the same commands
         start_time: Final = time.time()
-        _used_ttl: Final = self.get_ttl(ttl=ttl)
+        _used_ttl: Final[int | None] = self.get_ttl(ttl=ttl)  # pyright: ignore[reportUnknownMemberType]  # BaseCache.get_ttl takes untyped **kwargs
         namespaced_key: Final = self.check_and_fix_namespace(key=key)
         try:
-            async with _redis_client.pipeline(transaction=False) as pipe:
-                pipe.incrby(name=namespaced_key, amount=value)
-                pipe.ttl(namespaced_key)
-                result, current_ttl = await pipe.execute()
-            if _used_ttl is not None and current_ttl == -1:
-                await _redis_client.expire(namespaced_key, _used_ttl)
+            result: Final = await self._incrby_with_ttl(_redis_client, namespaced_key, value, _used_ttl)  # pyright: ignore[reportUnknownMemberType]  # see above
             end_time: Final = time.time()
             asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+                self.service_logger_obj.async_service_success_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # ServiceLogging's hooks are untyped, as in async_increment
                     service=ServiceTypes.REDIS,
                     duration=end_time - start_time,
                     call_type="async_increment_count",
@@ -1562,11 +1575,10 @@ class RedisCache(BaseCache):
                     parent_otel_span=parent_otel_span,
                 )
             )
-            return int(result)
         except Exception as e:
             failed_at: Final = time.time()
             asyncio.create_task(
-                self.service_logger_obj.async_service_failure_hook(
+                self.service_logger_obj.async_service_failure_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # see above
                     service=ServiceTypes.REDIS,
                     duration=failed_at - start_time,
                     error=e,
@@ -1584,6 +1596,7 @@ class RedisCache(BaseCache):
                 e,
             )
             raise
+        return result
 
     @_redis_circuit_breaker_guard
     async def async_set_max(

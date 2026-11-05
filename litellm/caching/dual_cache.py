@@ -587,14 +587,10 @@ class DualCache(BaseCache):
         local_only: bool = False,
         ttl: float | None = None,
         parent_otel_span: Span | None = None,
-    ) -> int | None:
+    ) -> int:
         """``async_increment_cache`` for whole-number counters: Redis gets INCRBY, so the key holds an
-        integer. Returns the new count, the in-memory one when Redis fails, or None with no backend."""
-        in_memory: Final = (
-            None
-            if self.in_memory_cache is None
-            else int(await self.in_memory_cache.async_increment(key, value, ttl=ttl))
-        )
+        integer. Returns the new count, or the in-memory one when Redis fails."""
+        in_memory: Final = int(self.in_memory_cache.increment_cache(key=key, value=value, ttl=ttl))  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache.increment_cache takes untyped **kwargs
         if self.redis_cache is None or local_only:
             return in_memory
         try:

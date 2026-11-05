@@ -3573,8 +3573,7 @@ class RustCore(
                 # The allowed-fails counters: INCRBY, so the key holds an integer as the Python
                 # router's increment_cache left it.
                 count: Final = _count(step.get("value"))
-                counted: Final = await self._store_for(key).async_increment_count(key, count, local_only=local, ttl=ttl)
-                return count if counted is None else counted
+                return await self._store_for(key).async_increment_count(key, count, local_only=local, ttl=ttl)
             case "increment_usage":
                 await self._increment_usage(_as_list(step.get("keys")), _as_list(step.get("value")), ttl)
                 return None
