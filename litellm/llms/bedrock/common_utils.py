@@ -1507,6 +1507,12 @@ def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | Non
     return _is_claude(base_model)
 
 
+def bedrock_converse_rejects_signed_thinking(model: str, base_model: str | None) -> bool:
+    if base_model is None and "." not in get_bedrock_base_model(model):
+        return False
+    return not bedrock_converse_accepts_redacted_thinking(model, base_model)
+
+
 def _is_claude(model: str) -> bool:
     return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
 

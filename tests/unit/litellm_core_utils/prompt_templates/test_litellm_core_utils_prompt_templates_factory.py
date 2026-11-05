@@ -445,8 +445,9 @@ def test_anthropic_messages_pt_drops_the_stream_index_from_replayed_thinking_blo
                 {"text": "hello"},
             ],
         ),
-        ("global.zai.glm-5.3", [{"text": "pondering"}, {"text": "hello"}]),
-        ("amazon.nova-pro-v1:0", [{"text": "pondering"}, {"text": "hello"}]),
+        ("global.zai.glm-5.3", [{"text": "hello"}]),
+        ("amazon.nova-pro-v1:0", [{"text": "hello"}]),
+        ("converse/us.openai.gpt-6-luna", [{"text": "hello"}]),
     ),
 )
 def test_bedrock_converse_replays_signed_thinking_only_to_claude(
@@ -1069,6 +1070,136 @@ async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_
 
     assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
     assert assistant_content == [{"text": "hello"}]
+
+
+_HIDDEN_MODEL_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
+
+
+async def _converse_messages(
+    messages: list[dict[str, object]], model: str, base_model: str | None, use_async: bool
+) -> list[dict[str, object]]:
+    return (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock", base_model=base_model
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(
+            messages=messages, model=model, llm_provider="bedrock", base_model=base_model
+        )
+    )
+
+
+def _assistant_with_thinking(placement: str, block: dict[str, object]) -> dict[str, object]:
+    return (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [block]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    "signature", ["claude-signature", encrypted_reasoning_signature("gAAAA_1")], ids=["claude", "encrypted"]
+)
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("converse/us.openai.gpt-6-luna", None),
+        ("us.amazon.nova-pro-v1:0", None),
+        ("us.amazon.nova-pro-v1:0", "anthropic.claude-sonnet-4-6"),
+        (_HIDDEN_MODEL_ARN, "openai.gpt-oss-120b-1:0"),
+    ],
+)
+async def test_bedrock_converse_drops_signed_thinking_for_a_known_non_claude_target(
+    use_async: bool, placement: str, signature: str, model: str, base_model: str | None
+):
+    block: Final = {"type": "thinking", "thinking": "private plan", "signature": signature}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_thinking(placement, block),
+        {"role": "user", "content": "again"},
+    ]
+
+    assert await _converse_messages(messages, model, base_model, use_async) == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": [{"text": "hello"}]},
+        {"role": "user", "content": [{"text": "again"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("us.anthropic.claude-sonnet-4-6", None),
+        ("claude-sonnet-4-6", None),
+        (_HIDDEN_MODEL_ARN, None),
+        (_HIDDEN_MODEL_ARN, "anthropic.claude-sonnet-4-6"),
+    ],
+)
+async def test_bedrock_converse_keeps_signed_thinking_for_a_target_that_may_be_claude(
+    use_async: bool, placement: str, model: str, base_model: str | None
+):
+    block: Final = {"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_thinking(placement, block),
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, model, base_model, use_async)
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [
+        {"reasoningContent": {"reasoningText": {"text": "private plan", "signature": "claude-signature"}}},
+        {"text": "hello"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_keeps_the_tool_call_when_dropping_signed_thinking(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.openai.gpt-6-luna", None, use_async)
+
+    assert [m["role"] for m in result] == ["user", "assistant", "user"]
+    assert [list(part) for part in result[1]["content"]] == [["toolUse"]]
+    assert result[1]["content"][0]["toolUse"]["toolUseId"] == "call_1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_leaves_no_empty_turn_when_signed_thinking_was_all_it_held(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.openai.gpt-6-luna", None, use_async)
+
+    assert all(m["content"] for m in result)
+    assert "private plan" not in str(result)
 
 
 @pytest.mark.parametrize(
