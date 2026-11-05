@@ -228,7 +228,7 @@ class SpanEmitter:
 
     # -- the engine ---------------------------------------------------------- #
 
-    def _map_data(self, data: SpanData) -> tuple[dict[str, AttrValue], Mapping[str, AttrValue]]:
+    def _map_data(self, data: SpanData) -> tuple[Mapping[str, AttrValue], Mapping[str, AttrValue]]:
         configured: Final = {key: value for mapper in self._mappers for key, value in mapper.map(data).items()}
         for_langfuse: Final = (
             dict(
@@ -242,7 +242,7 @@ class SpanEmitter:
         )
         return {**configured, **for_langfuse}, for_langfuse
 
-    def map_attributes(self, data: SpanData) -> dict[str, AttrValue]:
+    def map_attributes(self, data: SpanData) -> Mapping[str, AttrValue]:
         """Run the configured mapper chain on ``data`` without creating a span."""
         mapped, _ = self._map_data(data)
         return mapped

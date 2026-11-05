@@ -17,7 +17,7 @@ When LiteLLM is called inside an outer GenAI instrumentation that attached
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final
 
 from opentelemetry.context import Context, get_value
 from opentelemetry.util.genai.invocation import (
@@ -134,8 +134,8 @@ def get_active_genai_context_data(
 def publish_to_genai_context(
     ctx_data: ContextData,
     data: LLMCallSpanData,
-    span_attrs: Mapping[str, object],
-    metric_attrs: Mapping[str, object] | None = None,
+    span_attrs: Mapping[str, AttributeValue],
+    metric_attrs: Mapping[str, str | bool | int | float] | None = None,
 ) -> None:
     """Publish LiteLLM's mapped span and metric attributes into an outer ``ctx_data``."""
     allow_content: Final = bool(ctx_data.capture_content)
@@ -143,14 +143,14 @@ def publish_to_genai_context(
         if not allow_content and _is_content_attribute(key):
             continue
         if val is not None and isinstance(val, (str, bool, int, float, list, tuple)):
-            ctx_data.attributes[key] = cast(AttributeValue, val)
+            ctx_data.attributes[key] = val  # rebind-ok: mutates context container in place
 
     if data.error is not None:
-        ctx_data.attributes[Error.TYPE] = data.error.error_type
+        ctx_data.attributes[Error.TYPE] = data.error.error_type  # rebind-ok: mutates context container in place
         if data.error.message:
-            ctx_data.attributes[Error.MESSAGE] = data.error.message
+            ctx_data.attributes[Error.MESSAGE] = data.error.message  # rebind-ok: mutates context container in place
 
     if metric_attrs:
         for key, val in metric_attrs.items():
             if val is not None and isinstance(val, (str, bool, int, float)):
-                ctx_data.metric_attributes[key] = val
+                ctx_data.metric_attributes[key] = val  # rebind-ok: mutates context container in place

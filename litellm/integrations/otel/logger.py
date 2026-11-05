@@ -30,6 +30,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.genai_context import (
+    ContextData,
     get_active_genai_context_data,
     publish_to_genai_context,
 )
@@ -180,7 +181,7 @@ class _LLMCallSpan:
         span: "Span | None",
         start_time_ns: int | None,
         provider: "TracerProvider | None" = None,
-        outer_ctx_data: "object | None" = None,
+        outer_ctx_data: "ContextData | None" = None,
     ) -> None:
         self.span = span
         self.start_time_ns = start_time_ns
@@ -574,7 +575,7 @@ class OpenTelemetryV2(CustomLogger):
         if carrier is None and not call.reached_a_provider and outer_ctx_data is None:
             return None, False
         try:
-            span = self._finish_carrier(
+            span: Final = self._finish_carrier(
                 carrier,
                 call,
                 start_time,
@@ -593,7 +594,7 @@ class OpenTelemetryV2(CustomLogger):
         carrier: "_LLMCallSpan | None",
         call: LLMCallEvent,
         kwargs: Mapping[str, object],
-    ) -> object | None:
+    ) -> ContextData | None:
         if carrier is not None and carrier.outer_ctx_data is not None:
             return carrier.outer_ctx_data
         return get_active_genai_context_data(
@@ -630,7 +631,7 @@ class OpenTelemetryV2(CustomLogger):
         end_time: datetime | float | None,
         *,
         kwargs: Mapping[str, object] | None = None,
-        outer_ctx_data: object | None = None,
+        outer_ctx_data: ContextData | None = None,
     ) -> Span | None:
         payload: Final = call.payload
         call_id: Final = call.call_id
@@ -644,7 +645,7 @@ class OpenTelemetryV2(CustomLogger):
                 carrier.span.end(end_time=to_ns(end_time))
             return None
         capture_content: Final = self._capture_span_content() and (
-            outer_ctx_data is None or bool(getattr(outer_ctx_data, "capture_content", False))
+            outer_ctx_data is None or bool(outer_ctx_data.capture_content)
         )
         data: Final = LLMCallSpanData.from_standard_logging_payload(
             payload,
@@ -668,7 +669,7 @@ class OpenTelemetryV2(CustomLogger):
                 else None
             )
             publish_to_genai_context(
-                outer_ctx_data,  # type: ignore[arg-type]
+                outer_ctx_data,
                 data,
                 mapped,
                 metric_attrs,
