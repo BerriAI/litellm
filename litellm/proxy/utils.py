@@ -241,6 +241,7 @@ from litellm.proxy.db.token_auth import (
     resolve_database_token_auth,
 )
 from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
     resolve_endpoint_translation,
@@ -320,6 +321,7 @@ if TYPE_CHECKING:
     from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord
     from litellm.proxy.db.model_usage_rollup import ModelUsageTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.proxy.route_llm_request import UnroutableModelProbe
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
@@ -1877,6 +1879,10 @@ class _CallbackCapabilities:
     # every string entry in ``litellm.callbacks``.
     resolved_callbacks: tuple[object, ...] = field(default_factory=tuple)
     listed_models_filters: tuple[CustomLogger, ...] = field(default_factory=tuple)
+    last_custom_pre_call_hook: int = -1
+    routes_on_sensitive_data: bool = False
+    has_parallel_guardrail_before_last_custom_hook: bool = False
+    never_skipped_guardrails: tuple[CustomGuardrail, ...] = ()
 
 
 def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
@@ -1886,6 +1892,111 @@ def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
 
 def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
+
+
+_LITELLM_PACKAGES: Final = ("litellm", "litellm_enterprise")
+
+
+def _ships_with_litellm(callback: object) -> bool:
+    """Whether ``callback``'s class is defined in a file inside the imported ``litellm`` or ``litellm_enterprise`` package."""
+    package_files: Final = (getattr(sys.modules.get(name), "__file__", None) for name in _LITELLM_PACKAGES)
+    package_dirs: Final = tuple(
+        os.path.dirname(os.path.realpath(path)) + os.sep for path in package_files if isinstance(path, str)
+    )
+    source: Final = getattr(sys.modules.get(type(callback).__module__), "__file__", None)
+    return isinstance(source, str) and os.path.realpath(source).startswith(package_dirs)
+
+
+def _is_custom_pre_call_hook(callback: CustomLogger) -> bool:
+    return isinstance(callback, CustomCodeGuardrail) or (
+        not _ships_with_litellm(callback)
+        and (isinstance(callback, CustomGuardrail) or "async_pre_call_hook" in type(callback).__dict__)
+    )
+
+
+async def _skipped_for_unroutable_model(
+    guardrail: CustomGuardrail,
+    data: Mapping[str, object],
+    call_type: str,
+    probe: "UnroutableModelProbe | None",
+    caps: _CallbackCapabilities,
+) -> bool:
+    event_type: Final = (
+        GuardrailEventHooks.pre_mcp_call if call_type in MCP_GUARDRAIL_CALL_TYPES else GuardrailEventHooks.pre_call
+    )
+    if (
+        probe is None
+        or caps.resolved_callbacks.index(guardrail) <= caps.last_custom_pre_call_hook
+        or not guardrail.should_run_guardrail(data=data, event_type=event_type)  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+        or not await probe.refuses(data)
+    ):
+        return False
+    if not any(
+        earlier.guardrail_name == guardrail.guardrail_name
+        and earlier.should_run_guardrail(data=data, event_type=event_type)  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+        for earlier in caps.never_skipped_guardrails
+    ):
+        probe.record_skipped_guardrail(guardrail.guardrail_name)
+    return True
+
+
+_SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
+_EXTRACTION_SPEC_TEXT_KEYS: Final = ("instructions", "unit")
+
+
+def _without_extraction_spec_texts(spec: object) -> object:
+    spec_fields: Final = _as_str_mapping(spec)
+    return (
+        spec
+        if not isinstance(spec, Mapping)
+        else {**spec_fields, **{key: REDACTED_BY_LITELLM for key in _EXTRACTION_SPEC_TEXT_KEYS if key in spec_fields}}
+    )
+
+
+def without_unscanned_content(request: Mapping[str, object]) -> Mapping[str, object]:
+    """Every request field a pre-call guardrail can rewrite, each replaced with a redaction marker, including the
+    fields of a pass-through request's body under ``data``."""
+    system_instruction: Final = {"parts": [{"text": REDACTED_BY_LITELLM}]}
+    redactions: Final[Mapping[str, object]] = {
+        "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
+        "contents": [{"role": "user", "parts": [{"text": REDACTED_BY_LITELLM}]}],
+        "prompt": "",
+        "input": "",
+        "query": "",
+        "instruction": "",
+        "state": "",
+        "tools": [],
+        "system": REDACTED_BY_LITELLM,
+        "instructions": REDACTED_BY_LITELLM,
+        **{key: system_instruction for key in _SYSTEM_INSTRUCTION_KEYS},
+    }
+    body: Final = request.get("data")
+    body_fields: Final = _as_str_mapping(body)
+    config: Final = request.get("config")
+    config_fields: Final = _as_str_mapping(config)
+    extraction_fields: Final = request.get("fields")
+    extraction_specs: Final = _as_str_mapping(extraction_fields)
+    return {
+        **{key: value for key, value in redactions.items() if key in request},
+        **(
+            {} if not isinstance(body, Mapping) else {"data": {**body_fields, **without_unscanned_content(body_fields)}}
+        ),
+        **(
+            {}
+            if not isinstance(extraction_fields, Mapping)
+            else {"fields": {name: _without_extraction_spec_texts(spec) for name, spec in extraction_specs.items()}}
+        ),
+        **(
+            {}
+            if not isinstance(config, Mapping)
+            else {
+                "config": {
+                    **config_fields,
+                    **{key: system_instruction for key in _SYSTEM_INSTRUCTION_KEYS if key in config_fields},
+                }
+            }
+        ),
+    }
 
 
 _LISTED_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
@@ -2926,11 +3037,13 @@ class ProxyLogging:
             data.pop("prompt_version", None)
             data.pop("prompt_environment", None)
 
-    def _process_guardrail_metadata(self, data: dict, *, skip_guardrails: bool = False) -> None:
+    def _process_guardrail_metadata(
+        self, data: dict, *, skip_guardrails: bool = False, routing_probe: "UnroutableModelProbe | None" = None
+    ) -> None:
         """
         Process guardrails from metadata and add to applied_guardrails, leaving out the pre_call
-        policy pipeline steps that have not run. With ``skip_guardrails`` the pipelines run on
-        another request, so every step is added.
+        policy pipeline steps that have not run and the guardrails ``routing_probe`` skipped.
+        With ``skip_guardrails`` the pipelines run on another request, so every step is added.
         """
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -2959,7 +3072,7 @@ class ProxyLogging:
                 frozenset[str]()
                 if skip_guardrails
                 else _request_steps_that_have_not_run(cast(dict[str, object], data))  # cast-ok: request payload
-            )
+            ) | (frozenset[str]() if routing_probe is None else routing_probe.skipped_guardrails)
             for guardrail_name in guardrails_in_metadata:
                 if (
                     isinstance(guardrail_name, str)
@@ -3160,6 +3273,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        routing_probe: "UnroutableModelProbe | None" = None,
     ) -> None:
         pass
 
@@ -3172,6 +3286,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        routing_probe: "UnroutableModelProbe | None" = None,
     ) -> dict:
         pass
 
@@ -3183,6 +3298,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        routing_probe: "UnroutableModelProbe | None" = None,
     ) -> dict | None:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -3195,6 +3311,13 @@ class ProxyLogging:
         With ``guardrails_only`` the walk is limited to guardrails and guardrail pipelines: rate
         limiting, budget accounting, prompt templates and hanging-request alerting are skipped.
         Use it to scan a payload that is not itself a request, such as one record of a batch file.
+
+        With ``routing_probe``, a pre-call guardrail litellm ships is not called for a model ``route_request``
+        refuses, when only litellm's own guardrails and hooks come after it, no guardrail reroutes on sensitive
+        data, and no ``run_in_parallel`` guardrail sits at or before the last operator-written guardrail or hook.
+        The hooks after a skipped sequential guardrail see the request with every field it could have rewritten
+        redacted, and a skipped guardrail is left out of ``applied_guardrails`` unless a guardrail at or before
+        the last operator-written one shares its name and runs for this request.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
@@ -3262,6 +3385,11 @@ class ProxyLogging:
             )
 
             caps: Final = ProxyLogging.callback_capabilities()
+            probe: Final = (
+                None
+                if caps.routes_on_sensitive_data or caps.has_parallel_guardrail_before_last_custom_hook
+                else routing_probe
+            )
             # Skip the per-request callback walk entirely when nothing in
             # ``litellm.callbacks`` overrides ``async_pre_call_hook`` and no
             # CustomGuardrail is configured. Saves the loop overhead +
@@ -3301,6 +3429,16 @@ class ProxyLogging:
                             continue
 
                         if getattr(_callback, "run_in_parallel", False):
+                            continue
+
+                        if await _skipped_for_unroutable_model(
+                            _callback,
+                            data,  # pyright: ignore[reportUnknownArgumentType]  # data is the untyped request dict
+                            call_type,
+                            probe,
+                            caps,
+                        ):
+                            data.update(without_unscanned_content(data))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # data is the untyped request dict
                             continue
 
                         data = await self._run_sequential_guardrail_callback(
@@ -3369,7 +3507,19 @@ class ProxyLogging:
 
             if parallel_guardrails and data is not None:
                 await self._run_parallel_pre_call_guardrails(
-                    guardrails=parallel_guardrails,
+                    guardrails=tuple(
+                        [
+                            guardrail
+                            for guardrail in parallel_guardrails
+                            if not await _skipped_for_unroutable_model(
+                                guardrail,
+                                data,  # pyright: ignore[reportUnknownArgumentType]  # data is the untyped request dict
+                                call_type,
+                                probe,
+                                caps,
+                            )
+                        ]
+                    ),
                     data=data,
                     raw_request_snapshot=raw_request_snapshot,
                     user_api_key_dict=user_api_key_dict,
@@ -3377,17 +3527,17 @@ class ProxyLogging:
                 )
 
             if data is not None:
-                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails, routing_probe=routing_probe)
 
             return data
         except SensitiveDataRouteException as e:
             data = await self._handle_sensitive_data_route_exception(e, data, user_api_key_dict)
             if data is not None:
-                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails, routing_probe=routing_probe)
             return data
         except Exception:
             if data is not None:
-                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails, routing_probe=routing_probe)
             raise
 
     async def _run_parallel_pre_call_guardrails(
@@ -3679,6 +3829,15 @@ class ProxyLogging:
                 if resolved.enforces_request_content is True:
                     has_content_enforcer = True
 
+        last_custom_pre_call_hook: Final = max(
+            (position for position, callback in enumerate(resolved_callbacks) if _is_custom_pre_call_hook(callback)),
+            default=-1,
+        )
+        never_skipped_guardrails: Final = tuple(
+            callback
+            for callback in resolved_callbacks[: last_custom_pre_call_hook + 1]
+            if isinstance(callback, CustomGuardrail)
+        )
         caps: Final = _CallbackCapabilities(
             has_post_call_response_headers=has_post_call_response_headers,
             has_iterator_override=has_iterator_override
@@ -3693,6 +3852,15 @@ class ProxyLogging:
             listed_models_filters=tuple(
                 callback for callback in resolved_callbacks if _overrides_hook(callback, "async_filter_listed_models")
             ),
+            last_custom_pre_call_hook=last_custom_pre_call_hook,
+            routes_on_sensitive_data=any(
+                isinstance(callback, CustomGuardrail) and callback.should_route_on_sensitive_data()
+                for callback in resolved_callbacks
+            ),
+            has_parallel_guardrail_before_last_custom_hook=any(
+                getattr(guardrail, "run_in_parallel", False) for guardrail in never_skipped_guardrails
+            ),
+            never_skipped_guardrails=never_skipped_guardrails,
         )
         # Limit cache to handle test churn without leaking; production
         # callback lists are stable so this rarely grows past 1 entry.
