@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from itertools import chain, groupby, product
 from typing import (
@@ -78,37 +79,48 @@ def _has_activity_page(scope: UsageAlertScope, entity: str) -> bool:
     return True
 
 
+@dataclass(frozen=True, slots=True)
+class _Observations:
+    evaluated: bool
+    changed: tuple[UsageAlertObservation, ...]
+
+
 def _observations(
     rule: UsageAlertRule,
     rows: Sequence[DailyAlertMetrics],
     target: date,
     suppressed: frozenset[str | None] = frozenset(),
-) -> tuple[UsageAlertObservation, ...]:
-    def observation(entity: str, entity_rows: Sequence[DailyAlertMetrics]) -> UsageAlertObservation | None:
+    *,
+    active: frozenset[str | None] = frozenset(),
+) -> _Observations:
+    changed: Final[list[UsageAlertObservation]] = []  # mutable-ok: collect only persisted changes for this page
+    evaluated = False  # rebind-ok: retain whether any entity had sufficient evidence, including healthy entities
+    for entity, group in groupby(rows, lambda row: row.entity_id):
         if None in suppressed or entity in suppressed:
-            return None
+            continue
         if not _has_activity_page(rule.scope_type, entity):
-            return None
+            continue
         if rule.scope_id is not None and rule.scope_id != entity:
-            return None
-        comparison: Final = compare_daily_usage(rule, entity_rows, target)
+            continue
+        comparison = compare_daily_usage(rule, tuple(group), target)  # rebind-ok: comparison for the current entity
         if comparison is None:
-            return None
-        identity: Final = None if rule.scope_type == "deployment" else entity
-        return UsageAlertObservation(
-            entity_id=identity,
-            baseline_sample_days=comparison.baseline_sample_days,
-            day=target,
-            observed=comparison.observed,
-            baseline=comparison.baseline,
-            threshold=comparison.threshold,
-            breached=comparison.breached,
+            continue
+        evaluated = True
+        identity = None if rule.scope_type == "deployment" else entity  # rebind-ok: scope identity for this entity
+        if not comparison.breached and identity not in active:
+            continue
+        changed.append(
+            UsageAlertObservation(
+                entity_id=identity,
+                baseline_sample_days=comparison.baseline_sample_days,
+                day=target,
+                observed=comparison.observed,
+                baseline=comparison.baseline,
+                threshold=comparison.threshold,
+                breached=comparison.breached,
+            )
         )
-
-    candidates: Final = tuple(
-        observation(entity, tuple(group)) for entity, group in groupby(rows, lambda row: row.entity_id)
-    )
-    return tuple(item for item in candidates if item is not None)
+    return _Observations(evaluated, tuple(changed))
 
 
 def _default_rule(rule: UsageAlertRule) -> bool:
@@ -290,11 +302,10 @@ class UsageAlertJob:
         active: frozenset[str | None],
         suppressed: frozenset[str | None],
     ) -> bool:
-        observations: Final = _observations(rule, rows, target, suppressed)
-        changed: Final = tuple(item for item in observations if item.breached or item.entity_id in active)
-        if changed:
-            await self._store.record_observations(rule, changed)
-        return bool(observations)
+        observations: Final = _observations(rule, rows, target, suppressed, active=active)
+        if observations.changed:
+            await self._store.record_observations(rule, observations.changed)
+        return observations.evaluated
 
     async def _deliver_channel(self, alert: UsageAlert, rule: UsageAlertRule, channel: UsageAlertChannel) -> str | None:
         try:

@@ -127,7 +127,9 @@ def test_sentinel_entities_cannot_create_alerts_with_unusable_activity_links(sco
     )
     history: Final = tuple(replace(_row(_DAY - timedelta(days=days)), entity_id=entity) for days in (1, 2, 3))
     current: Final = replace(_row(_DAY, spend=100), entity_id=entity)
-    assert _observations(rule, (*history, current), _DAY) == ()
+    observations: Final = _observations(rule, (*history, current), _DAY)
+    assert not observations.evaluated
+    assert observations.changed == ()
 
 
 def test_custom_entity_rule_replaces_only_the_matching_default() -> None:
@@ -181,3 +183,36 @@ def test_reporting_identity_preserves_canonical_rows_and_distinct_raw_buckets() 
     assert _reporting_id("key", replace(canonical, entity_id="")).entity_id == "unattributed"
     assert _reporting_id("key", replace(canonical, entity_id="unattributed")).entity_id == "raw:unattributed"
     assert _reporting_id("key", replace(canonical, entity_id="raw:key")).entity_id == "raw:raw:key"
+
+
+@pytest.mark.parametrize(
+    "active,spend,history_days,evaluated,persisted",
+    [(False, 20, 3, True, False), (True, 20, 3, True, True), (False, 100, 3, True, True), (True, 100, 1, False, False)],
+)
+def test_healthy_evaluation_completes_and_recovers_only_with_sufficient_evidence(
+    active: bool, spend: float, history_days: int, evaluated: bool, persisted: bool
+) -> None:
+    from litellm.proxy.spend_tracking.usage_alert_job import _observations
+    from litellm.types.proxy.usage_alerts import UsageAlertRule
+
+    rule: Final = UsageAlertRule(
+        id="rule",
+        name="spike",
+        scope_type="key",
+        metric="spend",
+        direction="increase",
+        created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        created_by=None,
+    )
+    history: Final = tuple(_row(_DAY - timedelta(days=day)) for day in range(1, history_days + 1))
+    observations: Final = _observations(
+        rule,
+        (*history, _row(_DAY, spend=spend)),
+        _DAY,
+        active=frozenset({"key-a"}) if active else frozenset(),
+    )
+    assert observations.evaluated is evaluated
+    assert bool(observations.changed) is persisted
+    if observations.changed:
+        assert observations.changed[0].breached is (spend >= 60)
