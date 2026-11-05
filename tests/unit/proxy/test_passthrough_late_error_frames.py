@@ -11,7 +11,7 @@ import json
 from collections.abc import AsyncIterator
 
 import pytest
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_request_processing import open_sse_before_first_byte
@@ -36,8 +36,8 @@ async def _drain(response: StreamingResponse) -> str:
     return b"".join(chunks).decode("utf-8")
 
 
-async def _relay(produced: StreamingResponse, *, answers_as_anthropic: bool = False) -> str:
-    async def deliver() -> StreamingResponse:
+async def _relay(produced: Response, *, answers_as_anthropic: bool = False) -> str:
+    async def deliver() -> Response:
         await asyncio.sleep(0.05)
         return produced
 
@@ -124,6 +124,20 @@ async def test_a_large_error_body_is_read_with_a_bound():
 
     assert body.count("event: error") == 1
     assert len(body) < 128 * 1024
+
+
+@pytest.mark.asyncio
+async def test_an_error_body_that_arrived_whole_still_reaches_the_client_as_an_event():
+    produced = Response(
+        content=json.dumps({"error": {"message": "buffered upstream said no", "type": "server_error"}}),
+        status_code=502,
+        media_type="application/json",
+    )
+
+    body = await _relay(produced, answers_as_anthropic=True)
+
+    assert body.count("event: error") == 1
+    assert "buffered upstream said no" in body
 
 
 FAKE_KEY = "sk-test-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"

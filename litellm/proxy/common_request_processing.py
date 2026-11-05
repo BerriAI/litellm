@@ -1297,7 +1297,7 @@ _ANTHROPIC_LATE_ERROR_BODY_LIMIT: Final = 64 * 1024
 
 async def _read_late_error_body(response: Response) -> bytes:
     """Read at most one page of an error body. A read that fails yields what it got."""
-    read: bytes = b""
+    read: bytes = b""  # rebind-ok: accumulates streamed chunks, then takes the buffered body
     try:
         if isinstance(response, StreamingResponse):
             async for chunk in response.body_iterator:
@@ -1305,20 +1305,20 @@ async def _read_late_error_body(response: Response) -> bytes:
                 if len(read) >= _ANTHROPIC_LATE_ERROR_BODY_LIMIT:
                     break
         else:
-            read = bytes(response.body or b"")
+            read = bytes(response.body or b"")  # rebind-ok: the buffered body arrives whole, nothing to accumulate
     except Exception:  # noqa: BLE001  # the stream is already broken; the caller still needs a frame
         verbose_proxy_logger.exception("could not read the body of an upstream late failure")
     return read[:_ANTHROPIC_LATE_ERROR_BODY_LIMIT]
 
 
 class _LateErrorDetail(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     message: str | None = None
 
 
 class _LateErrorEnvelope(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     error: _LateErrorDetail | None = None
 
