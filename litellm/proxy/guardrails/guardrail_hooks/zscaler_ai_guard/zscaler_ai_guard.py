@@ -40,6 +40,9 @@ class ZscalerAIGuard(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
+    def supports_scan_only_tool_results(self) -> bool:
+        return False
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -251,19 +254,9 @@ class ZscalerAIGuard(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         input_type: Literal["request", "response"],
     ) -> str | None:
-        """
-        Pick the text sent to Zscaler AI Guard.
-
-        A request (IN) is scanned by its last turn only, and only when that turn is the user's:
-        the trailing run of user messages in `structured_messages`. Earlier turns were scanned when
-        they were sent, the system prompt is the operator's own, and a request that ends on an
-        assistant or tool message carries no new user input, so it is not scanned at all.
-
-        A response (OUT), or a request whose route supplies no `structured_messages`, falls back
-        to every extracted text joined with spaces.
-        """
-        structured_messages: Final = inputs.get("structured_messages")
-        if input_type == "request" and structured_messages:
+        structured_messages: Final = inputs.get("structured_messages") or []
+        has_chat_completions_rows: Final = any("content" in message for message in structured_messages)
+        if input_type == "request" and has_chat_completions_rows:
             return get_last_user_message(list(structured_messages))
         texts: Final = inputs.get("texts", [])
         return " ".join(texts) if texts else None

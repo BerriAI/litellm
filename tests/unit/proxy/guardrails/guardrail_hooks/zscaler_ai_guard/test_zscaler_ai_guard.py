@@ -23,6 +23,8 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import ZscalerAIGuard
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
+from litellm.types.utils import GenericGuardrailAPIInputs
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -148,91 +150,9 @@ _CONVERSATION: Final = [
 ]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("last_turn", "expected_content"),
-    [
-        ([{"role": "user", "content": "And three plus three?"}], "And three plus three?"),
-        (
-            [
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": "And three"}, {"type": "text", "text": " plus three?"}],
-                }
-            ],
-            "And three plus three?",
-        ),
-        (
-            [{"role": "user", "content": "And three plus three?"}, {"role": "user", "content": "Answer in words."}],
-            "And three plus three?\nAnswer in words.",
-        ),
-    ],
-    ids=["string-content", "content-parts", "consecutive-user-messages"],
-)
-@patch(
-    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
-    new_callable=AsyncMock,
-)
-async def test_request_scans_only_the_last_user_turn(
-    mock_api_call: AsyncMock, last_turn: list[dict[str, object]], expected_content: str
-) -> None:
-    guardrail: Final = ZscalerAIGuard(policy_id=100)
-    messages: Final = [*_CONVERSATION, *last_turn]
-    inputs: Final = {"texts": ["every", "message", "flattened"], "structured_messages": messages}
-
-    await guardrail.apply_guardrail(inputs, {}, "request")
-
-    mock_api_call.assert_called_once()
-    assert mock_api_call.call_args.kwargs["content"] == expected_content
-    assert mock_api_call.call_args.kwargs["direction"] == "IN"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "last_turn",
-    [
-        {"role": "assistant", "content": "Prefilled answer:"},
-        {"role": "tool", "tool_call_id": "call_1", "content": "tool output"},
-    ],
-    ids=["assistant", "tool"],
-)
-@patch(
-    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
-    new_callable=AsyncMock,
-)
-async def test_request_ending_on_a_non_user_turn_is_not_scanned(
-    mock_api_call: AsyncMock, last_turn: dict[str, object]
-) -> None:
-    guardrail: Final = ZscalerAIGuard(policy_id=100)
-    inputs: Final = {"texts": ["every", "message"], "structured_messages": [*_CONVERSATION, last_turn]}
-
-    result: Final = await guardrail.apply_guardrail(inputs, {}, "request")
-
-    mock_api_call.assert_not_called()
-    assert result is inputs
-
-
-@pytest.mark.asyncio
-@patch(
-    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
-    new_callable=AsyncMock,
-)
-async def test_response_scans_every_text_and_ignores_structured_messages(mock_api_call: AsyncMock) -> None:
-    guardrail: Final = ZscalerAIGuard(policy_id=100)
-    inputs: Final = {
-        "texts": ["First choice.", "Second choice."],
-        "structured_messages": [*_CONVERSATION, {"role": "user", "content": "And three plus three?"}],
-    }
-
-    await guardrail.apply_guardrail(inputs, {}, "response")
-
-    mock_api_call.assert_called_once()
-    assert mock_api_call.call_args.kwargs["content"] == "First choice. Second choice."
-    assert mock_api_call.call_args.kwargs["direction"] == "OUT"
-
-
-@pytest.mark.asyncio
-async def test_last_user_turn_is_the_execute_policy_body_content() -> None:
+async def _execute_policy_bodies(
+    inputs: GenericGuardrailAPIInputs, input_type: Literal["request", "response"]
+) -> tuple[object, ...]:
     received: Final = asyncio.Queue[object]()
 
     async def execute_policy(request: web.Request) -> web.Response:
@@ -247,13 +167,124 @@ async def test_last_user_turn_is_the_execute_policy_body_content() -> None:
             api_base=str(server.make_url("/v1/detection/execute-policy")),
             policy_id=1,
         )
-        messages: Final = [*_CONVERSATION, {"role": "user", "content": "And three plus three?"}]
-        await guardrail.apply_guardrail(
-            {"texts": [str(m["content"]) for m in messages], "structured_messages": messages}, {}, "request"
-        )
+        returned: Final = await guardrail.apply_guardrail(inputs, {}, input_type)
 
-    assert received.get_nowait() == {"direction": "IN", "content": "And three plus three?", "policyId": 1}
-    assert received.empty()
+    assert returned is inputs
+    return tuple(received.get_nowait() for _ in range(received.qsize()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("inputs", "expected_content"),
+    [
+        (
+            {
+                "texts": ["every", "message", "flattened"],
+                "structured_messages": [*_CONVERSATION, {"role": "user", "content": "And three plus three?"}],
+            },
+            "And three plus three?",
+        ),
+        (
+            {
+                "texts": ["every", "message", "flattened"],
+                "structured_messages": [
+                    *_CONVERSATION,
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "And three"}, {"type": "text", "text": " plus three?"}],
+                    },
+                ],
+            },
+            "And three plus three?",
+        ),
+        (
+            {
+                "texts": ["every", "message", "flattened"],
+                "structured_messages": [
+                    *_CONVERSATION,
+                    {"role": "user", "content": "And three plus three?"},
+                    {"role": "user", "content": "Answer in words."},
+                ],
+            },
+            "And three plus three?\nAnswer in words.",
+        ),
+        (
+            {
+                "texts": ["Summarize", "this report"],
+                "structured_messages": [
+                    {
+                        "role": "user",
+                        "parts": [{"kind": "text", "text": "Summarize"}, {"kind": "text", "text": "this report"}],
+                        "messageId": "msg-1",
+                    }
+                ],
+            },
+            "Summarize this report",
+        ),
+        ({"texts": ["first input", "second input"]}, "first input second input"),
+        (
+            {
+                "texts": ["every", "message"],
+                "structured_messages": [*_CONVERSATION, {"role": "assistant", "content": "Prefilled answer:"}],
+            },
+            None,
+        ),
+        (
+            {
+                "texts": ["every", "message"],
+                "structured_messages": [
+                    *_CONVERSATION,
+                    {"role": "tool", "tool_call_id": "call_1", "content": "tool output"},
+                ],
+            },
+            None,
+        ),
+    ],
+    ids=[
+        "string-content",
+        "content-parts",
+        "consecutive-user-messages",
+        "a2a-message-parts",
+        "texts-only-route",
+        "ends-on-assistant",
+        "ends-on-tool",
+    ],
+)
+async def test_request_scan_sends_only_the_last_user_turn(
+    inputs: GenericGuardrailAPIInputs, expected_content: str | None
+) -> None:
+    bodies: Final = await _execute_policy_bodies(inputs, "request")
+
+    assert bodies == (
+        () if expected_content is None else ({"direction": "IN", "content": expected_content, "policyId": 1},)
+    )
+
+
+@pytest.mark.asyncio
+async def test_response_scan_sends_every_text() -> None:
+    inputs: Final = GenericGuardrailAPIInputs(
+        texts=["First choice.", "Second choice."],
+        structured_messages=[*_CONVERSATION, {"role": "user", "content": "And three plus three?"}],
+    )
+
+    bodies: Final = await _execute_policy_bodies(inputs, "response")
+
+    assert bodies == ({"direction": "OUT", "content": "First choice. Second choice.", "policyId": 1},)
+
+
+def test_scan_only_tool_results_is_rejected_at_initialization() -> None:
+    with pytest.raises(ValueError, match="never scans tool results"):
+        InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail={
+                "guardrail_name": "zscaler-tool-results-only",
+                "litellm_params": {
+                    "guardrail": "zscaler_ai_guard",
+                    "mode": "pre_call",
+                    "api_key": "test_key",
+                    "scan_only_tool_results": True,
+                },
+            },
+        )
 
 
 @pytest.mark.asyncio
