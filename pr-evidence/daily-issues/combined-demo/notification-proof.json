@@ -1,0 +1,25 @@
+{
+  "source": "afd8e32587c38e7c65247b7008070e0872fd70fc",
+  "historical_input": "Explicit synthetic daily aggregates in isolated QA",
+  "notifications": [
+    {
+      "channel": "email",
+      "accepted": true,
+      "received_at": 1793864897.087595,
+      "path": "/ui/alerts",
+      "source_activity_link_verified": true
+    },
+    {
+      "channel": "slack",
+      "accepted": true,
+      "received_at": 1793864897.094204,
+      "path": "/ui/alerts",
+      "source_activity_link_verified": true
+    }
+  ],
+  "live_request_tracking": {
+    "requests": 1,
+    "timed_requests": 1
+  },
+  "replay_did_not_duplicate": true
+}
