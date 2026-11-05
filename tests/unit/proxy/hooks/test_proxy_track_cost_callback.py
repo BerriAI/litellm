@@ -2851,8 +2851,11 @@ async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_requ
     live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
 ):
     """The window row's one-time seed from the spend log stops at the request start, which keeps the failure row
-    it already logged from being counted twice."""
+    it already logged from being counted twice. Only the legacy writers queue this row, so the ledger is off."""
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import proxy_logging_obj
+
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
 
     window_queue: Final = proxy_logging_obj.db_spend_update_writer.window_spend_update_queue
     await window_queue.flush_and_get_aggregated_window_spend_transactions()

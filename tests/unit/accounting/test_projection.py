@@ -150,6 +150,7 @@ async def test_entity_projection_matches_real_request_queues(monkeypatch: pytest
     client: Final = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
     monkeypatch.setattr(client, "spend_log_transactions", [])
     monkeypatch.setattr(client, "model_usage_transactions", [])
     writer: Final = DBSpendUpdateWriter()

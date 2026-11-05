@@ -2489,8 +2489,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
 
     use_spend_logs_ledger: bool = Field(
-        False,
-        description="Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.",
+        True,
+        description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
     )
 
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(

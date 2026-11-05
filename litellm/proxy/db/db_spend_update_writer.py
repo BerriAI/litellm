@@ -730,7 +730,7 @@ class DBSpendUpdateWriter:
         proxy_settings: Final = cast(  # cast-ok: proxy settings use string keys
             Mapping[str, object], general_settings
         )
-        use_ledger: Final = proxy_settings.get("use_spend_logs_ledger") is True
+        use_ledger: Final = proxy_settings.get("use_spend_logs_ledger", True) is not False
         request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
         if kwargs is not None:
             kwargs[ACCOUNTING_LEDGER_KWARG] = use_ledger  # rebind-ok: spend counters leave ledger windows to the worker
