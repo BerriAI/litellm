@@ -155,7 +155,8 @@ stt-vertex-chirp = [
 stt-nvidia-riva = [
     # NVIDIA Riva STT provider (gRPC). These are imported lazily inside the
     # provider handler so litellm core remains usable without them.
-    "nvidia-riva-client>=2.15.0",
+    "grpcio>=1.67.1,<2.0",
+    "protobuf>=5.26.1,<7.0",
     "soundfile>=0.12.1",
     "audioread>=3.0.1",
     "numpy>=1.26.0",
@@ -241,6 +242,7 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
+    "nvidia-riva-client==2.16.0",
 ]
 e2e-dev = [
     "playwright==1.61.0",
@@ -275,6 +277,9 @@ ci = [
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
+    # The Riva tests serve NVIDIA's own message definitions, which checks
+    # LiteLLM's hand-written copy of them on every run.
+    "nvidia-riva-client==2.16.0",
     "Pillow==12.3.0; python_version == '3.10'",
     "Pillow==13.0.0; python_version >= '3.11'",
     # Azure batch E2E tests still import psycopg2 directly.
