@@ -262,7 +262,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         router_cache: DualCache,
         clock: Callable[[], float] = time.monotonic,
         reservation_store: _ReservationStore | None = None,
-    ):
+    ) -> None:
         self.router_cache = router_cache
         self.router_cache_id = str(id(router_cache))
         self._clock = clock

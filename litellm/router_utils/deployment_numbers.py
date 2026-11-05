@@ -1,4 +1,3 @@
-# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false
 """Numbers a router deployment cannot be served with, refused the same way by both router cores.
 
 A whole number wider than 64 bits (a `ptu_shares` of `1e20`) does not fit the router's JSON
@@ -10,7 +9,9 @@ built or added, with the error naming the field.
 import math
 import re
 from collections.abc import Iterator, Mapping
-from typing import Final
+from typing import Final, TypeAlias
+
+from typing_extensions import TypeIs  # noqa: TID251  # narrows a walked value to the containers the walk reads
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
@@ -19,6 +20,7 @@ SMALLEST_NUMBER: Final = -(2**63)
 LARGEST_NUMBER: Final = 2**64 - 1
 # A pricing field: `input_cost_per_token`, `cache_read_input_token_cost`, ...
 _COST_FIELD: Final = re.compile(r"cost_per|_cost$")
+_Container: TypeAlias = Mapping[object, object] | list[object] | tuple[object, ...]
 
 
 def _reads_as_non_finite(value: object) -> bool:
@@ -37,6 +39,12 @@ def _is_cost(key: object) -> bool:
     return isinstance(key, str) and _COST_FIELD.search(key) is not None
 
 
+def _is_container(
+    value: object,
+) -> TypeIs[_Container]:  # guard-ok: isinstance decides it, keys and values stay object
+    return isinstance(value, Mapping | list | tuple)
+
+
 def _number_leaves(value: object) -> Iterator[tuple[str, object, bool]]:
     """Every value under ``value`` that is no container, in order: its path, and whether it sits in a
     cost field. Each container is walked once, so an entry that holds itself ends."""
@@ -44,7 +52,7 @@ def _number_leaves(value: object) -> Iterator[tuple[str, object, bool]]:
     walked: Final[set[int]] = set()  # mutable-ok: the ids walked so far
     while pending:
         current, path, cost = pending.pop()
-        if not isinstance(current, Mapping | list | tuple):
+        if not _is_container(current):
             yield path, current, cost
         elif id(current) not in walked:
             walked.add(id(current))
