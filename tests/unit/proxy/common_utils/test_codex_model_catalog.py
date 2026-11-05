@@ -14,11 +14,14 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockModel,
     CodexStockUpgrade,
     bundled_codex_models,
+    codex_base_instructions,
+    codex_catalog_openai_key,
     codex_catalog_rows,
     codex_model_list_body,
     codex_models_response_json,
     configured_service_tiers,
 )
+from litellm.types.utils import CredentialItem
 
 _PROMPT = "base prompt"
 _FAST = {"id": "priority", "name": "Fast", "description": "2x speed, increased usage"}
@@ -672,6 +675,27 @@ def test_unlimited_body_keeps_every_entry():
     assert CODEX_CATALOG_BYTE_LIMIT == 1024 * 1024
 
 
+@pytest.mark.parametrize(
+    ("client_version", "capped"),
+    [(None, True), ("0.165.0", True), ("0.166.0", False), ("0.167.0-alpha.4", False), ("not-a-version", True)],
+)
+def test_the_catalog_is_cut_at_the_byte_limit_only_for_a_codex_that_enforces_one(
+    client_version: str | None, capped: bool
+) -> None:
+    names: Final = tuple(
+        f"chat-model-{index}" for index in range(CODEX_CATALOG_BYTE_LIMIT // len(codex_base_instructions()) + 2)
+    )
+    listing: Final = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "x", "mode": "chat"} for name in names
+    )
+    body: Final = codex_model_list_body(
+        listing, tuple((name, name) for name in names), None, client_version=client_version
+    )
+    slugs: Final = [entry["slug"] for entry in json.loads(body)["models"]]
+    assert (len(body.encode()) <= CODEX_CATALOG_BYTE_LIMIT) is capped, len(body.encode())
+    assert (slugs == list(names)) is not capped, slugs
+
+
 def test_vendored_codex_catalog_entries_decode_on_codex():
     """Every stock entry served keeps the `model_messages` Codex's `ModelsResponse` decoder
     needs in place of `base_instructions`, and the catalog is read from the vendored file."""
@@ -944,3 +968,231 @@ def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when
         "mixed": False,
     }
     assert models[0]["context_window"] == 1000000
+
+
+@pytest.fixture
+def catalog_fetching(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_LOCAL_CODEX_CATALOG", raising=False)
+    monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
+
+
+def _router_with(*litellm_params: Mapping[str, str | bool]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": f"catalog-model-{index}", "litellm_params": dict(params)}
+            for index, params in enumerate(litellm_params)
+        ]
+    )
+
+
+@pytest.mark.usefixtures("catalog_fetching")
+def test_the_catalog_key_is_the_listed_openai_deployments_own_and_the_environments_only_for_a_keyless_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    monkeypatch.setenv("CATALOG_OPENAI_KEY", "sk-from-secret-ref")
+    router: Final = _router_with(
+        {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-not-openai"},
+        {"model": "openai/gpt-5.5", "api_key": "os.environ/CATALOG_OPENAI_KEY"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-second-openai"},
+        {"model": "openai/gpt-5.5"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(4)]
+    assert codex_catalog_openai_key(router, entries) == "sk-from-secret-ref"
+    assert codex_catalog_openai_key(router, entries[:1]) is None
+    assert codex_catalog_openai_key(router, entries[3:]) == "sk-from-env"
+
+
+@pytest.mark.usefixtures("catalog_fetching")
+def test_a_bare_openai_model_name_supplies_its_key_and_a_bare_alias_of_another_provider_does_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    router: Final = _router_with(
+        {"model": "claude-sonnet-4-5", "api_key": "sk-ant-bare-alias"},
+        {"model": "gpt-5.5", "api_key": "sk-bare-openai"},
+        {"model": "gpt-5.5", "custom_llm_provider": "azure", "api_key": "sk-azure-bare"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(3)]
+    assert codex_catalog_openai_key(router, entries) == "sk-bare-openai"
+    assert codex_catalog_openai_key(router, entries[:1]) is None
+    assert codex_catalog_openai_key(router, entries[2:]) is None
+
+
+@pytest.mark.usefixtures("catalog_fetching")
+def test_the_catalog_key_is_absent_without_an_openai_deployment_or_environment_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    router: Final = _router_with({"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-not-openai"})
+    assert codex_catalog_openai_key(router, [("catalog-model-0", "catalog-model-0")]) is None
+    assert codex_catalog_openai_key(None, [("catalog-model-0", "catalog-model-0")]) is None
+
+
+@pytest.mark.usefixtures("catalog_fetching")
+def test_a_key_for_an_openai_compatible_server_or_a_redirected_environment_never_goes_to_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://llm-gateway.internal.example/v1")
+    router: Final = _router_with(
+        {
+            "model": "openai/local-llama",
+            "api_key": "sk-internal-server",
+            "api_base": "https://inference.internal.example/v1",
+        },
+        {"model": "openai/gpt-5.5", "api_key": "sk-through-the-gateway"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-real-openai", "api_base": "https://api.openai.com/v1"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-eu-openai", "api_base": "https://eu.api.openai.com/v1"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(4)]
+    assert codex_catalog_openai_key(router, entries[:2]) is None
+    assert codex_catalog_openai_key(router, entries) == "sk-real-openai"
+    assert codex_catalog_openai_key(router, entries[3:]) is None
+    monkeypatch.delenv("OPENAI_BASE_URL")
+    monkeypatch.setattr(litellm, "api_base", "https://llm-gateway.internal.example/v1")
+    assert codex_catalog_openai_key(router, entries[:2]) is None
+    monkeypatch.setattr(litellm, "api_base", None)
+    assert codex_catalog_openai_key(router, entries[:2]) == "sk-through-the-gateway"
+
+
+@pytest.mark.usefixtures("catalog_fetching")
+def test_a_fedramp_key_or_a_gov_openai_base_never_goes_to_openais_commercial_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-proj-fedramp-from-env")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    router: Final = _router_with(
+        {"model": "openai/gpt-5.5", "api_key": "sk-gov-base", "api_base": "https://gov.api.openai.com/v1"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-proj-fedramp-own"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-svcacct-fedramp-own"},
+        {"model": "openai/gpt-5.5"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-commercial"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(5)]
+    assert codex_catalog_openai_key(router, entries[:4]) is None
+    assert codex_catalog_openai_key(router, entries) == "sk-commercial"
+
+
+@pytest.mark.parametrize("setting", ["LITELLM_LOCAL_CODEX_CATALOG", "LITELLM_OFFLINE_MODE"])
+@pytest.mark.usefixtures("catalog_fetching")
+def test_no_catalog_key_is_looked_up_while_the_catalog_stays_local(
+    monkeypatch: pytest.MonkeyPatch, setting: str
+) -> None:
+    monkeypatch.setenv("CATALOG_OPENAI_KEY", "sk-from-secret-ref")
+    router: Final = _router_with({"model": "openai/gpt-5.5", "api_key": "os.environ/CATALOG_OPENAI_KEY"})
+    entries: Final = [("catalog-model-0", "catalog-model-0")]
+    assert codex_catalog_openai_key(router, entries) == "sk-from-secret-ref"
+    monkeypatch.setenv(setting, "True")
+    assert codex_catalog_openai_key(router, entries) is None
+
+
+@pytest.mark.usefixtures("catalog_fetching")
+def test_a_base_url_or_a_credential_naming_another_server_keeps_the_key_from_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="internal-server",
+                credential_values={
+                    "api_key": "sk-internal-credential",
+                    "api_base": "https://inference.internal.example/v1",
+                },
+                credential_info={},
+            ),
+            CredentialItem(
+                credential_name="openai-org", credential_values={"api_key": "sk-openai-credential"}, credential_info={}
+            ),
+        ],
+    )
+    router: Final = _router_with(
+        {
+            "model": "openai/gpt-5.5",
+            "api_key": "sk-base-url-server",
+            "base_url": "https://inference.internal.example/v1",
+        },
+        {"model": "openai/gpt-5.5", "litellm_credential_name": "internal-server"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-own-key", "litellm_credential_name": "internal-server"},
+        {"model": "openai/gpt-5.5", "litellm_credential_name": "openai-org"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(4)]
+    assert codex_catalog_openai_key(router, entries[:3]) is None
+    assert codex_catalog_openai_key(router, entries) == "sk-openai-credential"
+
+
+@pytest.mark.usefixtures("catalog_fetching")
+def test_a_deployments_own_key_wins_over_its_named_credentials_key_as_on_the_call_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai-org", credential_values={"api_key": "sk-openai-credential"}, credential_info={}
+            )
+        ],
+    )
+    router: Final = _router_with(
+        {"model": "openai/gpt-5.5", "api_key": "sk-own-key", "litellm_credential_name": "openai-org"}
+    )
+    assert codex_catalog_openai_key(router, [("catalog-model-0", "catalog-model-0")]) == "sk-own-key"
+
+
+@pytest.mark.usefixtures("catalog_fetching")
+def test_an_api_base_that_does_not_parse_counts_as_another_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    router: Final = _router_with(
+        {"model": "openai/gpt-5.5", "api_key": "sk-unparseable-base", "api_base": "https://[my-vllm]:8000/v1"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-plain-openai"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(2)]
+    assert codex_catalog_openai_key(router, entries[:1]) is None
+    assert codex_catalog_openai_key(router, entries) == "sk-plain-openai"
+
+
+@pytest.mark.usefixtures("catalog_fetching")
+def test_an_oidc_key_reference_is_never_sent_as_the_catalog_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    monkeypatch.setenv("CATALOG_OIDC_KEY", "sk-behind-the-reference")
+    router: Final = _router_with(
+        {"model": "openai/gpt-5.5", "api_key": "oidc/env/CATALOG_OIDC_KEY"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-plain-openai"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(2)]
+    assert codex_catalog_openai_key(router, entries[:1]) is None
+    assert codex_catalog_openai_key(router, entries) == "sk-plain-openai"
+
+
+@pytest.mark.usefixtures("catalog_fetching")
+def test_a_deployment_sent_through_a_litellm_proxy_keeps_its_key_from_openai(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("USE_LITELLM_PROXY", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setattr(litellm, "use_litellm_proxy", False)
+    router: Final = _router_with(
+        {"model": "openai/gpt-5.5", "api_key": "sk-downstream-proxy", "use_litellm_proxy": True},
+        {"model": "openai/gpt-5.5", "api_key": "sk-plain-openai"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(2)]
+    assert codex_catalog_openai_key(router, entries[:1]) is None
+    assert codex_catalog_openai_key(router, entries) == "sk-plain-openai"
+    monkeypatch.setenv("USE_LITELLM_PROXY", "True")
+    assert codex_catalog_openai_key(router, entries) is None

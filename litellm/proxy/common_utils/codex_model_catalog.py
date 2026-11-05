@@ -12,15 +12,18 @@ upstream. A ``model_info.max_input_tokens`` the operator sets replaces a known m
 A fallback entry offers the model group's ``supported_reasoning_efforts`` as its reasoning levels,
 trimmed to the ones the requesting Codex release can parse.
 
-The stock entries are Codex 0.159.3's bundled catalog, vendored unchanged from
-https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/models-manager/models.json (Apache-2.0)
-as ``codex_bundled_models_0.159.3.json``, and ``codex_base_instructions.md`` is
-``codex-rs/models-manager/prompt.md`` at the same tag. Refresh both by downloading those two paths at
-a newer tag.
+The stock entries come from the requesting Codex release's own catalog, fetched by
+``codex_catalog_source.CodexCatalogSource`` and passed in as a ``CodexStock``, laid over the bundled entries
+below. When none is passed, or that release's cannot be fetched, they are Codex ``CODEX_BUNDLED_VERSION``'s
+bundled catalog, vendored unchanged from https://github.com/openai/codex/blob/rust-v<version>/codex-rs/models-manager/models.json
+(Apache-2.0) as ``codex_bundled_models_<version>.json``, with ``codex_base_instructions.md`` being
+``codex-rs/models-manager/prompt.md`` at the same tag. Refresh both by downloading those two paths at a
+newer tag and renaming the json after it.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
@@ -28,11 +31,13 @@ from itertools import accumulate, pairwise
 from pathlib import Path
 from types import MappingProxyType, NoneType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+from urllib.parse import urlparse
 
 from packaging.version import Version
 from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
@@ -40,9 +45,11 @@ if TYPE_CHECKING:
     from litellm.router import Router
     from litellm.router_api import RouterRegistry
     from litellm.types.proxy.model_listing import ModelInfoResponse
+    from litellm.types.router import DeploymentTypedDict
 
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
-CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name("codex_bundled_models_0.159.3.json")
+CODEX_BUNDLED_VERSION: Final = "0.166.0"
+CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name(f"codex_bundled_models_{CODEX_BUNDLED_VERSION}.json")
 CODEX_CATALOG_BYTE_LIMIT: Final = 1024 * 1024
 CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 
@@ -50,6 +57,7 @@ _TierId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 _BODY_PREFIX: Final = '{"models":['
 _BODY_SUFFIX: Final = "]}"
 _FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = Version("0.138.0")
+_FIRST_CODEX_WITHOUT_CATALOG_BYTE_LIMIT: Final = Version("0.166.0")
 _EFFORTS_EVERY_CODEX_PARSES: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
 _PREFERRED_DEFAULT_EFFORT: Final = "medium"
 _CODEX_UNSET_EFFORT: Final = "none"
@@ -161,6 +169,7 @@ class CodexStockModel(LiteLLMBaseModel):
     supported_reasoning_levels: tuple[CodexReasoningLevel, ...] = ()
     context_window: int | None = None
     max_context_window: int | None = None
+    base_instructions: str = ""
 
 
 class CodexStockCatalog(LiteLLMBaseModel):
@@ -190,6 +199,16 @@ class CodexCatalogRow:
     supported_reasoning_efforts: tuple[str, ...] | None = None
     search_tool_support: tuple[bool | None, ...] = ()
     configured_max_input_tokens: tuple[int | None, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CodexStock:
+    """One Codex release's own entries by slug and its base prompt; `source` names the release tag or the
+    vendored version they came from."""
+
+    models: Mapping[str, CodexStockModel]
+    instructions: str
+    source: str
 
 
 @cache
@@ -297,6 +316,18 @@ def _parses_custom_efforts(client_version: str | None) -> bool:
         return client_version is not None and Version(client_version) >= _FIRST_CODEX_WITH_CUSTOM_EFFORTS
     except ValueError:
         return False
+
+
+def codex_catalog_byte_limit(client_version: str | None) -> int | None:
+    """The cap the asking Codex puts on a `model_catalog_url` body: 1 MiB through 0.165, none from 0.166.0,
+    which dropped it (openai/codex#56525)."""
+    try:
+        uncapped: Final = (
+            client_version is not None and Version(client_version) >= _FIRST_CODEX_WITHOUT_CATALOG_BYTE_LIMIT
+        )
+    except ValueError:
+        return CODEX_CATALOG_BYTE_LIMIT
+    return None if uncapped else CODEX_CATALOG_BYTE_LIMIT
 
 
 def codex_reasoning_levels(
@@ -494,8 +525,8 @@ def codex_models_response_json(
     """Codex's `ModelsResponse` body for `rows`, in listing order, cut to Codex's byte limit.
 
     Only chat-capable rows are listed (Codex cannot drive an embedding or image model, and a
-    wildcard id is no model), their order is their `priority`. Codex drops a catalog over its
-    byte limit silently and keeps its bundled one, so the body holds only the entries that fit,
+    wildcard id is no model), their order is their `priority`. Codex before 0.166.0 drops a catalog over
+    its byte limit silently and keeps its bundled one, so the body holds only the entries that fit,
     the ones offering a service tier taken first and the rest in listing order, an entry too large
     for the bytes left passed over, every kept entry at its listing position; `byte_limit=None`
     keeps every entry. A row whose deployments set `model_info.max_input_tokens` gets the smallest
@@ -552,6 +583,135 @@ def _catalog_row(
     )
 
 
+OPENAI_API_HOST: Final = "api.openai.com"
+FEDRAMP_KEY_PREFIXES: Final = ("sk-proj-fedramp-", "sk-svcacct-fedramp-")
+
+
+_DEPLOYMENT_BASE_PARAMS: Final = ("api_base", "base_url")
+
+
+def _is_openai_host(url: object) -> bool:
+    if not isinstance(url, str):
+        return False
+    try:
+        host: Final = urlparse(url).hostname
+    except ValueError:
+        return False
+    return host == OPENAI_API_HOST
+
+
+def _every_call_goes_through_a_litellm_proxy() -> bool:
+    import litellm  # noqa: PLC0415  # litellm imports this module while it is initializing
+
+    return litellm.LiteLLMProxyChatConfig.should_use_litellm_proxy_by_default() is True
+
+
+def _is_openai_origin(bases: Sequence[object]) -> bool:
+    """Whether a deployment's OpenAI requests go to OpenAI itself, so its key may go to OpenAI's catalog
+    endpoint: every `api_base` and `base_url` the deployment and its credential set, else the global
+    `litellm.api_base`, `OPENAI_BASE_URL` or `OPENAI_API_BASE` override the OpenAI handler would apply, else
+    OpenAI."""
+    import litellm  # noqa: PLC0415  # litellm imports this module while it is initializing, so the global is read late
+
+    named: Final = tuple(filter(None, bases))
+    if named:
+        return all(map(_is_openai_host, named))
+    fallback: Final = litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    return not fallback or _is_openai_host(fallback)
+
+
+def _credential_values(name: object) -> Mapping[str, object]:
+    if not isinstance(name, str) or not name:
+        return MappingProxyType({})
+    from litellm.litellm_core_utils.credential_accessor import (
+        CredentialAccessor,  # noqa: PLC0415  # credential_accessor imports litellm, which imports this module
+    )
+
+    return MappingProxyType(CredentialAccessor.get_credential_values(name))
+
+
+def _deployment_provider(params: Mapping[str, object]) -> str:
+    """The provider litellm routes a deployment to: its `custom_llm_provider`, else its model's prefix, else
+    `openai` for a bare OpenAI model name such as `gpt-5.5`."""
+    import litellm  # noqa: PLC0415  # litellm imports this module while it is initializing
+
+    custom: Final = params.get("custom_llm_provider")
+    model: Final = params.get("model")
+    if isinstance(custom, str) and custom:
+        return custom
+    if not isinstance(model, str):
+        return ""
+    prefix, slash, _ = model.partition("/")
+    if slash:
+        return prefix
+    return "openai" if model in litellm.open_ai_chat_completion_models else ""
+
+
+def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
+    """The key a deployment sends OpenAI, its own values winning over its named credential's the way the call
+    path fills only what the deployment lacks and ``OPENAI_API_KEY`` standing in when neither sets one, when every
+    base either one sets is OpenAI's and the call does not go through a LiteLLM proxy."""
+    params: Final = MappingProxyType[str, object](deployment["litellm_params"])
+    credential: Final = _credential_values(params.get("litellm_credential_name"))
+    effective: Final = MappingProxyType({**credential, **params})
+    bases: Final = (
+        *(params.get(key) for key in _DEPLOYMENT_BASE_PARAMS),
+        *(credential.get(key) for key in _DEPLOYMENT_BASE_PARAMS),
+    )
+    if (
+        effective.get("use_litellm_proxy") is True
+        or _deployment_provider(effective) != "openai"
+        or not _is_openai_origin(bases)
+    ):
+        return None
+    key: Final = _resolved_key(effective.get("api_key"))
+    return None if key is None or key.startswith(FEDRAMP_KEY_PREFIXES) else key
+
+
+def _resolved_key(api_key: object) -> str | None:
+    if not isinstance(api_key, str) or not api_key:
+        return os.getenv("OPENAI_API_KEY") or None
+    if api_key.startswith("oidc/"):
+        return None
+    from litellm.secret_managers.main import (
+        get_secret_str,  # noqa: PLC0415  # secret_managers.main imports litellm, which imports this module
+    )
+
+    return (get_secret_str(api_key) if api_key.startswith("os.environ/") else api_key) or None
+
+
+def uses_vendored_codex_catalog() -> bool:
+    return is_offline_mode() or os.getenv("LITELLM_LOCAL_CODEX_CATALOG", "").strip().lower() == "true"
+
+
+def codex_catalog_openai_key(
+    llm_router: Router | None,
+    entries: Sequence[tuple[str, str]],
+    team_id: str | None = None,
+) -> str | None:
+    """The OpenAI API key the catalog fetch authenticates with: the first one among the listed entries'
+    deployments that routes to OpenAI with every `api_base` and `base_url` it or its credential sets being
+    OpenAI's own, ``OPENAI_API_KEY`` from the environment for one that sets no key. A key for an
+    OpenAI-compatible server or a FedRAMP key (Codex sends those to ``gov.chatgpt.com``) never leaves for
+    OpenAI's commercial catalog, a listing without an OpenAI deployment sends none, and no key is looked up
+    while the catalog stays local or calls go through a LiteLLM proxy."""
+    if uses_vendored_codex_catalog() or _every_call_goes_through_a_litellm_proxy():
+        return None
+    registry: Final = llm_router.registry() if llm_router is not None else None
+    deployments: Final = (
+        tuple(
+            deployment
+            for _, lookup_id in entries
+            for deployment in registry.deployments(
+                lookup_id, source="all", team_id=team_id
+            )  # comprehension-ok: flattening the entries' deployment lists
+        )
+        if registry is not None
+        else ()
+    )
+    return next(filter(None, map(_deployment_openai_key, deployments)), None)
+
+
 def codex_catalog_rows(
     rows: Sequence[ModelInfoResponse],
     entries: Sequence[tuple[str, str]],
@@ -583,10 +743,16 @@ def codex_model_list_body(
     label_entries: Sequence[tuple[str, str]] | None = None,
     *,
     client_version: str | None = None,
+    stock: CodexStock | None = None,
 ) -> str:
-    """The `/v1/models?client_version=...` body, logging the models Codex's byte limit left out."""
+    """The `/v1/models?client_version=...` body built on `stock` (the vendored pair when None), logging the
+    models Codex's byte limit left out."""
     body: Final = codex_models_response_json(
-        codex_catalog_rows(rows, entries, llm_router, team_id, label_entries), client_version=client_version
+        codex_catalog_rows(rows, entries, llm_router, team_id, label_entries),
+        stock=stock.models if stock is not None else None,
+        instructions=stock.instructions if stock is not None else None,
+        byte_limit=codex_catalog_byte_limit(client_version),
+        client_version=client_version,
     )
     if body.left_out:
         verbose_proxy_logger.warning(
