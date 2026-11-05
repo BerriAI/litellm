@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import Navbar from "@/components/navbar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -32,25 +33,26 @@ const hubStatus = (hub: HubData): HubStatus => {
 };
 
 function HubTabs({ hub }: { hub: HubData }) {
+  const { t } = useTranslation();
   const { tab, setTab, open, setOpen } = useHubUrlState();
   const paneProps = { selected: open, onSelect: setOpen };
   return (
     <Tabs value={tab} onValueChange={(next) => setTab(next as HubTab)} className="gap-4">
       <TabsList className="w-full sm:w-fit">
         <TabsTrigger value="models" className="px-1.5 sm:px-2">
-          <TabLabel count={hub.modelTotal}>Models</TabLabel>
+          <TabLabel count={hub.modelTotal}>{t("publicModelHub.tabs.models")}</TabLabel>
         </TabsTrigger>
         <TabsTrigger value="agents" className="px-1.5 sm:px-2">
-          <TabLabel count={hub.agents.data?.length}>Agents</TabLabel>
+          <TabLabel count={hub.agents.data?.length}>{t("publicModelHub.tabs.agents")}</TabLabel>
         </TabsTrigger>
         <TabsTrigger value="mcp" className="px-1.5 sm:px-2">
           <TabLabel count={hub.mcp.data?.length}>
-            <span className="sm:hidden">MCP</span>
-            <span className="hidden sm:inline">MCP servers</span>
+            <span className="sm:hidden">{t("publicModelHub.tabs.mcpShort")}</span>
+            <span className="hidden sm:inline">{t("publicModelHub.tabs.mcpServers")}</span>
           </TabLabel>
         </TabsTrigger>
         <TabsTrigger value="skills" className="px-1.5 sm:px-2">
-          <TabLabel count={hub.skills.data?.length}>Skills</TabLabel>
+          <TabLabel count={hub.skills.data?.length}>{t("publicModelHub.tabs.skills")}</TabLabel>
         </TabsTrigger>
       </TabsList>
       <TabsContent value="models">

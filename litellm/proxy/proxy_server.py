@@ -6,6 +6,7 @@ import importlib
 import inspect
 import io
 import itertools
+import logging
 import os
 import random
 import re
@@ -424,9 +425,13 @@ from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
+from litellm.proxy.alerting_endpoints.model_deprecation_alerts import (
+    router as model_deprecation_alerts_router,
+)
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
+from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload
 from litellm.proxy.auth.auth_checks import (
     ROLE_BASED_PERMISSIONS_ADAPTER,
     ExperimentalUIJWTToken,
@@ -3623,6 +3628,7 @@ async def increment_spend_counters(
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
+    windows_from_ledger: bool = False,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3659,6 +3665,7 @@ async def increment_spend_counters(
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            windows_from_ledger=windows_from_ledger,
         )
 
 
@@ -3686,6 +3693,50 @@ def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bo
         user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=True)
         return
     user_api_key_cache.budget_windows_absent_cache.delete_cache(absent_key)
+
+
+async def accounting_window_keys(token: str | None, team_id: str | None) -> tuple[Mapping[str, object], ...]:
+    scopes: Final = tuple(
+        (entity_type, entity_id, cache_key)
+        for entity_type, entity_id, cache_key in (
+            (Litellm_EntityType.KEY, token, token),
+            (Litellm_EntityType.TEAM, team_id, f"team_id:{team_id}"),
+        )
+        if entity_id is not None and cache_key is not None
+    )
+    snapshots: Final = tuple(
+        [
+            await _accounting_scope_windows(entity_type, entity_id, cache_key)
+            for entity_type, entity_id, cache_key in scopes
+        ]
+    )
+    from itertools import chain
+
+    return tuple(chain.from_iterable(snapshots))
+
+
+async def _accounting_scope_windows(
+    entity_type: Litellm_EntityType, entity_id: str, cache_key: str
+) -> tuple[Mapping[str, object], ...]:
+    from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
+
+    cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    limits: Final = (
+        await _stored_budget_limits(entity_type, entity_id) if cached is None else _cached_budget_limits(cached)
+    )
+    if not isinstance(limits, list):
+        return ()
+    windows: Final = TypeAdapter(tuple[object, ...]).validate_python(limits)
+    return tuple(
+        {
+            "entity_type": entity_type.value,
+            "entity_id": entity_id,
+            "window_duration": fixed[0],
+            "window_start": fixed[1].isoformat(),
+        }
+        for window in windows
+        if (fixed := fixed_budget_window(window)) is not None
+    )
 
 
 async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str) -> object:
@@ -3729,6 +3780,7 @@ async def _increment_spend_counters_batched(
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None = None,
+    windows_from_ledger: bool = False,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
@@ -3770,15 +3822,16 @@ async def _increment_spend_counters_batched(
             if window_counter not in reserved_counter_keys
             else None
         )
-        await _enqueue_window_spend_row_update(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            reset_at=window_reset_at,
-            window_duration=duration,
-            window_start=window_start,
-            increment=cost,
-            request_started_at=request_started_at,
-        )
+        if not windows_from_ledger:
+            await _enqueue_window_spend_row_update(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                reset_at=window_reset_at,
+                window_duration=duration,
+                window_start=window_start,
+                increment=cost,
+                request_started_at=request_started_at,
+            )
         return pending_window
 
     async def _window_increments(
@@ -13396,6 +13449,13 @@ async def completion(
             _response.choices[0].text = e.message
             return _response
     except Exception as e:
+        if is_provider_overload(e):
+            raise await base_llm_response_processor.handle_llm_api_exception(
+                e=e,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+                version=version,
+            )
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -18626,7 +18686,11 @@ async def model_deprecations(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
-    return collect_model_deprecations(llm_router=llm_router, warn_within_days=warn_within_days)
+    return collect_model_deprecations(
+        llm_router=llm_router,
+        warn_within_days=warn_within_days,
+        successor_log_level=logging.DEBUG,
+    )
 
 
 def get_model_group_info(
@@ -22393,6 +22457,7 @@ app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(model_deprecation_alerts_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)

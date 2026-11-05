@@ -357,13 +357,15 @@ def bedrock_chat_opts_into_native_structured_output(
 
 def bedrock_chat_uses_native_structured_output(
     model: str,
+    *,
+    will_think: bool,
     thinking_requested: bool,
     custom_llm_provider: str = "bedrock",
     model_info: Mapping[str, object] | None = None,
 ) -> bool:
-    return bedrock_chat_opts_into_native_structured_output(
-        model, thinking_requested, custom_llm_provider, model_info
-    ) or (not thinking_requested and _bedrock_native_output_replaces_unforceable_tool(model, model_info))
+    return bedrock_chat_opts_into_native_structured_output(model, will_think, custom_llm_provider, model_info) or (
+        not thinking_requested and _bedrock_native_output_replaces_unforceable_tool(model, model_info)
+    )
 
 
 def bedrock_native_output_is_deployment_opt_in(

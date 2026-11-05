@@ -340,6 +340,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_AccessGroupTable",
         "LiteLLM_AccountingDelivery",
         "LiteLLM_AccountingEvent",
+        "LiteLLM_SpendLogDelivery",
         "LiteLLM_ClaudeCodePluginTable",
         "LiteLLM_ClaudeCodePluginUpload",
         "LiteLLM_MemoryTable",

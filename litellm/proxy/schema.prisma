@@ -2141,6 +2141,23 @@ model LiteLLM_AccountingDelivery {
   @@index([target, state, next_attempt_at])
 }
 
+model LiteLLM_SpendLogDelivery {
+  delivery_id        String                  @id @default(dbgenerated("gen_random_uuid()::text"))
+  request_id         String
+  state              AccountingDeliveryState @default(pending)
+  accounting_payload Json
+  is_batch           Boolean
+  attempts           Int                     @default(0)
+  next_attempt_at    DateTime                @default(now())
+  applied_at         DateTime?
+  last_error         String?
+  created_at         DateTime                @default(now())
+
+  @@index([state, next_attempt_at])
+  @@index([state, applied_at])
+  @@index([request_id])
+}
+
 model LiteLLM_SubscriptionAccountTable {
   subscription_account_id String @id @default(uuid())
   custom_llm_provider String
