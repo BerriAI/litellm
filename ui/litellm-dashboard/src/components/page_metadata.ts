@@ -22,6 +22,7 @@ export const pageDescriptions: Record<string, ParseKeys> = {
   "tool-policies": "shell.pageDescriptions.toolPolicies",
   "vector-stores": "shell.pageDescriptions.vectorStores",
   new_usage: "shell.pageDescriptions.newUsage",
+  alerts: "shell.pageDescriptions.alerts",
   "cost-optimization": "shell.pageDescriptions.costOptimization",
   "model-insights": "shell.pageDescriptions.modelInsights",
   logs: "shell.pageDescriptions.logs",

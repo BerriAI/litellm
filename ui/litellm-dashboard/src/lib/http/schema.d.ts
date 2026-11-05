@@ -944,6 +944,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/alerting/model-deprecations/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Deprecation Alert State */
+        get: operations["get_deprecation_alert_state_alerting_model_deprecations_state_get"];
+        /** Update Deprecation Alert State */
+        put: operations["update_deprecation_alert_state_alerting_model_deprecations_state_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerting/model-deprecations/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deprecation Usage Tags
+         * @description Distinct tags observed with this model for a page of affected reporting key IDs.
+         */
+        get: operations["get_deprecation_usage_tags_alerting_model_deprecations_tags_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/alerting/settings": {
         parameters: {
             query?: never;
@@ -32376,6 +32414,59 @@ export interface components {
             /** Warnings */
             warnings: components["schemas"]["DeploymentWarning"][];
         };
+        /** DeprecationAlertState */
+        DeprecationAlertState: {
+            /**
+             * Deprecation Date
+             * Format: date
+             */
+            deprecation_date: string;
+            /** Last Seen Date */
+            last_seen_date?: string | null;
+            /**
+             * Last Seen Requests
+             * @default 0
+             */
+            last_seen_requests: number;
+            /** Model */
+            model: string;
+            /** @default open */
+            status: components["schemas"]["DeprecationAlertStatus"];
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+        };
+        /**
+         * DeprecationAlertStatus
+         * @enum {string}
+         */
+        DeprecationAlertStatus: "open" | "resolved" | "dismissed";
+        /** DeprecationAlertUpdate */
+        DeprecationAlertUpdate: {
+            /**
+             * Deprecation Date
+             * Format: date
+             */
+            deprecation_date: string;
+            /**
+             * Last Seen Date
+             * Format: date
+             */
+            last_seen_date: string;
+            /** Last Seen Requests */
+            last_seen_requests: number;
+            /** Model */
+            model: string;
+            status: components["schemas"]["DeprecationAlertStatus"];
+        };
+        /** DeprecationTagUsage */
+        DeprecationTagUsage: {
+            /** Api Key */
+            api_key: string;
+            /** Tag */
+            tag: string;
+        };
         /** DiscoverAgentRequest */
         DiscoverAgentRequest: {
             /**
@@ -39024,6 +39115,11 @@ export interface components {
              */
             deprecation_date: string;
             /**
+             * Deprecation Source
+             * @description Provider deprecation notice linked by the selected model cost-map entry.
+             */
+            deprecation_source?: string | null;
+            /**
              * Litellm Model
              * @description The underlying litellm model string the deprecation date is sourced from.
              */
@@ -39049,6 +39145,13 @@ export interface components {
              * @description The model to migrate to: model_info.successor_model on the deployment when set, else the successor_model the cost map names for the deprecated model.
              */
             successor_model?: string | null;
+            /** @description Whether the recommended successor comes from the model cost map or deployment configuration. */
+            successor_model_source?: components["schemas"]["SuccessorModelSource"] | null;
+            /**
+             * Team Public Model Name
+             * @description The model name visible to the team, when configured.
+             */
+            team_public_model_name?: string | null;
         };
         /** ModelDeprecationResponse */
         ModelDeprecationResponse: {
@@ -46827,6 +46930,11 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * SuccessorModelSource
+         * @enum {string}
+         */
+        SuccessorModelSource: "model_cost_map" | "deployment_config";
         /** SuggestTemplatesRequest */
         SuggestTemplatesRequest: {
             /** Attack Examples */
@@ -53139,6 +53247,105 @@ export interface operations {
                 content: {
                     "application/json": Record<string, never>[];
                     "text/csv": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deprecation_alert_state_alerting_model_deprecations_state_get: {
+        parameters: {
+            query: {
+                model: string;
+                deprecation_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationAlertState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_deprecation_alert_state_alerting_model_deprecations_state_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeprecationAlertUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationAlertState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deprecation_usage_tags_alerting_model_deprecations_tags_get: {
+        parameters: {
+            query: {
+                model: string;
+                api_keys: string[];
+                start_date: string;
+                end_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationTagUsage"][];
                 };
             };
             /** @description Validation Error */

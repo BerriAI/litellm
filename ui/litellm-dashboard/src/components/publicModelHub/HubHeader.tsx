@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ExternalLink, LayoutGrid } from "lucide-react";
+import { ChevronDown, ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/
 
 import { gatewayUrl, usefulLinkList } from "./hubFormat";
 import { CopyIconButton } from "./HubParts";
-import { StatusBadge } from "./HubStatus";
+import type { HubTab } from "./useHubUrlState";
+import styles from "./catalog.module.css";
 import type { HubInfo } from "./useHubData";
 
 export type HubStatus = "loading" | "operational" | "degraded" | "unavailable";
@@ -59,7 +60,7 @@ function BaseUrlField() {
   const { t } = useTranslation();
   const url = gatewayUrl();
   return (
-    <Field className="w-full gap-1.5 sm:w-[420px]">
+    <Field className="w-full gap-1.5 sm:w-[360px]">
       <InputGroup className="h-8">
         <InputGroupAddon>
           <InputGroupText className="text-xs font-medium">{t("publicModelHub.baseUrlField.label")}</InputGroupText>
@@ -75,31 +76,33 @@ function BaseUrlField() {
           <CopyIconButton value={url} label={t("publicModelHub.baseUrlField.copy")} className="size-6" />
         </InputGroupAddon>
       </InputGroup>
-      <FieldDescription id="hub-base-url-hint" className="text-xs text-balance">
+      <FieldDescription id="hub-base-url-hint" className="hidden text-xs text-balance sm:block">
         {t("publicModelHub.baseUrlField.hint")}
       </FieldDescription>
     </Field>
   );
 }
 
-export function HubHeader({ info, status }: { info: HubInfo | undefined; status: HubStatus }) {
+export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; status: HubStatus; tab: HubTab }) {
   const { t } = useTranslation();
   return (
-    <header className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center gap-2">
-          <h1 className="flex items-center gap-2 text-xl leading-7 font-semibold">
-            <LayoutGrid className="size-5" />
-            {t("publicModelHub.header.title")}
-          </h1>
-          {status === "operational" && <StatusBadge tone="success" label={t("publicModelHub.header.operational")} />}
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {info?.custom_docs_description || t("publicModelHub.header.description")}
+    <header className={styles.header}>
+      <div>
+        <p className={styles.eyebrow}>{info?.docs_title || t("publicModelHub.catalog.eyebrow")}</p>
+        <h1 className={styles.title}>
+          {t(tab === "skills" ? "publicModelHub.catalog.skillsHub" : "publicModelHub.catalog.modelHub")}
+        </h1>
+        <p className={styles.description}>
+          {info?.custom_docs_description ||
+            t(
+              tab === "skills"
+                ? "publicModelHub.catalog.skillsDescription"
+                : "publicModelHub.catalog.modelsDescription",
+            )}
         </p>
       </div>
       {status !== "unavailable" && (
-        <div className="flex flex-wrap items-start gap-2">
+        <div className={styles.connection}>
           <BaseUrlField />
           <LinksMenu info={info} />
         </div>

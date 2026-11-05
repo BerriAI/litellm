@@ -693,6 +693,7 @@ describe("Sidebar (leftnav)", () => {
     expectHref("Playground", "/ui/playground");
     expectHref("Models + Endpoints", "/ui/models-and-endpoints");
     expectHref("Usage", "/ui/usage");
+    expectHref("Alerts", "/ui/alerts");
     expectHref("API Reference", "/ui/api-reference");
   });
 

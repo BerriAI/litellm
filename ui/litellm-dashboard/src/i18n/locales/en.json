@@ -6971,6 +6971,48 @@
     }
   },
   "publicModelHub": {
+    "catalog": {
+      "modelHub": "Model Hub",
+      "skillsHub": "Skills Hub",
+      "eyebrow": "The LiteLLM catalog",
+      "modelsDescription": "Find pricing, context, and capabilities.",
+      "skillsDescription": "Discover reusable skills for your agents.",
+      "filters": "Filters",
+      "clearFilters": "Clear filters",
+      "provider": "Provider",
+      "capabilities": "Capabilities",
+      "mode": "Mode",
+      "model": "Model",
+      "inputLimit": "Input limit",
+      "inputPrice": "Input /1M",
+      "outputPrice": "Output /1M",
+      "searchModels": "Search models",
+      "loadingModels": "Loading models…",
+      "modelCount_one": "{{count}} model",
+      "modelCount_other": "{{count}} models",
+      "sort": {
+        "model_group": "Name",
+        "providers": "Provider",
+        "mode": "Mode",
+        "input_cost_per_token": "Input price",
+        "output_cost_per_token": "Output price",
+        "max_input_tokens": "Context",
+        "max_output_tokens": "Max output",
+        "rpm": "Rate limit"
+      },
+      "skill": "Skill",
+      "source": "Source",
+      "namespace": "Namespace",
+      "category": "Category",
+      "version": "Version",
+      "domain": "Domain",
+      "allDomains": "All domains",
+      "searchSkills": "Search skills",
+      "clearAll": "Clear all",
+      "loadingSkills": "Loading skills…",
+      "skillCount_one": "{{count}} skill",
+      "skillCount_other": "{{count}} skills"
+    },
     "modelHubPage": {
       "loading": "Loading..."
     },
@@ -7128,16 +7170,6 @@
       "context": "{{tokens}} context"
     },
     "modelsPane": {
-      "sorts": {
-        "name": "Name",
-        "provider": "Provider",
-        "mode": "Mode",
-        "inputPrice": "Input price",
-        "outputPrice": "Output price",
-        "context": "Context",
-        "maxOutput": "Max output",
-        "rateLimit": "Rate limit"
-      },
       "noun": "models"
     },
     "modelInspector": {
@@ -7266,6 +7298,7 @@
         "vectorStores": "Vector Stores",
         "toolPolicies": "Tool Policies",
         "usage": "Usage",
+        "alerts": "Alerts",
         "modelLeaderboard": "Model Leaderboard",
         "costOptimization": "Cost Optimization",
         "logs": "Logs",
@@ -7293,9 +7326,7 @@
         "uiTheme": "UI Theme",
         "telemetry": "Telemetry"
       },
-      "homeLink": "LiteLLM home",
-      "expandSidebar": "Expand sidebar",
-      "collapseSidebar": "Collapse sidebar"
+      "homeLink": "LiteLLM home"
     },
     "pageDescriptions": {
       "home": "Usage at a glance, recent launches and blog updates",
@@ -7313,6 +7344,7 @@
       "toolPolicies": "Configure tool use policies and permissions",
       "vectorStores": "Manage vector databases for embeddings",
       "newUsage": "View usage analytics and metrics",
+      "alerts": "Review and resolve model deprecation alerts across keys and teams",
       "costOptimization": "Track and configure cost-saving features: prompt compression, caching, and auto routing",
       "modelInsights": "Model Leaderboard: compare usage, spend, tokens, and task mix across this gateway",
       "logs": "Access request and response logs",
@@ -8284,7 +8316,7 @@
       },
       "placeholder": {
         "conversation": "Send a message...",
-        "home": "Ask a question, attach a file, or paste something to work on…",
+        "home": "Ask anything…",
         "research": "What should I research on the web?",
         "image": "Describe the image you want to create…"
       },
@@ -8320,6 +8352,8 @@
     },
     "shell": {
       "accountFallback": "Account",
+      "accountMenu": "Account menu, signed in as {{identity}}",
+      "home": "Chat home",
       "workspaceItems": {
         "credentials": "Credentials",
         "apiKeys": "API Keys",
@@ -8359,6 +8393,7 @@
       },
       "searchTitle": "Search conversations",
       "searchLabel": "Search conversations",
+      "searchPlaceholder": "Search conversations…",
       "noResults": "No conversations found",
       "searchChats": "Search chats",
       "recent": "Recent",
