@@ -282,7 +282,7 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["tools"] = self._clean_tool_schema_for_mistral(value)
             if param == "stream" and value is True:
                 optional_params["stream"] = value
-            if param == "tool_choice":
+            if param == "tool_choice" and "tools" in non_default_params and non_default_params["tools"]:
                 match self._tool_choice_to_send(
                     model,
                     cast(object, value),  # cast-ok: untyped request params, the match narrows it

@@ -2084,14 +2084,17 @@ class TestMistralToolChoice:
     )
 
     def _request_body(
-        self, tool_choice: str | Mapping[str, object], drop_params: bool = False
+        self,
+        tool_choice: str | Mapping[str, object],
+        drop_params: bool = False,
+        tools: Sequence[ChatCompletionToolParam] | None = TOOLS,
     ) -> Mapping[str, object]:
         import litellm
 
         optional_params: Final = litellm.get_optional_params(
             model="mistral-large-latest",
             custom_llm_provider="mistral",
-            tools=list(self.TOOLS),
+            tools=None if tools is None else list(tools),
             tool_choice=tool_choice,
             drop_params=drop_params,
         )
@@ -2152,6 +2155,16 @@ class TestMistralToolChoice:
 
         with pytest.raises(litellm.UnsupportedParamsError, match="tool_choice"):
             self._request_body(tool_choice)
+
+    @pytest.mark.parametrize("tools", [None, ()])
+    @pytest.mark.parametrize("tool_choice", UNUSABLE_TOOL_CHOICES)
+    def test_unusable_tool_choice_without_tools_is_not_sent(
+        self,
+        local_model_cost_map: None,
+        tool_choice: str | Mapping[str, object],
+        tools: Sequence[ChatCompletionToolParam] | None,
+    ) -> None:
+        assert "tool_choice" not in self._request_body(tool_choice, tools=tools)
 
     @pytest.mark.parametrize("tool_choice", UNUSABLE_TOOL_CHOICES)
     def test_unusable_tool_choice_is_dropped_with_a_warning_under_drop_params(
