@@ -143,6 +143,7 @@ _INCREMENT_IF_PRESENT_LUA: Final = (
 
 _LUA_COUNT: Final = TypeAdapter(int)
 _PLAIN_DECIMAL: Final = re.compile(r"-?[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?")
+_PIPELINE_COMMAND_NUMBER: Final = re.compile(r"Command # ([0-9]+) \(")
 _LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
 
@@ -151,6 +152,13 @@ def _as_incrbyfloat_writes(value: float) -> str:
     """``value`` as INCRBYFLOAT writes it into a missing key: 17 decimal places with the trailing zeros cut."""
     text: Final = format(Decimal(repr(value)), ".17f").rstrip("0").rstrip(".")
     return "0" if text == "-0" else text
+
+
+def _failed_after_the_first_command(error: Exception) -> bool:
+    """Whether redis-py names a pipeline command after the first as the one that failed, so the first one applied."""
+    message: Final = error.args[0] if error.args else None
+    number: Final = _PIPELINE_COMMAND_NUMBER.match(message) if isinstance(message, str) else None
+    return number is not None and int(number.group(1)) > 1
 
 
 def _plain_float(reply: object) -> float | None:
@@ -1494,8 +1502,9 @@ class RedisCache(BaseCache):
 
     async def _set_if_missing_and_get(self, key: str, value: float, ttl: int | None) -> tuple[bool, float] | None:
         """SET NX GET and its TTL command in one round trip: whether the key was created and the value it holds, or
-        None when the server refused a command rather than failed to answer, or the key holds a value this does not
-        read as INCRBYFLOAT would. SET NX GET is one command, so a refused one wrote nothing."""
+        None when the server refused SET NX GET rather than failed to answer, or the key holds a value this does not
+        read as INCRBYFLOAT would. SET NX GET is one command, so a refused one wrote nothing. A refused TTL command
+        raises, as it does in main's add."""
         from redis.exceptions import ClusterError, RedisError
         from redis.exceptions import ConnectionError as RedisConnectionError
         from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -1510,7 +1519,8 @@ class RedisCache(BaseCache):
                     pipe.expire(key, ttl)
                 replies: Final[Sequence[object]] = await pipe.execute()  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # redis generics
         except RedisError as e:
-            if isinstance(e, (RedisConnectionError, RedisTimeoutError, ClusterError)):
+            failed_to_answer: Final = isinstance(e, (RedisConnectionError, RedisTimeoutError, ClusterError))
+            if failed_to_answer or _failed_after_the_first_command(e):
                 raise
             return None
         if replies[0] is None:

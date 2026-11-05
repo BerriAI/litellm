@@ -1727,8 +1727,6 @@ class _KeyspacePipeline(_RaisingPipeline):
         self.commands.append(("SETNX", name, value))
 
     def _write(self, command: str) -> None:
-        if command in self.keyspace.refused:
-            raise NoPermissionError(f"this user has no permissions to run the '{command.lower()}' command")
         if self.writes_left is not None:
             if self.writes_left == 0:
                 raise ResponseError("OOM command not allowed when used memory > 'maxmemory'.")
@@ -1737,6 +1735,8 @@ class _KeyspacePipeline(_RaisingPipeline):
     def _run(self, command: tuple[object, ...]) -> object:
         name: Final = str(command[1])
         held: Final = self.keyspace.values.get(name)
+        if command[0] in self.keyspace.refused:
+            raise NoPermissionError(f"this user has no permissions to run the '{str(command[0]).lower()}' command")
         if command[0] == "EXPIRE":
             return held is not None
         self._write(str(command[0]))
@@ -1756,10 +1756,12 @@ class _KeyspacePipeline(_RaisingPipeline):
         if self.lost:
             raise RedisConnectionError("Connection closed by server.")
         replies: Final[list[object]] = []
-        for command in self.commands:
+        for number, command in enumerate(self.commands, start=1):
             try:
                 replies.append(self._run(command))
             except RedisError as e:
+                words: str = " ".join(str(part) for part in command)
+                e.args = (f"Command # {number} ({words}) of pipeline caused error: {e.args}",)
                 replies.append(e)
         first_error: Final = next((reply for reply in replies if isinstance(reply, Exception)), None)
         if first_error is not None:
@@ -1799,6 +1801,25 @@ async def test_async_increment_only_if_missing_sets_a_missing_key_once_when_redi
     assert float(keyspace.values["ns:spend:key:k"]) == 6.0
     assert keyspace.pipelines == 1
     added.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_async_increment_only_if_missing_raises_a_refused_ttl_command_as_mains_add_does_without_adding_again(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    keyspace: Final = _Keyspace(refused=frozenset(("EXPIRE",)))
+    added: Final = MagicMock()
+
+    with patch.object(redis_cache, "init_async_client", return_value=keyspace), pytest.raises(NoPermissionError):
+        await redis_cache.async_increment(
+            key="spend:key:k", value=6.0, ttl=60, refresh_ttl=True, only_if_missing=True, on_added=added
+        )
+
+    assert keyspace.values == {"ns:spend:key:k": "6"}
+    assert keyspace.pipelines == 1
+    added.assert_not_called()
 
 
 @pytest.mark.asyncio
