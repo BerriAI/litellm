@@ -279,7 +279,7 @@ def with_notice_when_the_create_may_exist(
         code=exc.code,
         headers={**exc.headers, SHOULD_RETRY_HEADER: "false"},
         openai_code=None if exc.openai_code is None else str(exc.openai_code),
-        provider_specific_fields=exc.provider_specific_fields,
+        provider_specific_fields=exc.provider_specific_fields,  # pyright: ignore[reportUnknownMemberType]  # ProxyException omits generic arguments
     )
 
 

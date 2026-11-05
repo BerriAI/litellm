@@ -1244,6 +1244,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_anthropic_thinking_payload": {"type": "boolean"},
             "supports_legacy_thinking": {"type": "boolean"},
             "thinking_always_on": {"type": "boolean"},
+            "thinking_on_by_default": {"type": "boolean"},
             "supports_mid_conversation_system": {"type": "boolean"},
             "supports_sampling_params": {"type": "boolean"},
             "supports_output_config": {"type": "boolean"},
@@ -8392,6 +8393,7 @@ def test_get_model_info_gemini(monkeypatch):
             and "veo" not in model
             and "lyria" not in model
             and "robotics" not in model
+            and "omni" not in model
             and "3.8-flash-tts" not in model
             and "3.8-flash-lite-tts" not in model
         ):

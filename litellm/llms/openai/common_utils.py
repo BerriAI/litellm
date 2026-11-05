@@ -220,9 +220,17 @@ def _seconds_before_resend(error: openai.APIError, max_retries: int, retries_lef
     )
 
 
+def _sent_headers(request: CreateFileRequest | CreateBatchRequest) -> Mapping[str, str]:
+    match request:
+        case {"extra_headers": dict() as sent_headers}:
+            return sent_headers
+        case _:
+            return {}
+
+
 def _numbered(request: _CreateRequestT, retries_taken: int) -> _CreateRequestT:
     numbered: Final = request.copy()
-    numbered["extra_headers"] = {_RETRY_COUNT_HEADER: str(retries_taken), **(request.get("extra_headers") or {})}
+    numbered["extra_headers"] = {_RETRY_COUNT_HEADER: str(retries_taken), **_sent_headers(request)}
     return numbered
 
 

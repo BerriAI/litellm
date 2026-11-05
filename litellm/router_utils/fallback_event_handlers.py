@@ -633,6 +633,8 @@ def get_fallback_model_group(
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
         if isinstance(item, dict):
+            if not item:
+                continue  # an empty entry names no group: the next entries still apply
             fallback_key = next(iter(item))
             if fallback_key == model_group:  # check exact match
                 fallback_model_group = item[model_group]
@@ -697,8 +699,7 @@ PROVIDER_SCOPED_CREATION_FUNCTION_NAMES: Final = frozenset({"_acreate_file"})
 NON_IDEMPOTENT_CREATE_FUNCTION_NAMES: Final = frozenset({"_acreate_file", "_acreate_batch"})
 
 
-def is_create_that_may_already_exist(original_function: object, error: BaseException) -> bool:
-    function_name: Final = getattr(original_function, "__name__", None)
+def is_create_that_may_already_exist(function_name: str, error: BaseException) -> bool:
     return function_name in NON_IDEMPOTENT_CREATE_FUNCTION_NAMES and create_may_already_exist(error)
 
 
@@ -945,10 +946,6 @@ async def run_async_fallback(
                     exception=e,
                     model_call_details=failure_callbacks_blocked_logging_obj.model_call_details,
                 )
-            if is_create_that_may_already_exist(
-                _FALLBACK_KWARGS_ADAPTER.validate_python(kwargs).get("original_function"), e
-            ):
-                raise
     raise error_from_fallbacks
 
 
