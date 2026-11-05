@@ -155,7 +155,7 @@ const ModelTopKeys = ({
     fetchTopApiKeys(modelName)
       .then((response) => {
         if (cancelled) return;
-        setSettled({
+        const nextState = {
           modelName,
           fetchTopApiKeys,
           rows: response.api_keys.map((row) => ({
@@ -168,12 +168,14 @@ const ModelTopKeys = ({
             tokens: row.metrics.total_tokens,
           })),
           failed: false,
-        });
+        };
+        setSettled(nextState);
       })
       .catch((error) => {
         if (cancelled) return;
         console.error(`Failed to fetch top keys for ${modelName}:`, error);
-        setSettled({ modelName, fetchTopApiKeys, rows: [], failed: true });
+        const failedState = { modelName, fetchTopApiKeys, rows: [], failed: true };
+        setSettled(failedState);
       });
     return () => {
       cancelled = true;

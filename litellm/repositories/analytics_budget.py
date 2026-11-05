@@ -88,7 +88,11 @@ class BoundedAnalyticsDatabase:
             if _PostgresError.model_validate(error.meta or {}).code not in ("57014", "55P03"):
                 raise
             raise AnalyticsCapacityError("Analytics exceeded its query budget. Try again shortly") from error
-        except (TransactionExpiredError, TransactionNotStartedError, asyncio.TimeoutError) as error:
+        except (
+            TransactionExpiredError,
+            TransactionNotStartedError,
+            asyncio.TimeoutError,  # pyright: ignore[reportDeprecated]  # Python 3.10 uses a distinct asyncio timeout class
+        ) as error:
             raise AnalyticsCapacityError("Analytics exceeded its connection budget. Try again shortly") from error
         finally:
             self._admission.release()

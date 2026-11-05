@@ -3740,6 +3740,38 @@
           "title": "AgentSkill",
           "type": "object"
         },
+        "BoundedDailyActivityResponse": {
+          "properties": {
+            "metadata": {
+              "$ref": "#/components/schemas/DailySpendMetadata"
+            },
+            "model_breakdown": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DailyActivityModelBreakdown"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When requested, includes the highest-spend models across the full date range and an explicit aggregate of all remaining models. Daily totals always cover the complete activity scope. Other per-day dimension breakdowns are omitted."
+            },
+            "results": {
+              "items": {
+                "$ref": "#/components/schemas/DailySpendData"
+              },
+              "maxItems": 366,
+              "title": "Results",
+              "type": "array"
+            }
+          },
+          "required": [
+            "results",
+            "metadata"
+          ],
+          "title": "BoundedDailyActivityResponse",
+          "type": "object"
+        },
         "BreakdownMetrics": {
           "description": "Breakdown of spend by different dimensions",
           "properties": {
@@ -3849,6 +3881,82 @@
             "api_keys"
           ],
           "title": "DailyActivityKeySearchResponse",
+          "type": "object"
+        },
+        "DailyActivityModelBreakdown": {
+          "properties": {
+            "limit": {
+              "maximum": 100.0,
+              "minimum": 1.0,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "models": {
+              "items": {
+                "$ref": "#/components/schemas/DailyActivityModelContribution"
+              },
+              "maxItems": 100,
+              "title": "Models",
+              "type": "array"
+            },
+            "other": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DailyActivityOtherModels"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "total_models": {
+              "minimum": 0.0,
+              "title": "Total Models",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "limit",
+            "total_models",
+            "models"
+          ],
+          "title": "DailyActivityModelBreakdown",
+          "type": "object"
+        },
+        "DailyActivityModelContribution": {
+          "properties": {
+            "metrics": {
+              "$ref": "#/components/schemas/SpendMetrics"
+            },
+            "model": {
+              "maxLength": 1024,
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "model",
+            "metrics"
+          ],
+          "title": "DailyActivityModelContribution",
+          "type": "object"
+        },
+        "DailyActivityOtherModels": {
+          "properties": {
+            "metrics": {
+              "$ref": "#/components/schemas/SpendMetrics"
+            },
+            "model_count": {
+              "minimum": 1.0,
+              "title": "Model Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "model_count",
+            "metrics"
+          ],
+          "title": "DailyActivityOtherModels",
           "type": "object"
         },
         "DailySpendData": {
@@ -5127,6 +5235,38 @@
             },
             {
               "in": "query",
+              "name": "bounded",
+              "required": false,
+              "schema": {
+                "default": false,
+                "title": "Bounded",
+                "type": "boolean"
+              }
+            },
+            {
+              "in": "query",
+              "name": "include_model_breakdown",
+              "required": false,
+              "schema": {
+                "default": false,
+                "title": "Include Model Breakdown",
+                "type": "boolean"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model_limit",
+              "required": false,
+              "schema": {
+                "default": 20,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Model Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
               "name": "agent_ids",
               "required": false,
               "schema": {
@@ -5243,7 +5383,15 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/SpendAnalyticsPaginatedResponse"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/SpendAnalyticsPaginatedResponse"
+                      },
+                      {
+                        "$ref": "#/components/schemas/BoundedDailyActivityResponse"
+                      }
+                    ],
+                    "title": "Response Get Agent Daily Activity Aggregated Agent Daily Activity Aggregated Get"
                   }
                 }
               },
