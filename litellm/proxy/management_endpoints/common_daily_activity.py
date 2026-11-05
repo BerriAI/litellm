@@ -12,7 +12,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.constants import PTU_SENTINEL_API_KEY, SUBSCRIPTION_BACKED_PROVIDERS
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_details,
@@ -287,12 +287,18 @@ def compute_tag_metadata_totals(records: Sequence[DailySpendRecord]) -> SpendMet
 
 
 def _entity_metadata(
-    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    entity_metadata_field: Mapping[str, Mapping[str, object]] | None,
     entity_id: str,
 ) -> dict[str, object]:
     """The metadata payload for one entity breakdown bucket, empty when the caller passed none."""
     stored: Final = entity_metadata_field.get(entity_id) if entity_metadata_field else None
-    return stored if stored is not None else {}
+    return dict(stored) if stored is not None else {}
+
+
+def provider_bucket_metadata(provider: str, base: Mapping[str, object]) -> Mapping[str, object]:
+    if provider in SUBSCRIPTION_BACKED_PROVIDERS:
+        return {**base, "subscription_covered": True}
+    return dict(base)
 
 
 def update_breakdown_metrics(
@@ -395,7 +401,7 @@ def update_breakdown_metrics(
         if provider not in breakdown.providers:
             breakdown.providers[provider] = MetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=provider_metadata.get(provider, {}),  # Add any provider-specific metadata here
+                metadata=provider_bucket_metadata(provider, provider_metadata.get(provider, {})),
             )
         breakdown.providers[provider].metrics = update_metrics(breakdown.providers[provider].metrics, record)
 
@@ -795,12 +801,23 @@ def _aggregate_grouping_sets_records_sync(
             grouped_data[date_str] = bucket
         return bucket
 
-    def assign_metric_with_metadata(target: dict[str, MetricWithMetadata], key: str, metrics: SpendMetrics) -> None:
+    def assign_metric_with_metadata(
+        target: dict[str, MetricWithMetadata],
+        key: str,
+        metrics: SpendMetrics,
+        metadata: Mapping[str, object] | None = None,
+    ) -> None:
         existing: Final = target.get(key)
-        if existing is None:
-            target[key] = MetricWithMetadata(metrics=metrics, metadata={})
-        else:
-            existing.metrics = sum_spend_metrics((existing.metrics, metrics))
+        target[key] = (
+            MetricWithMetadata(metrics=metrics, metadata=dict(metadata or {}))
+            if existing is None
+            else existing.model_copy(
+                update={
+                    "metrics": sum_spend_metrics((existing.metrics, metrics)),
+                    "metadata": {**existing.metadata, **(metadata or {})},
+                }
+            )
+        )
 
     def assign_api_key_breakdown(
         target: dict[str, MetricWithMetadata],
@@ -864,7 +881,9 @@ def _aggregate_grouping_sets_records_sync(
             # provider the base build reported.
             provider_metrics = metrics.model_copy(update={"flat_cost": 0.0})
             provider = record.custom_llm_provider or "unknown"
-            assign_metric_with_metadata(breakdown.providers, provider, provider_metrics)
+            assign_metric_with_metadata(
+                breakdown.providers, provider, provider_metrics, provider_bucket_metadata(provider, {})
+            )
         elif level == _GROUP_DATE_PROVIDER_API_KEY:
             if not is_ptu_sentinel:
                 provider = record.custom_llm_provider or "unknown"
@@ -1020,7 +1039,7 @@ def _fold_entity_rollups_sync(
     results: Sequence[DailySpendData],
     entity_rows: Sequence[EntityRollupRow],
     api_key_metadata: Mapping[str, KeyMetadataRow],
-    entity_metadata_field: Mapping[str, dict[str, object]] | None,  # mutable-ok: shared field shape
+    entity_metadata_field: Mapping[str, Mapping[str, object]] | None,
 ) -> None:
     """Write breakdown.entities onto the already-built per-day results."""
     by_date: Final = {day.date.strftime("%Y-%m-%d"): day for day in results}
@@ -1094,6 +1113,19 @@ async def _guardrail_spend_or_empty(
         return ()
 
 
+async def _user_entity_metadata(
+    repository: DailyActivityRepository, entity_rows: Sequence[EntityRollupRow]
+) -> Mapping[str, Mapping[str, object]]:
+    user_ids: Final = frozenset(row.entity_id for row in entity_rows if row.entity_id)
+    users: Final = await repository.user_metadata(user_ids)
+    return MappingProxyType(
+        {
+            user_id: MappingProxyType({"user_email": user.user_email, "user_alias": user.user_alias})
+            for user_id, user in users.items()
+        }
+    )
+
+
 async def get_daily_activity_aggregated(
     repository: DailyActivityRepository,
     scope: DailyActivityScope,
@@ -1138,12 +1170,17 @@ async def get_daily_activity_aggregated(
                 if entity_api_keys
                 else MappingProxyType({})
             )
+            user_entity_metadata: Final[Mapping[str, Mapping[str, object]]] = (
+                await _user_entity_metadata(repository, entity_records)
+                if scope.table is DailyActivityTable.USER
+                else MappingProxyType({})
+            )
             await asyncio.to_thread(
                 _fold_entity_rollups_sync,
                 results=aggregated["results"],
                 entity_rows=entity_records,
                 api_key_metadata=entity_key_metadata,
-                entity_metadata_field=entity_metadata_field,
+                entity_metadata_field=MappingProxyType({**user_entity_metadata, **(entity_metadata_field or {})}),
             )
         results: Final = (
             list(await asyncio.to_thread(_with_guardrail_breakdown, aggregated["results"], guardrail_rows))

@@ -13,9 +13,18 @@ import pytest
 from pydantic import ValidationError
 from redis.exceptions import ConnectionError as RedisConnectionError
 
+import time
+
+import redis
+import redis.asyncio
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
+from redis.asyncio import BlockingConnectionPool
+
 import litellm
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.exceptions import Timeout
 from litellm.scheduler import FlowItem, Scheduler, SchedulerCacheKeys
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -212,6 +221,53 @@ class _ExpiringCache:
         self.store[key] = value
 
 
+class _SchedulerClock:
+    now: float = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.mark.asyncio
+async def test_waiter_observes_shared_expiry_after_reading_just_before_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock: Final = _SchedulerClock()
+    server: Final = FakeServer()
+
+    class Pool(BlockingConnectionPool):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(connection_class=FakeConnection, server=server, **kwargs)
+
+    monkeypatch.setattr(time, "time", clock)
+    monkeypatch.setattr(redis, "Redis", FakeRedis)
+    monkeypatch.setattr(redis.asyncio, "BlockingConnectionPool", Pool)
+    cache: Final = RedisCache(host="scheduler-expiry")
+    scheduler: Final = Scheduler(redis_cache=cache)
+    scheduler.cache.in_memory_cache = InMemoryCache(clock=clock)
+    waiter: Final = FlowItem(priority=2, request_id="waiter", model_name="expiry")
+    key: Final = f"{SchedulerCacheKeys.queue.value}:{waiter.model_name}"
+    try:
+        await cache.async_set_cache(key, [(1, "dead-replica")])
+        assert await scheduler.get_queue(waiter.model_name) == [(1, "dead-replica")]
+        clock.now = 1000.1
+        await scheduler.add_request(waiter)
+        clock.now = 1005.05
+        assert not await scheduler.poll(waiter, [])
+        clock.now = 1005.2
+        server.connected = False
+        assert not await scheduler.poll(waiter, [])
+        server.connected = True
+        assert await cache.async_get_cache(key) is None
+        assert await scheduler.get_queue(waiter.model_name) == []
+        server.connected = False
+        assert await scheduler.get_queue(waiter.model_name) == []
+        server.connected = True
+        assert await scheduler.poll(waiter, [])
+        assert await scheduler.get_queue(waiter.model_name) == []
+    finally:
+        server.connected = True
+        await cache.disconnect()
+
+
 @pytest.mark.asyncio
 async def test_wait_for_turn_during_cooldown_survives_the_queue_key_expiring():
     cache: Final = _ExpiringCache()
@@ -230,7 +286,6 @@ async def test_wait_for_turn_during_cooldown_survives_the_queue_key_expiring():
     )
 
     assert await scheduler.get_queue("sched-model") == []
-
 
 
 class _JsonRoundTripRedisCache:
@@ -261,6 +316,7 @@ async def test_second_replica_enqueues_behind_a_queue_decoded_from_redis():
     assert await replica_b.poll(request=waiting_on_a, health_deployments=[])
     await replica_b.remove_request(request_id="waiting-on-a", model_name="sched-model")
     assert await replica_b.get_queue("sched-model") == []
+
 
 class _PausesAfterEnqueueScheduler(Scheduler):
     def __init__(self) -> None:
@@ -409,7 +465,8 @@ async def test_shared_scheduler_rejects_malformed_snapshots_without_replacing_lo
 @pytest.mark.parametrize("outcome", ["admitted", "failed", "cancelled"])
 @pytest.mark.asyncio
 async def test_shared_scheduler_cleanup_failure_preserves_the_request_outcome(
-    scheduler_redis_replies: tuple[RedisCache, AsyncMock, AsyncMock], outcome: Literal["admitted", "failed", "cancelled"]
+    scheduler_redis_replies: tuple[RedisCache, AsyncMock, AsyncMock],
+    outcome: Literal["admitted", "failed", "cancelled"],
 ) -> None:
     cache, reads, _writes = scheduler_redis_replies
     scheduler: Final = Scheduler(redis_cache=cache)

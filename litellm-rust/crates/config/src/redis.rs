@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fmt, time::Duration};
 
-use litellm_auth_types::SecretValue;
 use litellm_router_types::Spelled;
+use litellm_secret_value::SecretValue;
 use serde::{Deserialize, Deserializer, de::Error as _};
 
 use crate::{AdditionalFields, Error, Object, Value};

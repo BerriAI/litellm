@@ -8,9 +8,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use litellm_auth_types::{
-    Error, ErrorDetail, ResolvedCredential, SecretValue, TokenProviderHandle,
-};
+use litellm_auth_types::{Error, ErrorDetail, ResolvedCredential, TokenProviderHandle};
+use litellm_secret_value::SecretValue;
+
 use rstest::rstest;
 
 fn credential(index: usize, access_token: bool) -> ResolvedCredential {

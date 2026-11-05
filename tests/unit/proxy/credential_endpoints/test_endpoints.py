@@ -3166,18 +3166,34 @@ class TestCredentialDisplayName:
         repository.update_by_name.assert_not_awaited()
         assert litellm.credential_list == [_labeled_credential()]
 
-    def test_patch_accepts_the_same_credential_name_echoed_back(self, restore_credential_list, monkeypatch):
+    @pytest.mark.parametrize(
+        ("patch_info", "expected_info"),
+        [
+            ({}, {"custom_llm_provider": "openai"}),
+            ({"description": "y"}, {"custom_llm_provider": "openai", "description": "y"}),
+            ({"custom_llm_provider": "anthropic"}, {"custom_llm_provider": "anthropic"}),
+        ],
+    )
+    def test_patch_accepts_the_same_credential_name_echoed_back(
+        self, restore_credential_list, monkeypatch, patch_info: dict[str, str], expected_info: dict[str, str]
+    ):
         monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
         with _repository_holding(_labeled_credential()) as repository:
             response = _patch_credential(
                 "openai-prod",
-                {"credential_name": "openai-prod", "credential_values": {"api_key": "sk-new"}, "credential_info": {}},
+                {
+                    "credential_name": "openai-prod",
+                    "credential_values": {"api_key": "sk-new"},
+                    "credential_info": patch_info,
+                },
             )
 
         assert response.status_code == 200, response.text
         assert [(c.credential_name, c.credential_values) for c in litellm.credential_list] == [
             ("openai-prod", {"api_key": "sk-new"})
         ]
+        assert json.loads(repository.update_by_name.await_args.kwargs["data"]["credential_info"]) == expected_info
+        assert litellm.credential_list[0].credential_info == expected_info
 
     def test_patch_on_a_config_credential_is_rejected_as_config_owned(self, restore_credential_list, monkeypatch):
         config_credential = _labeled_credential(display_name=None).model_copy(update={"source": "config"})
@@ -3275,6 +3291,23 @@ class TestCredentialDisplayName:
         assert (by_name["display_name"], by_name["source"]) == ("Prod OpenAI", "db")
         assert config_by_name["source"] == "config"
         assert listed["openai-prod"]["credential_values"]["api_key"] != "sk-old"
+
+
+def test_looking_up_a_missing_credential_is_labelled_a_client_error_not_a_gateway_failure(
+    restore_credential_list: None,
+):
+    """Naming a credential that does not exist is the caller's own mistake, and the shared
+    handler used to label every one of these internal_server_error, so an SDK branching on
+    the type read a 404 it can never retry past as a gateway outage and backed off forever."""
+    response: Final = _call_as("GET", "/credentials/by_name/definitely-not-there")
+
+    assert response.status_code == 404, f"lookup answered {response.status_code}: {response.text}"
+    assert response.json()["error"] == {
+        "message": "Credential not found. Got credential name: definitely-not-there",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "404",
+    }
 
 
 def test_get_credential_by_model_masks_the_deployment_credentials(monkeypatch):
