@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 import pytest
 from starlette.responses import StreamingResponse
 
+from litellm.proxy._types import ProxyException
 from litellm.proxy.common_request_processing import open_sse_before_first_byte
 
 PING = ": ping\n\n"
@@ -123,3 +124,66 @@ async def test_a_large_error_body_is_read_with_a_bound():
 
     assert body.count("event: error") == 1
     assert len(body) < 128 * 1024
+
+
+FAKE_KEY = "sk-test-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+INTERNAL_PATH = "/home/runner/litellm/proxy/internal_state.py"
+
+
+@pytest.mark.asyncio
+async def test_a_late_failure_exception_is_redacted_before_framing():
+    async def boom():
+        await asyncio.sleep(0.05)
+        raise RuntimeError(f"upstream failed with key {FAKE_KEY} at {INTERNAL_PATH}")
+
+    response = await open_sse_before_first_byte(boom(), ping_interval_seconds=0.02, answers_as_anthropic=True)
+    body = await _drain(response)
+
+    assert body.count("event: error") == 1
+    assert FAKE_KEY not in body
+    assert INTERNAL_PATH not in body
+    assert "REDACTED" in body
+
+
+@pytest.mark.asyncio
+async def test_a_late_failure_that_is_already_a_proxy_exception_is_redacted():
+    async def boom():
+        await asyncio.sleep(0.05)
+        raise ProxyException(
+            message=f"upstream failed with key {FAKE_KEY} at {INTERNAL_PATH}",
+            type="api_error",
+            param=None,
+            code=500,
+        )
+
+    response = await open_sse_before_first_byte(boom(), ping_interval_seconds=0.02, answers_as_anthropic=True)
+    body = await _drain(response)
+
+    assert body.count("event: error") == 1
+    assert FAKE_KEY not in body
+    assert INTERNAL_PATH not in body
+    assert "REDACTED" in body
+
+
+@pytest.mark.asyncio
+async def test_a_late_error_body_is_redacted_before_framing():
+    body = await _relay(
+        _json_error({"error": {"message": f"failed with key {FAKE_KEY} at {INTERNAL_PATH}", "type": "server_error"}}),
+        answers_as_anthropic=True,
+    )
+
+    assert body.count("event: error") == 1
+    assert FAKE_KEY not in body
+    assert INTERNAL_PATH not in body
+    assert "REDACTED" in body
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_error_message_is_not_redacted():
+    body = await _relay(
+        _json_error({"error": {"message": "upstream said no", "type": "server_error"}}),
+        answers_as_anthropic=True,
+    )
+
+    assert "upstream said no" in body
+    assert "REDACTED" not in body

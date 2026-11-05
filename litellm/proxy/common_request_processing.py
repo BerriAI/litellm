@@ -1287,7 +1287,7 @@ def _anthropic_late_failure_frames(exc: Exception) -> tuple[str, ...]:
     return (
         anthropic_error_sse_frame(
             status_code=error_status_code(answered, status.HTTP_500_INTERNAL_SERVER_ERROR),
-            raw_message=answered.message,
+            raw_message=redact_internal_details_from_client_message(answered.message),
         ),
     )
 
@@ -1344,10 +1344,11 @@ async def _anthropic_late_response_frames(response: Response) -> tuple[str, ...]
     cannot simply be relayed.
     """
     body: Final = await _read_late_error_body(response)
+    message: Final = redact_internal_details_from_client_message(_late_error_message(body, response.status_code))
     return (
         anthropic_error_sse_frame(
             status_code=response.status_code,
-            raw_message=_late_error_message(body, response.status_code),
+            raw_message=message,
         ),
     )
 
