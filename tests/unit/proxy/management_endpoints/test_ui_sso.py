@@ -11437,7 +11437,6 @@ async def test_get_user_info_from_db_skips_insert_when_admin_only_and_user_not_i
             proxy_logging_obj=MagicMock(),
             user_email="uninvited@example.com",
             user_defined_values=user_defined_values,
-            alternate_user_id="uninvited-google-sub",
             ui_access_mode="admin_only",
         )
 
