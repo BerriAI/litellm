@@ -35,7 +35,7 @@ Before you build a new way to move data between the endpoints, the provider tran
 
 When creating PRs, target the repository's current default branch for both internal and external / OSS contributions. Check it with `python3 scripts/default_branch.py --branch` instead of assuming a branch name or relying on cached `origin/HEAD`
 
-When writing a PR body, treat the comments and imperative instructions inside .github/PULL_REQUEST_TEMPLATE/general.md as rules to follow, not just layout. Agent harnesses may strip HTML comments from copies of that file injected into context, so read .github/PULL_REQUEST_TEMPLATE/general.md from disk before writing a PR body to make sure you see every comment rule. A section you have nothing to put in (Relevant issues, Affected release, Linear ticket, Caveats, QA runbook, and so on) is removed entirely, heading included, never left as an empty title
+When writing a PR body, treat the comments and imperative instructions inside .github/PULL_REQUEST_TEMPLATE/general.md as rules to follow, not just layout. Agent harnesses may strip HTML comments from copies of that file injected into context, so read .github/PULL_REQUEST_TEMPLATE/general.md from disk before writing a PR body to make sure you see every comment rule. A section you have nothing to put in (Relevant issues, Affected release, Linear ticket, Caveats, QA runbook, and so on) is removed entirely, heading included, never left as an empty title. The one exception is "## Handwritten 1-3 sentence description", which the PR author writes, so an agent keeps its heading and leaves it empty
 
 Same applies for filing bug reports and feature requests, with .github/ISSUE_TEMPLATE/bug_report.yml and .github/ISSUE_TEMPLATE/feature_request.yml, respectively
 
