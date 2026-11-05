@@ -1,6 +1,7 @@
 import { useQuery, useInfiniteQuery, useQueryClient, UseQueryResult } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { createQueryKeys } from "../common/queryKeysFactory";
+import { invalidateModelQueries } from "./invalidateModelQueries";
 import { modelInfoCall, modelHubCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "../useAuthorized";
 import { EndpointType, isModeCompatibleWithEndpoint } from "@/components/chat_ui/mode_endpoint_mapping";
@@ -240,9 +241,7 @@ export const useAutoRouters = (): UseQueryResult<AutoRouterDeployment[], Error> 
 
 export const useInvalidateAutoRouters = (): (() => Promise<void>) => {
   const queryClient = useQueryClient();
-  return async () => {
-    await queryClient.invalidateQueries({ queryKey: modelKeys.lists() });
-  };
+  return () => invalidateModelQueries(queryClient);
 };
 
 export const useModelHub = () => {

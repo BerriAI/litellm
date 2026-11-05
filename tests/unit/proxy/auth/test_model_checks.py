@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 from litellm import Router
+from litellm.utils import AZURE_MODEL_PLACEHOLDER
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
@@ -1105,13 +1106,13 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
 @pytest.mark.parametrize(
     ("allowed_model_names", "expected_names", "expected_listings"),
     [
-        pytest.param(None, ["hosted_vllm/qwen2.5"], 1, id="unscoped"),
-        pytest.param(["hosted_vllm/qwen2.5"], ["hosted_vllm/qwen2.5"], 1, id="granted-a-listed-id"),
-        pytest.param(["qwen-open"], [], 0, id="granted-a-name-the-alias-matches"),
+        pytest.param(None, ["qwen-qwen2.5"], 1, id="unscoped"),
+        pytest.param(["qwen-qwen2.5"], ["qwen-qwen2.5"], 1, id="granted-a-listed-name"),
+        pytest.param(["hosted_vllm/qwen2.5"], [], 0, id="granted-only-the-provider-id"),
     ],
 )
 @respx.mock
-def test_expand_wildcard_alias_without_a_slash_lists_and_filters_by_its_provider_pattern(
+def test_expand_wildcard_alias_without_a_slash_lists_and_filters_by_its_own_pattern(
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
     allowed_model_names: list[str] | None,
@@ -2099,6 +2100,34 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
         pytest.param(
             "*", "openai/*", "openai/gpt-partial-route-9*", set(), id="provider-prefixed-key-filter-over-catch-all"
         ),
+        pytest.param(
+            "gpt-partial-route-*",
+            "openai/gpt-partial-route-*",
+            None,
+            {f"openai/{_ROUTE_OPENAI_ID}"},
+            id="slashless-name-repeating-the-deployment-partial-word",
+        ),
+        pytest.param("team-*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="slashless-alias-over-partial-deployment"),
+        pytest.param(
+            "team-*", "openai/*", None, {f"openai/{_ROUTE_OPENAI_ID}"}, id="slashless-alias-over-provider-catch-all"
+        ),
+        pytest.param(
+            "team-*", "cloudflare/@cf/*/*", None, set(), id="slashless-alias-with-fewer-wildcards-than-its-deployment"
+        ),
+        pytest.param(
+            "*partial-route-9*",
+            "openai/gpt-partial-route-9*",
+            None,
+            {f"openai/{_ROUTE_OPENAI_ID}"},
+            id="slashless-name-with-more-wildcards-than-its-deployment",
+        ),
+        pytest.param(
+            "gemini/*partial-route-9*",
+            "gemini/gemini-*",
+            None,
+            {_ROUTE_GEMINI_ID},
+            id="slashed-name-with-more-wildcards-than-its-deployment",
+        ),
         pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
         pytest.param("*", "gemini/gemini-partial-route-9*", None, set(), id="catch-all-over-mid-word-deployment"),
         pytest.param("*", "openai/responses/gpt-partial-route-9*", None, set(), id="catch-all-over-mid-word-route"),
@@ -2174,6 +2203,114 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
     assert listed_v1_models == sorted(reachable)
     if key_model is None:
         assert listed_model_info_names == sorted(reachable)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "expected_v1_models"),
+    [
+        pytest.param("azure/*", [f"azure/{AZURE_MODEL_PLACEHOLDER}"], id="provider-wildcard-lists-as-before"),
+        pytest.param("*", [AZURE_MODEL_PLACEHOLDER], id="catch-all-lists-as-before"),
+        pytest.param("my-*", [], id="slashless-alias-skips-the-placeholder"),
+    ],
+)
+def test_only_slashless_azure_wildcards_skip_the_catalog_placeholder(
+    model_name: str, expected_v1_models: list[str]
+) -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    router: Final = Router(model_list=[{"model_name": model_name, "litellm_params": {"model": "azure/*"}}])
+
+    v1_models: Final = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=[model_name],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+    model_info_names: Final = [
+        str(row["model_name"])
+        for row in expand_wildcard_deployments_for_model_info(
+            [dict(deployment) for deployment in router.get_model_list() or []], router
+        )
+    ]
+
+    assert v1_models == expected_v1_models
+    assert model_info_names == (expected_v1_models or [model_name])
+
+
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model"),
+    [
+        pytest.param("gpt-*", "gpt-*", id="same-wildcards-as-its-deployment"),
+        pytest.param("*gpt-5*", "gpt-5*", id="more-wildcards-than-its-deployment"),
+    ],
+)
+def test_slashless_wildcard_over_a_bare_deployment_lists_its_custom_llm_provider_catalog(
+    model_name: str, deployment_model: str
+) -> None:
+    from fnmatch import fnmatchcase
+
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+    from litellm.utils import get_valid_models
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": deployment_model, "custom_llm_provider": "openai", "api_key": "sk-test"},
+            }
+        ]
+    )
+
+    v1_models: Final = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=[model_name],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+    model_info_rows: Final = expand_wildcard_deployments_for_model_info(
+        [dict(deployment) for deployment in router.get_model_list() or []], router
+    )
+    openai_ids: Final = frozenset(model.removeprefix("openai/") for model in get_valid_models(custom_llm_provider="openai"))
+    routed_models: Final = {
+        listed_id: [deployment["litellm_params"]["model"] for deployment in router.wildcard_route_deployments(listed_id, None)]
+        for listed_id in v1_models
+    }
+
+    assert v1_models
+    assert [
+        listed_id for listed_id in v1_models if listed_id not in openai_ids or not fnmatchcase(listed_id, model_name)
+    ] == []
+    assert {listed_id: models for listed_id, models in routed_models.items() if models != [listed_id]} == {}
+    assert sorted(str(row["model_name"]) for row in model_info_rows) == sorted(v1_models)
+    assert [row for row in model_info_rows if row["litellm_params"]["model"] != row["model_name"]] == []
+
+
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model"),
+    [
+        pytest.param("*", "*", id="catch-all-over-a-bare-catch-all"),
+        pytest.param("foo/gpt-*", "gpt-*", id="slashed-name-over-a-bare-deployment"),
+        pytest.param("gpt-*", "openai/gpt-*", id="slashless-name-over-a-provider-prefixed-deployment"),
+    ],
+)
+def test_custom_llm_provider_changes_no_listing_outside_slashless_names_over_bare_deployments(
+    model_name: str, deployment_model: str
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    with_provider: Final = get_known_models_from_wildcard(
+        model_name, LiteLLM_Params(model=deployment_model, custom_llm_provider="openai")
+    )
+    without_provider: Final = get_known_models_from_wildcard(model_name, LiteLLM_Params(model=deployment_model))
+
+    assert with_provider == without_provider
 
 
 def test_inference_provider_route_lists_every_id_the_plain_provider_wildcard_lists() -> None:

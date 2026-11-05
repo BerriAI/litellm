@@ -2,8 +2,10 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Final, Literal, overload
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -19,6 +21,26 @@ from .json_loader import SimpleProviderConfig
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+_PAID_SEARCH_TOOLS: Final = frozenset({"web_search", "web_search_image", "image_search"})
+_PAYLOAD_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_TOOL_USAGE_ADAPTER: Final[TypeAdapter[Mapping[str, int]]] = TypeAdapter(Mapping[str, int])
+
+
+def web_search_requests_from_tool_usage(payload: object) -> int | None:
+    """
+    Billable search calls in a parsed OpenAI-compatible chat response whose usage carries a
+    tool_usage {tool_name: count} map, as EmpirioLabs reports built-in tool invocations.
+    Free tools (code_interpreter, web_extractor) are not counted.
+    """
+    try:
+        body: Final = _PAYLOAD_ADAPTER.validate_python(payload)
+        usage: Final = _PAYLOAD_ADAPTER.validate_python(body.get("usage"))
+        tool_usage: Final = _TOOL_USAGE_ADAPTER.validate_python(usage.get("tool_usage"), strict=True)
+    except ValidationError:
+        return None
+    calls: Final = sum(count for tool, count in tool_usage.items() if tool in _PAID_SEARCH_TOOLS and count > 0)
+    return calls if calls > 0 else None
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -178,6 +200,25 @@ def create_config_class(provider: SimpleProviderConfig):
                 optional_params["temperature"] = temp
 
             return optional_params
+
+        def transform_parsed_response_dict(
+            self,
+            parsed_response: dict[str, object],  # mutable-ok: BaseConfig signature
+        ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+            """
+            Carry the provider's usage.tool_usage search count as usage.server_tool_use.web_search_requests,
+            the field the built-in tool cost path bills per call.
+            """
+            repaired: Final = _PAYLOAD_ADAPTER.validate_python(
+                super().transform_parsed_response_dict(parsed_response)  # pyright: ignore[reportUnknownMemberType]  # base_class is picked at runtime
+            )
+            if not provider.special_handling.get("web_search_requests_from_tool_usage"):
+                return {**repaired}
+            web_search_requests: Final = web_search_requests_from_tool_usage(repaired)
+            if web_search_requests is None:
+                return {**repaired}
+            usage: Final = _PAYLOAD_ADAPTER.validate_python(repaired["usage"])
+            return {**repaired, "usage": {**usage, "server_tool_use": {"web_search_requests": web_search_requests}}}
 
         @property
         def custom_llm_provider(self) -> str | None:

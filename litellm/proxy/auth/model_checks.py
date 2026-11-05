@@ -23,7 +23,12 @@ from litellm.router import Router
 from litellm.router_api import fallback_chain
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager, get_valid_models, potential_model_names_in_lookup_order
+from litellm.utils import (
+    AZURE_MODEL_PLACEHOLDER,
+    ProviderConfigManager,
+    get_valid_models,
+    potential_model_names_in_lookup_order,
+)
 
 LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in LlmProviders)
 _PROVIDERS_SENDING_THE_DEPLOYMENT_PATH_AS_THE_MODEL_ID: Final = frozenset({LlmProviders.TOGETHER_AI.value})
@@ -375,6 +380,10 @@ def _ids_routing_to_catalog_models(
     catalog_ids: Sequence[str],
     routes_to_model: Callable[[str, str], bool],
 ) -> tuple[str, ...]:
+    if name_pattern.count("*") > deployment_pattern.count("*"):
+        return _catalog_ids_a_wider_name_matches(
+            name_pattern, deployment_pattern, provider, catalog_ids, routes_to_model
+        )
     if name_pattern.count("*") != deployment_pattern.count("*") or _lists_name_fragments(
         name_pattern, deployment_pattern
     ):
@@ -419,6 +428,23 @@ def _ids_routing_to_catalog_models(
     )
 
 
+def _catalog_ids_a_wider_name_matches(
+    name_pattern: str,
+    deployment_pattern: str,
+    provider: str,
+    catalog_ids: Sequence[str],
+    routes_to_model: Callable[[str, str], bool],
+) -> tuple[str, ...]:
+    name_regex: Final = _wildcard_name_regex(name_pattern)
+    return tuple(
+        catalog_id
+        for catalog_id in _ids_routing_to_catalog_models(
+            deployment_pattern, deployment_pattern, provider, catalog_ids, routes_to_model
+        )
+        if name_regex.fullmatch(catalog_id)
+    )
+
+
 def _model_info_field(deployment: Mapping[str, object], field: str) -> object:
     model_info: Final = deployment.get("model_info")
     return model_info.get(field) if is_str_keyed_mapping(model_info) else None
@@ -456,11 +482,12 @@ def _routes_to_model(
     return lambda listed_id, model: routed_models is None or model in routed_models(listed_id, team_id)
 
 
-def _deployment_pattern_naming_listed_ids(wildcard_suffix: str, litellm_params: LiteLLM_Params | None) -> str | None:
+def _deployment_pattern_naming_listed_ids(wildcard_model: str, litellm_params: LiteLLM_Params | None) -> str | None:
     if litellm_params is None or "/" not in litellm_params.model or not _check_wildcard_routing(litellm_params.model):
         return None
+    name_suffix: Final = wildcard_model.split("/", 1)[-1]
     deployment_suffix: Final = litellm_params.model.partition("/")[2]
-    return litellm_params.model if wildcard_suffix != "*" or deployment_suffix != "*" else None
+    return litellm_params.model if name_suffix != "*" or deployment_suffix != "*" else None
 
 
 def get_known_models_from_wildcard(
@@ -468,6 +495,43 @@ def get_known_models_from_wildcard(
     litellm_params: LiteLLM_Params | None = None,
     routes_to_model: Callable[[str, str], bool] = lambda _listed_id, _model: True,
 ) -> list[str]:
+    provider_id_prefix: Final = _custom_llm_provider_prefix(wildcard_model, litellm_params)
+    if litellm_params is None or provider_id_prefix is None:
+        return list(_known_models_from_wildcard(wildcard_model, litellm_params, routes_to_model))
+    return [
+        listed_id.removeprefix(provider_id_prefix)
+        for listed_id in _known_models_from_wildcard(
+            wildcard_model,
+            litellm_params.model_copy(update={"model": f"{provider_id_prefix}{litellm_params.model}"}),
+            lambda listed_id, model: routes_to_model(
+                listed_id.removeprefix(provider_id_prefix), model.removeprefix(provider_id_prefix)
+            ),
+        )
+    ]
+
+
+def _custom_llm_provider_prefix(wildcard_model: str, litellm_params: LiteLLM_Params | None) -> str | None:
+    if (
+        litellm_params is None
+        or not litellm_params.custom_llm_provider
+        or "/" in wildcard_model
+        or wildcard_model == "*"
+        or "/" in litellm_params.model
+        or not _check_wildcard_routing(litellm_params.model)
+    ):
+        return None
+    return f"{litellm_params.custom_llm_provider}/"
+
+
+def _without_azure_placeholder(catalog_ids: Sequence[str]) -> tuple[str, ...]:
+    return tuple(catalog_id for catalog_id in catalog_ids if catalog_id != AZURE_MODEL_PLACEHOLDER)
+
+
+def _known_models_from_wildcard(
+    wildcard_model: str,
+    litellm_params: LiteLLM_Params | None,
+    routes_to_model: Callable[[str, str], bool],
+) -> tuple[str, ...]:
     wildcard_model_to_expand: Final = (
         litellm_params.model
         if wildcard_model == "*"
@@ -476,15 +540,14 @@ def get_known_models_from_wildcard(
         and "/" in litellm_params.model
         else wildcard_model
     )
-    try:
-        wildcard_provider_prefix, wildcard_suffix = wildcard_model_to_expand.split("/", 1)
-    except ValueError:  # safely fail
-        return []
     deployment_pattern_naming_listed_ids: Final = (
         wildcard_model_to_expand
         if wildcard_model_to_expand != wildcard_model
-        else _deployment_pattern_naming_listed_ids(wildcard_suffix, litellm_params)
+        else _deployment_pattern_naming_listed_ids(wildcard_model, litellm_params)
     )
+    wildcard_provider_prefix, has_provider_prefix, wildcard_suffix = wildcard_model_to_expand.partition("/")
+    if not has_provider_prefix and deployment_pattern_naming_listed_ids is None:
+        return ()
 
     # Use provider from litellm_params when available, otherwise from wildcard prefix
     # (e.g., "openai" from "openai/*" - needed for BYOK where wildcard isn't in router)
@@ -501,16 +564,14 @@ def get_known_models_from_wildcard(
     wildcard_models = get_provider_models(provider=provider, litellm_params=litellm_params)
 
     if wildcard_models is None:
-        return []
+        return ()
     if deployment_pattern_naming_listed_ids is not None:
-        return list(
-            _ids_routing_to_catalog_models(
-                name_pattern=wildcard_model,
-                deployment_pattern=deployment_pattern_naming_listed_ids,
-                provider=provider,
-                catalog_ids=wildcard_models,
-                routes_to_model=routes_to_model,
-            )
+        return _ids_routing_to_catalog_models(
+            name_pattern=wildcard_model,
+            deployment_pattern=deployment_pattern_naming_listed_ids,
+            provider=provider,
+            catalog_ids=wildcard_models if has_provider_prefix else _without_azure_placeholder(wildcard_models),
+            routes_to_model=routes_to_model,
         )
     if wildcard_suffix != "*":
         model_prefix: Final = wildcard_suffix.replace("*", "")
@@ -526,7 +587,7 @@ def get_known_models_from_wildcard(
             # add model prefix to wildcard models
             wildcard_models = [f"{model_prefix}{model.removeprefix(provider_id_prefix)}" for model in wildcard_models]
 
-    return list(
+    return tuple(
         dict.fromkeys(_under_wildcard_prefix(model, wildcard_provider_prefix, provider) for model in wildcard_models)
     )
 
@@ -564,16 +625,6 @@ def _names_no_deployment_serves_by_name(
     return tuple(name for name in names if not deployed_by_name(name, team_id))
 
 
-def _wildcard_pattern_to_expand(model_name: str, litellm_model: str) -> str | None:
-    if not _check_wildcard_routing(model_name):
-        return None
-    if "/" in model_name or model_name == "*":
-        return model_name
-    if _check_wildcard_routing(litellm_model):
-        return litellm_model
-    return model_name
-
-
 def _can_expand_to_an_allowed_name(wildcard_pattern: str, allowed_model_names: Collection[str] | None) -> bool:
     if allowed_model_names is None:
         return True
@@ -601,10 +652,10 @@ def expand_wildcard_deployments_for_model_info(
         raw_params = deployment.get("litellm_params")
         litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
         litellm_model = str(litellm_params_dict.get("model") or "")
-        if (wildcard_pattern := _wildcard_pattern_to_expand(model_name, litellm_model)) is None:
+        if not _check_wildcard_routing(model_name):
             expanded.append(deployment)
             continue
-        if not _can_expand_to_an_allowed_name(wildcard_pattern, allowed_model_names):
+        if not _can_expand_to_an_allowed_name(model_name, allowed_model_names):
             continue
 
         try:
@@ -613,7 +664,7 @@ def expand_wildcard_deployments_for_model_info(
             expanded.append(deployment)
             continue
         expanded_names = get_known_models_from_wildcard(
-            wildcard_model=wildcard_pattern,
+            wildcard_model=model_name,
             litellm_params=litellm_params,
             routes_to_model=_routes_to_model(routed_models, _deployment_team_id(deployment)),
         )

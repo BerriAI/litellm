@@ -83,6 +83,7 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
+from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     CHAT_ALLOWED_TOOLS_LAYOUT,
     parse_chat_allowed_tools_tool_choice,
@@ -1635,7 +1636,6 @@ def dispatch_success_logging(
     is_litellm_internal_call: bool,
 ) -> None:
     if is_litellm_internal_call:
-        logging_obj.capture_usage_before_logging(result, start_time, end_time)
         return
 
     _schedule_async_success_logging(
@@ -1674,14 +1674,9 @@ def _schedule_async_success_logging(
     if not logging_obj.claim_async_success_log():
         return
 
-    if logging_obj.defer_async_logging and not is_completion_with_fallbacks:
-        logging_obj.capture_usage_before_logging(result, start_time, end_time, freeze_only=True)
-
     def _enqueue_async_logging() -> None:
         from litellm.responses.streaming_iterator import spawn_logging_task
 
-        if not is_completion_with_fallbacks:
-            logging_obj.capture_usage_before_logging(result, start_time, end_time)
         if logging_obj.defer_async_logging:
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result, start_time=start_time, end_time=end_time
@@ -2279,7 +2274,6 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            logging_obj.capture_usage_before_logging(TypeAdapter(object).validate_python(result), start_time, end_time)
             if not is_internal_call.get():
                 # Copy the current context to propagate it to the background thread
                 # This is essential for OpenTelemetry span context propagation
@@ -2312,7 +2306,7 @@ def client(original_function):
 
                 is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not is_completion_litellm_router_call
+                    num_retries and not is_completion_litellm_router_call and not is_agentic_followup_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2346,7 +2340,7 @@ def client(original_function):
 
                 is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not is_responses_litellm_router_call
+                    num_retries and not is_responses_litellm_router_call and not is_agentic_followup_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2645,7 +2639,10 @@ def client(original_function):
                 is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
-                    num_retries and not is_acompletion_litellm_router_call and not isinstance(e, ImportError)
+                    num_retries
+                    and not is_acompletion_litellm_router_call
+                    and not isinstance(e, ImportError)
+                    and not is_agentic_followup_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -2676,7 +2673,10 @@ def client(original_function):
                 is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
-                    num_retries and not is_aresponses_litellm_router_call and not isinstance(e, ImportError)
+                    num_retries
+                    and not is_aresponses_litellm_router_call
+                    and not isinstance(e, ImportError)
+                    and not is_agentic_followup_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -7445,6 +7445,18 @@ def get_model_info_helper(
                 input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_audio_token_flex=_model_info.get("input_cost_per_audio_token_flex", None),
+                input_cost_per_audio_token_above_200k_tokens=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_flex=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_flex", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_priority=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_priority", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_batches=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_batches", None
+                ),
                 input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
@@ -7458,12 +7470,18 @@ def get_model_info_helper(
                 input_cost_per_token_above_200k_tokens_batches=_model_info.get(
                     "input_cost_per_token_above_200k_tokens_batches"
                 ),
+                input_cost_per_token_above_200k_tokens_flex=_model_info.get(
+                    "input_cost_per_token_above_200k_tokens_flex", None
+                ),
                 input_cost_per_token_above_272k_tokens_batches=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_batches"
                 ),
                 output_cost_per_token_batches=_model_info.get("output_cost_per_token_batches"),
                 output_cost_per_token_above_200k_tokens_batches=_model_info.get(
                     "output_cost_per_token_above_200k_tokens_batches"
+                ),
+                output_cost_per_token_above_200k_tokens_flex=_model_info.get(
+                    "output_cost_per_token_above_200k_tokens_flex", None
                 ),
                 output_cost_per_token_above_272k_tokens_batches=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_batches"
@@ -7479,6 +7497,7 @@ def get_model_info_helper(
                 regional_processing_uplift_multiplier_us=_model_info.get(
                     "regional_processing_uplift_multiplier_us", None
                 ),
+                fedramp_uplift_multiplier=_model_info.get("fedramp_uplift_multiplier", None),
                 regional_endpoint_uplift_multiplier=_model_info.get("regional_endpoint_uplift_multiplier", None),
                 output_cost_per_audio_token=_model_info.get("output_cost_per_audio_token", None),
                 output_cost_per_character=_model_info.get("output_cost_per_character", None),
@@ -7526,6 +7545,7 @@ def get_model_info_helper(
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
+                output_cost_per_image_token_priority=_model_info.get("output_cost_per_image_token_priority", None),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
@@ -9069,6 +9089,9 @@ def bundled_provider_models(provider: str) -> tuple[str, ...]:
     return tuple(model for model in bundled if not is_hidden_as_retired(cost_map.get(model, {})))
 
 
+AZURE_MODEL_PLACEHOLDER: Final = "Azure-LLM"
+
+
 def get_valid_models(
     check_provider_endpoint: bool | None = None,
     custom_llm_provider: str | None = None,
@@ -9124,7 +9147,7 @@ def get_valid_models(
                 continue
 
             if provider == "azure":
-                valid_models.append("Azure-LLM")
+                valid_models.append(AZURE_MODEL_PLACEHOLDER)
             elif provider_config is not None and check_provider_endpoint and provider is not None:
                 valid_models.extend(
                     _get_valid_models_from_provider_api(
@@ -10273,6 +10296,7 @@ class ProviderConfigManager:
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
         if provider in (
+            LlmProviders.EMPIRIOLABS,
             LlmProviders.OPENAI,
             LlmProviders.AZURE,
             LlmProviders.AZURE_AI,
@@ -10280,6 +10304,7 @@ class ProviderConfigManager:
             LlmProviders.PARALLEL_AI,
         ):
             configs: Final = {
+                LlmProviders.EMPIRIOLABS: litellm.EmpirioLabsDecisionsConfig,
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,
                 LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
