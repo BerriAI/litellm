@@ -2,7 +2,7 @@
 OpenAPI compliance tests for Google Interactions API.
 
 Validates that our SDK requests/responses match the OpenAPI spec snapshot in
-interactions.openapi.json, taken from https://ai.google.dev/static/api/interactions.openapi.json
+interactions.openapi.json, taken from https://aistudio.google.com/api-reference/interactions.openapi.json
 (litellm/types/interactions/README.md says how to refresh it). The scheduled
 interactions-spec-canary workflow runs the same tests against the live spec by passing
 --interactions-spec-url, so a change Google makes shows up there, not in every PR.
@@ -23,7 +23,7 @@ import pytest
 from openapi_core import OpenAPI
 from pydantic import BaseModel, TypeAdapter
 
-OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
+OPENAPI_SPEC_URL = "https://aistudio.google.com/api-reference/interactions.openapi.json"
 OPENAPI_SPEC_SNAPSHOT: Final = Path(__file__).with_name("interactions.openapi.json")
 SPEC_URL_OPTION: Final = TypeAdapter(str | None)
 
