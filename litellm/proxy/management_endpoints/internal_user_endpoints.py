@@ -83,6 +83,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     handle_update_object_permission_common,
     set_object_permission,
 )
+from litellm.proxy.management_helpers.team_roster_sync import user_tx_db
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -123,6 +124,11 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
 _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
+
+
+_LOCK_ALL_USERS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_UserTable" WHERE TRUE ORDER BY user_id COLLATE "C" FOR UPDATE'
+)
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -2011,14 +2017,16 @@ async def bulk_user_update(
 
         try:
             # Perform bulk database update
-            await UserRepository(prisma_client).table.update_many(
-                where={},
-                data=(
-                    {**non_default_values, "model_max_budget": json.dumps(non_default_values["model_max_budget"])}
-                    if "model_max_budget" in non_default_values
-                    else non_default_values
-                ),
-            )
+            async with prisma_client.tx() as transaction:
+                _ = await transaction.query_raw(_LOCK_ALL_USERS_SQL)
+                _ = await user_tx_db(transaction).update_many(
+                    where={},
+                    data=(
+                        {**non_default_values, "model_max_budget": json.dumps(non_default_values["model_max_budget"])}
+                        if "model_max_budget" in non_default_values
+                        else non_default_values
+                    ),
+                )
 
             for start in range(0, len(all_users_in_db), _USER_CACHE_INVALIDATION_BATCH_SIZE):
                 await asyncio.gather(

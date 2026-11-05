@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.core_helpers import (
     set_provider_response_headers_in_hidden_params,
     subscript,
     unbind_budget_reservation_from_callbacks,
+    without,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
@@ -888,3 +889,21 @@ def test_json_contains_raises_the_in_operators_own_error(value: Container[object
     with pytest.raises(TypeError) as ours:
         json_contains(value, "error")
     assert str(ours.value) == str(native.value)
+
+
+def test_without_drops_the_named_keys_and_keeps_the_rest_in_order() -> None:
+    source: Final = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+    assert list(without(source, "b", "d").items()) == [("a", 1), ("c", 3)]
+    assert without(source, "missing") == source
+    assert without(source) == source
+
+
+def test_without_returns_a_new_dict_and_leaves_the_source_unchanged() -> None:
+    source: Final = {"a": 1, "b": 2}
+
+    result: Final = without(source, "a")
+    result["c"] = 3
+
+    assert source == {"a": 1, "b": 2}
+    assert result == {"b": 2, "c": 3}

@@ -6,19 +6,19 @@ import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { DataTable } from "@/components/shared/DataTable";
-import { Plugin } from "@/components/claude_code_plugins/types";
+import { SkillHubSkill } from "@/components/claude_code_plugins/types";
 
 import { getPluginTableColumns } from "./PluginTableColumns";
 
 interface PluginTableProps {
-  pluginsList: Plugin[];
+  pluginsList: SkillHubSkill[];
   isLoading: boolean;
   onDeleteClick: (pluginName: string, displayName: string) => void;
   isAdmin: boolean;
   onPluginClick: (pluginId: string) => void;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const DEFAULT_SORTING: SortingState = [{ id: "name", desc: false }];
 
 function EmptyState() {
   const { t } = useTranslation();
@@ -45,7 +45,7 @@ const PluginTable: React.FC<PluginTableProps> = ({ pluginsList, isLoading, onDel
   return (
     <DataTable
       data={pluginsList}
-      paginationMode="client"
+      paginationMode="none"
       columns={columns}
       getRowId={(plugin, index) => plugin.id || String(index)}
       sortingMode="client"

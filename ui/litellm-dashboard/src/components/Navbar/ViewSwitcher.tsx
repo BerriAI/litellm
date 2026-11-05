@@ -9,7 +9,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronDown, ChevronsUpDown, MessageSquare, PanelsTopLeft } from "lucide-react";
+import { useSidebar } from "@/components/shared/Sidebar";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { uiHref } from "@/utils/uiHref";
@@ -52,6 +53,7 @@ interface ViewSwitcherProps {
 export default function ViewSwitcher({ className, contentClassName }: ViewSwitcherProps) {
   const { t } = useTranslation();
   const term = useTerminology();
+  const { collapsed } = useSidebar();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
@@ -63,6 +65,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const isChatRoute = isWorkspaceRoute(normalizedPathname, CHAT);
   const isMoyaiRoute = isWorkspaceRoute(normalizedPathname, MOYAI);
   const isStandaloneRoute = isChatRoute || isMoyaiRoute;
+  const WorkspaceIcon = isChatRoute ? MessageSquare : PanelsTopLeft;
 
   const gatewayLabel = term(t("shell.viewSwitcher.aiGateway"));
   const activeLabel = activeWorkspaceLabel(
@@ -142,14 +145,29 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
             type="button"
             variant="outline"
             size="sm"
-            className={cn("max-w-[220px] gap-1.5 px-3 dark:bg-transparent", className)}
+            title={collapsed ? t("shell.viewSwitcher.trigger", { workspace: activeLabel }) : undefined}
+            className={cn(
+              "max-w-[220px] gap-1.5 px-3 dark:bg-transparent",
+              className,
+              collapsed &&
+                "mx-auto flex size-9 justify-center gap-0.5 border-sidebar-border p-0 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+            )}
           />
         }
       >
-        <span data-slot="workspace-label" className="truncate">
-          {activeLabel}
-        </span>
-        <ChevronsUpDown data-slot="workspace-chevron" className="size-3.5 flex-none text-muted-foreground" />
+        {collapsed ? (
+          <>
+            <WorkspaceIcon className="size-[18px]" />
+            <ChevronDown className="size-2.5 text-muted-foreground" />
+          </>
+        ) : (
+          <>
+            <span data-slot="workspace-label" className="truncate">
+              {activeLabel}
+            </span>
+            <ChevronsUpDown data-slot="workspace-chevron" className="size-3.5 flex-none text-muted-foreground" />
+          </>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent className={cn("w-auto", contentClassName)}>
         {items.map((item) => (

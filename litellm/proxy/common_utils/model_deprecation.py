@@ -16,6 +16,7 @@ from litellm.types.proxy.model_deprecation import (
     DeprecationStatus,
     ModelDeprecationInfo,
     ModelDeprecationResponse,
+    SuccessorModelSource,
 )
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ class _ResolvedDeprecation:
     litellm_provider: str | None
     copied_from_another_row: bool = False
     successor_model: str | None = None
+    deprecation_source: str | None = None
 
 
 def _parse_deprecation_date(raw_value: object) -> date | None:
@@ -49,8 +51,8 @@ def _parse_deprecation_date(raw_value: object) -> date | None:
         return None
 
 
-def _successor_model(raw_value: object) -> str | None:
-    """A non-empty successor name, or None when the field is missing, blank, or not a string"""
+def _non_empty_string(raw_value: object) -> str | None:
+    """A non-empty trimmed string, or None for missing, blank, or non-string fields"""
     return raw_value.strip() or None if isinstance(raw_value, str) else None
 
 
@@ -72,7 +74,8 @@ def _cost_map_lookup(model_key: str | None, catalog: Mapping[str, object]) -> _R
         copied_from_another_row=isinstance(entry, AliasedCostEntry)
         and "deprecation_date" not in entry.registered_fields
         and model_key not in catalog,
-        successor_model=_successor_model(fields.get("successor_model")),
+        successor_model=_non_empty_string(fields.get("successor_model")),
+        deprecation_source=_non_empty_string(fields.get("deprecation_source")),
     )
 
 
@@ -156,6 +159,7 @@ def _resolve_deployment_deprecation(
         litellm_model=model_key,
         litellm_provider=override_provider if isinstance(override_provider, str) else None,
         successor_model=from_catalog.successor_model if from_catalog is not None else None,
+        deprecation_source=from_catalog.deprecation_source if from_catalog is not None else None,
     )
 
 
@@ -174,7 +178,7 @@ def _checked_successor(
     successor_log_level: int,
 ) -> str | None:
     """The deployment's successor_model as set, with a warning when no model in its team scope matches it"""
-    successor: Final = _successor_model(model_info.get("successor_model"))
+    successor: Final = _non_empty_string(model_info.get("successor_model"))
     if successor is None:
         return None
     team_id: Final = model_info.get("team_id")
@@ -223,6 +227,14 @@ def _build_info(
             status=_classify(days_until, warn_within_days),
             litellm_provider=resolved.litellm_provider,
             successor_model=configured or resolved.successor_model,
+            successor_model_source=(
+                SuccessorModelSource.DEPLOYMENT_CONFIG
+                if configured is not None
+                else SuccessorModelSource.MODEL_COST_MAP
+                if resolved.successor_model
+                else None
+            ),
+            deprecation_source=resolved.deprecation_source,
         ),
         configured_successor=configured is not None,
     )
@@ -240,7 +252,7 @@ def _merge_group(group: Sequence[_DeploymentInfo], successor_log_level: int) -> 
     first: Final = group[0].info
     tiers: Final = tuple(
         tuple(
-            deployment.info.successor_model
+            deployment.info
             for deployment in group
             if deployment.configured_successor is configured and deployment.info.successor_model is not None
         )
@@ -249,15 +261,23 @@ def _merge_group(group: Sequence[_DeploymentInfo], successor_log_level: int) -> 
     successors: Final = next((tier for tier in tiers if tier), ())
     if not successors:
         return first
-    if len(frozenset(successors)) > 1:
+    selected: Final = successors[0]
+    names: Final = frozenset(info.successor_model for info in successors if info.successor_model is not None)
+    if len(names) > 1:
         verbose_logger.log(
             successor_log_level,
             "model_deprecation: %s names several successors %s, reporting %s",
             first.model_name,
-            sorted(frozenset(successors)),
-            successors[0],
+            sorted(names),
+            selected.successor_model,
         )
-    return first.model_copy(update={"successor_model": successors[0]})
+    return first.model_copy(
+        update={
+            "successor_model": selected.successor_model,
+            "successor_model_source": selected.successor_model_source,
+            "deprecation_source": selected.deprecation_source,
+        }
+    )
 
 
 def _dedupe(
