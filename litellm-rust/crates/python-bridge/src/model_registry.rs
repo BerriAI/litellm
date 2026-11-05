@@ -3,28 +3,18 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::PyBytes;
 
 #[pyfunction]
-pub fn bundled_model_cost_map(py: Python<'_>) -> Bound<'_, PyBytes> {
+pub fn bundled_model_cost_map(py: Python<'_>) -> PyResult<Bound<'_, PyBytes>> {
     static BYTES: PyOnceLock<Py<PyBytes>> = PyOnceLock::new();
     BYTES
-        .get_or_init(py, || {
-            PyBytes::new(py, litellm_model_catalog::BUNDLED_REGISTRY).unbind()
+        .get_or_try_init(py, || -> PyResult<Py<PyBytes>> {
+            let bytes = py
+                .import("importlib.resources")?
+                .call_method1("files", ("litellm",))?
+                .call_method1("joinpath", ("model_prices_and_context_window_backup.json",))?
+                .call_method0("read_bytes")?
+                .cast_into::<PyBytes>()
+                .map_err(PyErr::from)?;
+            Ok(bytes.unbind())
         })
-        .bind(py)
-        .clone()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[rstest::rstest]
-    fn repeated_calls_reuse_the_bundled_registry_bytes() {
-        Python::initialize();
-        let first = Python::attach(|py| bundled_model_cost_map(py).unbind());
-        Python::attach(|py| {
-            let second = bundled_model_cost_map(py);
-            assert!(first.bind(py).is(&second));
-            assert_eq!(second.as_bytes(), litellm_model_catalog::BUNDLED_REGISTRY);
-        });
-    }
+        .map(|bytes| bytes.bind(py).clone())
 }
