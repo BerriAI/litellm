@@ -90,6 +90,7 @@ export const RETIREMENT_ISSUE: Issue = {
 };
 
 export const FAMILY_SETTINGS: components["schemas"]["IssueFamilyList"] = {
+  projection_pending: false,
   data: (["spend", "latency", "reliability", "traffic"] as const).map((family) => ({
     family,
     enabled: true,

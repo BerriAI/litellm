@@ -486,6 +486,7 @@ describe("unified issue investigations", () => {
     { total: 5, label: "Thresholds vary by scope" },
   ])("describes incomplete or differing defaults without a fabricated multiplier: $total", async ({ total, label }) => {
     families = {
+      ...FAMILY_SETTINGS,
       data: FAMILY_SETTINGS.data.map((family) => ({
         ...family,
         total_rules: total,
@@ -516,5 +517,42 @@ describe("unified issue investigations", () => {
       }),
     );
     expect(calls.some((call) => call.path.includes("alert-rules"))).toBe(false);
+  });
+
+  it.each([0, 1, 3])("distinguishes %i delayed monitoring checks from insufficient history", async (delayed) => {
+    families = {
+      ...FAMILY_SETTINGS,
+      data: FAMILY_SETTINGS.data.map((family) => ({
+        ...family,
+        evaluation_status_counts: {
+          pending: 0,
+          complete: 0,
+          delayed: family.family === "spend" ? delayed : 0,
+          insufficient_coverage: 0,
+          insufficient_history: family.family === "latency" ? 5 : 0,
+        },
+      })),
+    };
+    renderWithProviders(<IssuesInbox />);
+    await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    await screen.findByRole("button", { name: "Edit Unexpected spend" });
+    if (delayed === 0) {
+      expect(screen.queryByText(/catching up/)).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByRole("status")).toHaveTextContent(
+        `${delayed} ${delayed === 1 ? "check is" : "checks are"} catching up and will resume automatically.`,
+      );
+      expect(screen.getByRole("status")).toHaveTextContent("Some resources have not been checked yet.");
+    }
+  });
+
+  it("shows alert processing backlog even when no rule evaluation is delayed", async () => {
+    families = { ...FAMILY_SETTINGS, projection_pending: true };
+    renderWithProviders(<IssuesInbox />);
+    await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(
+      await screen.findByText("Alert processing is catching up and will resume automatically."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Some resources have not been checked yet.")).not.toBeInTheDocument();
   });
 });

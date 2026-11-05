@@ -226,6 +226,10 @@ export default function IssueFamilySettings({ accessToken }: { accessToken: stri
         </Button>
       </div>
     );
+  const delayedChecks = query.data.data.reduce(
+    (total, family) => total + (family.evaluation_status_counts?.delayed ?? 0),
+    0,
+  );
   return (
     <div className="space-y-3">
       {save.isError && (
@@ -250,6 +254,17 @@ export default function IssueFamilySettings({ accessToken }: { accessToken: stri
             Daily monitoring is enabled by default. Checks wait for a usable baseline and complete usage data. Model
             retirement alerts appear automatically for used models.
           </p>
+          {delayedChecks > 0 && (
+            <p role="status" className="text-xs text-muted-foreground">
+              {delayedChecks} {delayedChecks === 1 ? "check is" : "checks are"} catching up and will resume
+              automatically. Some resources have not been checked yet.
+            </p>
+          )}
+          {delayedChecks === 0 && query.data.projection_pending && (
+            <p role="status" className="text-xs text-muted-foreground">
+              Alert processing is catching up and will resume automatically.
+            </p>
+          )}
           <ul className="divide-y">
             {query.data.data.map((family) => (
               <li key={family.family} className="flex items-center justify-between gap-3 py-3">

@@ -189,6 +189,7 @@ export default function UsageRules({ accessToken }: { accessToken: string | null
 
 const EVALUATION_LABELS = {
   pending: "Awaiting first evaluation",
+  delayed: "Catching up · resumes automatically",
   complete: "Evaluated",
   insufficient_coverage: "Waiting for complete usage data",
   insufficient_history: "Collecting a baseline",

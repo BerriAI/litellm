@@ -41,7 +41,7 @@ const observation = {
 const defaultSummary = {
   total: 40,
   enabled: 40,
-  evaluation_status_counts: { pending: 0, complete: 40, insufficient_coverage: 0, insufficient_history: 0 },
+  evaluation_status_counts: { pending: 0, delayed: 0, complete: 40, insufficient_coverage: 0, insufficient_history: 0 },
 };
 const savedRule: UsageRule = {
   id: "custom-rule",
@@ -64,6 +64,7 @@ const savedRule: UsageRule = {
   is_default: false,
 };
 const calls: { path: string; method: string; body: unknown; query: URLSearchParams }[] = [];
+let customRules: UsageRule[] = [];
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
 
@@ -88,6 +89,7 @@ describe("usage alerts API integration", () => {
   beforeEach(() => {
     testQueryClient.clear();
     calls.length = 0;
+    customRules = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const request = input instanceof Request ? input : new Request(input);
       const url = new URL(request.url);
@@ -101,7 +103,13 @@ describe("usage alerts API integration", () => {
         return ruleResponse(body);
       }
       if (url.pathname === "/usage/alert-rules") {
-        const page = { data: [], total: 0, offset: 0, limit: 20, default_summary: defaultSummary };
+        const page = {
+          data: customRules,
+          total: customRules.length,
+          offset: 0,
+          limit: 20,
+          default_summary: defaultSummary,
+        };
         return json(page);
       }
       if (url.pathname === "/v2/team/list") {
@@ -121,6 +129,25 @@ describe("usage alerts API integration", () => {
     });
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    { enabled: true, status: "delayed", label: "Catching up · resumes automatically" },
+    { enabled: true, status: "insufficient_history", label: "Collecting a baseline" },
+    { enabled: false, status: "delayed", label: "Disabled" },
+  ] as const)(
+    "shows $label for a custom rule without promising disabled checks will resume",
+    async ({ enabled, status, label }) => {
+      customRules = [{ ...savedRule, enabled, evaluation_status: status }];
+      const user = userEvent.setup();
+      renderWithProviders(<UsageRules accessToken="test-access-token" />);
+      await user.click(await screen.findByRole("button", { name: "Settings" }));
+      await user.click(screen.getByText("Custom rules", { selector: "summary" }));
+      expect(await screen.findByText(label)).toBeInTheDocument();
+      if (status !== "delayed" || !enabled) {
+        expect(screen.queryByText(/Catching up/)).not.toBeInTheDocument();
+      }
+    },
+  );
 
   it("shows saved evidence on the matching entity without recomputing from a current rule", async () => {
     renderWithProviders(<UsageAlertContext alertId="incident-test" scope="key" entityId="reporting-test-id" />);
