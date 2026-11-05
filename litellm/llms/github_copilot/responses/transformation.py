@@ -36,7 +36,7 @@ from litellm.utils import cached_get_model_info_helper
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    GetAPIKeyError,
+    GetAccessTokenError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -254,7 +254,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             return merged_headers
 
-        except GetAPIKeyError as e:
+        except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",

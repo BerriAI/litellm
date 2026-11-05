@@ -9,7 +9,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    GetAPIKeyError,
+    GetAccessTokenError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -70,7 +70,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             dynamic_api_key: Final = (
                 user_session.token if user_session is not None else self.authenticator.get_api_key()
             )
-        except GetAPIKeyError as e:
+        except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",

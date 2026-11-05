@@ -419,6 +419,7 @@ jobs:
 
           - shard: router
             test-path: >-
+              tests/unit/router_rust
               tests/unit/test_router
             python-version: "3.12"
             workers: 4

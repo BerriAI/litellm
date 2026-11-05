@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useTranslation } from "react-i18next";
 import {
   Combobox,
   ComboboxContent,
@@ -34,6 +35,7 @@ const ModelChoiceCombobox: React.FC<ModelChoiceComboboxProps> = ({
   ariaInvalid,
   ariaDescribedBy,
 }) => {
+  const { t } = useTranslation();
   const selected = value ? choices.find((choice) => choice.value === value) ?? { value, label: value } : null;
 
   return (
@@ -53,7 +55,7 @@ const ModelChoiceCombobox: React.FC<ModelChoiceComboboxProps> = ({
         showClear={value != null && value !== ""}
       />
       <ComboboxContent>
-        <ComboboxEmpty>No models found</ComboboxEmpty>
+        <ComboboxEmpty>{t("addModel.modelChoiceCombobox.empty")}</ComboboxEmpty>
         <ComboboxList>
           {(choice: ModelChoice) => (
             <ComboboxItem key={choice.value} value={choice}>

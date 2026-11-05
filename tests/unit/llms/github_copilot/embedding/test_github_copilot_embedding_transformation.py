@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from litellm.exceptions import AuthenticationError
-from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE, GetAPIKeyError
+from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE, GetAccessTokenError
 from litellm.llms.github_copilot.embedding.transformation import (
     GithubCopilotEmbeddingConfig,
 )
@@ -42,7 +42,7 @@ def test_github_copilot_embedding_config_validate_environment():
     assert str(uuid.UUID(validated_headers["x-request-id"])) == validated_headers["x-request-id"]
 
     # Test with authentication failure
-    config.authenticator.get_api_key.side_effect = GetAPIKeyError(
+    config.authenticator.get_api_key.side_effect = GetAccessTokenError(
         message="Failed to get API key",
         status_code=401,
     )

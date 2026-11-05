@@ -1,9 +1,10 @@
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.llm_response_utils import get_api_base as get_api_base_module
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
-from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
+from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE, prefetch_copilot_plan_api_base
 
 
 @pytest.fixture
@@ -58,6 +59,23 @@ class TestDeclaredAuthenticatingProvider:
 
         assert resolution_lookups == []
         assert api_base == "https://configured.example.com/v1"
+
+    def test_copilot_uses_the_user_endpoint_for_an_enterprise_api_base(self, isolated_token_dirs, resolution_lookups):
+        token_dir = isolated_token_dirs / "github_copilot"
+        token_dir.mkdir()
+        token = f"gho_{isolated_token_dirs.name}"
+        (token_dir / "access-token").write_text(token)
+        with respx.mock(assert_all_called=True) as router:
+            route = router.get("https://api.github.com/copilot_internal/user").respond(
+                json={"endpoints": {"api": "https://api.enterprise.githubcopilot.com"}}
+            )
+            prefetch_copilot_plan_api_base(token)
+
+        api_base = litellm.get_api_base(model="github_copilot/gpt-4o", optional_params={})
+
+        assert resolution_lookups == []
+        assert api_base == "https://api.enterprise.githubcopilot.com"
+        assert route.calls.last.request.headers["authorization"] == f"token {token}"
 
     def test_explicit_api_base_still_wins(self, isolated_token_dirs, resolution_lookups):
         api_base = litellm.get_api_base(

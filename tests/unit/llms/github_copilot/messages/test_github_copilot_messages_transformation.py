@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from litellm.exceptions import AuthenticationError
-from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE, GetAPIKeyError
+from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE, GetAccessTokenError
 from litellm.llms.github_copilot.messages.transformation import (
     GithubCopilotAnthropicMessagesConfig,
 )
@@ -193,7 +193,9 @@ def test_github_copilot_anthropic_messages_validate_environment_auth_error():
 
     # Mock the authenticator to raise an error
     config.authenticator = MagicMock()
-    config.authenticator.get_api_key.side_effect = GetAPIKeyError(status_code=401, message="No valid API key found")
+    config.authenticator.get_api_key.side_effect = GetAccessTokenError(
+        status_code=401, message="No valid API key found"
+    )
 
     with pytest.raises(AuthenticationError):
         config.validate_anthropic_messages_environment(

@@ -18,7 +18,6 @@ from litellm.llms.github_copilot.common_utils import (
     DEFAULT_COPILOT_USER_AGENT,
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAccessTokenError,
-    GetAPIKeyError,
     GetDeviceCodeError,
     InvalidAPIBaseError,
     get_copilot_api_base,
@@ -66,14 +65,9 @@ class TestGitHubCopilotAuthenticator:
             assert auth.access_token_file.endswith("/access-token")
             mock_makedirs.assert_called_once()
 
-    def test_ensure_token_dir(self):
-        """Test that the token directory is created if it doesn't exist."""
-        with (
-            patch("os.path.exists", return_value=False),
-            patch("os.makedirs") as mock_makedirs,
-        ):
-            auth = Authenticator()
-            mock_makedirs.assert_called_once_with(auth.token_dir, exist_ok=True)
+    def test_ensure_token_dir_creates_missing_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "github_copilot"))
+        assert Path(Authenticator().token_dir).is_dir()
 
     @pytest.mark.parametrize(
         "api_base",
@@ -358,14 +352,10 @@ class TestGitHubCopilotAuthenticator:
                 authenticator.get_access_token()
             assert authenticator._login.call_count == 3
 
-    def test_get_api_key_maps_access_token_failure(self, authenticator):
-        with patch.object(
-            authenticator,
-            "get_access_token",
-            side_effect=GetAccessTokenError(message="OAuth failed", status_code=401),
-        ):
-            with pytest.raises(GetAPIKeyError, match="Failed to get OAuth access token"):
-                authenticator.get_api_key()
+    def test_get_api_key_returns_github_token_without_http(self, logged_in_token_dir: Path) -> None:
+        with patch("litellm.llms.github_copilot.authenticator.get_httpx_client") as get_client:
+            assert Authenticator().get_api_key() == "gho_logged_in"
+        get_client.assert_not_called()
 
     @pytest.mark.parametrize(
         "malformed",
@@ -459,7 +449,7 @@ class TestGitHubCopilotAuthenticator:
             patch.dict(os.environ, {"GITHUB_COPILOT_DEVICE_CODE_URL": custom_url}),
             patch("litellm.llms.github_copilot.authenticator.get_httpx_client", return_value=mock_client),
         ):
-            authenticator._get_device_code()
+            assert authenticator._get_device_code()["device_code"] == "dc"
             assert mock_client.post.call_args[0][0] == custom_url
 
     def test_get_device_code_with_custom_client_id(self, authenticator, mock_http_client):
@@ -475,7 +465,7 @@ class TestGitHubCopilotAuthenticator:
             patch.dict(os.environ, {"GITHUB_COPILOT_CLIENT_ID": custom_id}),
             patch("litellm.llms.github_copilot.authenticator.get_httpx_client", return_value=mock_client),
         ):
-            authenticator._get_device_code()
+            assert authenticator._get_device_code()["device_code"] == "dc"
             assert mock_client.post.call_args[1]["json"]["client_id"] == custom_id
 
     def test_poll_for_access_token_with_custom_url(self, authenticator, mock_http_client):
@@ -488,7 +478,7 @@ class TestGitHubCopilotAuthenticator:
             patch("litellm.llms.github_copilot.authenticator.get_httpx_client", return_value=mock_client),
             patch("time.sleep"),
         ):
-            authenticator._poll_for_access_token("dc")
+            assert authenticator._poll_for_access_token("dc") == "tok"
             assert mock_client.post.call_args[0][0] == custom_url
 
     def test_poll_for_access_token_with_custom_client_id(self, authenticator, mock_http_client):
@@ -501,5 +491,5 @@ class TestGitHubCopilotAuthenticator:
             patch("litellm.llms.github_copilot.authenticator.get_httpx_client", return_value=mock_client),
             patch("time.sleep"),
         ):
-            authenticator._poll_for_access_token("dc")
+            assert authenticator._poll_for_access_token("dc") == "tok"
             assert mock_client.post.call_args[1]["json"]["client_id"] == custom_id

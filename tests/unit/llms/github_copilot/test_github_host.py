@@ -40,6 +40,7 @@ def test_github_com_endpoints_read_url_overrides_at_call_time(monkeypatch: pytes
     assert endpoints.device_code_url == "https://device.example/code"
     assert endpoints.access_token_url == "https://device.example/token"
     assert endpoints.configured_copilot_api_base == "https://copilot.example"
+    assert endpoints.copilot_user_url == "https://api.github.com/copilot_internal/user"
     assert endpoints.client_id == "custom-client"
 
 

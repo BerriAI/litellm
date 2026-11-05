@@ -15,6 +15,7 @@ import {
   vectorStoreListCall,
 } from "../networking";
 import { KeyEditView } from "./key_edit_view";
+import { teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
 
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
@@ -3232,6 +3233,60 @@ describe("KeyEditView", () => {
       renderAs("Admin");
 
       expect(await screen.findByRole("switch", { name: /disable global guardrails/i })).toBeInTheDocument();
+    });
+  });
+
+  describe("team admin editing a member's key", () => {
+    const renderAsTeamAdmin = (
+      onSubmit: (values: Record<string, unknown>, dirtyFields: readonly string[]) => Promise<void>,
+    ) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, team_id: "team-1", user_id: "member-user" }}
+          teams={[
+            {
+              team_id: "team-1",
+              team_alias: "Team One",
+              models: [],
+              members_with_roles: [{ user_id: "team-admin-user", role: "admin" }],
+            },
+          ]}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken="test-token"
+          userID="team-admin-user"
+          userRole="Internal User"
+        />,
+      );
+
+    const firstSavePayload = async (onSubmit: ReturnType<typeof vi.fn>) => {
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      const [values, dirtyFields] = onSubmit.mock.calls[0];
+      return teamAdminMemberKeyPayload({ ...values, key: values.token }, dirtyFields);
+    };
+
+    it("should block a rename on the first save instead of sending an empty update", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderAsTeamAdmin(onSubmit);
+
+      fireEvent.change(await screen.findByRole("textbox", { name: "Key Alias" }), { target: { value: "renamed" } });
+
+      expect(await firstSavePayload(onSubmit)).toEqual({ kind: "blocked", fields: ["key_alias"] });
+    });
+
+    it("should send a budget change on the first save", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderAsTeamAdmin(onSubmit);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
+        target: { value: "25" },
+      });
+
+      expect(await firstSavePayload(onSubmit)).toEqual({
+        kind: "ok",
+        payload: { key: MOCK_KEY_DATA.token, max_budget: "25" },
+      });
     });
   });
 });

@@ -12,7 +12,7 @@ from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 from litellm.llms.github_copilot.common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
-    GetAPIKeyError,
+    GetAccessTokenError,
 )
 
 
@@ -65,7 +65,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info(monkeypatch: 
     assert api_base == DEFAULT_GITHUB_COPILOT_API_BASE
 
     # Test with authentication failure
-    config.authenticator.get_api_key.side_effect = GetAPIKeyError(
+    config.authenticator.get_api_key.side_effect = GetAccessTokenError(
         message="Failed to get API key",
         status_code=401,
     )

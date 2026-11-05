@@ -171,20 +171,26 @@ async def test_discovery_discards_metadata_for_a_replaced_deployment(monkeypatch
     _invalidate_model_cost_lowercase_map()
 
 
-async def test_discovery_sends_the_secret_behind_an_oidc_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_discovery_sends_the_secret_behind_an_oidc_api_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
     token: Final = tmp_path / "token"
     token.write_text("local-secret")
-    router: Final = Router(model_list=[{
-        "model_name": "local",
-        "litellm_params": {
-            "model": "hosted_vllm/local-model",
-            "api_base": "https://discovery.test/v1",
-            "api_key": f"oidc/file/{token}",
-        },
-        "model_info": {"id": "oidc-deployment"},
-    }])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "local",
+                "litellm_params": {
+                    "model": "hosted_vllm/local-model",
+                    "api_base": "https://discovery.test/v1",
+                    "api_key": f"oidc/file/{token}",
+                },
+                "model_info": {"id": "oidc-deployment"},
+            }
+        ]
+    )
     authorizations: Final[list[str | None]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -1071,8 +1077,12 @@ def test_bedrock_deployment_keeps_custom_prices_when_profile_lookup_fails(
     tier_rates: Final = inherit_configured and service_tier != "default"
     input_rate: Final = configured_prices[f"input_cost_per_token_{service_tier}"] if tier_rates else 0.01
     output_rate: Final = configured_prices[f"output_cost_per_token_{service_tier}"] if tier_rates else 0.02
-    effective_input: Final = 0.0 if override == "input_cost_per_token_priority" and service_tier == "priority" else input_rate
-    cache_rate: Final = 0.0 if override == "cache_read_input_token_cost" else (0.001 if inherit_configured else effective_input)
+    effective_input: Final = (
+        0.0 if override == "input_cost_per_token_priority" and service_tier == "priority" else input_rate
+    )
+    cache_rate: Final = (
+        0.0 if override == "cache_read_input_token_cost" else (0.001 if inherit_configured else effective_input)
+    )
     assert completion_cost(
         model=model,
         completion_response=ModelResponse(
@@ -1562,6 +1572,8 @@ def test_ptu_service_tier_pricing_is_disabled_only_when_attribution_is_enabled(
         response: Final = router.completion(
             model=f"ptu-tier-model-{ptu_enabled}",
             messages=[{"role": "user", "content": "ptu service tier pricing"}],
+            # The deployment belongs to team-alpha, and a sync call is team filtered like an async one.
+            metadata={"user_api_key_team_id": "team-alpha"},
             service_tier="priority",
             mock_response=litellm.ModelResponse(
                 model=_TIER_BACKEND_MODEL,
@@ -2176,8 +2188,7 @@ def test_token_limits_stay_on_the_deployment_that_set_them(override_first: bool)
     override_id: Final = "token-limit-override-deployment"
     plain_id: Final = "token-limit-plain-deployment"
     model_keys: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key))
-        for key in (*shared_keys, override_id, plain_id)
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (*shared_keys, override_id, plain_id)
     }
     expected_cost_map_limits: Final = {
         key: {
@@ -2214,13 +2225,15 @@ def test_token_limits_stay_on_the_deployment_that_set_them(override_first: bool)
             assert {
                 field: (litellm.model_cost.get(key) or {}).get(field) for field in token_fields
             } == expected_cost_map_limits[key]
-            assert {
-                field: litellm.get_model_info(model=key).get(field) for field in token_fields
-            } == catalog_limits[key]
+            assert {field: litellm.get_model_info(model=key).get(field) for field in token_fields} == catalog_limits[
+                key
+            ]
 
-        assert {
-            field: litellm.get_model_info(model=override_id).get(field) for field in token_fields
-        } == {"max_input_tokens": 4321, "max_output_tokens": 987, "max_tokens": 987}
+        assert {field: litellm.get_model_info(model=override_id).get(field) for field in token_fields} == {
+            "max_input_tokens": 4321,
+            "max_output_tokens": 987,
+            "max_tokens": 987,
+        }
 
         plain_listing: Final = create_model_info_response(
             model_id="plain-gpt-4o-mini", provider="openai", llm_router=router
@@ -2277,9 +2290,7 @@ def test_unknown_backend_token_limits_still_fill_the_shared_key() -> None:
 def test_unknown_backend_token_limit_updates_when_deployment_is_upserted() -> None:
     backend_model: Final = "hosted_vllm/somelab.lit4544-token-limit-update"
     model_id: Final = "unknown-token-limit-updated-deployment"
-    model_keys: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (backend_model, model_id)
-    }
+    model_keys: Final = {key: copy.deepcopy(litellm.model_cost.get(key)) for key in (backend_model, model_id)}
     try:
         deployment: Final = Deployment(
             model_name="unknown-token-limit-update",
@@ -2996,7 +3007,8 @@ def test_a_github_copilot_chat_pin_opts_a_dual_endpoint_model_out_of_the_respons
 
 @pytest.mark.parametrize("registered_mode, pinned_mode", [("chat", "responses"), ("responses", "chat")])
 @pytest.mark.parametrize(
-    "model, custom_llm_provider", [("github_copilot/routing-test-model", None), ("routing-test-model", "github_copilot")]
+    "model, custom_llm_provider",
+    [("github_copilot/routing-test-model", None), ("routing-test-model", "github_copilot")],
 )
 def test_a_github_copilot_responses_pin_still_opts_the_model_into_the_responses_api(
     monkeypatch: pytest.MonkeyPatch,
@@ -4178,7 +4190,9 @@ def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(
     assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price
 
 
-def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_pricing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     catalog: Final = litellm.get_model_cost_map(url="")
     monkeypatch.setattr(litellm, "model_cost", dict(catalog))

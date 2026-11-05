@@ -8,6 +8,7 @@ from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST
 DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
+DEFAULT_GITHUB_COPILOT_USER_URL: Final = "https://api.github.com/copilot_internal/user"
 
 _GHE_SUBDOMAIN_PATTERN: Final = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
@@ -57,7 +58,7 @@ def github_host_endpoints(host: str) -> GithubHostEndpoints:
             host=normalized,
             device_code_url=os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL),
             access_token_url=os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL),
-            copilot_user_url="https://api.github.com/copilot_internal/user",
+            copilot_user_url=DEFAULT_GITHUB_COPILOT_USER_URL,
             user_url="https://api.github.com/user",
             client_id=client_id,
             copilot_api_hosts=frozenset({"githubcopilot.com"}),

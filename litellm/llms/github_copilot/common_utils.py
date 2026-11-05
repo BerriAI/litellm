@@ -21,7 +21,7 @@ from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST
+from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST, GITHUB_COPILOT_USER_SESSION_TTL_SECONDS
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from .github_host import GithubHostEndpoints, github_host_endpoints
@@ -32,7 +32,6 @@ USER_AGENT: Final = f"GitHubCopilotChat/{COPILOT_VERSION}"
 API_VERSION: Final = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
 _GITHUB_API_HOST: Final = "api.github.com"
-_PLAN_API_BASE_TTL_SECONDS: Final = 3600
 _PLAN_API_BASE_RETRY_SECONDS: Final = 60
 _PLAN_API_BASE_TIMEOUT_SECONDS: Final = 10.0
 DEFAULT_COPILOT_INTEGRATION_ID: Final = "vscode-chat"
@@ -92,7 +91,7 @@ class _CopilotUserPayload(TypedDict):
 _COPILOT_USER: Final = TypeAdapter(_CopilotUserPayload)
 _PLAN_API_BASES: Final = cast(  # cast-ok: pins the untyped module cache to _PlanApiBaseCache
     _PlanApiBaseCache,
-    InMemoryCache(max_size_in_memory=1000, default_ttl=_PLAN_API_BASE_TTL_SECONDS),
+    InMemoryCache(max_size_in_memory=1000, default_ttl=GITHUB_COPILOT_USER_SESSION_TTL_SECONDS),
 )
 _PLAN_API_BASE_LOOKUPS: Final[  # mutable-ok: single-flight registry of in-progress plan host lookups per token
     dict[str, "asyncio.Task[None]"]
@@ -127,10 +126,6 @@ class GetAccessTokenError(GithubCopilotError):
     pass
 
 
-class GetAPIKeyError(GithubCopilotError):
-    pass
-
-
 class InvalidAPIBaseError(GithubCopilotError):
     pass
 
@@ -144,7 +139,7 @@ def _get_copilot_header_value(environment_variable: str, default: str | None) ->
 
 def _get_configured_copilot_headers(
     config: tuple[tuple[str, str, str | None], ...],
-) -> dict[str, str]:
+) -> Mapping[str, str]:
     return {
         header: value
         for header, environment_variable, default in config
@@ -156,7 +151,7 @@ def get_copilot_auth_headers(
     access_token: str | None = None,
 ) -> dict[str, str]:  # mutable-ok: returned straight into httpx handlers whose headers params require dict
     headers: Final = _get_configured_copilot_headers(_COPILOT_AUTH_HEADER_CONFIG)
-    return {**headers, "authorization": f"token {access_token}"} if access_token else headers
+    return {**headers, "authorization": f"token {access_token}"} if access_token else {**headers}
 
 
 def get_copilot_default_headers(
@@ -255,7 +250,7 @@ def _plan_api_base_from(response: httpx.Response, endpoints: GithubHostEndpoints
         return endpoints.default_copilot_api_base, _PLAN_API_BASE_RETRY_SECONDS
     endpoints_api: Final = plan_endpoints.get("api") if plan_endpoints is not None else None
     trusted_api_base: Final = _trusted_plan_api_base(endpoints_api, endpoints)
-    return trusted_api_base or endpoints.default_copilot_api_base, _PLAN_API_BASE_TTL_SECONDS
+    return trusted_api_base or endpoints.default_copilot_api_base, GITHUB_COPILOT_USER_SESSION_TTL_SECONDS
 
 
 def _plan_api_base_key(github_token: str, endpoints: GithubHostEndpoints) -> str:

@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -13,7 +14,6 @@ from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
 from .common_utils import (
     GetAccessTokenError,
-    GetAPIKeyError,
     GetDeviceCodeError,
     get_copilot_auth_headers,
 )
@@ -39,7 +39,9 @@ class _AccessTokenPoll(TypedDict):
     error: ReadOnly[NotRequired[object]]
 
 
-_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_JSON_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(
+    Mapping[str, object], config=ConfigDict(strict=True)
+)
 _DEVICE_CODE: Final = TypeAdapter(_DeviceCode)
 _ACCESS_TOKEN_POLL: Final = TypeAdapter(_AccessTokenPoll)
 
@@ -114,13 +116,8 @@ class Authenticator:
         )
 
     def get_api_key(self) -> str:
-        try:
-            return self.get_access_token()
-        except GetAccessTokenError as e:
-            raise GetAPIKeyError(
-                message=f"Failed to get OAuth access token: {e!s}",
-                status_code=401,
-            ) from e
+        """Return the stored GitHub access token, loading it with device flow when needed."""
+        return self.get_access_token()
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""

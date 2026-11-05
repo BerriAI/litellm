@@ -3,7 +3,7 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
@@ -128,6 +128,11 @@ async def test_ui_view_users_proxy_admin_no_org_filter(mocker):
 
 
 UserWhereCondition = InsensitiveContains | Sequence[Mapping[str, InsensitiveContains]]
+
+
+@asynccontextmanager
+async def _transaction_over(db: object) -> AsyncIterator[SimpleNamespace]:
+    yield SimpleNamespace(query_raw=AsyncMock(return_value=[]), litellm_usertable=getattr(db, "litellm_usertable"))
 
 
 def _matches_user_where(row: LiteLLM_UserTableFiltered, where: Mapping[str, UserWhereCondition]) -> bool:
@@ -2419,6 +2424,7 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
     prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    prisma_client.tx = lambda: _transaction_over(prisma_client.db)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
@@ -2465,6 +2471,7 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(mocker:
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
     prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
     prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    prisma_client.tx = lambda: _transaction_over(prisma_client.db)
     prisma_client.get_data = mocker.AsyncMock(return_value=[saved_user])
     prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
@@ -2574,6 +2581,9 @@ async def test_user_update_reaches_cached_user_on_every_worker(
         async def update_data(self, user_id: str, data: dict[str, object], table_name: str) -> dict[str, object]:
             self.update_data_payload = data
             return {"user_id": user_id, "data": self.updated_user}
+
+        def tx(self) -> AbstractAsyncContextManager[SimpleNamespace]:
+            return _transaction_over(self.db)
 
     saved_user: Final = LiteLLM_UserTable(
         user_id="user-spruce",

@@ -28,7 +28,7 @@ from litellm.utils import convert_to_model_response_object
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    GetAPIKeyError,
+    GetAccessTokenError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -98,7 +98,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
 
             return merged_headers
 
-        except GetAPIKeyError as e:
+        except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",

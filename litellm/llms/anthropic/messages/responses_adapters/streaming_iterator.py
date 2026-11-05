@@ -141,6 +141,8 @@ class AnthropicResponsesStreamWrapper:
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         self._unreported_failure: Exception | None = None
+        # The failure behind this stream's error frame, for a router that accounts for it.
+        self.stream_failure: Exception | None = None
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: dict[str, int] = {}
@@ -467,6 +469,7 @@ class AnthropicResponsesStreamWrapper:
             llm_provider=getattr(self.responses_stream, "custom_llm_provider", None),
             model=self.model,
         )
+        self.stream_failure = self._unreported_failure
         self._chunk_queue.append(_anthropic_error_chunk(status_code, message))
 
     async def _report_unreported_failure(self) -> None:
@@ -577,6 +580,10 @@ class AnthropicResponsesSSEByteStream:
 
     async def aclose(self) -> None:
         await self._frames.aclose()
+
+    @property
+    def stream_failure(self) -> Exception | None:
+        return self._wrapper.stream_failure
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return self._wrapper.partial_response_on_disconnect()
