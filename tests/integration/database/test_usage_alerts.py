@@ -53,9 +53,11 @@ def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gate
 
 def test_team_admin_can_manage_team_alerts_but_member_can_only_read(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
-        team_id: Final = scenario.team()
-        admin_id: Final = scenario.member(team_id, role="admin")
-        member_id: Final = scenario.member(team_id, role="user")
+        admin_id: Final = scenario.user(user_role="internal_user")
+        member_id: Final = scenario.user(user_role="internal_user")
+        team_id: Final = scenario.team(
+            members_with_roles=[{"user_id": admin_id, "role": "admin"}, {"user_id": member_id, "role": "user"}]
+        )
         admin_key: Final = scenario.key(user_id=admin_id, key_type="management")
         member_key: Final = scenario.key(user_id=member_id, key_type="management")
         config: Final = {

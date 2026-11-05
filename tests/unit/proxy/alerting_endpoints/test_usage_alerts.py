@@ -65,3 +65,14 @@ def test_global_activity_link_uses_the_usage_page_date_contract() -> None:
     assert "range" not in query
     assert query["from"] == ["2026-10-28"]
     assert query["to"] == ["2026-11-04"]
+
+
+@pytest.mark.asyncio
+async def test_no_database_returns_an_actionable_service_error() -> None:
+    from litellm.proxy.alerting_endpoints.usage_alerts import list_usage_alerts
+
+    user: Final = UserAPIKeyAuth(user_id="qa-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as error:
+        await list_usage_alerts(user, None)
+    assert error.value.status_code == 503
+    assert error.value.detail == "Usage alerts require a database connection"

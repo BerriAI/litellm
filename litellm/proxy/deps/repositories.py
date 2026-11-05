@@ -5,11 +5,13 @@ from fastapi import Depends
 from litellm.models.deployment_warning import DeploymentWarningIgnoreStore
 from litellm.models.gateway_activity import GatewayActivityStore
 from litellm.models.plugin_upload import PluginUploadStore
+from litellm.models.usage_alerts import UsageAlertStore
 from litellm.models.user_banner import UserBannerStore
 from litellm.proxy.deps.database import DatabaseDep
 from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
 from litellm.repositories.gateway_activity_repository import GatewayActivityRepository
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
+from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
 
 
@@ -43,3 +45,10 @@ async def get_plugin_upload_repository(database: DatabaseDep) -> PluginUploadSto
 
 
 PluginUploadRepositoryDep: TypeAlias = Annotated[PluginUploadStore | None, Depends(get_plugin_upload_repository)]
+
+
+async def get_usage_alerts_repository(database: DatabaseDep) -> UsageAlertStore | None:
+    return None if database is None else UsageAlertsRepository.from_prisma(database.prisma)
+
+
+UsageAlertsRepositoryDep: TypeAlias = Annotated[UsageAlertStore | None, Depends(get_usage_alerts_repository)]

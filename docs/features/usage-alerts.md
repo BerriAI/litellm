@@ -19,7 +19,7 @@ The response has `data`, `total`, `limit`, and `offset`. Each incident includes 
 
 ## Create a rule
 
-This example alerts when a team's daily spend is at least three times its baseline and the absolute change is at least $10. Replace `team-example` with the team's ID.
+This example alerts when a team's daily spend is more than three times its baseline and the absolute change is at least $10. Replace `team-example` with the team's ID.
 
 ```bash
 curl "$LITELLM_API_BASE/usage/alert-rules" \
@@ -40,7 +40,7 @@ curl "$LITELLM_API_BASE/usage/alert-rules" \
   }'
 ```
 
-The baseline is the mean across recorded days in the preceding window. Missing reference days are unknown. At least `min_history_days` recorded days are required. A decrease uses `baseline / multiplier`; a multiplier of 2 detects a value at or below half the baseline. `min_value` is the minimum absolute difference in the metric's own units.
+The baseline is the mean across recorded days in the preceding window. Missing reference days are unknown. At least `min_history_days` recorded days are required. A decrease uses `baseline / multiplier`; a multiplier of 2 detects a value below half the baseline. `min_value` is the minimum absolute difference in the metric's own units.
 
 | Metric | Unit |
 | --- | --- |
@@ -48,6 +48,8 @@ The baseline is the mean across recorded days in the preceding window. Missing r
 | `requests` | Request count |
 | `latency` | Average response time in milliseconds |
 | `errors` | Failed-request count |
+
+Counts come from the existing Activity/spend aggregates, rather than every gateway HTTP outcome. Latency averages successful timed, non-internal requests; it is not time to first token and does not include failed requests. Gateway incidents link to Key Activity, which uses the same aggregates.
 
 The evaluator runs against daily aggregates. An hourly scheduler does not make these rolling hourly alerts. A complete UTC day and sufficient ingestion coverage are required before detecting drops; a missing flush must not become a false traffic-drop incident. Rule responses expose `last_evaluated_day` and `evaluation_status` so you can distinguish a completed evaluation from insufficient history or coverage.
 
