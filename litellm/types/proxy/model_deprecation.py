@@ -112,3 +112,15 @@ class DeprecationTagUsage(LiteLLMBaseModel):
 
     api_key: str
     tag: str
+
+
+class ModelDeprecationUsage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    requests: int = Field(ge=0)
+    last_used_date: date
+    last_day_requests: int = Field(ge=0)
+    keys: int = Field(ge=0)
+    users: int = Field(ge=0)
+    teams: int = Field(ge=0)
