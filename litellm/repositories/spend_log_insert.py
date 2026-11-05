@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -50,12 +50,19 @@ _COLUMNS: Final[tuple[LiteralString, ...]] = (
 _JSON_COLUMNS: Final = frozenset({"metadata", "request_tags", "messages", "response", "proxy_server_request"})
 
 
+class RejectedSpendLogRow(ValueError):
+    """A row the raw insert cannot encode, so it is isolated like a row Postgres refuses."""
+
+
 def _json_value(column: str, value: object) -> object:
     if isinstance(value, datetime):
         return value.isoformat()
-    if column in _JSON_COLUMNS and isinstance(value, str):
+    if column not in _JSON_COLUMNS or not isinstance(value, str):
+        return value
+    try:
         return _JSON.validate_json(value)
-    return value
+    except ValidationError as error:
+        raise RejectedSpendLogRow(f"Spend log column {column} is not valid JSON") from error
 
 
 def spend_log_insert_statement(rows: Sequence[Mapping[str, object]]) -> tuple[LiteralString, str]:
@@ -63,7 +70,7 @@ def spend_log_insert_statement(rows: Sequence[Mapping[str, object]]) -> tuple[Li
         raise ValueError("Spend log insert requires at least one row")
     fields: Final = frozenset(rows[0]) | {"created_at", "updated_at"}
     if not fields.issubset(_COLUMNS) or any(frozenset(row) | {"created_at", "updated_at"} != fields for row in rows):
-        raise ValueError("Spend log insert requires matching known columns")
+        raise RejectedSpendLogRow("Spend log insert requires matching known columns")
     columns: Final = ", ".join('"' + column + '"' for column in _COLUMNS if column in fields)
     now: Final = datetime.now(timezone.utc).isoformat()
     values: Final = tuple(
