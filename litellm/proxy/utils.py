@@ -4202,8 +4202,6 @@ class ProxyLogging:
                 **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
                     request_fields, logged_metadata_keys
                 ),
-                # The allowlist leaves out the request's redaction choice, so carry it over. As in the pre-call
-                # checks, an opt-out only counts for a key or team allowed to send one
                 **(
                     {"turn_off_message_logging": redact}
                     if redact or key_or_team_allows_client_message_redaction_opt_out(user_api_key_dict)
