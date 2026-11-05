@@ -39,6 +39,7 @@ from litellm.constants import (
 )
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.lunary import LunaryLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
@@ -12149,34 +12150,30 @@ async def test_failure_with_non_mapping_headers_is_still_logged(monkeypatch, hea
     assert (SCRUB_PROMPT in capture.async_kwargs["traceback_exception"]) is not redact
 
 
-def test_sync_failure_hands_callbacks_and_langfuse_the_scrubbed_error(monkeypatch):
+def test_sync_failure_hands_callbacks_the_scrubbed_error(monkeypatch):
     capture: Final = _FailureCapture()
-    langfuse: Final = MagicMock()
     monkeypatch.setattr(litellm, "turn_off_message_logging", True)
-    monkeypatch.setattr(litellm, "failure_callback", [capture, "langfuse"])
-    monkeypatch.setattr(litellm_logging, "langFuseLogger", langfuse)
+    monkeypatch.setattr(litellm, "failure_callback", [capture])
 
     _prompt_failure_logging_obj().failure_handler(_prompt_echo_error(), f"Traceback: {SCRUB_PROMPT}")
 
     assert capture.sync_kwargs is not None
     assert SCRUB_PROMPT not in json.dumps(capture.sync_kwargs["standard_logging_object"], default=str)
-    status_message: Final = langfuse.log_event_on_langfuse.call_args.kwargs["status_message"]
-    assert "Invalid message passed in" in status_message
-    assert SCRUB_PROMPT not in status_message
 
 
 def test_sync_failure_hands_lunary_the_scrubbed_traceback_when_only_the_traceback_quotes_the_prompt(monkeypatch):
-    lunary: Final = MagicMock()
+    tracked_events: Final[list[dict[str, object]]] = []
+    lunary_logger: Final = LunaryLogger()
+    monkeypatch.setattr(lunary_logger.lunary_client, "track_event", lambda *_, **event: tracked_events.append(event))
     monkeypatch.setattr(litellm, "turn_off_message_logging", True)
     monkeypatch.setattr(litellm, "failure_callback", ["lunary"])
-    monkeypatch.setattr(litellm_logging, "lunaryLogger", lunary)
+    monkeypatch.setattr(litellm_logging, "lunaryLogger", lunary_logger)
     error: Final = litellm.APIConnectionError(message="Connection failed", model="gpt-4o", llm_provider="openai")
 
     _prompt_failure_logging_obj().failure_handler(error, f"ValueError: bad input {SCRUB_PROMPT}\n\n{error}")
 
-    logged_error: Final = lunary.log_event.call_args.kwargs["error"]
-    assert "ValueError: bad input redacted-by-litellm" in logged_error
-    assert SCRUB_PROMPT not in logged_error
+    logged_errors: Final = [event["error"] for event in tracked_events if event.get("error") is not None]
+    assert logged_errors == [{"stack": f"ValueError: bad input redacted-by-litellm\n\n{error}"}]
 
 
 def test_enterprise_alerting_loggers_resolves_real_classes():

@@ -2,6 +2,7 @@ import asyncio
 import json
 import threading
 from collections.abc import Iterator, Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 from uuid import uuid4
@@ -24,6 +25,7 @@ from litellm.integrations.langfuse.langfuse_sdk import (
 )
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache as LegacyDynamicLoggingCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.thread_pool_executor import MAX_THREADS, executor
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -181,6 +183,45 @@ async def test_langfuse_logging_completion(langfuse_export: tuple[respx.Route, s
     await _flush_langfuse()
     assert route.call_count == 1
     _expected_generation(route, "completion.json", trace_id)
+
+
+@pytest.mark.asyncio
+async def test_langfuse_failure_with_redaction_on_logs_the_error_without_the_prompt(
+    langfuse_export: tuple[respx.Route, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route, _ = langfuse_export
+    prompt: Final = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "failure_callback", ["langfuse"])
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="failure-scrub",
+        function_id="failure-scrub",
+    )
+    logging_obj.model_call_details["messages"] = logging_obj.messages
+    error: Final = litellm.BadRequestError(
+        message=f"Invalid message passed in {{'role': 'user', 'content': '{prompt}'}}",
+        model="gpt-4o",
+        llm_provider="openai",
+    )
+
+    logging_obj.failure_handler(error, f"Traceback: {error}")
+    await _flush_langfuse()
+
+    spans: Final = _exported_spans(route)
+    status_messages: Final = [
+        attributes["langfuse.observation.status_message"]
+        for attributes in (TypeAdapter(dict[str, object]).validate_python(span["attributes"]) for span in spans)
+        if "langfuse.observation.status_message" in attributes
+    ]
+    assert status_messages == [
+        "litellm.BadRequestError: Invalid message passed in {'role': 'user', 'content': 'redacted-by-litellm'}"
+    ]
+    assert prompt not in json.dumps(spans)
 
 
 @pytest.mark.asyncio
