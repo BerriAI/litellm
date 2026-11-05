@@ -6686,6 +6686,33 @@ def _injected_fallback_router(fallback_response: object) -> Router:
     return router
 
 
+@_PYTHON_CORE_ONLY
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_releases_source_without_gc():
+    """The wrapper must not tie the source iterator into a reference cycle, otherwise every
+    streamed /v1/responses request (and its request/response bodies) stays in memory until a
+    full garbage collection runs."""
+    import weakref
+
+    from litellm.router_python_core import _fallback_responses_stream_wrapper_class
+
+    router = _make_router_with_fallback()
+    src = _make_responses_iterator(chunks=[MagicMock(type="response.output_text.delta")])
+    src_ref = weakref.ref(src)
+    wrapped = await router._aresponses_streaming_iterator(
+        response=src, initial_kwargs={"model": "gpt-4", "stream": True}
+    )
+    assert type(wrapped) is _fallback_responses_stream_wrapper_class()
+
+    gc.disable()
+    try:
+        assert len([chunk async for chunk in wrapped]) == 1
+        del src, wrapped
+        assert src_ref() is None
+    finally:
+        gc.enable()
+
+
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_fallback():
     """Catches MidStreamFallbackError, re-enters the fallback chain via
