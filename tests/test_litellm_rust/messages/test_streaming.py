@@ -56,15 +56,37 @@ async def test_sync_stream_raises_like_python_before_sending(server: RecordingSe
 
 
 @pytest.mark.asyncio
-async def test_stream_closed_early_logs_success_once(server: RecordingServer) -> None:
-    server.enqueue(STREAM)
+async def test_stream_closed_early_logs_only_delivered_usage_once(server: RecordingServer) -> None:
+    first_event: Final = MESSAGES_EVENTS[0]
+    start_message: Final = {
+        **MESSAGES_RESPONSE,
+        "content": [],
+        "stop_reason": None,
+        "usage": {"input_tokens": 5, "output_tokens": 0},
+    }
+    events: Final = (
+        (first_event[0], {"type": "message_start", "message": start_message}),
+        *MESSAGES_EVENTS[1:],
+    )
+    response: Final = ResponseSpec(body=None, events=events, chunk_delay=0.1)
+    server.enqueue(response)
     recorder: Final = RecordingLogger()
 
     stream: Final = await call(server, stream=True, callbacks=[recorder])
     assert isinstance(stream, AsyncIterator)
-    await anext(stream)
+    first: Final = await anext(stream)
+    assert first == response.payloads()[0]
+    assert b"message_stop" not in first
+    await stream.aclose()
     await stream.aclose()
 
-    assert len(await recorder.wait_for_async("async_log_success_event")) == 1
+    assert_served_natively(server)
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert len(success) == 1
+    assert success[0].response.usage.prompt_tokens == start_message["usage"]["input_tokens"]
+    assert success[0].response.usage.completion_tokens == 0
+    assert not any("failure" in name for name in recorder.names)
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
+    await drain_logging()
+    assert len(tuple(event for event in recorder.events if event.name == "async_log_success_event")) == 1

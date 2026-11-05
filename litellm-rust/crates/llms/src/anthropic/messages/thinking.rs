@@ -11,6 +11,7 @@ use litellm_llms_types::{
 use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
 use serde_json::Value;
 use strum::VariantArray;
+use unicode_general_category::{GeneralCategory, get_general_category};
 
 use crate::base_llm::messages::context::{
     MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
@@ -248,9 +249,34 @@ fn numeric_budget_tokens(budget: &Recognized<u64>) -> Option<i64> {
     }
 }
 
+fn decimal_digit(character: char) -> Option<char> {
+    if character.is_ascii_digit() {
+        return Some(character);
+    }
+    let decimal_run_length =
+        std::iter::successors(Some(u32::from(character)), |code| code.checked_sub(1))
+            .take_while(|code| {
+                char::from_u32(*code).is_some_and(|character| {
+                    get_general_category(character) == GeneralCategory::DecimalNumber
+                })
+            })
+            .count();
+    decimal_run_length
+        .checked_sub(1)
+        .and_then(|offset| char::from_digit((offset % 10) as u32, 10))
+}
+
 /// Python's `int(str)`: surrounding whitespace, a sign, and single underscores between digits.
 fn python_int(text: &str) -> Option<i64> {
-    let trimmed = text.trim();
+    let normalized: String = text
+        .trim()
+        .chars()
+        .map(|character| match character {
+            '+' | '-' | '_' => Some(character),
+            character => decimal_digit(character),
+        })
+        .collect::<Option<_>>()?;
+    let trimmed = normalized.as_str();
     let digits = trimmed.trim_start_matches(['+', '-']);
     let well_formed = trimmed.len() - digits.len() <= 1
         && !digits.is_empty()
@@ -1361,6 +1387,19 @@ mod tests {
     #[case::float_below_a_tier(json!(1023.9), "low")]
     #[case::string_budget(json!(" 16_000 "), "xhigh")]
     #[case::negative_budget(json!(-5), "low")]
+    #[case::fullwidth_budget(json!("８１９２"), "xhigh")]
+    #[case::arabic_indic_budget(json!("٨١٩٢"), "xhigh")]
+    #[case::mixed_unicode_budget(json!(" +8_١92 "), "xhigh")]
+    #[case::supplementary_decimal_budget(json!("𝟠𝟙𝟡𝟚"), "xhigh")]
+    #[case::negative_unicode_budget(json!("-８_١92"), "low")]
+    #[case::signed_underscored_budget(json!(" +8_192 "), "xhigh")]
+    #[case::negative_underscored_budget(json!("-8_192"), "low")]
+    #[case::unsigned_integer_limit(json!(u64::MAX), "xhigh")]
+    #[case::positive_string_overflow(json!("184467440737095516160"), "xhigh")]
+    #[case::negative_string_overflow(json!("-184467440737095516160"), "low")]
+    #[case::negative_fraction_truncates_toward_zero(json!(-0.9), "low")]
+    #[case::below_medium_fraction(json!(2047.9), "low")]
+    #[case::at_medium_fraction(json!(2048.0), "medium")]
     fn legacy_budgets_read_like_python_numbers(#[case] budget: Value, #[case] effort: &str) {
         let translated = translate_thinking(
             request(
@@ -1380,6 +1419,16 @@ mod tests {
 
     #[rstest]
     #[case::text(json!("lots"), "str")]
+    #[case::superscript_digits(json!("⁸¹⁹²"), "str")]
+    #[case::roman_numeral(json!("Ⅷ"), "str")]
+    #[case::leading_separator(json!("_8192"), "str")]
+    #[case::trailing_separator(json!("8192_"), "str")]
+    #[case::repeated_separator(json!("8__192"), "str")]
+    #[case::two_signs(json!("--8192"), "str")]
+    #[case::sign_only(json!("+"), "str")]
+    #[case::decimal_string(json!("8192.0"), "str")]
+    #[case::exponent_string(json!("8e3"), "str")]
+    #[case::whitespace_only(json!(" "), "str")]
     #[case::list(json!([1]), "list")]
     #[case::null(Value::Null, "NoneType")]
     #[case::boolean(json!(true), "bool")]

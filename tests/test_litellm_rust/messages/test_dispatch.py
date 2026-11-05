@@ -22,6 +22,8 @@ from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_ME
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from tests.test_litellm_rust.messages.data import call
+from tests.test_litellm_rust.support.recording_server import NativeEntry, RecordingServer
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 PYTHON_RULES: Final[Rules] = ()
@@ -659,3 +661,63 @@ async def test_interceptor_feature_follows_the_resolved_provider() -> None:
         rules=rules,
     )
     assert result is native_result
+
+
+@pytest.mark.asyncio
+async def test_generic_messages_admission_declines_before_provider_or_hooks(server: RecordingServer) -> None:
+    from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+    from tests.test_litellm_rust.support.isolation import rebound
+    from tests.test_litellm_rust.support.routing import routed
+
+    recorder: Final = RecordingLogger()
+    server.expected_requests = 0
+    with routed(*RUST_RULES), rebound(litellm, "callbacks", [recorder]):
+        with pytest.raises(RuntimeError, match=r"declined.*no native adapter"):
+            await call(
+                server,
+                model="openai/gpt-5",
+                max_tokens=16,
+                messages=MESSAGES,
+                model_info={"supported_endpoints": ["/v1/messages"]},
+                api_key="synthetic",
+                api_base=server.base_url,
+            )
+    assert server.requests == []
+    assert recorder.names == ()
+    assert server.native_entries == [NativeEntry(server.base_url, declined=True)]
+
+
+@pytest.mark.asyncio
+async def test_python_traffic_cannot_satisfy_native_execution_evidence(server: RecordingServer) -> None:
+    from tests.test_litellm_rust.support.routing import assert_served_natively, routed
+
+    with routed(*PYTHON_RULES):
+        await call(
+            server,
+            model="anthropic/claude-test",
+            max_tokens=16,
+            messages=MESSAGES,
+            api_key="synthetic",
+            api_base=server.base_url,
+        )
+    assert server.native_entries == []
+    with pytest.raises(AssertionError, match="native execution evidence"):
+        assert_served_natively(server)
+
+
+@pytest.mark.asyncio
+async def test_sync_entry_async_flag_executes_the_real_native_binding(server: RecordingServer) -> None:
+    from tests.test_litellm_rust.support.routing import assert_served_natively, routed
+
+    with routed(*RUST_RULES):
+        pending: Final = litellm.anthropic_messages_handler(
+            model="anthropic/claude-test",
+            max_tokens=16,
+            messages=MESSAGES,
+            api_key="synthetic",
+            api_base=server.base_url,
+            is_async=True,
+        )
+        assert inspect.isawaitable(pending)
+        response: Final = await pending
+    assert_served_natively(server, response)

@@ -37,6 +37,7 @@ thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 url.workspace = true
+unicode-general-category = "1.1"
 
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }

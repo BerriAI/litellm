@@ -245,3 +245,14 @@ def test_a_late_rejection_tells_the_logger_the_resolved_call_first() -> None:
     assert isinstance(mapped, litellm.BadRequestError)
     assert logger.model_call_details["custom_llm_provider"] == "anthropic"
     assert logger.model_call_details["optional_params"] == {"max_tokens": 8}
+
+
+def test_invalid_provider_response_is_an_api_error_with_its_original_cause() -> None:
+    error: Final = RuntimeError("invalid messages response integer outside i64/u64 range")
+    error.messages_response_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker supplied by the native boundary
+    mapped: Final = messages_host.map_failure(error, {"model": "deepseek/model"}, "deepseek")
+    assert isinstance(mapped, litellm.APIError)
+    assert not isinstance(mapped, litellm.APIConnectionError)
+    assert mapped.status_code == 500
+    assert mapped.__context__ is error
+    assert "response integer outside" in str(mapped)

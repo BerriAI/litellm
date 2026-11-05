@@ -7,6 +7,7 @@ import litellm
 from tests.test_litellm_rust.support.clickhouse import clickhouse_url as clickhouse_url
 from tests.test_litellm_rust.support.isolation import isolated_test_state
 from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
+from tests.test_litellm_rust.support.served import NativeEntry, recording_native_entries
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="function")
@@ -15,9 +16,16 @@ async def isolate_test_state() -> AsyncIterator[None]:
         yield
 
 
+@pytest.fixture(autouse=True)
+def native_entries() -> Generator[list[NativeEntry]]:
+    with recording_native_entries() as entries:
+        yield entries
+
+
 @pytest.fixture
-def recording_server() -> Generator[RecordingServer]:
+def recording_server(native_entries: list[NativeEntry]) -> Generator[RecordingServer]:
     with recording_service() as server:
+        server.native_entries = native_entries
         yield server
 
 

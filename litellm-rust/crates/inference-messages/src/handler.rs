@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use bytes::Bytes;
 use futures_util::{FutureExt, StreamExt, TryStreamExt, stream::BoxStream};
@@ -77,7 +77,10 @@ pub(super) async fn execute(
         &request.wire,
     );
     let identity = request.identity.clone();
-    let (output, source) = match cache.lookup().await {
+    let hit = cache.lookup().await.filter(|(output, _)| {
+        matches!(output, MessagesCallResponse::Stream { .. }) == request.stream
+    });
+    let (output, source) = match hit {
         Some(hit) => hit,
         None => (
             call_provider(&route.http, request, context).await?,
@@ -412,16 +415,61 @@ fn decode_response(
     model: &str,
     text: &str,
 ) -> Result<MessagesResponse, Error> {
-    let response = serde_json::from_str(text).map_err(|err| {
-        Error::invalid_response(litellm_llms::ErrorDetail::invalid(
-            "messages response JSON",
-            err,
-        ))
-    })?;
+    validate_response_numbers(text)?;
+    let response = serde_json::from_str(text).map_err(invalid_response_json)?;
     config
         .transform_anthropic_messages_response(model, response)
         .map_err(Error::from)
         .map_err(Error::after_send)
+}
+
+fn invalid_response_json(error: serde_json::Error) -> Error {
+    Error::invalid_response(litellm_llms::ErrorDetail::invalid(
+        "messages response JSON",
+        error,
+    ))
+}
+
+fn validate_response_numbers(text: &str) -> Result<(), Error> {
+    use serde_json::value::RawValue;
+
+    let root: &RawValue = serde_json::from_str(text).map_err(invalid_response_json)?;
+    let mut pending = vec![(root, 0usize)];
+    while let Some((value, depth)) = pending.pop() {
+        let token = value.get().trim();
+        if depth >= 128 {
+            return Err(invalid_response_json(serde::de::Error::custom(
+                "messages response nesting exceeds 128 levels",
+            )));
+        }
+        match token.as_bytes().first() {
+            Some(b'{') => {
+                let fields: BTreeMap<String, &RawValue> =
+                    serde_json::from_str(token).map_err(invalid_response_json)?;
+                pending.extend(fields.into_values().map(|value| (value, depth + 1)));
+            }
+            Some(b'[') => {
+                let items: Vec<&RawValue> =
+                    serde_json::from_str(token).map_err(invalid_response_json)?;
+                pending.extend(items.into_iter().map(|value| (value, depth + 1)));
+            }
+            Some(b'-' | b'0'..=b'9') if !token.contains(['.', 'e', 'E']) => {
+                let integer = if token.starts_with('-') {
+                    token.parse::<i64>().map(|_| ())
+                } else {
+                    token.parse::<u64>().map(|_| ())
+                };
+                integer.map_err(|error| {
+                    Error::invalid_response(litellm_llms::ErrorDetail::invalid(
+                        "messages response integer outside i64/u64 range",
+                        error,
+                    ))
+                })?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn streaming_response(
@@ -494,6 +542,46 @@ mod tests {
     use super::*;
     use crate::{MessagesSettings, MessagesShaping, common_utils::messages_provider};
     use litellm_inference::provider::resolve_llm_provider;
+
+    #[rstest]
+    #[case::u64_max("18446744073709551615", Some(json!(u64::MAX)))]
+    #[case::above_u64("18446744073709551617", None)]
+    #[case::i64_min("-9223372036854775808", Some(json!(i64::MIN)))]
+    #[case::below_i64("-9223372036854775809", None)]
+    #[case::decimal("18446744073709551617.0", Some(json!(18446744073709551617.0_f64)))]
+    #[case::exponent("1.8446744073709552e19", Some(json!(1.8446744073709552e19_f64)))]
+    #[case::quoted_integer(r#""18446744073709551617""#, Some(json!("18446744073709551617")))]
+    #[case::escaped_digit(r#""\u00318446744073709551617""#, Some(json!("18446744073709551617")))]
+    fn response_integer_tokens_never_round_into_success(
+        #[case] token: &str,
+        #[case] expected: Option<Value>,
+    ) {
+        let text = format!(
+            r#"{{"id":"m","type":"message","role":"assistant","model":"claude-test","content":[],"future":{{"values":[{token}]}}}}"#,
+        );
+        let config = litellm_llms::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
+        let result = decode_response(&config, "claude-test", &text);
+        match expected {
+            Some(expected) => assert_eq!(result.unwrap().extra["future"]["values"][0], expected),
+            None => {
+                let error = result.unwrap_err();
+                assert!(error.is_response());
+                assert!(!error.is_request());
+                assert!(error.dispatched());
+            }
+        }
+    }
+
+    #[rstest]
+    #[case::long_numeric_string(format!(r#""{}""#, "9".repeat(4096)), true)]
+    #[case::long_integer("9".repeat(4096), false)]
+    #[case::deeply_nested(format!("{}0{}", "[".repeat(512), "]".repeat(512)), false)]
+    fn response_numeric_guard_bounds_nesting_and_ignores_string_contents(
+        #[case] token: String,
+        #[case] accepted: bool,
+    ) {
+        assert_eq!(validate_response_numbers(&token).is_ok(), accepted);
+    }
 
     #[fixture]
     fn shaping() -> MessagesShaping {

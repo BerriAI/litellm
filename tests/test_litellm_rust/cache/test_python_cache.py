@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Final, Literal
 
 import pytest
@@ -19,10 +20,10 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelReq
 from litellm.proxy.utils import InternalUsageCache
 from litellm.rust_bridge.catalog import Route
 from tests.test_litellm_rust.cache.support import cache_key, collect, invoke, payload
-from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
+from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE, call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.routing import native_route
+from tests.test_litellm_rust.support.routing import assert_served_natively, native_route
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -360,3 +361,103 @@ async def test_legacy_cache_keeps_public_messages_responses_compatible(
     second_payload: Final = await collect(second) if stream else payload(second)
     assert second_payload == first_payload
     assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("response", "stream"))
+async def test_cancelling_a_cache_write_does_not_store_or_log_success(
+    recording_server: RecordingServer, stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.caching.base_cache import BaseCache
+    from litellm.caching.in_memory_cache import InMemoryCache
+
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    storage: Final = InMemoryCache()
+
+    class GatedCache(BaseCache):
+        async def async_get_cache(self, key: str, **kwargs: object) -> object:
+            return storage.get_cache(key, **kwargs)
+
+        async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+            entered.set()
+            await release.wait()
+            storage.set_cache(key, value, **kwargs)
+
+        async def async_set_cache_pipeline(
+            self, cache_list: list[tuple[str, object]], ttl: float | None = None
+        ) -> None:
+            entered.set()
+            await release.wait()
+            await storage.async_set_cache_pipeline(cache_list, ttl=ttl)
+
+    monkeypatch.setattr(litellm, "cache", Cache(_backend=GatedCache()))
+    recording_server.expected_requests = 2
+    recording_server.default_response = (
+        ResponseSpec(body=None, events=MESSAGES_EVENTS) if stream else ResponseSpec(body=MESSAGES_RESPONSE)
+    )
+    recorder: Final = RecordingLogger()
+
+    async def complete_call() -> object:
+        response: Final = await call(recording_server, stream=stream, callbacks=[recorder])
+        if stream:
+            await collect(response)
+        return response
+
+    with native_route(Route.MESSAGES):
+        task: Final = asyncio.create_task(complete_call())
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release.set()
+        await drain_logging()
+        assert storage.cache_dict == {}
+        assert len(recording_server.requests) == 1
+        assert not any("success" in name or "failure" in name for name in recorder.names)
+
+        second: Final = await call(recording_server, stream=stream)
+        assert cache_key(second) is None
+        if stream:
+            await collect(second)
+        third: Final = await call(recording_server, stream=stream)
+        assert isinstance(cache_key(third), str)
+        if stream:
+            await collect(third)
+
+    assert_served_natively(recording_server, count=2)
+    assert len(recording_server.requests) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_stream", (False, True), ids=("response_first", "stream_first"))
+@pytest.mark.parametrize("preset", (False, True), ids=("normal_key", "preset_key"))
+async def test_cached_messages_preserve_the_requested_response_mode(
+    recording_server: RecordingServer, first_stream: bool, preset: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache())
+    recording_server.expected_requests = None
+
+    async def request(stream: bool) -> object:
+        recording_server.default_response = (
+            ResponseSpec(body=None, events=MESSAGES_EVENTS) if stream else ResponseSpec(body=MESSAGES_RESPONSE)
+        )
+        options: Final = {"litellm_params": {"preset_cache_key": "messages-mode"}} if preset else {}
+        response: Final = await call(recording_server, stream=stream, **options)
+        assert isinstance(response, AsyncIterator) is stream
+        if stream:
+            assert await collect(response) == b"".join(recording_server.default_response.payloads())
+        else:
+            assert isinstance(response, dict)
+            assert response["id"] == MESSAGES_RESPONSE["id"]
+        return response
+
+    with native_route(Route.MESSAGES):
+        await request(first_stream)
+        second: Final = await request(not first_stream)
+        assert cache_key(second) is None
+        third: Final = await request(not first_stream)
+        assert isinstance(cache_key(third), str)
+
+    assert_served_natively(recording_server, count=2)
+    assert len(recording_server.requests) == 2

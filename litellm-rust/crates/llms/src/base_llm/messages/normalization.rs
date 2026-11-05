@@ -160,4 +160,93 @@ mod tests {
             normalized
         );
     }
+
+    #[rstest]
+    #[case::blocks(
+        json!([{"type":"text","text":"context","cache_control":{"type":"ephemeral","scope":"global","ttl":"1h","future":null}}]),
+        json!([{"type":"text","text":"context","cache_control":{"type":"ephemeral","ttl":"1h","future":null}}])
+    )]
+    #[case::text(json!("context"), json!("context"))]
+    #[case::absent(Value::Null, Value::Null)]
+    fn scope_removal_preserves_cache_hints_and_opaque_nested_fields(
+        #[case] system: Value,
+        #[case] expected_system: Value,
+    ) {
+        let nested = json!([{"type":"text","text":"nested","cache_control":{"scope":"global"}}]);
+        let tool = json!({"name":"lookup","input_schema":{},"cache_control":{"scope":"global","ttl":"1h"}});
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model":"test", "messages":[
+                {"role":"user","content":"plain","future_message":null},
+                {"role":"assistant","content":[
+                    {"type":"future","cache_control":{"type":"ephemeral","scope":"global","ttl":"1h","future":null},"payload":7},
+                    {"type":"text","text":"uncached"}
+                ]},
+                {"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":nested,
+                    "cache_control":{"scope":"global","ttl":"5m"}}]}
+            ],
+            "system":system, "tools":[tool], "future_request":null
+        })).unwrap();
+        let stripped = super::strip_cache_control_scope(request);
+        let wire = serde_json::to_value(&stripped).unwrap();
+        assert_eq!(
+            wire["messages"],
+            json!([
+                {"role":"user","content":"plain","future_message":null},
+                {"role":"assistant","content":[
+                    {"type":"future","cache_control":{"type":"ephemeral","ttl":"1h","future":null},"payload":7},
+                    {"type":"text","text":"uncached"}
+                ]},
+                {"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":nested,
+                    "cache_control":{"ttl":"5m"}}]}
+            ])
+        );
+        assert_eq!(
+            wire.get("system"),
+            (!expected_system.is_null()).then_some(&expected_system)
+        );
+        assert_eq!(wire["tools"], json!([tool]));
+        assert_eq!(wire.get("future_request"), Some(&Value::Null));
+        assert_eq!(super::strip_cache_control_scope(stripped.clone()), stripped);
+    }
+
+    #[rstest]
+    #[case::native_mid_conversation(true, json!({"role":"system","content":"later","name":"operator"}))]
+    #[case::converted_mid_conversation(false, json!({"role":"user","content":[
+        {"type":"text","text":crate::base_llm::messages::mid_conversation_system::CONVERTED_SYSTEM_NOTE},
+        {"type":"text","text":"later"}
+    ]}))]
+    fn leading_system_hoisting_and_later_system_conversion_compose(
+        #[case] supports_mid_conversation: bool,
+        #[case] expected_later: Value,
+    ) {
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model":"test", "max_tokens":16, "system":"existing",
+            "messages":[
+                {"role":"system","content":"leading"},
+                {"role":"assistant","content":[{"type":"tool_use","id":"t","name":"lookup","input":{}}]},
+                {"role":"system","content":"later","name":"operator"},
+                {"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}
+            ]
+        })).unwrap();
+        let assistant = request.messages[1].clone();
+        let result = request.messages[3].clone();
+        let normalized = normalize_system_role_messages(request, supports_mid_conversation);
+        let expected_messages = if supports_mid_conversation {
+            json!([assistant, expected_later, result])
+        } else {
+            json!([assistant, result, expected_later])
+        };
+        assert_eq!(
+            serde_json::to_value(&normalized).unwrap(),
+            json!({
+                "model":"test", "max_tokens":16,
+                "system":[{"type":"text","text":"existing"},{"type":"text","text":"leading"}],
+                "messages":expected_messages
+            })
+        );
+        assert_eq!(
+            normalize_system_role_messages(normalized.clone(), supports_mid_conversation),
+            normalized
+        );
+    }
 }

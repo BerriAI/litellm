@@ -23,6 +23,7 @@ pyo3::create_exception!(
 );
 
 const MESSAGES_REQUEST_ERROR: &str = "messages_request_error";
+const MESSAGES_RESPONSE_ERROR: &str = "messages_response_error";
 /// The rejection is a parameter the model does not support, which Python raises as
 /// `UnsupportedParamsError`.
 const MESSAGES_UNSUPPORTED_PARAM: &str = "messages_unsupported_param";
@@ -136,6 +137,9 @@ pub(crate) fn route_failure(
             }
             if error.is_missing_credential() {
                 value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;
+            }
+            if error.is_response() {
+                value.setattr(MESSAGES_RESPONSE_ERROR, true)?;
             }
             native
         }

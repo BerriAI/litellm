@@ -1,4 +1,5 @@
 use crate::base_llm::messages::context::MessagesModelCapabilities;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
 
@@ -317,7 +318,12 @@ fn retain_blocks(messages: Vec<Message>, keep: impl Fn(&ContentBlock) -> bool) -
 
 pub fn strip_empty_content_blocks(messages: Vec<Message>) -> Vec<Message> {
     retain_blocks(messages, |block| {
-        !is_empty_text_block(block) && !is_empty_thinking_block(block)
+        !is_empty_text_block(block)
+            && (!is_empty_thinking_block(block)
+                || block
+                    .signature
+                    .as_ref()
+                    .is_some_and(|signature| !signature.is_empty()))
     })
 }
 
@@ -397,6 +403,11 @@ pub fn strip_provider_specific_fields(messages: Vec<Message>) -> Vec<Message> {
                         .into_iter()
                         .map(|block| ContentBlock {
                             provider_specific_fields: None,
+                            extra: block
+                                .extra
+                                .into_iter()
+                                .filter(|(key, _)| key != "provider_specific_fields")
+                                .collect(),
                             ..block
                         })
                         .collect(),
@@ -444,8 +455,45 @@ pub fn filter_billing_headers_from_system(system: SystemPrompt) -> Option<System
     }
 }
 
+fn unwrapped_redacted_thinking_data(data: &str) -> Option<String> {
+    let decoded = STANDARD.decode(data).ok()?;
+    let native = std::str::from_utf8(&decoded).ok()?;
+    if !native.is_ascii() || STANDARD.decode(native).is_err() {
+        return None;
+    }
+    Some(native.to_string())
+}
+
+fn with_native_redacted_data(block: ContentBlock) -> ContentBlock {
+    if !block.is_type(ContentBlockType::RedactedThinking) {
+        return block;
+    }
+    let Some(data) = block
+        .data
+        .as_deref()
+        .and_then(unwrapped_redacted_thinking_data)
+    else {
+        return block;
+    };
+    ContentBlock {
+        data: Some(data),
+        ..block
+    }
+}
+
 pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> {
     retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
+        .into_iter()
+        .map(|message| match message.content {
+            MessageContent::Blocks(blocks) => Message {
+                content: MessageContent::Blocks(
+                    blocks.into_iter().map(with_native_redacted_data).collect(),
+                ),
+                ..message
+            },
+            MessageContent::Text(_) => message,
+        })
+        .collect()
 }
 
 fn is_advisor_use(block: &ContentBlock) -> bool {
@@ -858,9 +906,17 @@ mod tests {
         json!([
             {"role": "user", "content": "weather?"},
             {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "", "signature": "sig_abc"},
                 {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
             ]}
         ])
+    )]
+    #[case::empty_thinking_with_empty_signature_is_removed(
+        json!([{"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "", "signature": ""},
+            {"type": "text", "text": "answer"}
+        ]}]),
+        json!([{"role": "assistant", "content": [{"type": "text", "text": "answer"}]}])
     )]
     #[case::whitespace_thinking_beside_real_and_redacted_thinking(
         json!([{"role": "assistant", "content": [
@@ -896,6 +952,9 @@ mod tests {
     #[case::non_empty_text(json!([{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]))]
     #[case::padded_text(json!([{"role": "assistant", "content": [{"type": "text", "text": "  hi  "}]}]))]
     #[case::empty_string_content(json!([{"role": "user", "content": ""}]))]
+    #[case::signed_whitespace_thinking(json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": " \n ", "signature": "sig_abc"}
+    ]}]))]
     #[case::textless_non_text_block(json!([{"role": "user", "content": [
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}}
     ]}]))]
@@ -1001,6 +1060,10 @@ mod tests {
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}
         ])
     )]
+    #[case::unknown_block_null_provider_fields(
+        json!([{"role": "user", "content": [{"type": "future", "provider_specific_fields": null, "text": null}]}]),
+        json!([{"role": "user", "content": [{"type": "future", "text": null}]}])
+    )]
     fn strip_provider_specific_fields_rewrites(#[case] input: Value, #[case] expected: Value) {
         assert_eq!(apply(strip_provider_specific_fields, input), expected);
     }
@@ -1073,6 +1136,33 @@ mod tests {
     )]
     fn strip_encrypted_reasoning_blocks_rewrites(#[case] input: Value, #[case] expected: Value) {
         assert_eq!(apply(strip_encrypted_reasoning_blocks, input), expected);
+    }
+
+    #[rstest]
+    #[case::native(false)]
+    #[case::converse_wrapped(true)]
+    fn redacted_thinking_history_uses_the_native_data(#[case] wrapped: bool) {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        let native = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP";
+        let data = if wrapped {
+            STANDARD.encode(native)
+        } else {
+            native.to_string()
+        };
+        let input = json!([{"role": "assistant", "content": [
+            {"type": "redacted_thinking", "data": data},
+            {"type": "text", "text": "answer"}
+        ]}]);
+        assert_eq!(
+            apply(strip_encrypted_reasoning_blocks, input),
+            json!([
+                {"role": "assistant", "content": [
+                    {"type": "redacted_thinking", "data": native},
+                    {"type": "text", "text": "answer"}
+                ]}
+            ])
+        );
     }
 
     #[rstest]

@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::common_utils::messages_provider;
 
-pub use common_utils::merge_messages_header_sources;
+pub use common_utils::{merge_messages_header_sources, supports_messages_provider};
 pub use litellm_inference::Error;
 pub use types::{
     MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping, litellm_params,
