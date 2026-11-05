@@ -62,6 +62,13 @@ const MODELS = [
     input_cost_per_token: 0,
     output_cost_per_token: 0,
     description: "General purpose",
+    deployment_pricing: [
+      {
+        provider: "azure",
+        costs: { output_cost_per_token: 1e-5, output_cost_per_token_priority: 2e-5 },
+        tiered_pricing: [],
+      },
+    ],
   },
 ];
 
@@ -270,6 +277,24 @@ describe("PublicAiHub", () => {
     const row = await screen.findByRole("link", { name: /gpt-5/ });
 
     expect(within(row).getAllByText("Free").length).toBeGreaterThan(0);
+  });
+
+  it("shows the open model's prices for each of its deployments", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    await user.click(await screen.findByRole("link", { name: /gpt-5/ }));
+
+    expect(await screen.findByRole("heading", { name: "Pricing by deployment" })).toBeInTheDocument();
+    const azure = screen.getByRole("region", { name: "Azure pricing" });
+    expect(within(azure).getByRole("row", { name: /Output \/ 1M tokens/ })).toHaveTextContent("$10.00$20.00");
+  });
+
+  it("leaves the pricing breakdown out for a model without deployment prices", async () => {
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    expect(await screen.findByRole("heading", { level: 2, name: "claude-sonnet-4-5" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Pricing by deployment" })).not.toBeInTheDocument();
   });
 
   it("treats an empty open param as nothing opened", async () => {

@@ -2534,6 +2534,200 @@ def test_model_group_info_cost_none_for_unpriced_deployment_but_zero_when_declar
     assert priced.output_cost_per_token is not None and priced.output_cost_per_token > 0
 
 
+_HUB_PRICES: Final = MappingProxyType(
+    {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 4e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_creation_input_token_cost": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens": 2e-06,
+        "output_cost_per_token_above_200k_tokens": 8e-06,
+        "input_cost_per_token_priority": 3e-06,
+        "input_cost_per_token_flex": 5e-07,
+        "input_cost_per_token_batches": 5e-07,
+    }
+)
+
+
+def _cost_map_model(key: str, entry: Mapping[str, object]) -> str:
+    litellm.register_model(
+        {key: {"litellm_provider": "openai", "mode": "chat", **entry}},
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+    return f"openai/{key}"
+
+
+def test_model_group_info_lists_every_cost_map_price_of_a_deployment(local_model_cost_map: None) -> None:
+    model: Final = _cost_map_model("hub-pricing-model", {**_HUB_PRICES, "max_input_tokens": 400000})
+    router: Final = litellm.Router(model_list=[{"model_name": "hub", "litellm_params": {"model": model}}])
+
+    group: Final = router.registry().group("hub")
+
+    assert group is not None
+    assert [(p.provider, dict(p.costs), p.tiered_pricing) for p in group.deployment_pricing] == [
+        ("openai", dict(_HUB_PRICES), ())
+    ]
+
+
+def test_model_group_info_lists_each_deployments_price_once_next_to_the_unchanged_max(
+    local_model_cost_map: None,
+) -> None:
+    model: Final = _cost_map_model("hub-pricing-model", _HUB_PRICES)
+    override: Final = 3 * _HUB_PRICES["input_cost_per_token"]
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "hub", "litellm_params": {"model": model, "api_base": "https://a.example"}},
+            {"model_name": "hub", "litellm_params": {"model": model, "api_base": "https://b.example"}},
+            {"model_name": "hub", "litellm_params": {"model": model, "input_cost_per_token": override}},
+        ]
+    )
+
+    group: Final = router.registry().group("hub")
+
+    assert group is not None
+    assert [p.costs["input_cost_per_token"] for p in group.deployment_pricing] == [
+        _HUB_PRICES["input_cost_per_token"],
+        override,
+    ]
+    assert group.input_cost_per_token == override
+    assert group.output_cost_per_token == _HUB_PRICES["output_cost_per_token"]
+
+
+def _usage_billed_at(cost_key: str, prompt_tokens: int = 1000) -> tuple[Usage, str | None]:
+    match cost_key:
+        case "input_cost_per_token":
+            return Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens), None
+        case "output_cost_per_token":
+            return Usage(prompt_tokens=0, completion_tokens=1000, total_tokens=1000), None
+        case "cache_read_input_token_cost":
+            return Usage(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                total_tokens=1000,
+                prompt_tokens_details={"cached_tokens": 1000},
+            ), None
+        case "cache_creation_input_token_cost":
+            return Usage(
+                prompt_tokens=1000, completion_tokens=0, total_tokens=1000, cache_creation_input_tokens=1000
+            ), None
+        case "input_cost_per_token_priority":
+            return Usage(prompt_tokens=1000, completion_tokens=0, total_tokens=1000), "priority"
+        case "input_cost_per_token_flex":
+            return Usage(prompt_tokens=1000, completion_tokens=0, total_tokens=1000), "flex"
+        case _:
+            raise AssertionError(f"no billing scenario for {cost_key}")
+
+
+def _billed_rate(model: str, deployment_id: str, usage: Usage, service_tier: str | None) -> float:
+    cost: Final = litellm.completion_cost(
+        completion_response=litellm.ModelResponse(usage=usage),
+        model=model,
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+        service_tier=service_tier,
+    )
+    return cost / max(usage.prompt_tokens, usage.completion_tokens)
+
+
+def test_model_group_info_shows_an_overridden_deployment_only_the_prices_billing_charges(
+    local_model_cost_map: None,
+) -> None:
+    model: Final = _cost_map_model("hub-pricing-model", _HUB_PRICES)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "hub",
+                "litellm_params": {
+                    "model": model,
+                    "input_cost_per_token": 3 * _HUB_PRICES["input_cost_per_token"],
+                    "output_cost_per_token": 3 * _HUB_PRICES["output_cost_per_token"],
+                },
+                "model_info": {"id": "hub-override"},
+            }
+        ]
+    )
+
+    group: Final = router.registry().group("hub")
+
+    assert group is not None
+    costs: Final = group.deployment_pricing[0].costs
+    assert {key: _billed_rate(model, "hub-override", *_usage_billed_at(key)) for key in costs} == pytest.approx(
+        dict(costs)
+    )
+    long_prompt: Final = _usage_billed_at("input_cost_per_token", prompt_tokens=250_000)
+    assert _billed_rate(model, "hub-override", *long_prompt) == pytest.approx(costs["input_cost_per_token"])
+    shadowed: Final = {
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_batches",
+    }
+    assert shadowed.isdisjoint(costs), dict(costs)
+
+
+def test_model_group_info_lists_tiered_pricing_ranges(local_model_cost_map: None) -> None:
+    tiers: Final = (
+        {"range": [0, 256000], "input_cost_per_token": 5e-08, "output_cost_per_token": 4e-07},
+        {"range": [256000, 1000000], "input_cost_per_token": 2.5e-07, "output_cost_per_token": 2e-06},
+    )
+    model: Final = _cost_map_model("hub-tiered-model", {"tiered_pricing": list(tiers)})
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "tiered", "litellm_params": {"model": model}},
+            {
+                "model_name": "tiered",
+                "litellm_params": {"model": model, "input_cost_per_token": 1e-06, "output_cost_per_token": 4e-06},
+            },
+        ]
+    )
+
+    group: Final = router.registry().group("tiered")
+
+    assert group is not None
+    assert [
+        [(tier.range, dict(tier.costs)) for tier in pricing.tiered_pricing] for pricing in group.deployment_pricing
+    ] == [
+        [
+            ((0.0, 256000.0), {"input_cost_per_token": 5e-08, "output_cost_per_token": 4e-07}),
+            ((256000.0, 1000000.0), {"input_cost_per_token": 2.5e-07, "output_cost_per_token": 2e-06}),
+        ],
+        [],
+    ]
+
+
+def test_model_group_info_lists_custom_prices_of_an_unmapped_deployment_and_skips_an_unpriced_one() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "self-hosted",
+                "litellm_params": {"model": "openai/hub-unpriced", "api_base": "http://localhost:8000/v1"},
+                "model_info": {"cost_tracking_exempt": True},
+            },
+            {
+                "model_name": "self-hosted",
+                "litellm_params": {
+                    "model": "openai/hub-priced",
+                    "api_base": "http://localhost:8001/v1",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                },
+                "model_info": {"cache_read_input_token_cost": 1e-07},
+            },
+        ]
+    )
+
+    group: Final = router.registry().group("self-hosted")
+
+    assert group is not None
+    assert [(p.provider, dict(p.costs)) for p in group.deployment_pricing] == [
+        (
+            "openai",
+            {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06, "cache_read_input_token_cost": 1e-07},
+        )
+    ]
+
+
 def test_model_group_info_description_from_model_info():
     """
     model_info.description set in the config should surface on ModelGroupInfo,

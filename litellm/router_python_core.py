@@ -378,6 +378,7 @@ from litellm.router_utils.kubernetes_pod_discovery import (
     resolve_pods_after,
     resolve_pods_after_bound,
 )
+from litellm.router_utils.model_group_pricing import deployment_pricing
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     RESPONSES_CONTINUATION_KWARG,
@@ -790,6 +791,11 @@ def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object]
 
 def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
+
+
+def _configured_deployment_id(deployment: Mapping[str, object]) -> str | None:
+    deployment_id: Final = _configured_model_info(deployment).get("id")
+    return deployment_id if isinstance(deployment_id, str) else None
 
 
 def _operator_max_input_tokens(deployment: Mapping[str, object]) -> int | None:
@@ -13526,6 +13532,12 @@ class PythonCore(DeprecatedRouterMembers):
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
 
+            if (
+                pricing := deployment_pricing(
+                    llm_provider, _configured_deployment_id(model), litellm_params.model, model_info
+                )
+            ) is not None and pricing not in model_group_info.deployment_pricing:
+                model_group_info.deployment_pricing = (*model_group_info.deployment_pricing, pricing)
             model_group_info.supported_endpoints = (
                 tuple(
                     dict.fromkeys(

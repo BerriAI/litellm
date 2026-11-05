@@ -32335,6 +32335,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** DeploymentPricing */
+        DeploymentPricing: {
+            /** Costs */
+            costs: {
+                [key: string]: number;
+            };
+            /** Provider */
+            provider: string;
+            /**
+             * Tiered Pricing
+             * @default []
+             */
+            tiered_pricing: components["schemas"]["PriceTier"][];
+        };
         /** DeploymentWarning */
         DeploymentWarning: {
             /** Id */
@@ -39089,6 +39103,11 @@ export interface components {
             } | null;
             /** Custom Tags */
             custom_tags?: string[] | null;
+            /**
+             * Deployment Pricing
+             * @default []
+             */
+            deployment_pricing: components["schemas"]["DeploymentPricing"][];
             /** Description */
             description?: string | null;
             /** Health Checked At */
@@ -42242,6 +42261,18 @@ export interface components {
              * @description New status: 'published' or 'production'.
              */
             version_status: string;
+        };
+        /** PriceTier */
+        PriceTier: {
+            /** Costs */
+            costs: {
+                [key: string]: number;
+            };
+            /** Range */
+            range: [
+                number,
+                number
+            ];
         };
         /** Prompt */
         Prompt: {

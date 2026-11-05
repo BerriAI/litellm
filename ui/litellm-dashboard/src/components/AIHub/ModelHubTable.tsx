@@ -57,6 +57,7 @@ import {
   isDecisionMode,
 } from "@/lib/decisionModels";
 import DecisionModelGarden from "@/components/AIHub/DecisionModelGarden";
+import { DeploymentPricingBreakdown } from "@/components/molecules/models/DeploymentPricingBreakdown";
 import { ModelCustomMetadata } from "./ModelCustomMetadata";
 
 interface ModelHubTableProps {
@@ -819,6 +820,11 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     </p>
                   </div>
                 </div>
+                <DeploymentPricingBreakdown
+                  className="mt-4"
+                  deployments={selectedModel.deployment_pricing}
+                  heading={<p className="font-medium">Pricing by Deployment:</p>}
+                />
               </div>
 
               {/* Capabilities */}
