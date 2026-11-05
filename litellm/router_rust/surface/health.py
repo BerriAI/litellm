@@ -255,6 +255,17 @@ class RustHealthCallbacks:
         deployment: Final = self._deployment_of(deployment_id)
         return deployment is not None and _authenticates_per_caller(deployment.litellm_params)
 
+    def ran_as_request_deployment(self, logged_id: object, deployment_id: object) -> bool:
+        """Whether a call against ``deployment_id`` ran under credentials the request supplied
+        (``_handle_clientside_credential``): as ``logged_id``, a request-scoped deployment the router
+        does not hold, so its failure is that id's, never the shared deployment's."""
+        return (
+            logged_id is not None
+            and deployment_id is not None
+            and str(logged_id) != str(deployment_id)
+            and self._deployment_of(logged_id) is None
+        )
+
     def failure_exits(
         self, exception: object, logged: Mapping[str, object], deployment_id: object
     ) -> Mapping[str, bool]:
@@ -498,16 +509,17 @@ class RustHealthCallbacks:
         completion_response: object,
         start_time: object,
         end_time: object,
-    ) -> None:
-        """Count a success and the call's tokens and request against a tracked deployment."""
-        await self.report_stream_success(kwargs, completion_response)
+    ) -> str | None:
+        """Count a success and the call's tokens and request against a tracked deployment; returns
+        the counter's key, as the sync callback does."""
+        return await self.report_stream_success(kwargs, completion_response)
 
     async def report_stream_success(
         self,
         kwargs: Mapping[str, object],
         completion_response: object,
         callbacks: Mapping[str, bool] | None = None,
-    ) -> None:
+    ) -> str | None:
         """``deployment_callback_on_success``, for a stream that ended. The re-pin is the host's half
         of that callback, so it reads ``callbacks`` here."""
         from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
@@ -528,7 +540,7 @@ class RustHealthCallbacks:
         total: Final = float(tokens) if isinstance(tokens, int | float) else 0.0
         counted: Final = get_counted_usage_tokens(as_str_mapping(kwargs.get("litellm_params")) or {})
         usage_model: Final = target[1].get("deployment")
-        await self._drive_cache_steps(
+        finished: Final = await self._drive_cache_steps(
             self._handle.report_success(
                 target[0],
                 total if counted is None else max(0.0, total - counted),
@@ -538,6 +550,8 @@ class RustHealthCallbacks:
                 callbacks,
             )
         )
+        key: Final = finished.get("key")
+        return key if isinstance(key, str) else None
 
     async def count_realtime_session_success(self, deployment_id: str) -> None:
         """``increment_deployment_successes_for_current_minute`` for a realtime session that ended

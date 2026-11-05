@@ -1949,7 +1949,6 @@ ALIAS_CASES: Final = (
         "is_model_access_group_for_wildcard_route",
         False,
     ),
-    ("litellm.router", "Router", "_replay_model_cost_registrations", "replay_model_cost_registrations", False),
     ("litellm.router", "Router", "_routing_groups", "routing_groups", True),
     ("litellm.router", "Router", "_update_redis_cache", "update_redis_cache", False),
     (

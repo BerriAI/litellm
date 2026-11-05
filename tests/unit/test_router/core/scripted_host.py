@@ -22,7 +22,6 @@ from litellm.litellm_core_utils.agentic_followup_failure import mark_agentic_fol
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 from litellm.router_config import RouterDynamicConfig, build_router_config
 from litellm.router_core import RouterCore
-from litellm.router_python_core import PythonCore
 from litellm.router_python_host import CallbackList, Endpoint, PythonHost
 from litellm.types.utils import EmbeddingResponse, ModelResponse
 
@@ -482,43 +481,19 @@ def deployment(
     }
 
 
-def python_core(host: ScriptedHost, **arguments: object) -> PythonCore:  # kwargs-ok: the router's constructor arguments
-    """A ``PythonCore`` built the way ``Router`` builds one, on ``host``."""
-    config: Final = build_router_config(arguments)
-    return PythonCore(**config.arguments, _host=host)  # pyright: ignore[reportArgumentType]  # the same arguments Router binds
-
-
-class CoreDeclined(Exception):
-    """The core does not serve this configuration (the router would stay on the Python core)."""
-
-
 CoreBuilder = Callable[..., RouterCore]
 """``builder(host, **router_arguments)``: a router core on ``host``."""
 
 
 def rust_core(host: ScriptedHost, **arguments: object) -> RouterCore:  # kwargs-ok: the router's constructor arguments
-    """A ``RustCore`` on ``host``, built the way ``make_core`` builds one when the Rust router is on."""
+    """A ``RustCore`` on ``host``, built the way ``make_core`` builds one."""
     from litellm.router_rust.core import RustCore
-    from litellm.rust_bridge._native import RustBridgeDeclined
 
-    config: Final = build_router_config(arguments)  # an invalid config raises here, as for the Python core
-    try:
-        return RustCore.build(config, host)
-    except RustBridgeDeclined as declined:  # make_core keeps such a router on the Python core
-        raise CoreDeclined(str(declined)) from declined
+    return RustCore.build(build_router_config(arguments), host)
 
 
-CORE_BUILDERS: Final[dict[str, CoreBuilder]] = {"python": python_core, "rust": rust_core}
-
-
-def records_outcomes_through_callbacks(core: RouterCore) -> bool:
-    """Whether ``core`` learns attempt outcomes from callbacks it registers on its host. The Python
-    core does; the Rust core records every outcome from the attempt itself and registers none."""
-    return isinstance(core, PythonCore)
-
-
-"""Every core the suite runs on. Another core adds its builder here; a builder that cannot take a
-configuration raises ``CoreDeclined``, and the test is skipped for that core."""
+CORE_BUILDERS: Final[dict[str, CoreBuilder]] = {"rust": rust_core}
+"""Every core the suite runs on."""
 
 
 __all__ = [
@@ -526,7 +501,6 @@ __all__ = [
     "INFERENCE_OPS",
     "Call",
     "CoreBuilder",
-    "CoreDeclined",
     "HostCallbacks",
     "ScriptedHost",
     "auth_error",
@@ -537,7 +511,6 @@ __all__ = [
     "deployment",
     "dynamic_config",
     "embedding_response",
-    "python_core",
     "rate_limit",
     "rust_core",
     "server_error",

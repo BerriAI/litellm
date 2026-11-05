@@ -366,7 +366,7 @@ impl Router {
             })
             .await?;
         let name = match routed {
-            PreRouted::Model(name) => name,
+            PreRouted::Model(name) | PreRouted::Bound { model: name, .. } => name,
             PreRouted::Deployment(deployment) => return Ok(deployment),
         };
         snapshot.missing_routing_group(request, &name)?;
@@ -374,6 +374,10 @@ impl Router {
             .core
             .candidates(&snapshot, op, request, &name, &SelectInputs::default())
             .await?;
+        // An empty candidate list names what the request could route to before the cooldown filter.
+        if candidates.healthy.is_empty() && !candidates.kind.is_single() {
+            return Err(candidates.none_healthy(&snapshot.registry));
+        }
         self.core.pick(&snapshot, op, request, &candidates).await
     }
 
@@ -398,9 +402,7 @@ impl Router {
             .await?;
         // `_core_async_get_healthy_deployments` raises when nothing is left.
         if candidates.healthy.is_empty() {
-            return Err(Error::NoHealthyDeployments {
-                model: candidates.failed_model(&snapshot.registry),
-            });
+            return Err(candidates.none_healthy(&snapshot.registry));
         }
         Ok(candidates)
     }
@@ -434,7 +436,7 @@ impl Router {
 
     /// A success a logging callback saw (`deployment_callback_on_success`): counted for a
     /// configured deployment, with its tokens and requests when it tracks usage. Returns the
-    /// success counter's key, or `None` for an unknown deployment.
+    /// tokens counter's key when it added usage (`_increment_deployment_usage`), else `None`.
     pub async fn report_success(
         &self,
         id: &str,
@@ -462,22 +464,22 @@ impl Router {
         let Some(deployment) = snapshot.registry.deployment(id) else {
             return Ok(None);
         };
-        let key = self.core.health.count_success(id).await?;
-        if report
+        self.core.health.count_success(id).await?;
+        if !report
             .tracks_usage
             .unwrap_or_else(|| deployment.tracks_usage())
         {
-            self.core
-                .health
-                .add_usage(
-                    &deployment,
-                    report.usage_model.as_deref(),
-                    total_tokens,
-                    requests,
-                )
-                .await?;
+            return Ok(None);
         }
-        Ok(Some(key))
+        self.core
+            .health
+            .add_usage(
+                &deployment,
+                report.usage_model.as_deref(),
+                total_tokens,
+                requests,
+            )
+            .await
     }
 
     /// `sync_deployment_callback_on_success`: count a success against `id`, configured or not,
