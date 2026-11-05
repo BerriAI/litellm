@@ -132,7 +132,6 @@ def _span_error_from_exception(
     )
 
 
-# The request text each failure hook scrubbed out of its span's error, or None when the request isn't redacted.
 _scrub_texts_by_span: Final[weakref.WeakKeyDictionary[Span, frozenset[str] | None]] = weakref.WeakKeyDictionary()
 
 
