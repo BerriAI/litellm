@@ -1,15 +1,22 @@
+import asyncio
 import json
 import os
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 import psycopg
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
+from integration._support.process import OwnedState, owned_proxy
+from prisma import Prisma
+from psycopg import sql
 from redis import Redis
+
+from litellm.repositories.unit_of_work import spend_reset_unit_of_work
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
@@ -75,3 +82,173 @@ def test_reset_sweep_skips_ticks_while_another_pod_holds_the_lease_and_resumes_a
                 eventually(lambda: cache.get(RESET_LEASE_KEY), lambda value: value is None, seconds=15)
         finally:
             cache.delete(RESET_LEASE_KEY)
+
+
+def _blocked_reset_updates(table: str) -> int:
+    rows: Final = read_rows(
+        "SELECT count(*) AS blocked FROM pg_stat_activity WHERE datname = current_database() "
+        "AND wait_event_type = 'Lock' AND query LIKE %s AND query LIKE '%%UPDATE%%'",
+        (f'%"{table}"%',),
+    )
+    return int(str(rows[0]["blocked"]))
+
+
+@pytest.mark.parametrize("entity", ("key", "user", "team"))
+@pytest.mark.parametrize(
+    ("workers", "spend", "increment", "rollover", "reset_timezone"),
+    (
+        (3, 40.0, 0.25, False, "UTC"),
+        (1, 40.080000000000005, 0.0, False, "UTC"),
+        (1, 1234567.8901234567, 0.0, False, "UTC"),
+        (1, 1009.9442791267694, 0.0, False, "UTC"),
+        (3, 40.000000000000014, 0.0, True, "UTC"),
+        (1, 0.30000000000000004, 0.0, False, "America/Los_Angeles"),
+    ),
+    ids=(
+        "overlap-preserves-new-spend",
+        "fractional-roundoff",
+        "large-roundoff",
+        "four-ulp-roundoff",
+        "rollover-keeps-small-carry",
+        "non-utc-roundoff",
+    ),
+)
+def test_scheduled_reset_preserves_new_spend_and_never_leaves_roundoff(
+    gateway: Gateway,
+    tmp_path: Path,
+    entity: Literal["key", "user", "team"],
+    workers: int,
+    spend: float,
+    increment: float,
+    rollover: bool,
+    reset_timezone: str,
+) -> None:
+    max_budget: Final = 40.0 if rollover else 2000000.0
+    expected_spend: Final = spend - max_budget + increment if rollover else increment
+    config: Final = tmp_path / "without-redis.yaml"
+    config.write_text(
+        "model_list: []\ngeneral_settings:\n"
+        "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+        "  database_url: os.environ/DATABASE_URL\n"
+        "  store_model_in_db: true\n"
+        "litellm_settings:\n  cache: false\n"
+        f"  budget_rollover: {str(rollover).lower()}\n"
+        f"  timezone: {reset_timezone}\n"
+    )
+    with gateway.scenario() as scenario:
+        identity: Final = (
+            sha256(scenario.key(max_budget=max_budget, budget_duration="1d").encode()).hexdigest()
+            if entity == "key"
+            else scenario.user(max_budget=max_budget, budget_duration="1d")
+            if entity == "user"
+            else scenario.team(max_budget=max_budget, budget_duration="1d")
+        )
+        table, column = {
+            "key": ("LiteLLM_VerificationToken", "token"),
+            "user": ("LiteLLM_UserTable", "user_id"),
+            "team": ("LiteLLM_TeamTable", "team_id"),
+        }[entity]
+        with psycopg.connect(os.environ["DATABASE_URL"]) as gate:
+            gate.execute(
+                sql.SQL("UPDATE {} SET spend = %s, budget_reset_at = now() - interval '1 day' WHERE {} = %s").format(
+                    sql.Identifier(table), sql.Identifier(column)
+                ),
+                (spend, identity),
+            )
+            gate.commit()
+            gate.execute(
+                sql.SQL("SELECT 1 FROM {} WHERE {} = %s FOR UPDATE").format(
+                    sql.Identifier(table), sql.Identifier(column)
+                ),
+                (identity,),
+            )
+            with owned_proxy(
+                gateway,
+                tmp_path,
+                FAST_RESET_TICK,
+                config=config,
+                remove_environment=("REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_URL"),
+                workers=workers,
+                state=OwnedState.SHARED_WITH_WORKER,
+            ) as replica:
+                try:
+                    blocked: Final = eventually(
+                        lambda: _blocked_reset_updates(table), lambda count: count == workers, seconds=30
+                    )
+                    assert blocked == workers
+                    gate.execute(
+                        sql.SQL("UPDATE {} SET spend = spend + %s WHERE {} = %s").format(
+                            sql.Identifier(table), sql.Identifier(column)
+                        ),
+                        (increment, identity),
+                    )
+                    gate.commit()
+                    eventually(lambda: _blocked_reset_updates(table), lambda count: count == 0, seconds=30)
+                    with psycopg.connect(os.environ["DATABASE_URL"]) as observer:
+                        result: Final = observer.execute(
+                            sql.SQL("SELECT spend, budget_reset_at > now() FROM {} WHERE {} = %s").format(
+                                sql.Identifier(table), sql.Identifier(column)
+                            ),
+                            (identity,),
+                        ).fetchall()
+                    parameter, info = {
+                        "key": ("key", "info"),
+                        "user": ("user_id", "user_info"),
+                        "team": ("team_id", "team_info"),
+                    }[entity]
+                    response: Final = replica.request("GET", f"/{entity}/info?{parameter}={identity}")
+                    assert response.status_code == 200, response.text
+                    assert response.json()[info]["spend"] == pytest.approx(expected_spend, rel=1e-14, abs=0.0)
+                    assert result == [(expected_spend, True)], result
+                finally:
+                    gate.rollback()
+
+
+@pytest.mark.parametrize("entity", ("key", "user", "team"))
+def test_stale_zero_reset_cannot_erase_another_workers_rollover(gateway: Gateway, entity: str) -> None:
+    carry: Final = 1.4210854715202004e-14
+    previous_reset: Final = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    next_reset: Final = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=1)
+    with gateway.scenario() as scenario:
+        identity: Final = (
+            sha256(scenario.key(max_budget=40.0, budget_duration="1d").encode()).hexdigest()
+            if entity == "key"
+            else scenario.user(max_budget=40.0, budget_duration="1d")
+            if entity == "user"
+            else scenario.team(max_budget=40.0, budget_duration="1d")
+        )
+        table, column = {
+            "key": ("LiteLLM_VerificationToken", "token"),
+            "user": ("LiteLLM_UserTable", "user_id"),
+            "team": ("LiteLLM_TeamTable", "team_id"),
+        }[entity]
+        with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
+            connection.execute(
+                sql.SQL("UPDATE {} SET spend = %s, budget_reset_at = %s WHERE {} = %s").format(
+                    sql.Identifier(table), sql.Identifier(column)
+                ),
+                (40.0 + carry, previous_reset, identity),
+            )
+
+        async def commit_winner_then_stale_reset() -> None:
+            async with Prisma() as client:
+                for spend_after_reset in (carry, 0.0):
+                    async with spend_reset_unit_of_work(client.batch_) as writes:
+                        writer: Final = {"key": writes.keys, "user": writes.users, "team": writes.teams}[entity]
+                        writer.queue_spend_reset(identity, next_reset, 40.0, previous_reset, spend_after_reset)
+                    assert read_rows(
+                        sql.SQL("SELECT spend FROM {} WHERE {} = %s")
+                        .format(sql.Identifier(table), sql.Identifier(column))
+                        .as_string(),
+                        (identity,),
+                    ) == [{"spend": carry}]
+
+        asyncio.run(commit_winner_then_stale_reset())
+        parameter, info = {
+            "key": ("key", "info"),
+            "user": ("user_id", "user_info"),
+            "team": ("team_id", "team_info"),
+        }[entity]
+        response: Final = gateway.request("GET", f"/{entity}/info?{parameter}={identity}")
+        assert response.status_code == 200, response.text
+        assert response.json()[info]["spend"] == pytest.approx(carry, rel=1e-14, abs=0.0)
