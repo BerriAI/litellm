@@ -6374,7 +6374,11 @@ class TestVertexAILiveWebsocketPassthrough:
             ),
             (
                 "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
-                "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-db/locations/global/publishers/google/models/gemini-2.0-flash",
+            ),
+            (
+                "projects/other/locations/us-central1/endpoints/1234",
+                "projects/proj-db/locations/global/endpoints/1234",
             ),
         ],
     )
@@ -6400,7 +6404,9 @@ class TestVertexAILiveWebsocketPassthrough:
         rewriter = passthrough_module._build_vertex_live_setup_model_rewriter(
             vertex_project="proj-db",
             vertex_location="global",
+            configured_location="global",
             llm_router=llm_router,
+            keeps_caller_resource_path=False,
         )
 
         assert rewriter is not None
@@ -6491,6 +6497,402 @@ class TestVertexAILiveWebsocketPassthrough:
         assert "use_in_pass_through" in close_kwargs["reason"]
         assert "default_vertex_config" in close_kwargs["reason"]
         assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+    def _pinned_live_router(self, extra_params: Mapping[str, object]) -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "service_account"}',
+                        **extra_params,
+                    },
+                }
+            ]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "query, field",
+        [
+            ({"vertex_location": "us-central1"}, "vertex_location"),
+            ({"vertex_project": "caller-project"}, "vertex_project"),
+            ({"vertex_project": "proj-db", "vertex_location": "us-central1"}, "vertex_location"),
+        ],
+    )
+    async def test_query_overriding_a_pinned_deployment_closes_before_minting_a_token(
+        self, monkeypatch, query: Mapping[str, str], field: str
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", self._pinned_live_router({}))
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert field in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+        ensure_token.assert_not_awaited()
+        ws_passthrough.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra_params, general_settings, query, expected_location",
+        [
+            ({}, {}, {"vertex_project": "proj-db", "vertex_location": "global"}, "global"),
+            (
+                {"configurable_clientside_auth_params": ["vertex_location"]},
+                {},
+                {"vertex_location": "us-central1"},
+                "us-central1",
+            ),
+            ({}, {"allow_client_side_credentials": True}, {"vertex_location": "us-central1"}, "us-central1"),
+        ],
+        ids=["matches_the_pin", "deployment_opt_in", "proxy_wide_opt_in"],
+    )
+    async def test_query_the_admin_allows_reaches_vertex(
+        self,
+        monkeypatch,
+        extra_params: Mapping[str, object],
+        general_settings: Mapping[str, object],
+        query: Mapping[str, str],
+        expected_location: str,
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", self._pinned_live_router(extra_params))
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+
+        websocket.close.assert_not_awaited()
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live") == (
+            f"projects/proj-db/locations/{expected_location}/publishers/google/models/gemini-live-2.5-flash"
+        )
+
+    def _use_default_vertex_config(self, monkeypatch, general_settings: Mapping[str, object], vertex_location):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+        from litellm.types.passthrough_endpoints.vertex_ai import (
+            VertexPassThroughCredentials,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router,
+            "default_vertex_config",
+            VertexPassThroughCredentials(
+                vertex_project="proj-env",
+                vertex_location=vertex_location,
+                vertex_credentials='{"type": "env_account"}',
+            ),
+        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "deployment_key_to_vertex_credentials", {})
+        self._clear_vertex_env(monkeypatch)
+
+    async def _open_live(self, query: Mapping[str, str]):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        websocket = self._websocket()
+        ensure_token = AsyncMock(
+            side_effect=lambda credentials, project_id, custom_llm_provider: ("token-abc", project_id or "proj-env")
+        )
+        ws_passthrough = AsyncMock()
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+        return websocket, ensure_token, ws_passthrough
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "query, field",
+        [
+            ({"vertex_project": "caller-project"}, "vertex_project"),
+            ({"vertex_location": "us-central1"}, "vertex_location"),
+            ({"vertex_project": "proj-env", "vertex_location": "us-central1"}, "vertex_location"),
+        ],
+    )
+    async def test_query_moving_default_vertex_config_closes_before_minting_a_token(
+        self, monkeypatch, query: Mapping[str, str], field: str
+    ):
+        self._use_default_vertex_config(monkeypatch, {}, vertex_location="europe-west4")
+
+        websocket, ensure_token, ws_passthrough = await self._open_live(query)
+
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert f"{field} is pinned by default_vertex_config" in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+        ensure_token.assert_not_awaited()
+        ws_passthrough.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings, default_location, query, expected_project, expected_location",
+        [
+            (
+                {},
+                "europe-west4",
+                {"vertex_project": "proj-env", "vertex_location": "europe-west4"},
+                "proj-env",
+                "europe-west4",
+            ),
+            ({}, None, {"vertex_location": "us-central1"}, "proj-env", "us-central1"),
+            (
+                {"allow_client_side_credentials": True},
+                "europe-west4",
+                {"vertex_project": "caller-project", "vertex_location": "us-central1"},
+                "caller-project",
+                "us-central1",
+            ),
+        ],
+        ids=["matches_the_pin", "location_left_unset", "proxy_wide_opt_in"],
+    )
+    async def test_default_vertex_config_serves_the_queries_it_allows(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        default_location,
+        query: Mapping[str, str],
+        expected_project: str,
+        expected_location: str,
+    ):
+        self._use_default_vertex_config(monkeypatch, general_settings, vertex_location=default_location)
+
+        websocket, ensure_token, ws_passthrough = await self._open_live(query)
+
+        websocket.close.assert_not_awaited()
+        assert ensure_token.await_args.kwargs["project_id"] == expected_project
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live-2.5-flash") == (
+            f"projects/{expected_project}/locations/{expected_location}/publishers/google/models/gemini-live-2.5-flash"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_registered_project_and_location_pair_still_serves_its_query(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+        from litellm.types.passthrough_endpoints.vertex_ai import (
+            VertexPassThroughCredentials,
+        )
+
+        self._use_default_vertex_config(monkeypatch, {}, vertex_location="europe-west4")
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router,
+            "deployment_key_to_vertex_credentials",
+            {
+                "caller-project-us-central1": VertexPassThroughCredentials(
+                    vertex_project="caller-project",
+                    vertex_location="us-central1",
+                    vertex_credentials='{"type": "registered_account"}',
+                )
+            },
+        )
+
+        websocket, ensure_token, _ = await self._open_live(
+            {"vertex_project": "caller-project", "vertex_location": "us-central1"}
+        )
+
+        websocket.close.assert_not_awaited()
+        ensure_token.assert_awaited_once_with(
+            credentials='{"type": "registered_account"}',
+            project_id="caller-project",
+            custom_llm_provider="vertex_ai_beta",
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings, expected",
+        [
+            ({}, "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash"),
+            (
+                {"allow_client_side_credentials": True},
+                "projects/caller-project/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+            ),
+        ],
+        ids=["pinned", "proxy_wide_opt_in"],
+    )
+    async def test_setup_frame_resource_path_cannot_move_the_session_to_another_project(
+        self, monkeypatch, general_settings: Mapping[str, object], expected: str
+    ):
+        self._use_default_vertex_config(monkeypatch, general_settings, vertex_location="europe-west4")
+
+        _, _, ws_passthrough = await self._open_live({})
+
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert (
+            rewriter("projects/caller-project/locations/us-central1/publishers/google/models/gemini-2.0-flash")
+            == expected
+        )
+
+    def _pin_no_vertex_project(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        default_vertex_config: VertexPassThroughCredentials | None,
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router, "default_vertex_config", default_vertex_config
+        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "deployment_key_to_vertex_credentials", {})
+        self._clear_vertex_env(monkeypatch)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "default_vertex_config",
+        [None, VertexPassThroughCredentials(vertex_location="europe-west4")],
+        ids=["no_default_vertex_config", "default_vertex_config_without_a_project"],
+    )
+    async def test_caller_named_project_closes_before_any_upstream_connect_when_nothing_pins_one(
+        self, monkeypatch, default_vertex_config: VertexPassThroughCredentials | None
+    ):
+        self._pin_no_vertex_project(monkeypatch, {}, default_vertex_config)
+
+        websocket, ensure_token, ws_passthrough = await self._open_live({"vertex_project": "other-project"})
+
+        ws_passthrough.assert_not_awaited()
+        ensure_token.assert_not_awaited()
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert "vertex_project" in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "configured_by, default_vertex_config",
+        [
+            ("VERTEXAI_PROJECT", None),
+            ("DEFAULT_VERTEXAI_PROJECT", VertexPassThroughCredentials(vertex_location="europe-west4")),
+        ],
+        ids=["vertexai_project_env", "default_vertexai_project_env"],
+    )
+    async def test_with_nothing_pinned_the_caller_may_name_the_project_the_admin_configured(
+        self, monkeypatch, configured_by: str, default_vertex_config: VertexPassThroughCredentials | None
+    ):
+        self._pin_no_vertex_project(monkeypatch, {}, default_vertex_config)
+        monkeypatch.setattr(litellm, "vertex_project", None)
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.setenv(configured_by, "proj-configured")
+
+        websocket, _, ws_passthrough = await self._open_live(
+            {"vertex_project": "proj-configured", "vertex_location": "europe-west4"}
+        )
+
+        websocket.close.assert_not_awaited()
+        assert ws_passthrough.await_args.kwargs["custom_headers"]["x-goog-user-project"] == "proj-configured"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings, query, expected_project, expected_location",
+        [
+            ({}, {"vertex_location": "europe-west4"}, "proj-env", "europe-west4"),
+            (
+                {"allow_client_side_credentials": True},
+                {"vertex_project": "other-project", "vertex_location": "europe-west4"},
+                "other-project",
+                "europe-west4",
+            ),
+        ],
+        ids=["caller_region", "proxy_wide_opt_in"],
+    )
+    async def test_with_nothing_pinned_the_caller_keeps_the_region_and_the_opt_in_keeps_the_project(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        query: Mapping[str, str],
+        expected_project: str,
+        expected_location: str,
+    ):
+        self._pin_no_vertex_project(monkeypatch, general_settings, None)
+
+        websocket, _, ws_passthrough = await self._open_live(query)
+
+        websocket.close.assert_not_awaited()
+        passthrough_kwargs = ws_passthrough.await_args.kwargs
+        assert passthrough_kwargs["custom_headers"]["x-goog-user-project"] == expected_project
+        assert passthrough_kwargs["setup_model_rewriter"]("gemini-2.0-flash") == (
+            f"projects/{expected_project}/locations/{expected_location}/publishers/google/models/gemini-2.0-flash"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "setup_model, expected",
+        [
+            (
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+            ),
+            (
+                "projects/caller-project/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+            ),
+        ],
+        ids=["own_project", "other_project"],
+    )
+    async def test_setup_frame_keeps_its_region_when_no_region_is_pinned(
+        self, monkeypatch, setup_model: str, expected: str
+    ):
+        self._use_default_vertex_config(monkeypatch, {}, vertex_location=None)
+
+        websocket, _, ws_passthrough = await self._open_live({})
+
+        websocket.close.assert_not_awaited()
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter(setup_model) == expected
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("model, expected_model", [("gemini-3.8-live", "gemini-3.8-live"), (None, "")])

@@ -8,6 +8,7 @@ Provides:
 
 import base64
 import json
+import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -20,12 +21,13 @@ from starlette.datastructures import UploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, LITELLM_PROXY_ADMIN_NAME
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_utils import is_request_body_safe
+from litellm.proxy.auth.auth_utils import get_request_route, is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -59,8 +61,11 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
+from litellm.rag.ingestion.vertex_ai_ingestion import DEFAULT_VERTEX_RAG_LOCATION
 from litellm.rag.main import get_ingestion_class
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
@@ -177,6 +182,103 @@ def _ingest_provider_error(vector_store_config: Mapping[str, object]) -> str | N
     except ValueError as error:
         return str(error)
     return None
+
+
+_VERTEX_RAG_CORPUS_NAME: Final = re.compile(
+    r"projects/(?P<project>[^/%\\]+)/locations/(?P<location>[^/%\\]+)/ragCorpora/(?P<corpus>[^/%\\]+)"
+)
+_DOT_SEGMENTS: Final = frozenset({".", ".."})
+
+
+def _clean_vertex_corpus_name(corpus_name: object) -> re.Match[str] | None:
+    if not isinstance(corpus_name, str) or not _DOT_SEGMENTS.isdisjoint(corpus_name.split("/")):
+        return None
+    return _VERTEX_RAG_CORPUS_NAME.fullmatch(corpus_name)
+
+
+def _vertex_target_message(field: str) -> str:
+    return (
+        f"Rejected Request: {field} picks a Vertex project or region other than the proxy's. "
+        "Use a vector store a proxy admin created, or set general_settings.allow_client_side_credentials"
+    )
+
+
+def _vertex_target_is_checked(
+    vector_store_config: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+) -> bool:
+    return (
+        vector_store_config.get("custom_llm_provider") == "vertex_ai"
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and general_settings.get("allow_client_side_credentials") is not True
+    )
+
+
+def _configured_vertex_project() -> str | None:
+    return litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT")
+
+
+def _corpus_on_configured_project(vector_store_config: Mapping[str, object]) -> Mapping[str, object]:
+    corpus: Final = _clean_vertex_corpus_name(vector_store_config.get("vector_store_id"))
+    configured_project: Final = _configured_vertex_project()
+    if corpus is None or configured_project is None or not corpus["project"].isdigit():
+        return vector_store_config
+    return MappingProxyType(
+        {
+            **vector_store_config,
+            "vector_store_id": (
+                f"projects/{configured_project}/locations/{corpus['location']}/ragCorpora/{corpus['corpus']}"
+            ),
+        }
+    )
+
+
+async def _authorize_rewritten_corpus(
+    requested: Mapping[str, object], rewritten: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    rewritten_id: Final = rewritten.get("vector_store_id")
+    if isinstance(rewritten_id, str) and rewritten_id != requested.get("vector_store_id"):
+        await assert_user_can_access_vector_store_id(vector_store_id=rewritten_id, user_api_key_dict=user_api_key_dict)
+
+
+def _vertex_target_error(vector_store_config: Mapping[str, object]) -> str | None:
+    corpus_name: Final = vector_store_config.get("vector_store_id")
+    corpus: Final = _clean_vertex_corpus_name(corpus_name)
+    if corpus_name and corpus is None:
+        return _vertex_target_message("vector_store_id")
+    configured_project: Final = _configured_vertex_project()
+    configured_location: Final = VertexBase.safe_get_vertex_ai_location({}) or DEFAULT_VERTEX_RAG_LOCATION
+    requested: Final = (
+        *(
+            (name, vector_store_config.get(name), configured_project)
+            for name in ("vertex_project", "vertex_ai_project")
+        ),
+        *(
+            (name, vector_store_config.get(name), configured_location)
+            for name in ("vertex_location", "vertex_ai_location")
+        ),
+        ("vector_store_id", corpus["project"] if corpus is not None else None, configured_project),
+        ("vector_store_id", corpus["location"] if corpus is not None else None, configured_location),
+    )
+    field: Final = next((name for name, asked, configured in requested if asked and asked != configured), None)
+    return None if field is None else _vertex_target_message(field)
+
+
+async def _admin_set_store_target(
+    managed_store: LiteLLM_ManagedVectorStore | None, prisma_client: "PrismaClient | None"
+) -> bool:
+    if managed_store is None:
+        return False
+    if managed_store.get("is_config", False):
+        return True
+    creator: Final = managed_store.get("user_id")
+    if creator == LITELLM_PROXY_ADMIN_NAME:
+        return True
+    if creator is None or prisma_client is None:
+        return False
+    creator_row: Final = await UserRepository(prisma_client).find_by_id(creator)
+    return creator_row is not None and creator_row.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
 _MANAGED_STORE_CALLER_OPTIONS: Final = frozenset(
@@ -660,6 +762,7 @@ async def rag_ingest(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
+        general_settings_view,
         llm_router,
         prisma_client,
         proxy_config,
@@ -684,15 +787,24 @@ async def rag_ingest(
                 general_settings=general_settings,
                 llm_router=llm_router,
                 model="",
+                route=get_request_route(request=request),
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
         managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
-        base: Final = {
+        requested_base: Final = {
             **_caller_vector_store_options(request_vector_store_config, managed_store),
             **_managed_store_overrides(managed_store),
         }
+        vertex_target_checked: Final = _vertex_target_is_checked(
+            requested_base, user_api_key_dict, general_settings_view()
+        ) and not await _admin_set_store_target(managed_store, prisma_client)
+        base: Final = _corpus_on_configured_project(requested_base) if vertex_target_checked else requested_base
+        await _authorize_rewritten_corpus(requested_base, base, user_api_key_dict)
+        vertex_target_error: Final = _vertex_target_error(base) if vertex_target_checked else None
+        if vertex_target_error is not None:
+            raise HTTPException(status_code=400, detail={"error": vertex_target_error})
         request_data: Final[dict[str, Any]] = await add_litellm_data_to_request(
             data={},
             request=request,

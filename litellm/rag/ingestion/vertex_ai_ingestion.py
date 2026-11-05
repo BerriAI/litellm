@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
 
+DEFAULT_VERTEX_RAG_LOCATION: Final = "us-central1"
+
 
 def _present_fields(fields: tuple[tuple[str, object], ...]) -> Mapping[str, object]:
     return {name: value for name, value in fields if value}
@@ -90,7 +92,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
         # Get project, location, and credentials using VertexBase methods
         self.project_id = self.safe_get_vertex_ai_project(litellm_params)
-        self.location = self.get_vertex_ai_location(litellm_params) or "us-central1"
+        self.location = self.get_vertex_ai_location(litellm_params) or DEFAULT_VERTEX_RAG_LOCATION
         self.vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params)
 
     async def embed(
