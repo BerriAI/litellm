@@ -702,10 +702,12 @@ def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
     return message.get("role") != "assistant"
 
 
+def message_carries_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
+    return any(_carries_prompt_cache_breakpoint(part) for part in _as_object_list(message.get("content")) or ())
+
+
 def _tool_result_carries_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
-    return message.get("role") == "tool" and any(
-        _carries_prompt_cache_breakpoint(part) for part in _as_object_list(message.get("content")) or ()
-    )
+    return message.get("role") == "tool" and message_carries_prompt_cache_breakpoint(message)
 
 
 def _part_without_prompt_cache_breakpoint(part: object) -> object:

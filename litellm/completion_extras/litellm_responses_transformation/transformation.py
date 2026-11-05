@@ -36,6 +36,7 @@ from litellm.completion_extras.litellm_responses_transformation.history import (
 )
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
+    message_carries_prompt_cache_breakpoint,
     routed_model_info,
     supports_openai_prompt_cache_breakpoint,
 )
@@ -293,12 +294,8 @@ def _get_reasoning_items(
     return []
 
 
-def _is_string_system_message(msg: "AllMessageValues") -> bool:
-    match msg:
-        case {"role": "system", "content": str()}:
-            return True
-        case _:
-            return False
+def _is_unmarked_system_message(msg: "AllMessageValues") -> bool:
+    return msg.get("role") == "system" and not message_carries_prompt_cache_breakpoint(msg)
 
 
 def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]:  # mutable-ok: API message payload
@@ -952,8 +949,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and isinstance(tool_call.get("custom"), dict)
         )
 
-        leading_system_string_count: Final = next(
-            (index for index, msg in enumerate(messages) if not _is_string_system_message(msg)),
+        leading_unmarked_system_count: Final = next(
+            (index for index, msg in enumerate(messages) if not _is_unmarked_system_message(msg)),
             len(messages),
         )
 
@@ -967,7 +964,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(replayed_turn.items)
             elif role == "system":
                 # Extract system message as instructions
-                if isinstance(content, str) and index < leading_system_string_count:
+                if isinstance(content, str) and index < leading_unmarked_system_count:
                     if instructions:
                         # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"
