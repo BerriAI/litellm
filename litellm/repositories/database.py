@@ -5,7 +5,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from litellm.proxy.db.db_span import proxy_service_logging
 from litellm.proxy.db.native_database import (
+    ServiceLoggingEvents,
     TokenRotation,
     keep_token_fresh,
     native_endpoint,
@@ -37,7 +39,9 @@ class Database:
     async def open(cls, prisma: "PrismaClient", writer_url: str, reader_url: str | None) -> "Database":
         try:
             native: Final = await NativeDatabase.connect(
-                native_endpoint(writer_url), None if reader_url is None else native_endpoint(reader_url)
+                ServiceLoggingEvents(loop=asyncio.get_running_loop(), service_logging=proxy_service_logging),
+                native_endpoint(writer_url),
+                None if reader_url is None else native_endpoint(reader_url),
             )
         except BaseException:
             await prisma.aclose()

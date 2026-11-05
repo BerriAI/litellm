@@ -5,7 +5,7 @@ from typing import Generic, Literal, Never, NotRequired, TypedDict, TypeVar, fin
 import httpx
 from pydantic import JsonValue
 
-from litellm.rust_bridge.database import NativeDatabaseEndpoint
+from litellm.rust_bridge.database import NativeDatabaseEndpoint, NativeDatabaseEvents
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 
@@ -31,10 +31,11 @@ class NativeClickHouseSpendStorage:
 class NativeDatabase:
     @staticmethod
     def connect(
-        writer: NativeDatabaseEndpoint, reader: NativeDatabaseEndpoint | None = None
+        events: NativeDatabaseEvents, writer: NativeDatabaseEndpoint, reader: NativeDatabaseEndpoint | None = None
     ) -> Future[NativeDatabase]: ...
     def set_writer_password(self, password: str) -> None: ...
     def set_reader_password(self, password: str) -> None: ...
+    def health_check(self) -> Future[None]: ...
     def close(self) -> Future[None]: ...
 
 @final
