@@ -11,7 +11,7 @@
      Say what the PR does for users and why, then anything that keeps it working over time (a sync job, a config someone owns)
      No bullets, tables, or code names here. Everything else goes inside the Details block below -->
 
-_Author, replace this line with 1-3 sentences in your own words_
+<insert handwritten description here>
 
 <details>
 <summary>Details</summary>
