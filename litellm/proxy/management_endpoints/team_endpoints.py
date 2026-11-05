@@ -109,6 +109,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     can_org_access_model,
     delete_cache_key_objects,
     delete_cache_team_object,
+    evict_budget_windows_absent_marker,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_org_object,
     get_team_membership,
@@ -223,7 +224,12 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
+from litellm.proxy.utils import (
+    PrismaClient,
+    ProxyLogging,
+    handle_exception_on_proxy,
+    query_raw_within_statement_timeout,
+)
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
@@ -612,6 +618,9 @@ async def refresh_cached_team(
     await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
         await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
+    await evict_budget_windows_absent_marker(
+        entity_type=Litellm_EntityType.TEAM, entity_id=team_row.team_id, user_api_key_cache=user_api_key_cache
+    )
 
 
 _refresh_cached_team: Final = refresh_cached_team
@@ -7469,6 +7478,9 @@ class _TeamUserSpendDbRow(TypedDict):
     failed_requests: ReadOnly[int]
 
 
+_TEAM_USER_SPEND_ROWS: Final = TypeAdapter(tuple[_TeamUserSpendDbRow, ...])
+
+
 @router.get(
     "/team/spend/by_user",
     response_model=TeamUserSpendResponse,
@@ -7519,12 +7531,16 @@ async def get_team_spend_by_user(
     own_user_only: Final = scope.api_key_filter is not None
     user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
     async with db_span("team_user_spend", "LiteLLM_SpendLogs"):
-        rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
-            _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
-            start_date,
-            end_date,
-            *scoped_team_ids,
-            *user_param,
+        rows: Final = _TEAM_USER_SPEND_ROWS.validate_python(
+            await query_raw_within_statement_timeout(
+                prisma_client,
+                _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+                start_date,
+                end_date,
+                *scoped_team_ids,
+                *user_param,
+                what="Spend per user",
+            )
         )
     results: Final = tuple(
         TeamUserSpendRow(

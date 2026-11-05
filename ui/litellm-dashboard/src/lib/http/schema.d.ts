@@ -30,7 +30,7 @@ export interface paths {
         };
         /**
          * Agent Skills Index
-         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         * @description Discover public Hub skills and the separately enabled hosted skill store.
          */
         get: operations["agent_skills_index__well_known_agent_skills_index_json_get"];
         put?: never;
@@ -339,7 +339,7 @@ export interface paths {
         };
         /**
          * Agent Skills Index
-         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         * @description Discover public Hub skills and the separately enabled hosted skill store.
          */
         get: operations["agent_skills_index__well_known_skills_index_json_get"];
         put?: never;
@@ -936,6 +936,44 @@ export interface paths {
         };
         /** Get Agent Daily Activity Export */
         get: operations["get_agent_daily_activity_export_agent_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerting/model-deprecations/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Deprecation Alert State */
+        get: operations["get_deprecation_alert_state_alerting_model_deprecations_state_get"];
+        /** Update Deprecation Alert State */
+        put: operations["update_deprecation_alert_state_alerting_model_deprecations_state_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerting/model-deprecations/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deprecation Usage Tags
+         * @description Distinct tags observed with this model for a page of affected reporting key IDs.
+         */
+        get: operations["get_deprecation_usage_tags_alerting_model_deprecations_tags_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2528,6 +2566,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/claude-code/plugins/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Plugin
+         * @description Create a skill and its uploaded ZIP atomically. Duplicate names return 409.
+         */
+        post: operations["upload_plugin_claude_code_plugins_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claude-code/plugins/{plugin_name}": {
         parameters: {
             query?: never;
@@ -2599,6 +2657,26 @@ export interface paths {
          *         - plugin_name: The name of the plugin to delete
          */
         delete: operations["delete_plugin_claude_code_plugins__plugin_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/plugins/{plugin_name}/archive/{digest}.zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Plugin Archive
+         * @description Download an uploaded ZIP under the same visibility policy as its skill.
+         */
+        get: operations["download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -10066,8 +10144,9 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy. An entry also names its `successor_model`
-         *     when the deployment sets `model_info.successor_model`.
+         *     models configured on this proxy. An entry also names its `successor_model`:
+         *     `model_info.successor_model` when the deployment sets one, else the
+         *     replacement the cost map records from the provider's deprecation notice.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -11098,7 +11177,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_3"];
+        get: operations["websocket_realtime_websocket_endpoint_get_5"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11116,7 +11195,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Proxy Realtime Calls */
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
         post: operations["proxy_realtime_calls_openai_v1_realtime_calls_post"];
         delete?: never;
         options?: never;
@@ -11133,7 +11215,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Realtime Client Secret */
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
         post: operations["create_realtime_client_secret_openai_v1_realtime_client_secrets_post"];
         delete?: never;
         options?: never;
@@ -14075,7 +14160,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get"];
+        get: operations["websocket_realtime_websocket_endpoint_get_3"];
         put?: never;
         post?: never;
         delete?: never;
@@ -14093,7 +14178,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Proxy Realtime Calls */
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
         post: operations["proxy_realtime_calls_realtime_calls_post"];
         delete?: never;
         options?: never;
@@ -14110,7 +14198,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Realtime Client Secret */
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
         post: operations["create_realtime_client_secret_realtime_client_secrets_post"];
         delete?: never;
         options?: never;
@@ -14136,6 +14227,66 @@ export interface paths {
          *     endpoint and encrypts the ephemeral key returned under `client_secret.value`.
          */
         post: operations["create_realtime_transcription_session_realtime_transcription_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/realtime/translations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: realtime_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_realtime_websocket_endpoint_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/realtime/translations/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
+        post: operations["proxy_realtime_calls_realtime_translations_calls_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/realtime/translations/client_secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
+        post: operations["create_realtime_client_secret_realtime_translations_client_secrets_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -15513,6 +15664,174 @@ export interface paths {
         get: operations["active_callbacks_settings_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skills
+         * @description Browse the caller's public and granted private skills.
+         */
+        get: operations["list_skills_skill_hub_skills_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Skill
+         * @description Import a public skills.sh or GitHub skill as a portable snapshot.
+         */
+        post: operations["import_skill_skill_hub_skills_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Skill
+         * @description Publish a portable skill while retaining Claude marketplace compatibility.
+         */
+        post: operations["upload_skill_skill_hub_skills_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skill
+         * @description Read one visible skill and its portable download URL.
+         */
+        get: operations["get_skill_skill_hub_skills__name__get"];
+        /**
+         * Replace Skill Metadata
+         * @description Replace registry metadata, clearing omitted fields and preserving skill files.
+         */
+        put: operations["replace_skill_metadata_skill_hub_skills__name__put"];
+        post?: never;
+        /**
+         * Remove Skill
+         * @description Delete a skill and its managed archive.
+         */
+        delete: operations["remove_skill_skill_hub_skills__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Skill
+         * @description Download the complete portable skill, with SKILL.md at the ZIP root.
+         */
+        get: operations["download_skill_skill_hub_skills__name__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Skill Content
+         * @description Read the original SKILL.md without downloading supporting files.
+         */
+        get: operations["skill_content_skill_hub_skills__name__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Skill
+         * @description Make a skill public using the existing Hub publication policy.
+         */
+        post: operations["publish_skill_skill_hub_skills__name__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/unpublish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unpublish Skill
+         * @description Remove a skill from public discovery while retaining explicit grants.
+         */
+        post: operations["unpublish_skill_skill_hub_skills__name__unpublish_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21527,8 +21846,9 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy. An entry also names its `successor_model`
-         *     when the deployment sets `model_info.successor_model`.
+         *     models configured on this proxy. An entry also names its `successor_model`:
+         *     `model_info.successor_model` when the deployment sets one, else the
+         *     replacement the cost map records from the provider's deprecation notice.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -21893,7 +22213,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_2"];
+        get: operations["websocket_realtime_websocket_endpoint_get_4"];
         put?: never;
         post?: never;
         delete?: never;
@@ -21911,7 +22231,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Proxy Realtime Calls */
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
         post: operations["proxy_realtime_calls_v1_realtime_calls_post"];
         delete?: never;
         options?: never;
@@ -21928,7 +22251,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Realtime Client Secret */
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
         post: operations["create_realtime_client_secret_v1_realtime_client_secrets_post"];
         delete?: never;
         options?: never;
@@ -21954,6 +22280,66 @@ export interface paths {
          *     endpoint and encrypts the ephemeral key returned under `client_secret.value`.
          */
         post: operations["create_realtime_transcription_session_v1_realtime_transcription_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/realtime/translations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: realtime_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_realtime_websocket_endpoint_get_2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/realtime/translations/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
+        post: operations["proxy_realtime_calls_v1_realtime_translations_calls_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/realtime/translations/client_secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
+        post: operations["create_realtime_client_secret_v1_realtime_translations_client_secrets_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -27942,6 +28328,29 @@ export interface components {
             /** File */
             file: string;
         };
+        /** Body_upload_plugin_claude_code_plugins_upload_post */
+        Body_upload_plugin_claude_code_plugins_upload_post: {
+            /**
+             * File
+             * @description Skill ZIP containing SKILL.md and supporting files, up to 10 MiB
+             */
+            file: string;
+            /**
+             * Metadata
+             * @description JSON skill metadata without a source URL
+             */
+            metadata: string;
+        };
+        /** Body_upload_skill_skill_hub_skills_upload_post */
+        Body_upload_skill_skill_hub_skills_upload_post: {
+            /**
+             * File
+             * @description Agent Skills ZIP with SKILL.md and optional supporting files
+             */
+            file: string;
+            /** Version */
+            version?: string | null;
+        };
         /** Body_video_create_character_v1_videos_characters_post */
         Body_video_create_character_v1_videos_characters_post: {
             /** Name */
@@ -28770,7 +29179,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "get_responses" | "aget_responses" | "delete_responses" | "adelete_responses" | "cancel_responses" | "acancel_responses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "acreate_realtime_client_secret" | "arealtime_calls" | "acreate_realtime_transcription_session" | "acreate_realtime_translation_client_secret" | "arealtime_translation_calls" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "get_responses" | "aget_responses" | "delete_responses" | "adelete_responses" | "cancel_responses" | "acancel_responses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -29404,7 +29813,7 @@ export interface components {
             /** Choice */
             choice: string;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Probabilities */
             probabilities: {
                 [key: string]: number;
@@ -30068,27 +30477,6 @@ export interface components {
          * @description Documents all the fields supported by `general_settings` in config.yaml
          */
         ConfigGeneralSettings: {
-            /** @description Opt-in durable usage capture. Legacy spend updates remain active. Requires local Prisma writes. */
-            accounting_capture?: components["schemas"]["UsageCaptureSettings"] | null;
-            /**
-             * Accounting Sync Ack
-             * @description Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. Other requests remain supported with asynchronous usage capture.
-             * @default false
-             */
-            accounting_sync_ack: boolean;
-            /**
-             * Accounting Sync Ack Failure Policy
-             * @description Return 503 or log the persistence failure after the response wait expires
-             * @default fail_closed
-             * @enum {string}
-             */
-            accounting_sync_ack_failure_policy: "fail_closed" | "log";
-            /**
-             * Accounting Sync Ack Timeout Seconds
-             * @description Maximum response wait for usage commit, including the batch flush interval
-             * @default 20
-             */
-            accounting_sync_ack_timeout_seconds: number;
             /**
              * Admission Queue Timeout Seconds
              * @description maximum time a request waits for a worker slot
@@ -30690,6 +31078,12 @@ export interface components {
              * @description decrypt keys with google kms
              */
             use_google_kms?: boolean | null;
+            /**
+             * Use Spend Logs Ledger
+             * @description Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.
+             * @default false
+             */
+            use_spend_logs_ledger: boolean;
             /**
              * Use Spend Logs Partitioning
              * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
@@ -32197,6 +32591,59 @@ export interface components {
             ignore_available: boolean;
             /** Warnings */
             warnings: components["schemas"]["DeploymentWarning"][];
+        };
+        /** DeprecationAlertState */
+        DeprecationAlertState: {
+            /**
+             * Deprecation Date
+             * Format: date
+             */
+            deprecation_date: string;
+            /** Last Seen Date */
+            last_seen_date?: string | null;
+            /**
+             * Last Seen Requests
+             * @default 0
+             */
+            last_seen_requests: number;
+            /** Model */
+            model: string;
+            /** @default open */
+            status: components["schemas"]["DeprecationAlertStatus"];
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+        };
+        /**
+         * DeprecationAlertStatus
+         * @enum {string}
+         */
+        DeprecationAlertStatus: "open" | "resolved" | "dismissed";
+        /** DeprecationAlertUpdate */
+        DeprecationAlertUpdate: {
+            /**
+             * Deprecation Date
+             * Format: date
+             */
+            deprecation_date: string;
+            /**
+             * Last Seen Date
+             * Format: date
+             */
+            last_seen_date: string;
+            /** Last Seen Requests */
+            last_seen_requests: number;
+            /** Model */
+            model: string;
+            status: components["schemas"]["DeprecationAlertStatus"];
+        };
+        /** DeprecationTagUsage */
+        DeprecationTagUsage: {
+            /** Api Key */
+            api_key: string;
+            /** Tag */
+            tag: string;
         };
         /** DiscoverAgentRequest */
         DiscoverAgentRequest: {
@@ -33927,6 +34374,35 @@ export interface components {
             url: string;
         } & {
             [key: string]: unknown;
+        };
+        /** ImportSkillRequest */
+        ImportSkillRequest: {
+            /**
+             * Path
+             * @description Repository-relative skill directory
+             */
+            path?: string | null;
+            /**
+             * Ref
+             * @description Git commit, tag or branch to import
+             * @default HEAD
+             */
+            ref: string;
+            /**
+             * Skill
+             * @description Skill name to select when a repository contains several skills
+             */
+            skill?: string | null;
+            /**
+             * Url
+             * @description Public skills.sh skill URL or GitHub repository URL
+             */
+            url: string;
+            /**
+             * Version
+             * @description Version label for the imported snapshot
+             */
+            version?: string | null;
         };
         /**
          * IncompleteDetails
@@ -35780,6 +36256,8 @@ export interface components {
             drop_params?: boolean | string | null;
             /** Explicit Cache Read Input Token Cost */
             explicit_cache_read_input_token_cost?: number | null;
+            /** Fedramp Uplift Multiplier */
+            fedramp_uplift_multiplier?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -35795,6 +36273,14 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens */
+            input_cost_per_audio_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Batches */
+            input_cost_per_audio_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Flex */
+            input_cost_per_audio_token_above_200k_tokens_flex?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Priority */
+            input_cost_per_audio_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Audio Token Batches */
             input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Audio Token Flex */
@@ -35833,6 +36319,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Batches */
             input_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Flex */
+            input_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -35940,6 +36428,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Priority */
+            output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -35974,6 +36464,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Batches */
             output_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Flex */
+            output_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -38830,6 +39322,11 @@ export interface components {
              */
             deprecation_date: string;
             /**
+             * Deprecation Source
+             * @description Provider deprecation notice linked by the selected model cost-map entry.
+             */
+            deprecation_source?: string | null;
+            /**
              * Litellm Model
              * @description The underlying litellm model string the deprecation date is sourced from.
              */
@@ -38852,9 +39349,16 @@ export interface components {
             status: "upcoming" | "imminent" | "deprecated";
             /**
              * Successor Model
-             * @description The model to migrate to, as set in model_info.successor_model on the deployment.
+             * @description The model to migrate to: model_info.successor_model on the deployment when set, else the successor_model the cost map names for the deprecated model.
              */
             successor_model?: string | null;
+            /** @description Whether the recommended successor comes from the model cost map or deployment configuration. */
+            successor_model_source?: components["schemas"]["SuccessorModelSource"] | null;
+            /**
+             * Team Public Model Name
+             * @description The model name visible to the team, when configured.
+             */
+            team_public_model_name?: string | null;
         };
         /** ModelDeprecationResponse */
         ModelDeprecationResponse: {
@@ -38948,6 +39452,11 @@ export interface components {
              * @default false
              */
             supports_background_chat: boolean;
+            /**
+             * Supports Continuation
+             * @default false
+             */
+            supports_continuation: boolean;
             /**
              * Supports Fast Mode
              * @default false
@@ -40221,7 +40730,7 @@ export interface components {
             /** Choice */
             choice: string | boolean;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -40317,7 +40826,7 @@ export interface components {
         /** OpenAIScoreAnswer */
         OpenAIScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -42053,6 +42562,8 @@ export interface components {
         };
         /** PromptCacheOptions */
         PromptCacheOptions: {
+            /** Comparison Response Id */
+            comparison_response_id?: string;
             /**
              * Mode
              * @enum {string}
@@ -45557,7 +46068,7 @@ export interface components {
         /** ScoreAnswer */
         ScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Legend */
             legend: {
                 [key: string]: string | {
@@ -46087,6 +46598,54 @@ export interface components {
             type: string;
             /** Updated At */
             updated_at: string;
+        };
+        /** SkillHubList */
+        SkillHubList: {
+            /** Count */
+            count: number;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Skills */
+            skills: components["schemas"]["SkillHubSkill"][];
+        };
+        /** SkillHubMetadata */
+        SkillHubMetadata: {
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /** Namespace */
+            namespace?: string | null;
+            /** Version */
+            version?: string | null;
+        };
+        /** SkillHubPublication */
+        SkillHubPublication: Record<string, never>;
+        /** SkillHubSkill */
+        SkillHubSkill: {
+            /** Content Url */
+            content_url?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Download Url */
+            download_url?: string | null;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Source */
+            source: {
+                [key: string]: string;
+            };
+            /** Version */
+            version?: string | null;
+            /**
+             * Visibility
+             * @enum {string}
+             */
+            visibility: "public" | "private";
         };
         /** SkillReference */
         SkillReference: {
@@ -46626,6 +47185,11 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * SuccessorModelSource
+         * @enum {string}
+         */
+        SuccessorModelSource: "model_cost_map" | "deployment_config";
         /** SuggestTemplatesRequest */
         SuggestTemplatesRequest: {
             /** Attack Examples */
@@ -47955,7 +48519,7 @@ export interface components {
             id: string;
             /**
              * Tool Name
-             * @description Regex pattern applied to the tool's function name
+             * @description Regex pattern applied to the tool's name, or to its type when the tool has no name
              */
             tool_name?: string | null;
             /**
@@ -48487,6 +49051,54 @@ export interface components {
              * @default quality score meets the dataset success threshold
              */
             success_definition: string;
+        };
+        /** TranscriptionDetectedLanguage */
+        TranscriptionDetectedLanguage: {
+            /** Code */
+            code: string;
+        };
+        /** TranscriptionResponse */
+        TranscriptionResponse: {
+            /** Languages */
+            languages?: components["schemas"]["TranscriptionDetectedLanguage"][] | null;
+            /** Text */
+            text?: string | null;
+            /** Usage */
+            usage?: components["schemas"]["TranscriptionUsageDurationObject"] | components["schemas"]["TranscriptionUsageTokensObject"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** TranscriptionUsageDurationObject */
+        TranscriptionUsageDurationObject: {
+            /** Seconds */
+            seconds: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "duration";
+        };
+        /** TranscriptionUsageInputTokenDetailsObject */
+        TranscriptionUsageInputTokenDetailsObject: {
+            /** Audio Tokens */
+            audio_tokens: number;
+            /** Text Tokens */
+            text_tokens: number;
+        };
+        /** TranscriptionUsageTokensObject */
+        TranscriptionUsageTokensObject: {
+            input_token_details?: components["schemas"]["TranscriptionUsageInputTokenDetailsObject"] | null;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tokens";
         };
         /** TransformRequestBody */
         TransformRequestBody: {
@@ -49668,28 +50280,56 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
-        /** UsageCaptureSettings */
-        UsageCaptureSettings: {
+        /** UploadPluginRequest */
+        UploadPluginRequest: {
+            /** @description Plugin author */
+            author?: components["schemas"]["PluginAuthor"] | null;
             /**
-             * Batch Size
-             * @default 1000
+             * Category
+             * @description Plugin category
              */
-            batch_size: number;
+            category?: string | null;
             /**
-             * Flush Interval Seconds
-             * @default 5
+             * Description
+             * @description Plugin description
              */
-            flush_interval_seconds: number;
+            description?: string | null;
             /**
-             * Max Pending Bytes
-             * @default 16777216
+             * Domain
+             * @description Skill domain (e.g., 'Productivity')
              */
-            max_pending_bytes: number;
+            domain?: string | null;
             /**
-             * Max Pending Records
-             * @default 10000
+             * Homepage
+             * @description Plugin homepage URL
              */
-            max_pending_records: number;
+            homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
+            /**
+             * Keywords
+             * @description Search keywords
+             */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Skill name (kebab-case)
+             */
+            name: string;
+            /**
+             * Namespace
+             * @description Skill namespace within domain (e.g., 'workflows')
+             */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Semantic version
+             * @default 1.0.0
+             */
+            version: string | null;
         };
         /** UsageChartPoint */
         UsageChartPoint: {
@@ -51364,6 +52004,8 @@ export interface components {
             drop_params?: boolean | string | null;
             /** Explicit Cache Read Input Token Cost */
             explicit_cache_read_input_token_cost?: number | null;
+            /** Fedramp Uplift Multiplier */
+            fedramp_uplift_multiplier?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -51379,6 +52021,14 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens */
+            input_cost_per_audio_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Batches */
+            input_cost_per_audio_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Flex */
+            input_cost_per_audio_token_above_200k_tokens_flex?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Priority */
+            input_cost_per_audio_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Audio Token Batches */
             input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Audio Token Flex */
@@ -51417,6 +52067,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Batches */
             input_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Flex */
+            input_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -51524,6 +52176,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Priority */
+            output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -51558,6 +52212,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Batches */
             output_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Flex */
+            output_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -52859,6 +53515,105 @@ export interface operations {
             };
         };
     };
+    get_deprecation_alert_state_alerting_model_deprecations_state_get: {
+        parameters: {
+            query: {
+                model: string;
+                deprecation_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationAlertState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_deprecation_alert_state_alerting_model_deprecations_state_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeprecationAlertUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationAlertState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deprecation_usage_tags_alerting_model_deprecations_tags_get: {
+        parameters: {
+            query: {
+                model: string;
+                api_keys: string[];
+                start_date: string;
+                end_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationTagUsage"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     alerting_settings_alerting_settings_get: {
         parameters: {
             query?: never;
@@ -53409,7 +54164,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TranscriptionResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -55596,6 +56352,39 @@ export interface operations {
             };
         };
     };
+    upload_plugin_claude_code_plugins_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_plugin_claude_code_plugins_upload_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterPluginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_plugin_claude_code_plugins__plugin_name__get: {
         parameters: {
             query?: never;
@@ -55680,6 +56469,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                digest: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */
@@ -67721,7 +68542,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_3: {
+    websocket_realtime_websocket_endpoint_get_5: {
         parameters: {
             query?: never;
             header?: never;
@@ -71087,7 +71908,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get: {
+    websocket_realtime_websocket_endpoint_get_3: {
         parameters: {
             query?: never;
             header?: never;
@@ -71161,6 +71982,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealtimeTranscriptionSessionResponse"];
+                };
+            };
+        };
+    };
+    websocket_realtime_websocket_endpoint_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    proxy_realtime_calls_realtime_translations_calls_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/sdp": string;
+            };
+        };
+        responses: {
+            /** @description WebRTC SDP answer */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    create_realtime_client_secret_realtime_translations_client_secrets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "gpt-realtime-translate",
+                 *       "session": {
+                 *         "model": "gpt-realtime-translate",
+                 *         "type": "translation"
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    expires_after?: {
+                        /**
+                         * Anchor
+                         * @default created_at
+                         */
+                        anchor?: string | null;
+                        /** Seconds */
+                        seconds?: number | null;
+                    } | null;
+                    /** Model */
+                    model?: string | null;
+                    session?: ({
+                        audio?: ({
+                            input?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Noise Reduction */
+                                noise_reduction?: {
+                                    [key: string]: unknown;
+                                } | null;
+                                transcription?: ({
+                                    /** Delay */
+                                    delay?: string | null;
+                                    /** Keywords */
+                                    keywords?: string[] | null;
+                                    /** Language */
+                                    language?: string | null;
+                                    /** Languages */
+                                    languages?: string[] | null;
+                                    /** Model */
+                                    model?: string | null;
+                                    /** Prompt */
+                                    prompt?: string | null;
+                                } & {
+                                    [key: string]: unknown;
+                                }) | null;
+                                /** Turn Detection */
+                                turn_detection?: {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                            output?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Language */
+                                language?: string | null;
+                                /** Voice */
+                                voice?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                        } & {
+                            [key: string]: unknown;
+                        }) | null;
+                        /** Include */
+                        include?: string[] | null;
+                        /** Instructions */
+                        instructions?: string | null;
+                        /** Max Output Tokens */
+                        max_output_tokens?: number | string | null;
+                        /** Model */
+                        model?: string | null;
+                        /** Output Modalities */
+                        output_modalities?: string[] | null;
+                        /** Prompt */
+                        prompt?: {
+                            [key: string]: unknown;
+                        } | null;
+                        /** Tool Choice */
+                        tool_choice?: unknown | null;
+                        /** Tools */
+                        tools?: {
+                            [key: string]: unknown;
+                        }[] | null;
+                        /** Tracing */
+                        tracing?: unknown | null;
+                        /** Truncation */
+                        truncation?: unknown | null;
+                        /** Type */
+                        type?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimeClientSecretResponse"];
                 };
             };
         };
@@ -72776,6 +73764,334 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_skills_skill_hub_skills_get: {
+        parameters: {
+            query?: {
+                query?: string;
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_skill_skill_hub_skills_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportSkillRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_skill_skill_hub_skills_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_skill_skill_hub_skills_upload_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_skill_hub_skills__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_skill_metadata_skill_hub_skills__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillHubMetadata"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_skill_skill_hub_skills__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_skill_skill_hub_skills__name__archive_get: {
+        parameters: {
+            query?: {
+                digest?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    skill_content_skill_hub_skills__name__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/markdown": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_skill_skill_hub_skills__name__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillHubPublication"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unpublish_skill_skill_hub_skills__name__unpublish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillHubPublication"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -78618,7 +79934,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TranscriptionResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -82214,7 +83531,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_2: {
+    websocket_realtime_websocket_endpoint_get_4: {
         parameters: {
             query?: never;
             header?: never;
@@ -82288,6 +83605,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealtimeTranscriptionSessionResponse"];
+                };
+            };
+        };
+    };
+    websocket_realtime_websocket_endpoint_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    proxy_realtime_calls_v1_realtime_translations_calls_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/sdp": string;
+            };
+        };
+        responses: {
+            /** @description WebRTC SDP answer */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    create_realtime_client_secret_v1_realtime_translations_client_secrets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "gpt-realtime-translate",
+                 *       "session": {
+                 *         "model": "gpt-realtime-translate",
+                 *         "type": "translation"
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    expires_after?: {
+                        /**
+                         * Anchor
+                         * @default created_at
+                         */
+                        anchor?: string | null;
+                        /** Seconds */
+                        seconds?: number | null;
+                    } | null;
+                    /** Model */
+                    model?: string | null;
+                    session?: ({
+                        audio?: ({
+                            input?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Noise Reduction */
+                                noise_reduction?: {
+                                    [key: string]: unknown;
+                                } | null;
+                                transcription?: ({
+                                    /** Delay */
+                                    delay?: string | null;
+                                    /** Keywords */
+                                    keywords?: string[] | null;
+                                    /** Language */
+                                    language?: string | null;
+                                    /** Languages */
+                                    languages?: string[] | null;
+                                    /** Model */
+                                    model?: string | null;
+                                    /** Prompt */
+                                    prompt?: string | null;
+                                } & {
+                                    [key: string]: unknown;
+                                }) | null;
+                                /** Turn Detection */
+                                turn_detection?: {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                            output?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Language */
+                                language?: string | null;
+                                /** Voice */
+                                voice?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                        } & {
+                            [key: string]: unknown;
+                        }) | null;
+                        /** Include */
+                        include?: string[] | null;
+                        /** Instructions */
+                        instructions?: string | null;
+                        /** Max Output Tokens */
+                        max_output_tokens?: number | string | null;
+                        /** Model */
+                        model?: string | null;
+                        /** Output Modalities */
+                        output_modalities?: string[] | null;
+                        /** Prompt */
+                        prompt?: {
+                            [key: string]: unknown;
+                        } | null;
+                        /** Tool Choice */
+                        tool_choice?: unknown | null;
+                        /** Tools */
+                        tools?: {
+                            [key: string]: unknown;
+                        }[] | null;
+                        /** Tracing */
+                        tracing?: unknown | null;
+                        /** Truncation */
+                        truncation?: unknown | null;
+                        /** Type */
+                        type?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimeClientSecretResponse"];
                 };
             };
         };

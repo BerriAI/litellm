@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
+    routed_model_info,
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.asyncify import (
@@ -21,9 +22,10 @@ from litellm.litellm_core_utils.asyncify import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
-    prompt_cache_breakpoint_for_wire,
+    prompt_cache_breakpoint_with_readable_mode,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -186,6 +188,7 @@ def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, ob
         provider if isinstance(provider, str) else None,
         forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url"),
         forwarded_kwargs.get("prompt_cache_options"),
+        routed_model_info(forwarded_kwargs.get("model_info")),
     )
 
 
@@ -193,10 +196,11 @@ def _model_takes_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[s
     provider: Final = forwarded_kwargs.get("custom_llm_provider")
     provider_name: Final = provider if isinstance(provider, str) else None
     base_model: Final = forwarded_kwargs.get("base_model")
-    return supports_openai_prompt_cache_breakpoint(model, provider_name) or (
+    model_info: Final = routed_model_info(forwarded_kwargs.get("model_info"))
+    return supports_openai_prompt_cache_breakpoint(model, provider_name, model_info) or (
         isinstance(base_model, str)
         and bool(base_model)
-        and supports_openai_prompt_cache_breakpoint(base_model, provider_name)
+        and supports_openai_prompt_cache_breakpoint(base_model, provider_name, model_info)
     )
 
 
@@ -207,7 +211,7 @@ def _without_prompt_cache_breakpoint(block: Mapping[str, object]) -> Mapping[str
 def _cache_control_as_wire_safe_prompt_cache_breakpoint(block: Mapping[str, object]) -> Mapping[str, object]:
     if "prompt_cache_breakpoint" not in block:
         return cache_control_as_prompt_cache_breakpoint(block)
-    wire_marker: Final = prompt_cache_breakpoint_for_wire(block["prompt_cache_breakpoint"], drop_params=True)
+    wire_marker: Final = prompt_cache_breakpoint_with_readable_mode(block["prompt_cache_breakpoint"], drop_params=True)
     return cache_control_as_prompt_cache_breakpoint(
         with_prompt_cache_breakpoint(_without_prompt_cache_breakpoint(block), wire_marker)
     )
@@ -272,6 +276,14 @@ def _build_responses_kwargs(
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
+    target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    request_tools: Final = tools_without_mcp_servers(
+        forwarded_kwargs.get("mcp_servers"),
+        tools or (),
+        model=model,
+        route=target_provider if isinstance(target_provider, str) else "this route",
+        drop_params=drops_mcp_servers(forwarded_kwargs),
+    )
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
         [
@@ -304,10 +316,10 @@ def _build_responses_kwargs(
         request_data["temperature"] = temperature
     if thinking:
         request_data["thinking"] = thinking
-    if tool_choice:
+    if tool_choice and (request_tools or not tools):
         request_data["tool_choice"] = tool_choice
-    if tools:
-        request_data["tools"] = tools
+    if request_tools:
+        request_data["tools"] = list(request_tools)
     if top_p is not None:
         request_data["top_p"] = top_p
     if output_format:
@@ -347,7 +359,7 @@ def _build_responses_kwargs(
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages"}
+    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages", "mcp_servers"}
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (

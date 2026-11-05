@@ -1,6 +1,6 @@
 import hashlib
 import json
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -11,6 +11,7 @@ from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    budget_windows_absent_cache_key,
     end_user_cache_key,
     get_management_object_ttl,
     is_user_key_cache_key,
@@ -30,6 +31,17 @@ class CapturingInMemoryCache(InMemoryCache):
     def set_cache(self, key, value, **kwargs):  # type: ignore[override]
         self.last_ttl = kwargs.get("ttl")
         super().set_cache(key, value, **kwargs)
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.seconds = 1000.0
+
+    def __call__(self) -> float:
+        return self.seconds
+
+    def advance(self, seconds: float) -> None:
+        self.seconds += seconds
 
 
 class FakeRedisCache(RedisCache):
@@ -431,6 +443,29 @@ class TestUserKeyObjectPartition:
         assert first_key is not None, "key partition still evicts at its old capacity"
         assert first_key.token == tokens[0]
         assert cache.get_cache(end_user_cache_key("u0")) == {"user_id": "u0"}
+
+    def test_update_in_memory_max_size_applies_to_no_window_notes(self):
+        cache = UserApiKeyCache()
+        cache.update_in_memory_max_size(1)
+
+        cache.budget_windows_absent_cache.set_cache(key=budget_windows_absent_cache_key("key", "first"), value=True)
+        cache.budget_windows_absent_cache.set_cache(key=budget_windows_absent_cache_key("key", "second"), value=True)
+
+        assert cache.budget_windows_absent_cache.get_cache(key=budget_windows_absent_cache_key("key", "first")) is None
+        assert cache.budget_windows_absent_cache.get_cache(key=budget_windows_absent_cache_key("key", "second")) is True
+
+    def test_update_cache_ttl_applies_to_no_window_notes(self):
+        clock: Final = _ManualClock()
+        cache: Final = UserApiKeyCache(
+            default_in_memory_ttl=60, budget_windows_absent_in_memory_cache=InMemoryCache(clock=clock)
+        )
+        cache.update_cache_ttl(default_in_memory_ttl=5, default_redis_ttl=5)
+        note: Final = budget_windows_absent_cache_key("key", "no-windows")
+
+        cache.budget_windows_absent_cache.set_cache(key=note, value=True)
+        clock.advance(6)
+
+        assert cache.budget_windows_absent_cache.get_cache(key=note) is None
 
     def test_update_in_memory_max_size_none_resets_key_object_partition_to_default(self):
         cache = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=1))

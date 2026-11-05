@@ -620,7 +620,7 @@ class DualCache(BaseCache):
         increment_list: list["RedisPipelineIncrementOperation"],
         local_only: bool = False,
         parent_otel_span: Span | None = None,
-        **kwargs,
+        **kwargs: object,  # kwargs-ok: accepted and unused, as the cache interface's other calls take them
     ) -> list[float] | None:
         result: list[float] | None = None
         try:
@@ -673,7 +673,7 @@ class DualCache(BaseCache):
         if self.redis_cache is not None:
             self.redis_cache.flush_cache()
 
-    def delete_cache(self, key):
+    def delete_cache(self, key: str) -> None:
         """
         Delete a key from the cache
         """

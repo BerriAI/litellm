@@ -10,7 +10,11 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    declared_prompt_cache_breakpoint,
+    routed_model_info,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     content_parts,
     convert_content_list_to_str,
@@ -125,18 +129,14 @@ def _with_breakpoints_for_foundry(message: AllMessageValues, drop_params: bool) 
 
 
 def _deployment_reads_breakpoints(model: str, litellm_params: Mapping[str, object]) -> bool:
+    model_info: Final = routed_model_info(litellm_params.get("model_info"))
+    declared: Final = declared_prompt_cache_breakpoint(model_info)
+    if declared is not None:
+        return declared
     base_model: Final = litellm_params.get("base_model")
     named_models: Final = (base_model, model) if isinstance(base_model, str) and base_model else (model,)
-    model_info: Final = litellm_params.get("model_info")
-    if not isinstance(model_info, Mapping):
-        return any(
-            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(name, "azure_ai") for name in named_models
-        )
-    deployment_flag: Final = _FIELDS.validate_python(model_info).get("supports_prompt_cache_breakpoint")
-    if isinstance(deployment_flag, bool):
-        return deployment_flag
     return any(
-        AnthropicCacheControlHook.catalog_targets_openai_prompt_cache_breakpoint(name, "azure_ai")
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(name, "azure_ai", model_info=model_info)
         for name in named_models
     )
 

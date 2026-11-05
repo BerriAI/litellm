@@ -334,8 +334,10 @@ def test_settings_snapshot_is_reused_until_a_setting_is_written(router):
     assert router.settings().fallbacks == [{"gpt": ["team-gpt"]}]
     router._core_fallbacks = [{"gpt": ["other"]}]  # the router's own writes invalidate it too
     assert router.settings().fallbacks == [{"gpt": ["other"]}]
-    router.settings().fallbacks.append({"x": ["y"]})  # the snapshot holds the router's own objects
-    assert router._core_fallbacks[-1] == {"x": ["y"]}
+    router.settings().fallbacks.append(
+        {"x": ["y"]}
+    )  # the snapshot's lists are copies: settings change only via apply()
+    assert router._core_fallbacks == [{"gpt": ["other"]}]
     unrelated = router.settings()
     router._core_model_list = list(router._core_model_list)
     assert router.settings() is unrelated
@@ -446,84 +448,30 @@ def test_generate_model_id_is_the_module_function():
         assert Router.generate_model_id("g", params) == deployment_id("g", params)
 
 
-def test_subclass_override_of_an_old_member_is_still_called():
-    calls = []
+def test_router_cannot_be_subclassed():
+    with pytest.raises(TypeError, match=r"^litellm\.Router cannot be subclassed"):
 
-    class Sub(litellm.Router):
-        async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
-        ):
-            calls.append(model)
-            return await super().async_pre_routing_hook(model, request_kwargs, messages, input, specific_deployment)
-
-    r = Sub(
-        model_list=[
-            {
-                "model_name": "m",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x", "mock_response": "ok"},
-            }
-        ]
-    )
-    response = asyncio.run(r.acompletion(model="m", messages=[{"role": "user", "content": "hi"}]))
-    assert response.choices[0].message.content == "ok"
-    assert calls == ["m"]
+        class Sub(litellm.Router):
+            pass
 
 
-def test_direct_call_of_a_subclass_override_runs_it_once():
-    calls = []
+def test_core_classes_can_still_be_subclassed():
+    from litellm.router_python_core import PythonCore
 
-    class Sub(litellm.Router):
-        def get_model_access_groups(self, model_name=None, model_access_group=None, team_id=None):
-            calls.append(model_name)
-            return super().get_model_access_groups(model_name, model_access_group, team_id)
+    class PythonSub(PythonCore):
+        pass
 
-    r = Sub(model_list=[{"model_name": "m", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"}}])
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        assert r.get_model_access_groups("m") == {}
-    assert calls == ["m"]
-    assert asyncio.run(asyncio.to_thread(r.registry().access_groups, model_name="m")) == {}
-    assert calls == ["m", "m"]
+    assert isinstance(object.__new__(PythonSub), Router)
 
+    try:
+        from litellm.router_rust.core import RustCore
+    except ImportError:
+        pytest.skip("the native lib does not load")
 
-def test_subclass_staticmethod_override_is_still_consulted():
-    calls = []
+    class RustSub(RustCore):
+        pass
 
-    class Sub(litellm.Router):
-        @staticmethod
-        def is_deployment_blocked(deployment):
-            calls.append(deployment.model_info.id)
-            return True
-
-    r = Sub(
-        model_list=[
-            {
-                "model_name": "m",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
-                "model_info": {"id": "d1"},
-            }
-        ]
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        assert r.get_deployment_credentials(model_id="d1") is None
-    assert calls == ["d1"]
-
-
-def test_private_alias_skips_a_subclass_override_of_the_public_name():
-    calls = []
-
-    class Sub(litellm.Router):
-        def get_all_deployments(self, *args, **kwargs):
-            calls.append("get_all_deployments")
-            return super().get_all_deployments(*args, **kwargs)
-
-    r = Sub(model_list=[{"model_name": "m", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"}}])
-    calls.clear()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        assert len(r._get_all_deployments(model_name="m")) == 1
-    assert calls == []
+    assert issubclass(RustSub, RustCore)
 
 
 def test_old_name_writes_and_deletes_warn(router):
@@ -777,23 +725,6 @@ def test_old_members_refuse_objects_that_are_not_routers():
 
     with pytest.raises(TypeError, match=r"is not a litellm\.Router"):
         _as_router(object())  # pyright: ignore[reportArgumentType]
-
-
-def test_direct_call_of_an_async_subclass_override_runs_it_once():
-    calls = []
-
-    class Sub(litellm.Router):
-        async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
-        ):
-            calls.append(model)
-            return await super().async_pre_routing_hook(model, request_kwargs, messages, input, specific_deployment)
-
-    r = Sub(model_list=[{"model_name": "m", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"}}])
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        asyncio.run(r.async_pre_routing_hook("m", {}))
-    assert calls == ["m"]
 
 
 def test_routing_context_forwards_to_the_router(router, monkeypatch):
