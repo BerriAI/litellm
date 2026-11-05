@@ -2852,7 +2852,9 @@ class ProxyBaseLLMRequestProcessing:
                         if is_hard_per_model_limit(fallback_exc):
                             raise
                         continue
-            except BaseException:
+            except BaseException as e:
+                if is_guardrail_intervention(e):
+                    redact_blocked_request_body_snapshot(rate_limited_data)
                 self.data = rate_limited_data
                 raise
 

@@ -7976,6 +7976,77 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert call_count == 2
 
     @pytest.mark.asyncio
+    async def test_fallback_guardrail_block_redacts_restored_request_body(self):
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.litellm_pre_call_utils import redact_blocked_request_body_snapshot
+
+        primary_model = "gpt-4"
+        fallback_model = "gpt-3.5-turbo"
+        secret = "glpat-FAKE-NOT-A-REAL-TOKEN-2222"
+        raw_body = {
+            "model": primary_model,
+            "messages": [{"role": "user", "content": f"my token is {secret}"}],
+        }
+        processor = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": primary_model,
+                "messages": raw_body["messages"],
+                "proxy_server_request": {
+                    "url": "http://localhost/v1/chat/completions",
+                    "method": "POST",
+                    "body": dict(raw_body),
+                },
+            }
+        )
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == primary_model:
+                raise ProxyRateLimitError(
+                    detail="TPM limit exceeded for gpt-4",
+                    headers={"retry-after": "30"},
+                )
+            redact_blocked_request_body_snapshot(processor.data)
+            raise GuardrailRaisedException(
+                guardrail_name="block-secrets",
+                message="Content blocked: secret detected",
+                blocked_content=True,
+            )
+
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{primary_model: [fallback_model]}]
+
+        with (
+            patch.object(
+                processor,
+                "common_processing_pre_call_logic",
+                side_effect=mock_pre_call_logic,
+            ),
+            pytest.raises(GuardrailRaisedException),
+        ):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None),
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model=primary_model,
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["proxy_server_request"]["body"] == {
+            "model": primary_model,
+            "[redacted]": "blocked by guardrail",
+        }, "fallback restoration put the unredacted blocked prompt back in the spend-log snapshot"
+
+    @pytest.mark.asyncio
     async def test_local_rate_limit_fallback_skips_an_aliased_embedding_only_model(self):
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
