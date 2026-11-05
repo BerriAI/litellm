@@ -169,7 +169,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    resolve_wildcard_prefixed_model,
+)
 from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
@@ -392,9 +395,18 @@ def _get_model_names_for_budget_checks(
 ) -> list[str]:
     if model is None:
         return []
-    if isinstance(model, str):
-        return [model]
-    return model
+    base_models: list[str] = [model] if isinstance(model, str) else list(model)
+    if litellm.enable_model_prefix_enforcement:
+        expanded: list[str] = []
+        for m in base_models:
+            if m not in expanded:
+                expanded.append(m)
+            if isinstance(m, str):
+                resolved = resolve_wildcard_prefixed_model(model=m)
+                if resolved is not None and resolved not in expanded:
+                    expanded.append(resolved)
+        return expanded
+    return base_models
 
 
 def _budget_fallback_target_model(target: object) -> str | None:
