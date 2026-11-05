@@ -517,31 +517,6 @@ def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta:
     return ",".join(sorted(betas))
 
 
-_HEADER_VALUE_LIST: Final = TypeAdapter(tuple[object, ...])
-
-
-def _header_strings(value: object) -> tuple[str, ...]:
-    if isinstance(value, str):
-        return (value,)
-    if not isinstance(value, list | tuple):
-        return ()
-    return tuple(entry for entry in _HEADER_VALUE_LIST.validate_python(value) if isinstance(entry, str))
-
-
-def merge_header_sources(*sources: Mapping[str, object] | None) -> Mapping[str, object]:
-    """Later sources win per header, except ``anthropic-beta``, which unions every source so client betas
-    never drop a deployment's configured ones."""
-    entries: Final = tuple(chain.from_iterable((source or {}).items() for source in sources))
-    beta_values: Final = tuple(
-        chain.from_iterable(_header_strings(value) for name, value in entries if name.lower() == "anthropic-beta")
-    )
-    merged_beta: Final = merge_anthropic_beta_headers(beta_values, None)
-    return MappingProxyType(
-        {name: value for name, value in entries if name.lower() != "anthropic-beta"}
-        | ({"anthropic-beta": merged_beta} if merged_beta else {})
-    )
-
-
 def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tuple[dict, str | None]:
     """
     Handle Anthropic OAuth token detection and header setup.

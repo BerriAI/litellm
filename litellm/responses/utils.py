@@ -16,7 +16,6 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
-from litellm.llms.anthropic.common_utils import merge_header_sources
 from litellm.llms.base_llm.responses.transformation import (
     ANY_REASONING_FIELD_VALUES,
     REASONING_SUMMARY_VALUES,
@@ -263,7 +262,7 @@ class ResponsesAPIRequestUtils:
         )
         if extra_headers is None and not scoped_headers:
             return None
-        return dict(merge_header_sources(extra_headers, scoped_headers))
+        return {**(extra_headers or {}), **scoped_headers}
 
     @staticmethod
     def _check_valid_arg(

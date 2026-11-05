@@ -271,6 +271,45 @@ async def test_a_continue_on_chat_or_responses_resends_the_betas_its_create_turn
     assert continued["extra_headers"] == {"anthropic-beta": "advisor-tool-2026-03-01,message-threads-2026-08-12"}
 
 
+CLIENT_BETAS: Final = {"custom_llm_provider": "anthropic,azure_ai", "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"}}
+CLIENT_VERSION: Final = {"custom_llm_provider": "anthropic", "extra_headers": {"anthropic-version": "2023-06-01"}}
+CLIENT_BETAS_WITH_THE_CREATES: Final = {
+    "custom_llm_provider": "anthropic,azure_ai",
+    "extra_headers": {"anthropic-beta": "advisor-tool-2026-03-01,context-1m-2025-08-07,message-threads-2026-08-12"},
+}
+
+
+@pytest.mark.parametrize(
+    ("client_headers", "expected"),
+    (
+        (CLIENT_BETAS, CLIENT_BETAS_WITH_THE_CREATES),
+        ([CLIENT_BETAS, CLIENT_VERSION], (CLIENT_BETAS_WITH_THE_CREATES, CLIENT_VERSION)),
+        (CLIENT_VERSION, CLIENT_VERSION),
+    ),
+)
+@pytest.mark.parametrize("call_type", ("acompletion", "aresponses", "anthropic_messages"))
+@pytest.mark.asyncio
+async def test_a_continue_that_sends_its_own_betas_keeps_the_create_turns_betas_next_to_them(
+    call_type: CallTypesLiteral, client_headers: object, expected: object
+) -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data=sent_with("advisor-tool-2026-03-01,message-threads-2026-08-12", thread=CREATE),
+        user_api_key_dict=OWNER,
+        response=anthropic_message("msg_client_betas"),
+    )
+    continued: Final = await ownership.async_pre_call_hook(
+        user_api_key_dict=OWNER,
+        cache=DualCache(),
+        data={**continue_from("msg_client_betas"), "provider_specific_header": client_headers},
+        call_type=call_type,
+    )
+
+    assert continued is not None
+    assert continued["provider_specific_header"] == expected
+    assert continued["extra_headers"] == {"anthropic-beta": "advisor-tool-2026-03-01,message-threads-2026-08-12"}
+
+
 @pytest.mark.asyncio
 async def test_a_pass_through_continue_is_checked_but_left_unchanged() -> None:
     ownership: Final = hook()

@@ -32,6 +32,7 @@ _UNOWNED_THREAD_MESSAGE: Final = (
 )
 
 _MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
 class _ThreadBinding(BaseModel):
@@ -88,6 +89,36 @@ def _with_anthropic_beta(extra_headers: object, anthropic_beta: str) -> Mapping[
     return {
         **{name: value for name, value in headers.items() if name.lower() != _ANTHROPIC_BETA_HEADER},
         _ANTHROPIC_BETA_HEADER: merge_anthropic_beta_headers(_anthropic_beta(headers), anthropic_beta),
+    }
+
+
+def _as_mappings(value: object) -> tuple[Mapping[str, object], ...]:
+    try:
+        return _MAPPINGS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return ()
+
+
+def _client_headers_with_anthropic_beta(scoped: Mapping[str, object], anthropic_beta: str) -> Mapping[str, object]:
+    client_headers: Final = _as_mapping(scoped.get("extra_headers"))
+    if client_headers is None or _anthropic_beta(client_headers) is None:
+        return scoped
+    return {**scoped, "extra_headers": dict(_with_anthropic_beta(client_headers, anthropic_beta))}
+
+
+def _provider_headers_with_anthropic_beta(
+    provider_specific_header: object, anthropic_beta: str
+) -> Mapping[str, object]:
+    single: Final = _as_mapping(provider_specific_header)
+    if single is not None:
+        return {"provider_specific_header": _client_headers_with_anthropic_beta(single, anthropic_beta)}
+    scoped_headers: Final = _as_mappings(provider_specific_header)
+    if not scoped_headers:
+        return {}
+    return {
+        "provider_specific_header": tuple(
+            _client_headers_with_anthropic_beta(scoped, anthropic_beta) for scoped in scoped_headers
+        )
     }
 
 
@@ -192,7 +223,11 @@ class MessageThreadOwnership(CustomLogger):
             raise HTTPException(status_code=404, detail=message_thread_not_found_body(_UNOWNED_THREAD_MESSAGE))
         if binding.anthropic_beta is None or call_type == _PASS_THROUGH_CALL_TYPE:
             return None
-        return {**data, "extra_headers": _with_anthropic_beta(data.get("extra_headers"), binding.anthropic_beta)}
+        return {
+            **data,
+            "extra_headers": _with_anthropic_beta(data.get("extra_headers"), binding.anthropic_beta),
+            **_provider_headers_with_anthropic_beta(data.get("provider_specific_header"), binding.anthropic_beta),
+        }
 
     async def async_post_call_success_hook(
         self,

@@ -26,12 +26,7 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.anthropic.common_utils import (
-    ToolsWithoutStrict,
-    is_claude_tool_target,
-    merge_header_sources,
-    tools_without_strict,
-)
+from litellm.llms.anthropic.common_utils import ToolsWithoutStrict, is_claude_tool_target, tools_without_strict
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -4690,18 +4685,6 @@ def test_requires_native_compaction_beta_is_false_without_a_signal(
     from litellm.llms.anthropic.common_utils import requires_native_compaction_beta
 
     assert requires_native_compaction_beta(provider, optional_params, messages) is False
-
-
-def test_merge_header_sources_keeps_only_the_string_betas_of_a_mixed_list() -> None:
-    merged: Final = merge_header_sources(
-        {"anthropic-beta": ["context-1m-2025-08-07", b"bytes-beta", ("nested",), object(), 3]},
-        {"Anthropic-Beta": "message-threads-2026-08-12", "x-other": "kept"},
-    )
-
-    assert dict(merged) == {
-        "anthropic-beta": "context-1m-2025-08-07,message-threads-2026-08-12",
-        "x-other": "kept",
-    }
 
 
 @pytest.mark.parametrize(

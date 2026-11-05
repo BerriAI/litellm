@@ -242,7 +242,7 @@ from .litellm_core_utils.streaming_chunk_builder_utils import (
     ChunkProcessor as ChunkProcessor,  # noqa: PLC0414  # public re-export
 )
 from .llms.anthropic.chat import AnthropicChatCompletion
-from .llms.anthropic.common_utils import is_claude_tool_target, merge_header_sources
+from .llms.anthropic.common_utils import is_claude_tool_target
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -5957,15 +5957,12 @@ def completion(
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
         if provider_specific_header is not None:
-            merged_headers: Final = merge_header_sources(
-                headers,
+            headers.update(
                 ProviderSpecificHeaderUtils.get_provider_specific_headers(
                     provider_specific_header=provider_specific_header,
                     custom_llm_provider=custom_llm_provider,
-                ),
+                )
             )
-            headers.clear()
-            headers.update(merged_headers)
 
         if model_response is not None and hasattr(model_response, HIDDEN_PARAMS_ATTR):
             model_response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
