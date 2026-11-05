@@ -140,7 +140,5 @@ def call_with_native_output_fallback(
                 raise
             return attempt(composed_retry)
     if isinstance(first_attempt, Coroutine):
-        return _await_with_native_output_fallback(
-            first_attempt, attempt, retry_for, strict_tools_fallback, model
-        )
+        return _await_with_native_output_fallback(first_attempt, attempt, retry_for, strict_tools_fallback, model)
     return first_attempt
