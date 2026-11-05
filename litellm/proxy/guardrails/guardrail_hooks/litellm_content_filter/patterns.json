@@ -99,6 +99,34 @@
       "description": "Detects generic API key patterns"
     },
     {
+      "name": "jwt_token",
+      "display_name": "JWT / Bearer Token",
+      "pattern": "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_\\-]{10,}",
+      "category": "Credential Patterns",
+      "description": "Detects JSON Web Tokens (JWTs) in standard three-part base64url format (header.payload.signature)"
+    },
+    {
+      "name": "openai_api_key",
+      "display_name": "OpenAI API Key",
+      "pattern": "\\b(?:sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\\-]{20,}|sk-[A-Za-z0-9]{32,51})\\b",
+      "category": "Credential Patterns",
+      "description": "Detects OpenAI API keys (sk-proj-..., sk-svcacct-..., sk-admin-..., and legacy sk-... formats)"
+    },
+    {
+      "name": "anthropic_api_key",
+      "display_name": "Anthropic API Key",
+      "pattern": "\\bsk-ant-(?:api\\d{2}-)?[A-Za-z0-9_\\-]{20,}\\b",
+      "category": "Credential Patterns",
+      "description": "Detects Anthropic API keys (sk-ant-... format)"
+    },
+    {
+      "name": "gemini_api_key",
+      "display_name": "Gemini / Google API Key",
+      "pattern": "\\b(?:AIza[A-Za-z0-9_\\-]{33,36}|AQ\\.[A-Za-z0-9_\\-]{45,55})\\b",
+      "category": "Credential Patterns",
+      "description": "Detects Google / Gemini API keys (legacy AIza... and new AQ.... authorization key formats)"
+    },
+    {
       "name": "ipv4",
       "display_name": "IP Address (IPv4)",
       "pattern": "\\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\b",
