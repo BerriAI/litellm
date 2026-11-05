@@ -59741,6 +59741,248 @@
           "title": "SkillHubVersions",
           "type": "object"
         },
+        "SkillScan": {
+          "properties": {
+            "archive_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Archive Sha256"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Completed At"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "report": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SkillScanReport"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "requested_by": {
+              "title": "Requested By",
+              "type": "string"
+            },
+            "started_at": {
+              "format": "date-time",
+              "title": "Started At",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "running",
+                "completed",
+                "failed"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "status",
+            "requested_by",
+            "started_at",
+            "expires_at"
+          ],
+          "title": "SkillScan",
+          "type": "object"
+        },
+        "SkillScanFinding": {
+          "properties": {
+            "explanation": {
+              "anyOf": [
+                {
+                  "maxLength": 8000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Explanation"
+            },
+            "file": {
+              "maxLength": 2048,
+              "title": "File",
+              "type": "string"
+            },
+            "message": {
+              "maxLength": 8000,
+              "title": "Message",
+              "type": "string"
+            },
+            "remediation": {
+              "anyOf": [
+                {
+                  "maxLength": 8000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Remediation"
+            },
+            "rule_id": {
+              "maxLength": 200,
+              "title": "Rule Id",
+              "type": "string"
+            },
+            "severity": {
+              "enum": [
+                "LOW",
+                "MEDIUM",
+                "HIGH",
+                "CRITICAL"
+              ],
+              "title": "Severity",
+              "type": "string"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start Line"
+            }
+          },
+          "required": [
+            "rule_id",
+            "severity",
+            "message",
+            "file"
+          ],
+          "title": "SkillScanFinding",
+          "type": "object"
+        },
+        "SkillScanReport": {
+          "properties": {
+            "complete": {
+              "title": "Complete",
+              "type": "boolean"
+            },
+            "findings": {
+              "items": {
+                "$ref": "#/components/schemas/SkillScanFinding"
+              },
+              "maxItems": 500,
+              "title": "Findings",
+              "type": "array"
+            },
+            "limitations": {
+              "default": [],
+              "items": {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "maxItems": 100,
+              "title": "Limitations",
+              "type": "array"
+            },
+            "risk_score": {
+              "maximum": 100.0,
+              "minimum": 0.0,
+              "title": "Risk Score",
+              "type": "integer"
+            },
+            "scan_mode": {
+              "enum": [
+                "static-only",
+                "static+llm"
+              ],
+              "title": "Scan Mode",
+              "type": "string"
+            },
+            "scanner_version": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Scanner Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scanner_version",
+            "complete",
+            "scan_mode",
+            "risk_score",
+            "findings"
+          ],
+          "title": "SkillScanReport",
+          "type": "object"
+        },
+        "SkillScanRequest": {
+          "additionalProperties": false,
+          "properties": {},
+          "title": "SkillScanRequest",
+          "type": "object"
+        },
+        "SkillScanResponse": {
+          "properties": {
+            "configured": {
+              "title": "Configured",
+              "type": "boolean"
+            },
+            "scan": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SkillScan"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "configured",
+            "scan"
+          ],
+          "title": "SkillScanResponse",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -60886,6 +61128,117 @@
             }
           ],
           "summary": "Reject Submission",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/submissions/{submission_id}/scan": {
+        "get": {
+          "description": "Read the latest manual security scan. Only proxy admins may read reports.",
+          "operationId": "get_skill_scan_skill_hub_submissions__submission_id__scan_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillScanResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Skill Scan",
+          "tags": [
+            "skill_hub"
+          ]
+        },
+        "post": {
+          "description": "Start an optional scan of a pending submission. Scans never change approval decisions.",
+          "operationId": "start_skill_scan_skill_hub_submissions__submission_id__scan_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SkillScanRequest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": " Request"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillScanResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Start Skill Scan",
           "tags": [
             "skill_hub"
           ]

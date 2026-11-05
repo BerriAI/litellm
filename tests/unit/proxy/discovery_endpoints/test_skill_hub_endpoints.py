@@ -684,3 +684,72 @@ async def test_replacement_rejections_do_not_stage_or_change_files(pending_hub: 
     assert hub.database.litellm_skillsubmission.rows == ()
     hub.plugins.update.assert_not_awaited()
     hub.archives.upsert.assert_not_awaited()
+
+
+@pytest.mark.parametrize("key", (MEMBER_KEY, OTHER_KEY, VIEWER_KEY))
+@pytest.mark.parametrize("method", ("GET", "POST"))
+async def test_skill_scan_requires_full_admin(hub: HubClient, key: str, method: str) -> None:
+    response = await hub.client.request(method, "/skill-hub/submissions/absent/scan", headers=_headers(key))
+    assert response.status_code == 403, response.text
+
+
+async def test_unconfigured_scanning_preserves_manual_approval(pending_hub: HubClient) -> None:
+    hub = pending_hub
+    created = await _upload(hub, _zip(FILES), MEMBER_KEY, version=None)
+    path = f"/skill-hub/submissions/{created.json()['submission_id']}"
+    state = await hub.client.get(path + "/scan", headers=_headers(MASTER_KEY))
+    assert state.status_code == 200, state.text
+    assert state.json() == {"configured": False, "scan": None}
+    unavailable = await hub.client.post(path + "/scan", headers=_headers(MASTER_KEY))
+    assert unavailable.status_code == 503, unavailable.text
+    approved = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY))
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["submission"]["status"] == "approved"
+
+
+@pytest.mark.parametrize("scanner_status", (200, 503), ids=("report", "error"))
+async def test_configured_scan_persists_result_without_changing_manual_approval(
+    pending_hub: HubClient, monkeypatch: pytest.MonkeyPatch, scanner_status: int,
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.discovery_endpoints import skill_scanning
+
+    hub: Final = pending_hub
+    report: Final = {
+        "scanner_version": "test-version", "complete": True, "scan_mode": "static-only",
+        "risk_score": 0, "findings": [], "limitations": [],
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer scanner-only-token"
+        return httpx.Response(scanner_status, json=report)
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+
+    def scanner_client(provider: str, params: Mapping[str, object]) -> AsyncHTTPHandler:
+        return handler
+
+    monkeypatch.setattr(skill_scanning, "get_async_httpx_client", scanner_client)
+    monkeypatch.setattr(proxy_server, "general_settings", {"skill_scanner": {
+        "endpoint": "https://scanner.example/scan", "api_key_env": "SCANNER_TEST_KEY",
+    }})
+    monkeypatch.setenv("SCANNER_TEST_KEY", "scanner-only-token")
+    created: Final = await _upload(hub, _zip(FILES), MEMBER_KEY, version=None)
+    path: Final = f"/skill-hub/submissions/{created.json()['submission_id']}"
+    before: Final = (await hub.client.get(path, headers=_headers(MASTER_KEY))).json()
+    async with handler.client:
+        started: Final = await hub.client.post(path + "/scan", headers=_headers(MASTER_KEY))
+    assert started.status_code == 200, started.text
+    completed: Final = (await hub.client.get(path + "/scan", headers=_headers(MASTER_KEY))).json()["scan"]
+    assert completed["id"] == started.json()["scan"]["id"]
+    expected: Final = ("completed", report) if scanner_status == 200 else ("failed", None)
+    assert (completed["status"], completed["report"]) == expected
+    assert completed["error"] is None if scanner_status == 200 else "HTTP 503" in completed["error"]
+    monkeypatch.setattr(proxy_server, "general_settings", {"skill_scanner": {"endpoint": "invalid"}})
+    retained: Final = await hub.client.get(path + "/scan", headers=_headers(MASTER_KEY))
+    assert retained.status_code == 200 and retained.json() == {"configured": False, "scan": completed}
+    unavailable: Final = await hub.client.post(path + "/scan", headers=_headers(MASTER_KEY))
+    assert unavailable.status_code == 503 and "configuration is invalid" in unavailable.text
+    assert (await hub.client.get(path, headers=_headers(MASTER_KEY))).json() == before
+    approved: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY))
+    assert approved.status_code == 200 and approved.json()["submission"]["status"] == "approved"

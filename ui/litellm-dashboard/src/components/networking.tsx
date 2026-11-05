@@ -6975,6 +6975,12 @@ export const reviewSkillSubmission = (
 ): Promise<components["schemas"]["SkillHubReviewResponse"]> =>
   apiClient.put(`/skill-hub/submissions/${encodeURIComponent(id)}/${action}`, { accessToken, body });
 
+export const getSkillScan = (accessToken: string, id: string): Promise<components["schemas"]["SkillScanResponse"]> =>
+  apiClient.get(`/skill-hub/submissions/${encodeURIComponent(id)}/scan`, { accessToken });
+
+export const startSkillScan = (accessToken: string, id: string): Promise<components["schemas"]["SkillScanResponse"]> =>
+  apiClient.post(`/skill-hub/submissions/${encodeURIComponent(id)}/scan`, { accessToken });
+
 export const downloadSkillSubmission = (accessToken: string, id: string): Promise<Blob> =>
   apiClient.getBlob(`/skill-hub/submissions/${encodeURIComponent(id)}/archive`, { accessToken, redirect: "error" });
 

@@ -1755,6 +1755,28 @@
       "importHint": "Enter the original source URL. Use a skill selector or path when the repository contains several skills. Leave the ref blank to use HEAD.",
       "saving": "Saving..."
     },
+    "scanning": {
+      "title": "Security scan",
+      "scan": "Scan for threats",
+      "running": "Scanning…",
+      "advisory": "Scanning is optional. You can approve or reject this submission at any time.",
+      "loading": "Loading scan status…",
+      "unconfigured": "Security scanning is not configured. Ask your gateway administrator to connect a scanner.",
+      "loadFailed": "Could not load the scan status.",
+      "requestedBy": "Requested by {{name}}",
+      "archiveDigest": "Scanned archive SHA-256: {{digest}}",
+      "mutableSource": "This scan uses an external source that may change after scanning.",
+      "summary": "{{count}} findings · Risk score {{score}}/100 · SkillSpector {{version}}",
+      "semantic": "Static and semantic analysis",
+      "static": "Static analysis only",
+      "incomplete": "Analysis was incomplete. This report does not establish that the skill is safe.",
+      "noFindings": "No findings were reported in the analyzed content.",
+      "status": {
+        "running": "In progress",
+        "completed": "Completed",
+        "failed": "Failed"
+      }
+    },
     "submissions": {
       "adminIntro": "Review submitted skills and changes before publishing them",
       "authorIntro": "Your submissions and review outcomes. Pending changes are not published",

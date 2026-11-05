@@ -115,7 +115,48 @@ const makeSubmissions = (count: number): SkillSubmission[] =>
     proposal: { ...pending.proposal, description: `Instructions ${index + 1}` },
   }));
 
+let scanFailure = false;
+let scanRequested = false;
+
+function scanResponse(method: string) {
+  if (method === "POST") scanRequested = true;
+  return Response.json({
+    configured: true,
+    scan: !scanRequested
+      ? null
+      : {
+          id: "scan-1",
+          status: scanFailure ? "failed" : "completed",
+          requested_by: "admin",
+          started_at: "2026-01-01T00:00:00Z",
+          expires_at: "2026-01-01T00:03:00Z",
+          archive_sha256: "a".repeat(64),
+          error: scanFailure ? "Scanner was unreachable" : null,
+          report: scanFailure
+            ? null
+            : {
+                scanner_version: "test-version",
+                complete: false,
+                scan_mode: "static-only",
+                risk_score: 85,
+                findings: [
+                  {
+                    rule_id: "unsafe-upload",
+                    severity: "HIGH",
+                    message: "Potential data exfiltration",
+                    file: "SKILL.md",
+                    start_line: 8,
+                  },
+                ],
+                limitations: [],
+              },
+        },
+  });
+}
+
 beforeEach(() => {
+  scanFailure = false;
+  scanRequested = false;
   testQueryClient.clear();
   vi.clearAllMocks();
   catalog = [published];
@@ -129,6 +170,9 @@ beforeEach(() => {
     const url = new URL(request?.url ?? String(input), "http://localhost");
     const path = url.pathname;
     const method = request?.method ?? options?.method ?? "GET";
+    if (path === `/skill-hub/submissions/${pending.id}/scan`) {
+      return scanResponse(method);
+    }
     if (method !== "GET") {
       const body = request ? await request.text() : options?.body;
       writes.push({ path, method, body });
@@ -629,4 +673,72 @@ it("ignores an in-flight admin submission list that resolves after the same acco
   expect(screen.getByText("No submissions yet")).toBeInTheDocument();
   expect(screen.queryByText("Proposed instructions")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+});
+
+it.each([false, true])("keeps approval available after manual scanning, failure=%s", async (failure) => {
+  scanFailure = failure;
+  renderSubmissions();
+  fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+  const scan = await screen.findByRole("button", { name: "Scan for threats" });
+  await waitFor(() => expect(scan).toBeEnabled());
+  expect(screen.getByRole("button", { name: "Approve and publish" })).toBeEnabled();
+  fireEvent.click(scan);
+  expect(
+    await screen.findByText(failure ? "Scanner was unreachable" : "Potential data exfiltration"),
+  ).toBeInTheDocument();
+  if (!failure) {
+    expect(screen.getByText("SKILL.md:8")).toBeInTheDocument();
+    expect(
+      screen.getByText("Analysis was incomplete. This report does not establish that the skill is safe."),
+    ).toBeInTheDocument();
+  }
+  expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Approve and publish" }));
+  expect(await screen.findByText("Approved")).toBeInTheDocument();
+  expect(writes).toHaveLength(1);
+  expect(writes[0].path).toBe(`/skill-hub/submissions/${pending.id}/approve`);
+});
+
+it.each([200, 409])("refreshes the running scan after POST %s and ignores an older GET", async (status) => {
+  renderSubmissions();
+  fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+  const scan = await screen.findByRole("button", { name: "Scan for threats" });
+  await waitFor(() => expect(scan).toBeEnabled());
+  const older = Promise.withResolvers<Response>();
+  const refreshed = Promise.withResolvers<Response>();
+  const running = {
+    configured: true,
+    scan: {
+      id: "current-scan",
+      status: "running",
+      requested_by: "another-admin",
+      started_at: "2026-01-01T00:00:00Z",
+      expires_at: "2026-01-01T00:03:00Z",
+    },
+  };
+  const originalFetch = fetchMock.getMockImplementation()!;
+  let reads = 0;
+  fetchMock.mockImplementation((input, options) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (!url.endsWith(`/submissions/${pending.id}/scan`)) return originalFetch(input, options);
+    if ((input instanceof Request ? input.method : options?.method) === "POST") {
+      return Promise.resolve(
+        Response.json(status === 409 ? { detail: "A scan is already running" } : running, { status }),
+      );
+    }
+    return ++reads === 1 ? older.promise : refreshed.promise;
+  });
+  void testQueryClient.refetchQueries({ type: "active" });
+  await waitFor(() => expect(reads).toBe(1));
+  fireEvent.click(scan);
+  await waitFor(() => expect(reads).toBe(2));
+  expect(screen.getByRole("button", { name: "Scanning…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Approve and publish" })).toBeEnabled();
+  refreshed.resolve(Response.json(running));
+  expect(await screen.findByText("Requested by another-admin")).toBeInTheDocument();
+  await act(async () => older.resolve(Response.json({ configured: true, scan: null })));
+  expect(screen.getByRole("button", { name: "Scanning…" })).toBeDisabled();
+  expect(screen.getByText("Requested by another-admin")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Approve and publish" }));
+  expect(await screen.findByText("Approved")).toBeInTheDocument();
 });

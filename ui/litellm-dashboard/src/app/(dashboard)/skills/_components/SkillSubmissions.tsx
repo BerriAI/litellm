@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable/useUrlTableState";
+import SkillScanPanel from "./SkillScanPanel";
 import { toast } from "@/lib/toast";
 
 const METADATA_FIELDS = ["name", "version", "description", "source", "keywords", "domain", "namespace"] as const;
@@ -207,6 +208,14 @@ function SubmissionReview({ id, accessToken, queryScope, canReview, onClose, onC
               <Button variant="outline" onClick={download} disabled={downloading}>
                 {t(downloading ? "skills.submissions.downloading" : "skills.submissions.download")}
               </Button>
+            )}
+            {canReview && (
+              <SkillScanPanel
+                id={id}
+                accessToken={accessToken}
+                queryScope={queryScope}
+                pending={submission.status === "pending_review"}
+              />
             )}
             {canDecide && (
               <>
