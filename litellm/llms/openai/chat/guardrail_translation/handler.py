@@ -78,6 +78,81 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
+_MAX_FOLDS: Final = 8
+
+
+class _StreamFold:
+    """What a sampled round needs from the chunks the stream has delivered so far.
+
+    A round reads the accumulated texts, the argument text each tool call has streamed and
+    whether any call has appeared at all. Reading those back from the first chunk every round
+    costs the length of the stream each time, so a stream of n chunks costs n squared over its
+    rounds. The fold keeps the answers and advances over the chunks that arrived since the last
+    round, which only a round on the same unmutated chunk list may reuse.
+    """
+
+    def __init__(self, source: Sequence[object]) -> None:
+        self.source: Final = source
+        self.folded = 0
+        self.carries_tool_calls = False
+        self.ended = False
+        self.texts_by_choice: Final[dict[int, str]] = {}  # mutable-ok: the fold grows as chunks arrive
+        self.texts_by_content: Final[dict[tuple[int, int | None], str]] = {}  # mutable-ok: grows per chunk
+        self.arguments: Final[dict[tuple[int, int], str]] = {}  # mutable-ok: grows per chunk
+        self.call_ids: Final[dict[tuple[int, int], str]] = {}  # mutable-ok: grows per chunk
+        self.choices: Final[set[int]] = set()  # mutable-ok: grows per chunk
+
+    def advance(self) -> "_StreamFold":
+        arrived: Final = tuple(self.source)[self.folded :]
+        for chunk in arrived:
+            keys_content = isinstance(chunk, ModelResponseStream)
+            choices = _stream_chunk_choices(chunk)
+            if choices and stream_item_field(choices[0], "finish_reason") is not None:
+                self.ended = True
+            for choice in choices:
+                self._fold_choice(choice, keys_content=keys_content)
+        self.folded += len(arrived)
+        return self
+
+    def _fold_choice(self, choice: object, *, keys_content: bool) -> None:
+        index: Final = cast(int, stream_item_field(choice, "index") or 0)  # cast-ok: a choice index is an int
+        self.choices.add(index)
+        self._fold_tool_calls(choice, index=index)
+        holder: Final = (
+            stream_item_field(choice, "delta")
+            if isinstance(choice, litellm.StreamingChoices)
+            else stream_item_field(choice, "message")
+            if isinstance(choice, litellm.Choices)
+            else None
+        )
+        if holder is None:
+            return
+        content: Final = stream_item_field(holder, "content")
+        if isinstance(content, str):
+            if content:
+                self.texts_by_choice[index] = self.texts_by_choice.get(index, "") + content
+            if keys_content:
+                self._add_content_text((index, None), content)
+        elif isinstance(content, list) and keys_content:
+            for position, item in enumerate(cast("list[object]", content)):  # cast-ok: checked just above
+                text = stream_item_field(item, "text")
+                if isinstance(text, str) and text:
+                    self._add_content_text((index, position), text)
+
+    def _add_content_text(self, key: tuple[int, int | None], text: str) -> None:
+        self.texts_by_content[key] = self.texts_by_content.get(key, "") + text
+
+    def _fold_tool_calls(self, choice: object, *, index: int) -> None:
+        for call in _streamed_delta_tool_calls(stream_item_field(choice, "delta")):
+            self.carries_tool_calls = True
+            key = (index, cast(int, stream_item_field(call, "index") or 0))  # cast-ok: a call index is an int
+            arguments = stream_item_field(stream_item_field(call, "function"), "arguments")
+            self.arguments[key] = self.arguments.get(key, "") + (arguments if isinstance(arguments, str) else "")
+            call_id = stream_item_field(call, "id")
+            if isinstance(call_id, str) and call_id:
+                self.call_ids[key] = call_id
+
+
 class OpenAIChatCompletionsHandler(BaseTranslation):
     """
     Handler for processing OpenAI chat completions messages with guardrails.
@@ -91,6 +166,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._folds: Final[dict[int, _StreamFold]] = {}  # mutable-ok: one fold per chunk list this handler has read
 
     def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
         """
@@ -539,6 +618,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
             return responses_so_far
 
+        self._folds.clear()
         return await self._process_streaming_block_only(
             responses_so_far=responses_so_far,
             guardrail_to_apply=guardrail_to_apply,
@@ -779,18 +859,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
     @staticmethod
-    def _streamed_tool_arguments_are_complete(responses_so_far: Sequence["ModelResponseStream"]) -> bool:
-        """Whether every streamed tool call now carries arguments that parse as JSON.
-
-        A call that has announced itself but emitted no argument text yet is still in flight, so a
-        parallel call finishing first does not make the whole set complete.
-        """
-        joined: Final = OpenAIChatCompletionsHandler._joined_streamed_arguments(responses_so_far)
-        if not joined:
-            return False
-        return all(OpenAIChatCompletionsHandler._parses_as_json(arguments) for arguments in joined.values())
-
-    @staticmethod
     def _streamed_call_ids(responses_so_far: Sequence["ModelResponseStream"]) -> Mapping[tuple[int, int], str]:
         """The id each (choice index, tool call index) announced itself with."""
         choices: Final = chain.from_iterable(chunk.choices for chunk in responses_so_far)
@@ -881,6 +949,29 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         _, error_obj = sse_error_payload(exc)
         return (f'data: {{"error": {json.dumps(error_obj)}}}\n\n'.encode(),)
 
+    def _folded(self, responses_so_far: Sequence[object]) -> "_StreamFold":
+        """The fold for these chunks, advanced over the ones that arrived since the last round.
+
+        Kept per chunk list, so the rounds of one stream share a fold while a list this handler
+        has not folded before starts a new one. A path that rewrites chunks in place drops the
+        folds first, since a fold only describes the chunks as it read them.
+        """
+        cached: Final = self._folds.get(id(responses_so_far))
+        if cached is not None and cached.source is responses_so_far:
+            return cached.advance()
+        if len(self._folds) >= _MAX_FOLDS:
+            self._folds.clear()
+        fresh: Final = _StreamFold(responses_so_far).advance()
+        self._folds[id(responses_so_far)] = fresh
+        return fresh
+
+    @staticmethod
+    def _arguments_are_complete(arguments: Mapping[tuple[int, int], str]) -> bool:
+        """Whether every tool call the stream announced now carries arguments that parse."""
+        if not arguments:
+            return False
+        return all(OpenAIChatCompletionsHandler._parses_as_json(text) for text in arguments.values())
+
     @staticmethod
     def _accumulate_string_content_by_choice_index(
         responses_so_far: list["ModelResponseStream"],
@@ -925,7 +1016,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         re-derives the raw accumulated text every round (so a rewrite guardrail
         always sees consistent input) and hands the result back out of band.
         """
-        raw_by_index: Final = self._accumulate_string_content_by_choice_index(responses_so_far)
+        fold: Final = self._folded(responses_so_far)
+        raw_by_index: Final = fold.texts_by_choice
         if not raw_by_index:
             sink.record(MappingProxyType({}), MappingProxyType({}))
             return
@@ -954,12 +1046,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self.merge_user_api_key_metadata_into_request(resolved_request_data, user_api_key_dict)
         try:
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
-            stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+            stream_ended: Final = fold.ended
             inspects_tool_calls: Final = (
-                inspecting_one_choice or stream_ended or self._streamed_choice_count(responses_so_far) > 1
-            ) and self._stream_carries_tool_calls(responses_so_far)
+                inspecting_one_choice or stream_ended or len(fold.choices) > 1
+            ) and fold.carries_tool_calls
             if inspects_tool_calls:
-                tool_arguments_complete: Final = self._streamed_tool_arguments_are_complete(responses_so_far)
+                tool_arguments_complete: Final = self._arguments_are_complete(fold.arguments)
                 assembled: Final = (
                     None
                     if not stream_ended and not tool_arguments_complete
@@ -1090,14 +1182,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     resolved_request_data[key] = prior
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
-        chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
-        stream_ended: Final = self._first_choice_has_finished(responses_so_far)
-        carries_tool_calls: Final = self._stream_carries_tool_calls(responses_so_far)
+        fold: Final = self._folded(responses_so_far)
+        stream_ended: Final = fold.ended
         return StreamingScanKey(
-            texts=tuple(self._combine_streaming_texts(chunks).values()),
+            texts=tuple(fold.texts_by_content.values()),
             tool_calls=self._streamed_tool_call_fingerprints(responses_so_far) if stream_ended else (),
             stream_ended=stream_ended,
-            tool_calls_in_flight=carries_tool_calls and not stream_ended,
+            tool_calls_in_flight=fold.carries_tool_calls and not stream_ended,
         )
 
     def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
@@ -1119,29 +1210,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             for chunk in responses_so_far
             for choice in _stream_chunk_choices(chunk)
             for tool_call in _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
-        )
-
-    @staticmethod
-    def _streamed_choice_count(responses_so_far: Sequence[object]) -> int:
-        """How many distinct choices the stream has carried so far."""
-        return len(
-            frozenset(
-                stream_item_field(choice, "index") or 0
-                for choice in chain.from_iterable(_stream_chunk_choices(chunk) for chunk in responses_so_far)
-            )
-        )
-
-    @staticmethod
-    def _stream_carries_tool_calls(responses_so_far: Sequence[object]) -> bool:
-        """Whether any chunk so far carried a tool call, without fingerprinting them.
-
-        A round only needs to know that tool calls are present; fingerprinting every fragment
-        dumps and serializes each one, and repeating that as the stream grows is what made a
-        long tool argument cost far more CPU than the arguments themselves.
-        """
-        return any(
-            _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
-            for choice in chain.from_iterable(_stream_chunk_choices(chunk) for chunk in responses_so_far)
         )
 
     @staticmethod

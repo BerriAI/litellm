@@ -1725,6 +1725,95 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert LegacyHookGuardrail.choice_counts == [2]
 
     @pytest.mark.asyncio
+    async def test_rounds_read_a_growing_stream_as_if_each_had_read_it_whole(self) -> None:
+        """Carrying what earlier rounds read may only save work, never change what a round sees."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class RecordingGuardrail(CustomGuardrail):
+            seen: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen.append(tuple(inputs.get("texts") or ()))
+                return inputs
+
+        def chunk(position: int) -> ModelResponseStream:
+            return ModelResponseStream(choices=[
+                StreamingChoices(
+                    index=index,
+                    delta=Delta(content=f"word{position} ", tool_calls=[{
+                        "index": 0, "id": f"call_{index}", "type": "function",
+                        "function": {"name": "weather", "arguments": '{"ci' if position == 0 else f'ty{position}": 1,'},
+                    }]),
+                    finish_reason="tool_calls" if position == 5 else None,
+                )
+                for index in (0, 1)
+            ])
+
+        async def rounds(carried: bool) -> list[object]:
+            RecordingGuardrail.seen = []
+            handler: Final = OpenAIChatCompletionsHandler()
+            growing: Final[list[ModelResponseStream]] = []
+            for position in range(6):
+                growing.append(chunk(position))
+                await (handler if carried else OpenAIChatCompletionsHandler()).process_output_streaming_response(
+                    responses_so_far=list(growing) if not carried else growing,
+                    guardrail_to_apply=RecordingGuardrail(guardrail_name="recording"),
+                    litellm_logging_obj=None,
+                    request_data={"model": "gpt-4"},
+                    stream_transform_sink=StreamTransformSink(),
+                )
+            return list(RecordingGuardrail.seen)
+
+        assert await rounds(carried=True) == await rounds(carried=False)
+
+    @pytest.mark.asyncio
+    async def test_a_pass_that_rewrites_the_chunks_is_not_read_from_a_stale_fold(self) -> None:
+        """What earlier rounds read describes the chunks as they were, so a rewrite discards it."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class RecordingGuardrail(CustomGuardrail):
+            seen: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen.append(tuple(inputs.get("texts") or ()))
+                return inputs
+
+        RecordingGuardrail.seen = []
+        handler: Final = OpenAIChatCompletionsHandler()
+        chunks: Final = [ModelResponseStream(choices=[
+            StreamingChoices(index=0, delta=Delta(content="hello"), finish_reason=None)
+        ])]
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=RecordingGuardrail(guardrail_name="recording"),
+            litellm_logging_obj=None,
+            request_data={"model": "gpt-4"},
+            stream_transform_sink=StreamTransformSink(),
+        )
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockGuardrail(guardrail_name="rewriter"),
+            litellm_logging_obj=None,
+            request_data={"model": "gpt-4"},
+        )
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=RecordingGuardrail(guardrail_name="recording"),
+            litellm_logging_obj=None,
+            request_data={"model": "gpt-4"},
+            stream_transform_sink=StreamTransformSink(),
+        )
+        assert RecordingGuardrail.seen == [("hello",), ("HELLO",)]
+
+    @pytest.mark.asyncio
     async def test_a_buffered_stream_that_carried_no_choices_is_not_an_error(self) -> None:
         """A stream can end carrying only usage, and a policy step still runs over it."""
         from litellm.types.utils import ModelResponseStream
