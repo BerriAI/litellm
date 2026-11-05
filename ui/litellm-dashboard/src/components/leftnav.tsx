@@ -71,6 +71,7 @@ import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
+  formatUserRole,
   internalUserRoles,
   isAdminRole,
   isUserTeamAdminForAnyTeam,
@@ -253,7 +254,7 @@ const menuGroups: MenuGroup[] = [
         page: "skills",
         label: "shell.nav.items.skills",
         icon: <Blocks {...ICON} />,
-        roles: all_admin_roles,
+        roles: [...all_admin_roles, ...internalUserRoles, formatUserRole("org_admin")],
       },
       { key: "guardrails", page: "guardrails", label: "shell.nav.items.guardrails", icon: <Shield {...ICON} /> },
       {
