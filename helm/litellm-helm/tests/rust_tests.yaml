@@ -1,0 +1,87 @@
+suite: Rust switch
+templates:
+  - deployment.yaml
+  - configmap-litellm.yaml
+tests:
+  - it: leaves LITELLM_RUST unset by default
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+          any: true
+  - it: sets LITELLM_RUST to false
+    template: deployment.yaml
+    set:
+      rust.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+            value: "false"
+  - it: sets LITELLM_RUST to true
+    template: deployment.yaml
+    set:
+      rust.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+            value: "true"
+  - it: keeps LITELLM_RUST off the collector sidecar
+    template: deployment.yaml
+    set:
+      rust.enabled: true
+      collector.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: litellm-collector
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_RUST
+          any: true
+  - it: lets envVars override the value
+    template: deployment.yaml
+    set:
+      rust.enabled: true
+      envVars.LITELLM_RUST: "false"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+            value: "false"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+            value: "true"
+  - it: lets extraEnvVars override the value without a duplicate entry
+    template: deployment.yaml
+    set:
+      rust.enabled: true
+      extraEnvVars:
+        - name: LITELLM_RUST
+          value: "false"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+            value: "false"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_RUST
+            value: "true"
+  - it: rejects a value that is not a boolean
+    template: deployment.yaml
+    set:
+      rust.enabled: "yes"
+    asserts:
+      - failedTemplate: {}

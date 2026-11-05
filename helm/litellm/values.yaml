@@ -294,8 +294,12 @@ gateway:
   # Number of uvicorn worker processes per gateway pod. Sets NUM_WORKERS,
   # consumed by the gateway image entrypoint. Default is 1.
   numWorkers: 1
-  rustGateway:
-    # null inherits the image default; true or false sets LITELLM_RUST
+  rust:
+    # Sets LITELLM_RUST on the gateway container. null leaves it unset. true runs
+    # the Rust forwarding server on the public port in front of the Python workers
+    # and turns on the opt-in Rust routes, false keeps every switchable route on
+    # Python. A LITELLM_RUST in extraEnv wins, and this wins over one from
+    # envConfigMaps or envSecrets
     enabled:
   extraEnv: [] # Add extra environment variables to the gateway
   envConfigMaps: [] # Add extra environment variables to the gateway from config maps

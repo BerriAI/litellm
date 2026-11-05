@@ -4,9 +4,14 @@
 
 replicaCount: 1
 
-rustGateway:
-  # null inherits the image default; true or false sets LITELLM_RUST
+rust:
+  # Sets LITELLM_RUST on the proxy container. null leaves it unset. true runs the
+  # Rust forwarding server on the public port in front of the Python workers and
+  # turns on the opt-in Rust routes, false keeps every switchable route on Python.
+  # A LITELLM_RUST in envVars or extraEnvVars wins, and this wins over one from
+  # environmentSecrets or environmentConfigMaps
   enabled:
+
 liteadmin:
   enabled: false
   existingSecret: ""

@@ -58,6 +58,14 @@ spec:
           env:
             {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
             {{- include "litellm.proxyEnv" . | nindent 12 }}
+            {{- $userSetsRust := hasKey (default dict .Values.envVars) "LITELLM_RUST" }}
+            {{- range .Values.extraEnvVars }}
+            {{- if eq .name "LITELLM_RUST" }}{{ $userSetsRust = true }}{{ end }}
+            {{- end }}
+            {{- if and (kindIs "bool" .Values.rust.enabled) (not $userSetsRust) }}
+            - name: LITELLM_RUST
+              value: {{ .Values.rust.enabled | quote }}
+            {{- end }}
             {{- if .Values.liteadmin.enabled }}
             - name: LITELLM_ADMIN_AGENT_URL
               value: {{ printf "http://%s-liteadmin:10000" (include "litellm.fullname" . | trunc 53 | trimSuffix "-") | quote }}
