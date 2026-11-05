@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Final, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -69,6 +69,8 @@ class DeprecationAlertStatus(str, Enum):
 
 
 class DeprecationAlertUpdate(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     model: str = Field(min_length=1, max_length=1024)
     deprecation_date: date
     status: DeprecationAlertStatus
@@ -77,6 +79,8 @@ class DeprecationAlertUpdate(LiteLLMBaseModel):
 
 
 class DeprecationAlertState(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     model: str
     deprecation_date: date
     status: DeprecationAlertStatus = DeprecationAlertStatus.OPEN
@@ -87,5 +91,7 @@ class DeprecationAlertState(LiteLLMBaseModel):
 
 
 class DeprecationTagUsage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     api_key: str
     tag: str
