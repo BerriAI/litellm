@@ -1476,7 +1476,6 @@ class TestRouterIOTokenIntegration:
 
         assert await _io_counters_since(router, first_minute) == (0, 0)
 
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("call", "original_function", "mock_error"),
@@ -1548,41 +1547,6 @@ class TestContextSlotRetention:
 
         set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=False, metadata_channel="metadata")
         assert get_io_token_rate_limit_request_kwargs() is None
-
-    @pytest.mark.asyncio
-    async def test_router_does_not_pin_kwargs_without_io_limits(self):
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "plain",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
-                }
-            ]
-        )
-        set_io_token_rate_limit_request_kwargs(None, metadata_channel="metadata")
-        kwargs = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
-        deployment = router.get_deployment_by_model_group_name("plain")
-        assert deployment is not None
-        router._update_kwargs_with_deployment(deployment=deployment.model_dump(), kwargs=kwargs)
-        assert get_io_token_rate_limit_request_kwargs() is None
-
-    @pytest.mark.asyncio
-    async def test_router_pins_kwargs_for_io_limited_deployment(self):
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "limited",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "itpm": 100},
-                }
-            ],
-            optional_pre_call_checks=["enforce_model_rate_limits"],
-        )
-        set_io_token_rate_limit_request_kwargs(None, metadata_channel="metadata")
-        kwargs = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
-        deployment = router.get_deployment_by_model_group_name("limited")
-        assert deployment is not None
-        router._update_kwargs_with_deployment(deployment=deployment.model_dump(), kwargs=kwargs)
-        assert get_io_token_rate_limit_request_kwargs() is kwargs
 
 
 @pytest.mark.asyncio

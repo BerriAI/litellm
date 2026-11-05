@@ -554,35 +554,35 @@ impl Health {
             return Ok(());
         }
         callbacks
-            .record(
-                OutcomeWrite::AttemptUsage,
-                self.add_usage(deployment, None, total_tokens as f64, 1.0),
-            )
+            .record(OutcomeWrite::AttemptUsage, async {
+                self.add_usage(deployment, None, total_tokens as f64, 1.0)
+                    .await
+                    .map(|_| ())
+            })
             .await
     }
 
     /// `_increment_deployment_usage`, for a deployment that tracks usage: tokens and requests
     /// under `model` (metadata's `deployment`, which a wildcard route fills; else the
-    /// deployment's own), unless there is nothing to add.
+    /// deployment's own), unless there is nothing to add. Returns the tokens counter's key when
+    /// it added to it.
     pub async fn add_usage(
         &self,
         deployment: &Deployment,
         model: Option<&str>,
         total_tokens: f64,
         requests: f64,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<String>, Error> {
         if total_tokens <= 0.0 && requests <= 0.0 {
-            return Ok(());
+            return Ok(None);
         }
         let minute = current_minute(self.clock.now());
         let model = model.unwrap_or(&deployment.params.model);
+        let tpm_key = usage_key(&deployment.id, model, UsageMetric::Tpm, &minute);
         self.cache
             .async_increment_usage(
                 &[
-                    (
-                        usage_key(&deployment.id, model, UsageMetric::Tpm, &minute),
-                        total_tokens,
-                    ),
+                    (tpm_key.clone(), total_tokens),
                     (
                         usage_key(&deployment.id, model, UsageMetric::Rpm, &minute),
                         requests,
@@ -591,7 +591,7 @@ impl Health {
                 Some(USAGE_TTL),
             )
             .await?;
-        Ok(())
+        Ok(Some(tpm_key))
     }
 
     /// `async_deployment_callback_on_failure`: a failed request counts against the deployment's

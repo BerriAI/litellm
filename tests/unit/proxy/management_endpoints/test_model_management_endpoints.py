@@ -2288,8 +2288,8 @@ class TestTeamModelSiblingRouting:
     async def test_router_finds_all_sibling_team_deployments(self):
         """
         When two team deployments share team_public_model_name="gpt-4.1-mini",
-        the router's _common_checks_available_deployment must return BOTH as
-        healthy_deployments (not collapse to one).
+        routing that public name for the team must reach BOTH deployments
+        (not collapse to one).
         """
         import litellm
 
@@ -2338,14 +2338,16 @@ class TestTeamModelSiblingRouting:
         result = router.map_team_model(public_name, team_id)
         assert result == public_name
 
-        # _common_checks_available_deployment should return both deployments
-        model, healthy = router._common_checks_available_deployment(
-            model=public_name,
-            request_kwargs={"metadata": {"user_api_key_team_id": team_id}},
-        )
-        assert isinstance(healthy, list)
-        assert len(healthy) == 2
-        api_bases = {d["litellm_params"]["api_base"] for d in healthy}
+        # routing the public name for the team must reach both siblings
+        api_bases = set()
+        for _ in range(30):
+            response = await router.acompletion(
+                model=public_name,
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="ok",
+                metadata={"user_api_key_team_id": team_id},
+            )
+            api_bases.add(response._hidden_params["api_base"])
         assert api_bases == {
             "https://eastus.openai.azure.com",
             "https://westus.openai.azure.com",

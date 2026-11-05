@@ -74,6 +74,11 @@ class EndpointCore(Protocol):
         ...
 
     @property
+    def public(self) -> object:
+        """The ``Router`` that owns the core, for litellm functions that take ``router=``."""
+        ...
+
+    @property
     def host(self) -> "PythonHost": ...
 
     @property
@@ -232,6 +237,9 @@ class Plan:
     fail_key: CountKey | None = "deployment"
     # One attempt, no retries and no fallbacks.
     single_attempt: bool = False
+    # Whether the attempt's metadata carries the walk's keys (``original_model_group``, the retry
+    # counts): not for an endpoint whose metadata goes to the provider as the caller sent it.
+    stamps_walk: bool = True
     # The named parameter the endpoint takes beside **kwargs, sent between the deployment params and
     # the request (`{**data, name: value, **kwargs}`).
     named: tuple[str, ...] = ()
@@ -267,8 +275,9 @@ class Plan:
     def stamps_failed_deployment(self) -> bool:
         """Whether the attempt stamps ``failed_deployment_id`` on its error, which weighted failover
         reads: every endpoint but file and batch creation (whose result belongs to the deployment
-        that served it), moderation's pass-through and search."""
-        return self.kind not in ("batch", "cancel_batch", "create_file", "moderation", "search")
+        that served it), moderation's pass-through, search and vector store creation (whose
+        handler calls the provider without the attempt wrapper)."""
+        return self.kind not in ("batch", "cancel_batch", "create_file", "moderation", "search", "vector_store_create")
 
     @property
     def metadata_field(self) -> str:
@@ -450,6 +459,7 @@ PLANS: Final[Mapping[str, Plan]] = MappingProxyType(
             stamp="none",
             fail_key="group",
             single_attempt=True,
+            stamps_walk=False,
         ),
         "amoderation": Plan(
             "amoderation",
@@ -635,6 +645,44 @@ _SYNC_VECTOR_STORE_FILES: Final[Mapping[str, str]] = MappingProxyType(
         )
     }
 )
+
+# The endpoints ``RustEndpoints`` serves with a method of its own, by the same name.
+_DIRECT_ENDPOINTS: Final = frozenset(
+    {
+        "avector_store_create",
+        "acreate_file",
+        "acreate_batch",
+        "acancel_batch",
+        "aretrieve_batch",
+        "alist_batches",
+        "aadapter_completion",
+        "abatch_completion",
+        "abatch_completion_one_model_multiple_requests",
+        "abatch_completion_fastest_response",
+        "schedule_acompletion",
+        "priority_header_update",
+        "aguardrail",
+        "asearch",
+    }
+)
+
+
+def endpoint_names() -> frozenset[str]:
+    """Every endpoint name ``RustEndpoints.member`` may serve: what ``dir()`` of a router lists."""
+    return frozenset(
+        {
+            *PLANS,
+            *_HOST_GENERIC,
+            *_VIDEO_DIRECT,
+            *_SYNC_GENERIC,
+            *_UNBRANCHED,
+            *_ASSISTANTS,
+            *_MANAGED_AGENTS,
+            *_SYNC_VECTOR_STORE_FILES,
+            *_DIRECT_ENDPOINTS,
+            "create_interaction",
+        }
+    )
 
 
 def plan_for(endpoint: str) -> Plan:
@@ -968,8 +1016,7 @@ def _search_attempt(
     kwargs: dict[str, object],  # mutable-ok: the attempt's own kwargs
     group: str,
 ) -> AttemptCall:
-    """`SearchAPIRouter.async_search_with_fallbacks_helper`: one of the search tools named
-    ``group`` at random, called with its provider, credentials and params under the request's."""
+    """One of the search tools named ``group`` at random, called with its provider, credentials and params under the request's."""
     import random
 
     tools: Final = [tool for tool in core.endpoints.search_tools if as_dict(tool).get("search_tool_name") == group]
@@ -1359,7 +1406,15 @@ class RustEndpoints:
         self._search_tools: list[object] = tools  # mutable-ok: the router's live list
         self._guardrails: list[object] = list(_as_items(config.get("guardrail_list")))  # mutable-ok: same
         parsed: Final = parse_default_priority(config.get("default_priority"))
-        self._default_priority: Final = None if isinstance(parsed, InvalidPriority) else parsed
+        if isinstance(parsed, InvalidPriority):
+            from litellm._logging import verbose_router_logger
+
+            verbose_router_logger.warning(
+                "router_settings.default_priority is ignored, no request is queued by default: %s",
+                parsed.message,
+            )
+        # apply() assigns it after construction, kept as given, as the Python core's attribute is.
+        self._default_priority: int | None = None if isinstance(parsed, InvalidPriority) else parsed
         self._polling_interval: Final = config.get("polling_interval")
         self._caching_groups: Final = config.get("caching_groups")
         self._default_max_parallel_requests: object = config.get("default_max_parallel_requests")
@@ -1375,15 +1430,17 @@ class RustEndpoints:
         self._cache_responses = value
 
     def assign_setting(self, name: str, value: object) -> None:
-        """``search_tools``, ``guardrail_list`` or ``default_max_parallel_requests`` assigned after
-        construction, kept as given: later searches, guardrail picks and slot limits built from
-        then on read it, as the Python core's attributes are read."""
+        """``search_tools``, ``guardrail_list``, ``default_max_parallel_requests`` or
+        ``default_priority`` assigned after construction, kept as given: later searches, guardrail
+        picks, slot limits and queued calls read it, as the Python core's attributes are read."""
         if name == "search_tools":
             self._search_tools = value  # pyright: ignore[reportAttributeAccessIssue]  # stored as given, as the Python core stores it
         elif name == "guardrail_list":
             self._guardrails = value  # pyright: ignore[reportAttributeAccessIssue]  # same
         elif name == "default_max_parallel_requests":
             self._default_max_parallel_requests = value
+        elif name == "default_priority":
+            self._default_priority = value  # pyright: ignore[reportAttributeAccessIssue]  # stored as given, as the Python core stores it
         else:
             raise ValueError(f"not an endpoint setting: {name}")
 
@@ -1490,23 +1547,8 @@ class RustEndpoints:
             return self._sync_vector_store_files(name)
         if name == "create_interaction":
             return self._factory("create_interaction", "interactions.create")
-        direct: Final = {
-            "avector_store_create": self.avector_store_create,
-            "acreate_file": self.acreate_file,
-            "acreate_batch": self.acreate_batch,
-            "acancel_batch": self.acancel_batch,
-            "aretrieve_batch": self.aretrieve_batch,
-            "alist_batches": self.alist_batches,
-            "aadapter_completion": self.aadapter_completion,
-            "abatch_completion": self.abatch_completion,
-            "abatch_completion_one_model_multiple_requests": self.abatch_completion_one_model_multiple_requests,
-            "abatch_completion_fastest_response": self.abatch_completion_fastest_response,
-            "schedule_acompletion": self.schedule_acompletion,
-            "priority_header_update": self.priority_header_update,
-            "aguardrail": self.aguardrail,
-            "asearch": self.asearch,
-        }.get(name)
-        if direct is not None:
+        if name in _DIRECT_ENDPOINTS:
+            direct: Final[Callable[..., object]] = getattr(self, name)  # pyright: ignore[reportAny]  # one of this class's own endpoint methods
             return direct
         if name == "responses":
             return self._sync_factory(name, PLANS["responses"])
@@ -1538,7 +1580,10 @@ class RustEndpoints:
         client: object,
         kwargs: dict[str, object],  # mutable-ok: the wrapper's own kwargs
     ) -> object:
-        plan: Final = generic_plan(name) or _generic(name, host_op)
+        listed: Final = generic_plan(name)
+        # The endpoint's own plan, unless the wrapper calls another litellm function for it
+        # (``avector_store_create`` without a model calls ``vector_stores.main.acreate``).
+        plan: Final = listed if listed is not None and listed.host_op == host_op else _generic(name, host_op)
         if name in _CONTAINER_ENDPOINTS:
             return await self._containers(plan, custom_llm_provider, kwargs)
         if name in _RESPONSE_ID_ENDPOINTS:
@@ -1618,7 +1663,7 @@ class RustEndpoints:
             if provider_kwargs.get("model"):
                 return self._core.call_sync(plan, provider_kwargs, _SINGLE_ATTEMPT)
             if name == "vector_store_search":
-                return self._invoke(plan.host_op)(**{**provider_kwargs, "router": self._core.router})
+                return self._invoke(plan.host_op)(**{**provider_kwargs, "router": self._core.public})
             return self._invoke(plan.host_op)(**provider_kwargs)
 
         sync_wrapper.__name__ = name
@@ -1695,7 +1740,7 @@ class RustEndpoints:
         if kwargs.get("model"):
             return await self._ageneric(plan, kwargs)
         if name == "avector_store_search":
-            return await self._direct(plan.host_op, {**kwargs, "router": self._core.router})
+            return await self._direct(plan.host_op, {**kwargs, "router": self._core.public})
         return await self._direct(plan.host_op, kwargs)
 
     async def _interactions(
@@ -1880,7 +1925,12 @@ class RustEndpoints:
         assert isinstance(scheduler, Scheduler)
 
         async def healthy_deployments() -> Sequence[object]:
-            healthy: Final = await self._core.select(model, dict(request), kind="healthy")
+            try:
+                healthy: Final = await self._core.select(model, dict(request), kind="healthy")
+            except Exception:  # noqa: BLE001  # `_async_get_healthy_deployments` lists none on any lookup failure
+                # It lists none while every deployment cools down, or for a group it cannot look up:
+                # the request keeps its place in the queue, and the call itself raises the error.
+                return []
             return list(healthy) if isinstance(healthy, Sequence) else [healthy]
 
         await scheduler.wait_for_turn(
@@ -2440,6 +2490,7 @@ __all__ = [
     "attempt_call",
     "clean_realtime_session_deployment",
     "compacted_attempt",
+    "endpoint_names",
     "failover_fields",
     "generic_plan",
     "log_refused_call",

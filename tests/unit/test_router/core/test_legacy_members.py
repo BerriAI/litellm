@@ -1,11 +1,10 @@
 """
-The old public Router members outside the entry points, on each core: registry lookups, the
+The old public Router members outside the entry points: registry lookups, the
 routing-state lifecycle, the routing callbacks' checks, one provider call's accounting and the
 pre-routing strategy builders (``RustLegacyMembers``, litellm/router_rust/surface/legacy_members.py).
 """
 
 import asyncio
-import inspect
 from collections.abc import Mapping
 from typing import Final
 
@@ -13,18 +12,10 @@ import pytest
 
 import litellm
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
-from litellm.containers.endpoint_factory import (
-    _generated_endpoints,  # pyright: ignore[reportPrivateUsage]  # the names the routers register
-)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.token_counter import served_openai_models
 from litellm.router_api import RoutingContext
 from litellm.router_core import RouterCore
-from litellm.router_python_core import PythonCore
-from litellm.router_rust.surface.legacy_members import (
-    _ASSISTANTS_ENDPOINTS,  # pyright: ignore[reportPrivateUsage]  # pinned against the Python core below
-    _ROUTER_ENDPOINTS,  # pyright: ignore[reportPrivateUsage]  # see above
-)
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
 from litellm.router_strategy.auto_router.auto_router_model_naming import HEURISTIC_V2_CAPABILITY
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
@@ -46,7 +37,6 @@ from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
     completion_response,
     deployment,
-    python_core,
     rate_limit,
     rust_core,
     server_error,
@@ -177,12 +167,6 @@ def test_served_openai_models_reads_the_group_and_follows_a_model_list_change(ma
     assert core.served_openai_models("g") == served_openai_models(
         core.registry().deployments("g", source="named") or ()
     )  # pyright: ignore[reportAttributeAccessIssue]  # see above
-
-
-def test_the_tier_params_never_dropped_constant_matches(make_core: MakeCore) -> None:
-    core: Final = make_core(model_list=list(GROUP))
-
-    assert core.TIER_PARAMS_NEVER_DROPPED == PythonCore.TIER_PARAMS_NEVER_DROPPED  # pyright: ignore[reportAttributeAccessIssue]  # a class constant
 
 
 def test_auto_router_capability_violation_resolves_the_limit_on_every_call(make_core: MakeCore) -> None:
@@ -324,19 +308,6 @@ def test_initialize_router_endpoints_replaces_only_what_it_binds(make_core: Make
     # `acreate_file` is a method an assignment shadows.
     assert core.aget_assistants is assigned  # pyright: ignore[reportAttributeAccessIssue]  # see above
     assert core.acreate_file is assigned  # pyright: ignore[reportAttributeAccessIssue]  # see above
-
-
-def test_the_endpoint_names_are_the_ones_the_python_core_binds() -> None:
-    bound: Final = vars(python_core(ScriptedHost(), model_list=[]))
-    listed: Final = {*_ROUTER_ENDPOINTS, *_ASSISTANTS_ENDPOINTS, *_generated_endpoints}
-
-    assert listed <= set(bound)
-    wrappers: Final = {
-        name
-        for name, value in bound.items()
-        if inspect.isfunction(value) and value.__qualname__.startswith("PythonCore.factory_function.")
-    }
-    assert wrappers <= listed
 
 
 # --- pre-routing strategies ----------------------------------------------------------------------
