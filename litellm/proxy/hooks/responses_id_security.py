@@ -7,7 +7,7 @@ instead of writing immediately on each request.
 
 from collections.abc import AsyncGenerator, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
@@ -22,7 +22,12 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.interactions import InteractionsAPIResponse, InteractionsAPIStreamingResponse
+from litellm.types.interactions import (
+    CancelInteractionResult,
+    DeleteInteractionResult,
+    InteractionsAPIResponse,
+    InteractionsAPIStreamingResponse,
+)
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
@@ -84,9 +89,14 @@ def _proxy_signing_key() -> str | None:
 _RESPONSE_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_DATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 _ResponseObjectT = TypeVar("_ResponseObjectT", bound=BaseLiteLLMOpenAIResponseObject)
-_AddressedResultT = TypeVar(
-    "_AddressedResultT", bound=ResponsesAPIResponse | InteractionsAPIResponse | DeleteResponseResult
+_AddressedResult: TypeAlias = (
+    ResponsesAPIResponse
+    | InteractionsAPIResponse
+    | DeleteResponseResult
+    | DeleteInteractionResult
+    | CancelInteractionResult
 )
+_AddressedResultT: Final = TypeVar("_AddressedResultT", bound=_AddressedResult)
 
 
 def _response_payload(response_obj: object) -> Mapping[str, object] | None:
@@ -178,9 +188,7 @@ def _held_id_naming(response_id: str | None, held_ids: Mapping[str, str]) -> str
     )
 
 
-def _id_sent_back(
-    response: ResponsesAPIResponse | InteractionsAPIResponse | DeleteResponseResult, held_ids: Mapping[str, str]
-) -> str | None:
+def _id_sent_back(response: _AddressedResult, held_ids: Mapping[str, str]) -> str | None:
     held_id: Final = _held_id_naming(response.id, held_ids)
     if held_id is not None:
         return held_id
@@ -484,7 +492,14 @@ class ResponsesIDSecurity(CustomLogger):
 
         if general_settings.get("disable_responses_id_security", False):
             return response
-        if isinstance(response, ResponsesAPIResponse | InteractionsAPIResponse | DeleteResponseResult):
+        if isinstance(
+            response,
+            ResponsesAPIResponse
+            | InteractionsAPIResponse
+            | DeleteResponseResult
+            | DeleteInteractionResult
+            | CancelInteractionResult,
+        ):
             return self._advertised_response(response, user_api_key_dict, data)
         return response
 

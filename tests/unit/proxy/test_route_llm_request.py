@@ -95,6 +95,33 @@ def test_qca_model_group_alias_rejects_request_selector_overrides(selector: str)
     assert error.value.code == "403"
 
 
+@pytest.mark.parametrize("selector", ("agent", "environment"))
+def test_qca_deployment_id_rejects_request_selector_overrides(selector: str) -> None:
+    deployment_id: Final = "qoder-deployment-id"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qoder-agent",
+                "litellm_params": {
+                    "model": "qca/agent_configured",
+                    "environment": "env_configured",
+                    "api_key": "unit-provider-key",
+                },
+                "model_info": {"id": deployment_id},
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyException) as error:
+        _raise_if_qca_deployment_selectors_are_overridden(
+            router,
+            deployment_id,
+            {"model": deployment_id, selector: f"{selector}_attacker"},
+        )
+
+    assert error.value.code == "403"
+
+
 @pytest.mark.parametrize(
     "route_type, required_body_params",
     [
@@ -1451,7 +1478,9 @@ async def test_route_request_applies_override_fallbacks_when_request_carries_cre
 @pytest.mark.parametrize(
     "router_only_setting",
     [
-        pytest.param({"model_group_retry_policy": {"gpt-4": {"TimeoutErrorRetries": 1}}}, id="model-group-retry-policy"),
+        pytest.param(
+            {"model_group_retry_policy": {"gpt-4": {"TimeoutErrorRetries": 1}}}, id="model-group-retry-policy"
+        ),
         pytest.param({"context_window_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="context-window-fallbacks"),
         pytest.param({"content_policy_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="content-policy-fallbacks"),
     ],
@@ -2657,7 +2686,9 @@ async def test_a_user_config_adaptive_request_answers_with_the_model_it_picked()
                 },
                 {
                     **_mock_deployment("smart"),
-                    "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": ["code_generation"]}},
+                    "model_info": {
+                        "adaptive_router_preferences": {"quality_tier": 3, "strengths": ["code_generation"]}
+                    },
                 },
             ]
         },

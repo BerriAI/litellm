@@ -6,10 +6,10 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from litellm.exceptions import RateLimitError
-from litellm.llms.qca.interactions.handler import create_qca_interaction
+from litellm.exceptions import BadRequestError, RateLimitError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.qca.interactions.handler import create_qca_interaction
 from litellm.types.interactions import InteractionsAPIResponse
 
 
@@ -94,6 +94,9 @@ async def test_create_qca_interaction_maps_session_events_to_completed_response(
     assert isinstance(response, InteractionsAPIResponse)
     assert response.id == "qca1.sess_test.evt_input"
     assert response.status == "completed"
+    assert response.created is not None
+    assert response.updated is not None
+    assert datetime.fromisoformat(response.updated) >= datetime.fromisoformat(response.created)
     assert response.steps == [
         {
             "type": "model_output",
@@ -138,7 +141,7 @@ async def test_create_qca_interaction_continues_session_and_streams_normalized_e
                     {
                         "id": "evt_action",
                         "type": "session.status_idle",
-                            "stop_reason": {"type": "end_turn"},
+                        "stop_reason": {"type": "end_turn"},
                     }
                 ),
             )
@@ -182,7 +185,7 @@ async def test_create_qca_interaction_continues_session_and_streams_normalized_e
 async def test_create_qca_interaction_rejects_unsupported_features_before_network_call() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(500))) as client:
         logging_obj: Final = MagicMock()
-        with pytest.raises(ValueError, match="background"):
+        with pytest.raises(BadRequestError, match="background") as error:
             await create_qca_interaction(
                 agent="agent_test",
                 input="hello",
@@ -196,12 +199,13 @@ async def test_create_qca_interaction_rejects_unsupported_features_before_networ
                 logging_obj=logging_obj,
                 client=client,
             )
+    assert error.value.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_create_qca_interaction_rejects_store_false_before_network_call() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(500))) as client:
-        with pytest.raises(ValueError, match="store"):
+        with pytest.raises(BadRequestError, match="store") as error:
             await create_qca_interaction(
                 agent="agent_test",
                 input="hello",
@@ -215,6 +219,7 @@ async def test_create_qca_interaction_rejects_store_false_before_network_call() 
                 logging_obj=MagicMock(),
                 client=client,
             )
+    assert error.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -253,7 +258,7 @@ async def test_create_qca_interaction_rejects_continuation_for_another_agent() -
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
         logging_obj: Final = MagicMock()
-        with pytest.raises(ValueError, match="configured agent and environment"):
+        with pytest.raises(BadRequestError, match="configured agent and environment") as error:
             await create_qca_interaction(
                 agent="agent_test",
                 input="continue",
@@ -267,5 +272,6 @@ async def test_create_qca_interaction_rejects_continuation_for_another_agent() -
                 logging_obj=logging_obj,
                 client=client,
             )
+    assert error.value.status_code == 400
 
     assert [request.method for request in requests] == ["GET"]
