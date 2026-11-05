@@ -189,7 +189,7 @@ async def test_langfuse_logging_completion(langfuse_export: tuple[respx.Route, s
 async def test_langfuse_failure_with_redaction_on_logs_the_error_without_the_prompt(
     langfuse_export: tuple[respx.Route, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    route, _ = langfuse_export
+    route: Final = langfuse_export[0]
     prompt: Final = "my ssn is 123-45-6789"
     monkeypatch.setattr(litellm, "turn_off_message_logging", True)
     monkeypatch.setattr(litellm, "failure_callback", ["langfuse"])

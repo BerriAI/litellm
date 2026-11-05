@@ -12056,16 +12056,24 @@ SCRUB_PROMPT: Final = "my ssn is 123-45-6789"
 class _FailureCapture(CustomLogger):
     def __init__(self, **kwargs: bool) -> None:
         super().__init__(**kwargs)
-        self.sync_kwargs: dict | None = None
-        self.async_kwargs: dict | None = None
+        self.sync_kwargs: dict[str, object] | None = None
+        self.async_kwargs: dict[str, object] | None = None
 
     def log_failure_event(
-        self, kwargs: dict, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
     ) -> None:
         self.sync_kwargs = kwargs
 
     async def async_log_failure_event(
-        self, kwargs: dict, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
     ) -> None:
         self.async_kwargs = kwargs
 
@@ -12096,7 +12104,7 @@ def _prompt_echo_error() -> litellm.BadRequestError:
 
 async def _async_failure_payload(
     monkeypatch: pytest.MonkeyPatch, *, redact: bool, error: Exception, capture: _FailureCapture | None = None
-) -> dict:
+) -> dict[str, object]:
     logger: Final = capture or _FailureCapture()
     monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
     monkeypatch.setattr(litellm, "_async_failure_callback", [logger])
