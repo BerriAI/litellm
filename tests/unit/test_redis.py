@@ -2,6 +2,7 @@ import inspect
 import json
 import os
 import ssl
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -3249,3 +3250,46 @@ def test_redis_settings_resolve_like_the_rust_resolver_expects(monkeypatch, kwar
         outcome = {"rejected": {"type": type(error).__name__, "message": str(error)}}
 
     assert outcome == expected
+
+
+_REDIS_PY_KWARGS: Final = json.loads(
+    (Path(__file__).parents[2] / "litellm-rust/crates/redis-resolve/redis-py-kwargs.json").read_text()
+)
+
+
+def _named_args(*classes: type) -> frozenset[str]:
+    return frozenset(
+        name
+        for cls in classes
+        for spec in (inspect.getfullargspec(inspect.unwrap(cls.__init__)),)
+        for name in spec.args + spec.kwonlyargs
+        if name != "self"
+    )
+
+
+def test_redis_py_kwargs_catalog_matches_the_installed_redis_py():
+    assert redis.__version__ in _REDIS_PY_KWARGS["meta"]["redis_py_versions"]
+    signatures: Final = {
+        "sync": _named_args(redis.Redis),
+        "async": _named_args(async_redis.Redis),
+        "connection": _named_args(
+            *(cls for cls in (*redis.Connection.__mro__, *async_redis.Connection.__mro__) if cls is not object)
+        ),
+        "cluster": _named_args(async_redis.RedisCluster),
+    }
+    args: Final = _REDIS_PY_KWARGS["args"]
+    names: Final = frozenset(args).union(*signatures.values())
+
+    catalogued: Final = {name: args.get(name, {}).get("redis_py", {}).get(redis.__version__, []) for name in names}
+    installed: Final = {name: [kind for kind, named in signatures.items() if name in named] for name in names}
+    assert catalogued == installed
+
+
+@pytest.mark.skipif(
+    redis.__version__ != _REDIS_PY_KWARGS["meta"]["redis_py_locked"],
+    reason="the catalog records REDIS_* names for the locked redis-py only",
+)
+def test_redis_py_kwargs_catalog_names_the_environment_kwargs_python_reads():
+    catalogued: Final = frozenset(name for name, arg in _REDIS_PY_KWARGS["args"].items() if arg["environment"])
+
+    assert catalogued == frozenset(_get_redis_env_kwarg_mapping().values())

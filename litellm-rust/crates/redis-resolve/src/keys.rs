@@ -1,184 +1,265 @@
 use litellm_redis_types::Ignored;
 use serde_json::Value;
 
-// Every Redis setting litellm/_redis.py reads, with how Rust handles it and where else Python looks for it.
-// Warn rows are read by Python and dropped here with a warning naming the consequence, never an error.
-// Reject rows are security checks Rust cannot perform, so asking for one fails instead of connecting without it.
-// environment marks the kwargs _get_redis_env_kwarg_mapping reads as REDIS_<KWARG>, and fallback lists the names
-// _get_redis_client_logic consults with get_secret when the merged kwargs lack the setting
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// How the Rust client honors a redis-py kwarg.
+#[derive(Clone, Copy, Debug)]
 pub enum Handling {
+    /// Modeled by the resolver into a field of `Options`.
     Read,
-    Warn,
+    /// Dropped and returned as an `Ignored` naming `consequence`, unless `met` says the value asks for nothing the
+    /// Rust client does not already do.
+    Warn {
+        consequence: &'static str,
+        met: Option<fn(&Value) -> bool>,
+    },
+    /// A security check the Rust client cannot perform, so setting it to true fails instead of connecting without it.
     Reject,
 }
 
+/// What the value is, which decides where an unread setting lands in a `Resolution`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    /// Plain data, kept verbatim in `passthrough`.
+    Plain,
+    /// A Python object (a class, callable or instance), named in `host_objects` for the host to reattach.
+    Object,
+}
+
+/// Whether redis-py's `parse_url` reads the setting from a url's query and the Rust resolver does too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FromUrl {
+    No,
+    Any,
+    Rediss,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Setting {
     pub kwarg: &'static str,
     pub handling: Handling,
+    pub shape: Shape,
+    pub from_url: FromUrl,
+    /// `_get_redis_env_kwarg_mapping` reads it as `REDIS_<KWARG>`.
     pub environment: bool,
+    /// The names `_merge_redis_kwargs` reads with `get_secret` when the merged kwargs lack the setting.
     pub fallback: &'static [&'static str],
 }
 
 impl Setting {
-    const fn new(
-        kwarg: &'static str,
-        handling: Handling,
-        environment: bool,
-        fallback: &'static [&'static str],
-    ) -> Self {
+    const fn new(kwarg: &'static str, handling: Handling) -> Self {
         Self {
             kwarg,
             handling,
-            environment,
-            fallback,
+            shape: Shape::Plain,
+            from_url: FromUrl::No,
+            environment: false,
+            fallback: &[],
         }
+    }
+
+    const fn env(self) -> Self {
+        Self {
+            environment: true,
+            ..self
+        }
+    }
+
+    const fn object(self) -> Self {
+        Self {
+            shape: Shape::Object,
+            ..self
+        }
+    }
+
+    const fn in_url(self, from_url: FromUrl) -> Self {
+        Self { from_url, ..self }
+    }
+
+    const fn or_secrets(self, fallback: &'static [&'static str]) -> Self {
+        Self { fallback, ..self }
     }
 
     pub fn environment_name(&self) -> Option<String> {
         self.environment
             .then(|| format!("REDIS_{}", self.kwarg.to_ascii_uppercase()))
     }
-}
 
-pub const SETTINGS: &[Setting] = &[
-    Setting::new("aws_iam_auth", Handling::Read, true, &[]),
-    Setting::new("aws_iam_cache_name", Handling::Read, true, &[]),
-    Setting::new(
-        "aws_iam_region",
-        Handling::Read,
-        true,
-        &["AWS_REGION", "AWS_DEFAULT_REGION"],
-    ),
-    Setting::new("aws_iam_serverless", Handling::Read, true, &[]),
-    Setting::new("aws_iam_user_name", Handling::Read, true, &[]),
-    Setting::new(
-        "azure_client_id",
-        Handling::Read,
-        true,
-        &["AZURE_CLIENT_ID"],
-    ),
-    Setting::new(
-        "azure_client_secret",
-        Handling::Read,
-        true,
-        &["AZURE_CLIENT_SECRET"],
-    ),
-    Setting::new(
-        "azure_redis_ad_token",
-        Handling::Read,
-        true,
-        &["REDIS_AZURE_AD_TOKEN"],
-    ),
-    Setting::new(
-        "azure_tenant_id",
-        Handling::Read,
-        true,
-        &["AZURE_TENANT_ID"],
-    ),
-    Setting::new("cache", Handling::Warn, true, &[]),
-    Setting::new("cache_config", Handling::Warn, true, &[]),
-    Setting::new("charset", Handling::Warn, true, &[]),
-    Setting::new("client_name", Handling::Warn, true, &[]),
-    Setting::new("connection_pool", Handling::Warn, false, &[]),
-    Setting::new("credential_provider", Handling::Read, false, &[]),
-    Setting::new("db", Handling::Read, true, &[]),
-    Setting::new("decode_responses", Handling::Warn, true, &[]),
-    Setting::new("encoding", Handling::Warn, true, &[]),
-    Setting::new("encoding_errors", Handling::Warn, true, &[]),
-    Setting::new("errors", Handling::Warn, true, &[]),
-    Setting::new("event_dispatcher", Handling::Warn, true, &[]),
-    Setting::new(
-        "gcp_service_account",
-        Handling::Read,
-        true,
-        &["REDIS_GCP_SERVICE_ACCOUNT"],
-    ),
-    Setting::new(
-        "gcp_ssl_ca_certs",
-        Handling::Read,
-        true,
-        &["REDIS_GCP_SSL_CA_CERTS"],
-    ),
-    Setting::new("health_check_interval", Handling::Read, true, &[]),
-    Setting::new("host", Handling::Read, true, &[]),
-    Setting::new("lib_name", Handling::Warn, true, &[]),
-    Setting::new("lib_version", Handling::Warn, true, &[]),
-    Setting::new("max_connections", Handling::Warn, true, &[]),
-    Setting::new("namespace", Handling::Read, false, &[]),
-    Setting::new("password", Handling::Read, true, &[]),
-    Setting::new("port", Handling::Read, true, &[]),
-    Setting::new("protocol", Handling::Warn, true, &[]),
-    Setting::new("redis_connect_func", Handling::Warn, true, &[]),
-    Setting::new("retry", Handling::Warn, false, &[]),
-    Setting::new("retry_on_error", Handling::Warn, true, &[]),
-    Setting::new("retry_on_timeout", Handling::Warn, true, &[]),
-    Setting::new(
-        "sentinel_nodes",
-        Handling::Read,
-        false,
-        &["REDIS_SENTINEL_NODES"],
-    ),
-    Setting::new(
-        "sentinel_password",
-        Handling::Read,
-        false,
-        &["REDIS_SENTINEL_PASSWORD"],
-    ),
-    Setting::new(
-        "service_name",
-        Handling::Read,
-        false,
-        &["REDIS_SERVICE_NAME"],
-    ),
-    Setting::new("single_connection_client", Handling::Warn, true, &[]),
-    Setting::new("socket_connect_timeout", Handling::Read, true, &[]),
-    Setting::new("socket_keepalive", Handling::Warn, true, &[]),
-    Setting::new("socket_keepalive_options", Handling::Warn, true, &[]),
-    Setting::new("socket_timeout", Handling::Read, true, &[]),
-    Setting::new("ssl", Handling::Read, true, &[]),
-    Setting::new("ssl_ca_certs", Handling::Read, true, &[]),
-    Setting::new("ssl_ca_data", Handling::Read, true, &[]),
-    Setting::new("ssl_ca_path", Handling::Read, true, &[]),
-    Setting::new("ssl_cert_reqs", Handling::Read, true, &[]),
-    Setting::new("ssl_certfile", Handling::Read, true, &[]),
-    Setting::new("ssl_check_hostname", Handling::Read, true, &[]),
-    Setting::new("ssl_ciphers", Handling::Warn, true, &[]),
-    Setting::new("ssl_keyfile", Handling::Read, true, &[]),
-    Setting::new("ssl_min_version", Handling::Warn, true, &[]),
-    Setting::new("ssl_ocsp_context", Handling::Warn, true, &[]),
-    Setting::new("ssl_ocsp_expected_cert", Handling::Warn, true, &[]),
-    Setting::new("ssl_password", Handling::Read, true, &[]),
-    Setting::new("ssl_validate_ocsp", Handling::Reject, true, &[]),
-    Setting::new("ssl_validate_ocsp_stapled", Handling::Reject, true, &[]),
-    Setting::new(
-        "startup_nodes",
-        Handling::Read,
-        false,
-        &["REDIS_CLUSTER_NODES"],
-    ),
-    Setting::new("unix_socket_path", Handling::Read, true, &[]),
-    Setting::new("url", Handling::Read, true, &[]),
-    Setting::new("username", Handling::Read, true, &[]),
-];
+    pub fn is_read(&self) -> bool {
+        matches!(self.handling, Handling::Read)
+    }
 
-pub(crate) fn is_refused_when_set(kwarg: &str) -> bool {
-    setting(kwarg).is_some_and(|setting| setting.handling == Handling::Reject)
-}
-
-pub(crate) fn ignored(setting: String, kwarg: &str) -> Ignored {
-    Ignored {
-        setting,
-        consequence: consequence(kwarg),
+    /// The warning a set value earns, or `None` when the setting is read, refused or already met.
+    pub(crate) fn warning(&self, value: &Value) -> Option<&'static str> {
+        match self.handling {
+            Handling::Warn { consequence, met } if !met.is_some_and(|met| met(value)) => {
+                Some(consequence)
+            }
+            _ => None,
+        }
     }
 }
+
+const fn read(kwarg: &'static str) -> Setting {
+    Setting::new(kwarg, Handling::Read)
+}
+
+const fn warn(kwarg: &'static str, consequence: &'static str) -> Setting {
+    Setting::new(
+        kwarg,
+        Handling::Warn {
+            consequence,
+            met: None,
+        },
+    )
+}
+
+const fn warn_unless(
+    kwarg: &'static str,
+    consequence: &'static str,
+    met: fn(&Value) -> bool,
+) -> Setting {
+    Setting::new(
+        kwarg,
+        Handling::Warn {
+            consequence,
+            met: Some(met),
+        },
+    )
+}
+
+const fn reject(kwarg: &'static str) -> Setting {
+    Setting::new(kwarg, Handling::Reject)
+}
+
+const NO_EQUIVALENT: &str = "the Rust client has no equivalent";
+const OWN_STACK: &str = "the Rust client uses its own pool, retries and events";
+const OWN_CONNECTION: &str = "it tunes redis-py's own connection, and the Rust client has its own";
+const OWN_CLUSTER: &str = "the Rust cluster client discovers, routes and retries on its own";
+const MAINTENANCE: &str = "the Rust client does not follow server maintenance notifications";
+const RUSTLS: &str = "rustls negotiates TLS 1.2+ with its own ECDHE AEAD suites";
+const OCSP: &str = "it only configures ssl_validate_ocsp, which the Rust client refuses when set";
+const VERIFY_FLAGS: &str = "rustls verifies certificates with its own fixed rules, so no extra X.509 flag such as CRL checking applies";
+
+/// Every Redis kwarg redis-py or `litellm/_redis.py` accepts, one row each. `redis-py-kwargs.json` records which
+/// redis-py versions and `REDIS_*` names accept them, and `tests/catalog.rs` keeps the two in step.
+pub const SETTINGS: &[Setting] = &[
+    warn("address_remap", OWN_CLUSTER).object(),
+    warn("auto_close_connection_pool", OWN_STACK),
+    read("aws_iam_auth").env(),
+    read("aws_iam_cache_name").env(),
+    read("aws_iam_region")
+        .env()
+        .or_secrets(&["AWS_REGION", "AWS_DEFAULT_REGION"]),
+    read("aws_iam_serverless").env(),
+    read("aws_iam_user_name").env(),
+    read("azure_client_id")
+        .env()
+        .or_secrets(&["AZURE_CLIENT_ID"]),
+    read("azure_client_secret")
+        .env()
+        .or_secrets(&["AZURE_CLIENT_SECRET"]),
+    read("azure_redis_ad_token")
+        .env()
+        .or_secrets(&["REDIS_AZURE_AD_TOKEN"]),
+    read("azure_tenant_id")
+        .env()
+        .or_secrets(&["AZURE_TENANT_ID"]),
+    warn("cache", NO_EQUIVALENT).env().object(),
+    warn("cache_config", NO_EQUIVALENT).env().object(),
+    warn("charset", NO_EQUIVALENT).env(),
+    warn("client_name", NO_EQUIVALENT).env(),
+    warn("cluster_error_retry_attempts", OWN_CLUSTER),
+    warn("command_packer", OWN_CONNECTION).object(),
+    warn("connection_class", OWN_STACK).object(),
+    warn("connection_error_retry_attempts", OWN_CLUSTER),
+    warn("connection_pool", OWN_STACK).object(),
+    read("credential_provider"),
+    read("db").env().in_url(FromUrl::Any),
+    warn("decode_responses", NO_EQUIVALENT).env(),
+    warn("driver_info", NO_EQUIVALENT).object(),
+    warn("dynamic_startup_nodes", OWN_CLUSTER),
+    warn("encoder_class", OWN_CONNECTION).object(),
+    warn("encoding", NO_EQUIVALENT).env(),
+    warn("encoding_errors", NO_EQUIVALENT).env(),
+    warn("errors", NO_EQUIVALENT).env(),
+    warn("event_dispatcher", OWN_STACK).env().object(),
+    read("gcp_service_account")
+        .env()
+        .or_secrets(&["REDIS_GCP_SERVICE_ACCOUNT"]),
+    read("gcp_ssl_ca_certs")
+        .env()
+        .or_secrets(&["REDIS_GCP_SSL_CA_CERTS"]),
+    read("health_check_interval").env(),
+    read("host").env(),
+    warn("legacy_responses", NO_EQUIVALENT),
+    warn("lib_name", NO_EQUIVALENT).env(),
+    warn("lib_version", NO_EQUIVALENT).env(),
+    warn("load_balancing_strategy", OWN_CLUSTER),
+    warn("maint_notifications_config", MAINTENANCE).object(),
+    warn("maint_notifications_pool_handler", MAINTENANCE).object(),
+    warn("maintenance_notification_hash", MAINTENANCE),
+    warn("maintenance_state", MAINTENANCE),
+    warn("max_connections", "the Rust client has no connection cap").env(),
+    read("namespace"),
+    warn("orig_host_address", MAINTENANCE),
+    warn("orig_socket_connect_timeout", MAINTENANCE),
+    warn("orig_socket_timeout", MAINTENANCE),
+    warn("oss_cluster_maint_notifications_handler", MAINTENANCE).object(),
+    warn("parser", OWN_CONNECTION),
+    warn("parser_class", OWN_CONNECTION).object(),
+    read("password").env().in_url(FromUrl::Any),
+    warn("path", OWN_CLUSTER),
+    warn("policy_resolver", OWN_CLUSTER).object(),
+    read("port").env(),
+    warn("protocol", NO_EQUIVALENT).env(),
+    warn("read_from_replicas", OWN_CLUSTER),
+    warn(
+        "redis_connect_func",
+        "the Python object is not callable from Rust, so static username and password are used",
+    )
+    .env()
+    .object(),
+    warn("reinitialize_steps", OWN_CLUSTER),
+    warn("require_full_coverage", OWN_CLUSTER),
+    warn("retry", OWN_STACK).object(),
+    warn("retry_on_error", NO_EQUIVALENT).env().object(),
+    warn("retry_on_timeout", NO_EQUIVALENT).env(),
+    read("sentinel_nodes").or_secrets(&["REDIS_SENTINEL_NODES"]),
+    read("sentinel_password").or_secrets(&["REDIS_SENTINEL_PASSWORD"]),
+    read("service_name").or_secrets(&["REDIS_SERVICE_NAME"]),
+    warn("single_connection_client", NO_EQUIVALENT).env(),
+    read("socket_connect_timeout").env(),
+    warn("socket_keepalive", NO_EQUIVALENT).env(),
+    warn("socket_keepalive_options", NO_EQUIVALENT).env(),
+    warn("socket_read_size", OWN_CONNECTION),
+    read("socket_timeout").env(),
+    warn("socket_type", OWN_CONNECTION),
+    read("ssl").env(),
+    read("ssl_ca_certs").env().in_url(FromUrl::Rediss),
+    read("ssl_ca_data").env().in_url(FromUrl::Rediss),
+    read("ssl_ca_path").env().in_url(FromUrl::Rediss),
+    read("ssl_cert_reqs").env().in_url(FromUrl::Rediss),
+    read("ssl_certfile").env().in_url(FromUrl::Rediss),
+    read("ssl_check_hostname").env().in_url(FromUrl::Rediss),
+    warn("ssl_ciphers", RUSTLS).env(),
+    warn("ssl_exclude_verify_flags", VERIFY_FLAGS),
+    warn("ssl_include_verify_flags", VERIFY_FLAGS),
+    read("ssl_keyfile").env().in_url(FromUrl::Rediss),
+    warn_unless("ssl_min_version", RUSTLS, is_met_by_rustls).env(),
+    warn("ssl_ocsp_context", OCSP).env().object(),
+    warn("ssl_ocsp_expected_cert", OCSP).env(),
+    read("ssl_password").env().in_url(FromUrl::Rediss),
+    reject("ssl_validate_ocsp").env(),
+    reject("ssl_validate_ocsp_stapled").env(),
+    read("startup_nodes").or_secrets(&["REDIS_CLUSTER_NODES"]),
+    read("unix_socket_path").env(),
+    read("url").env(),
+    read("username").env().in_url(FromUrl::Any),
+];
 
 // rustls only speaks TLS 1.2 and 1.3, so a minimum of 1.2 or lower is already met. redis-py takes an
 // ssl.TLSVersion, which reaches Rust as its name or its value
-pub(crate) fn is_met_by_rustls(kwarg: &str, value: &Value) -> bool {
-    if kwarg != "ssl_min_version" {
-        return false;
-    }
+fn is_met_by_rustls(value: &Value) -> bool {
     match value {
         Value::Number(number) => matches!(number.as_i64(), Some(-2 | 769 | 770 | 771)),
         Value::String(text) => matches!(
@@ -192,48 +273,36 @@ pub(crate) fn is_met_by_rustls(kwarg: &str, value: &Value) -> bool {
     }
 }
 
-// redis-py parameters whose value is a Python object rather than plain data. credential_provider is modeled as
-// Auth::Provider instead
-const HOST_OBJECTS: &[&str] = &[
-    "address_remap",
-    "cache",
-    "cache_config",
-    "connection_class",
-    "connection_pool",
-    "driver_info",
-    "event_dispatcher",
-    "maint_notifications_config",
-    "parser_class",
-    "redis_connect_func",
-    "retry",
-    "retry_on_error",
-    "ssl_ocsp_context",
-];
-
-pub(crate) fn is_host_object(kwarg: &str) -> bool {
-    HOST_OBJECTS.contains(&kwarg)
-}
-
-/// What ignoring a warned setting means for the connection, so the operator reads the consequence
-/// rather than only the key name.
-fn consequence(kwarg: &str) -> &'static str {
-    match kwarg {
-        "ssl_ocsp_context" | "ssl_ocsp_expected_cert" => {
-            "it only configures ssl_validate_ocsp, which the Rust client refuses when set"
-        }
-        "ssl_ciphers" | "ssl_min_version" => {
-            "rustls negotiates TLS 1.2+ with its own ECDHE AEAD suites"
-        }
-        "credential_provider" | "redis_connect_func" => {
-            "the Python object is not callable from Rust, so static username and password are used"
-        }
-        "connection_pool" | "retry" | "event_dispatcher" => {
-            "the Rust client uses its own pool, retries and events"
-        }
-        _ => "the Rust client has no equivalent",
-    }
-}
-
 pub fn setting(kwarg: &str) -> Option<&'static Setting> {
     SETTINGS.iter().find(|setting| setting.kwarg == kwarg)
+}
+
+pub(crate) fn is_refused_when_set(kwarg: &str) -> bool {
+    setting(kwarg).is_some_and(|setting| matches!(setting.handling, Handling::Reject))
+}
+
+/// A warned setting the kwargs set, with what dropping it means. A kwarg with no row is not a Redis setting, so it
+/// passes through without a warning.
+pub(crate) fn ignored(source: &str, kwarg: &str, value: &Value) -> Option<Ignored> {
+    let consequence = setting(kwarg)?.warning(value)?;
+    Some(Ignored {
+        setting: source.to_owned(),
+        consequence,
+    })
+}
+
+/// A url query parameter the resolver does not read. redis-py turns every one into a client kwarg, so even one with
+/// no row is reported.
+pub(crate) fn ignored_query(source: &str, name: &str, value: &Value) -> Option<Ignored> {
+    let consequence = match setting(name) {
+        None => NO_EQUIVALENT,
+        Some(setting) if setting.is_read() => {
+            "the Rust client does not read it from this url's query"
+        }
+        Some(setting) => setting.warning(value)?,
+    };
+    Some(Ignored {
+        setting: source.to_owned(),
+        consequence,
+    })
 }

@@ -5,24 +5,10 @@ use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
 use crate::{
-    Entry, Expected, RedisError, keys,
+    Entry, Expected, RedisError,
+    keys::{self, FromUrl},
     options::{self, TlsInput, flag, parsed, secret, text},
 };
-
-// redis-py's parse_url turns every query parameter into a client kwarg. Only these and, on a rediss:// url, the
-// TLS ones have a redis-rs equivalent, so any other parameter is ignored
-const URL_CONNECTION_SETTINGS: &[&str] = &["db", "username", "password"];
-
-const URL_TLS_SETTINGS: &[&str] = &[
-    "ssl_cert_reqs",
-    "ssl_ca_certs",
-    "ssl_ca_data",
-    "ssl_ca_path",
-    "ssl_certfile",
-    "ssl_keyfile",
-    "ssl_password",
-    "ssl_check_hostname",
-];
 
 /// `gcp_ca_certs` replaces `ssl_ca_certs` when GCP IAM is on, as `_get_redis_client_logic` does.
 pub(super) fn tls_options(
@@ -85,8 +71,11 @@ pub(super) fn url_query(url: &str) -> Result<UrlQuery, RedisError> {
         .collect();
     options::refuse_unenforceable(query.iter().map(|(name, entry)| (name, entry)))?;
     let (query, ignored): (Vec<_>, Vec<_>) = query.into_iter().partition(|(name, _)| {
-        URL_CONNECTION_SETTINGS.contains(&name.as_str())
-            || (tls_scheme && URL_TLS_SETTINGS.contains(&name.as_str()))
+        keys::setting(name).is_some_and(|setting| match setting.from_url {
+            FromUrl::Any => true,
+            FromUrl::Rediss => tls_scheme,
+            FromUrl::No => false,
+        })
     });
     let get = |key: &str| {
         query
@@ -118,9 +107,8 @@ pub(super) fn url_query(url: &str) -> Result<UrlQuery, RedisError> {
         username: secret(get("username").as_ref()),
         password: secret(get("password").as_ref()),
         ignored: ignored
-            .into_iter()
-            .filter(|(name, _)| !keys::is_refused_when_set(name))
-            .map(|(name, entry)| keys::ignored(entry.source, &name))
+            .iter()
+            .filter_map(|(name, entry)| keys::ignored_query(&entry.source, name, &entry.value))
             .collect(),
     })
 }

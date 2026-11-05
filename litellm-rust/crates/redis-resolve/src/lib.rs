@@ -11,7 +11,7 @@ mod options;
 mod tls;
 
 pub use error::{Expected, RedisError};
-pub use keys::{Handling, SETTINGS, Setting, setting};
+pub use keys::{FromUrl, Handling, SETTINGS, Setting, Shape, setting};
 pub use options::is_present;
 
 use options::Options;

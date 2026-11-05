@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::{
     Entry, Expected, Kwargs, RedisError,
-    keys::{self, Handling},
+    keys::{self, Shape},
 };
 
 /// Every setting the resolver reads. A setting is `None` when it is unset, null or empty.
@@ -84,10 +84,11 @@ impl Unmodeled {
         let unmodeled = || {
             kwargs
                 .iter()
-                .filter(|(key, _)| handling(key) != Some(Handling::Read))
+                .filter(|(key, _)| !keys::setting(key).is_some_and(keys::Setting::is_read))
         };
-        let (objects, plain): (Vec<_>, Vec<_>) =
-            unmodeled().partition(|(key, _)| keys::is_host_object(key));
+        let (objects, plain): (Vec<_>, Vec<_>) = unmodeled().partition(|(key, _)| {
+            keys::setting(key).is_some_and(|setting| setting.shape == Shape::Object)
+        });
         let passthrough = plain
             .into_iter()
             .map(|(key, entry)| (key.clone(), entry.value.clone()))
@@ -96,11 +97,7 @@ impl Unmodeled {
             passthrough: Passthrough::new(passthrough),
             host_objects: objects.into_iter().map(|(key, _)| key.clone()).collect(),
             ignored: unmodeled()
-                .filter(|(key, entry)| {
-                    handling(key) == Some(Handling::Warn)
-                        && !keys::is_met_by_rustls(key, &entry.value)
-                })
-                .map(|(key, entry)| keys::ignored(entry.source.clone(), key))
+                .filter_map(|(key, entry)| keys::ignored(&entry.source, key, &entry.value))
                 .collect(),
         })
     }
@@ -110,13 +107,17 @@ impl Options {
     /// The typed settings and the ones the resolver leaves to the host.
     pub(super) fn read(kwargs: &Kwargs) -> Result<(Self, Unmodeled), RedisError> {
         let unmodeled = Unmodeled::read(kwargs)?;
-        let get = |key: &str| {
+        let options = Self::from_lookup(|key| {
             kwargs
                 .get(key)
                 .filter(|entry| is_present(&entry.value))
                 .cloned()
-        };
-        let options = Self {
+        });
+        Ok((options, unmodeled))
+    }
+
+    fn from_lookup(get: impl Fn(&'static str) -> Option<Entry>) -> Self {
+        Self {
             url: get("url"),
             host: get("host"),
             port: get("port"),
@@ -163,8 +164,7 @@ impl Options {
             socket_timeout: get("socket_timeout"),
             socket_connect_timeout: get("socket_connect_timeout"),
             health_check_interval: get("health_check_interval"),
-        };
-        Ok((options, unmodeled))
+        }
     }
 }
 
@@ -181,10 +181,6 @@ pub(super) fn refuse_unenforceable<'a>(
             }),
             false => Ok(()),
         })
-}
-
-fn handling(key: &str) -> Option<Handling> {
-    keys::setting(key).map(|setting| setting.handling)
 }
 
 // Python reads most of these with `x or fallback`, so an empty value counts as unset everywhere
@@ -281,5 +277,32 @@ fn coerced<N, T>(
             tracing::warn!(setting = %entry.source, "Redis setting is not a number, so the default is used like redis-py");
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, collections::BTreeSet};
+
+    use rstest::rstest;
+
+    use super::Options;
+    use crate::SETTINGS;
+
+    // a Read row that Options never asks for would be neither modeled nor passed through nor warned about
+    #[rstest]
+    fn options_ask_for_exactly_the_read_rows() {
+        let asked = RefCell::new(BTreeSet::new());
+        let _ = Options::from_lookup(|kwarg| {
+            asked.borrow_mut().insert(kwarg);
+            None
+        });
+
+        let read: BTreeSet<&str> = SETTINGS
+            .iter()
+            .filter(|setting| setting.is_read())
+            .map(|setting| setting.kwarg)
+            .collect();
+        assert_eq!(asked.into_inner(), read);
     }
 }
