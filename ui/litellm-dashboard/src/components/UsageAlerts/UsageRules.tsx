@@ -184,7 +184,7 @@ const EVALUATION_LABELS = {
   pending: "Awaiting first evaluation",
   complete: "Evaluated",
   insufficient_coverage: "Waiting for complete usage data",
-  insufficient_history: "Waiting for more history",
+  insufficient_history: "Collecting a baseline",
 };
 
 function RuleRow({

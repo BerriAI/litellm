@@ -4,8 +4,8 @@ import { SPEND_ISSUE } from "./issueFixtures";
 
 describe("issue comparisons", () => {
   it.each([
-    ["spend", "spend", 30, "New activity · $30.00 vs $0.00"],
-    ["error_rate", "reliability", 8, "New activity · 8% vs 0%"],
+    ["spend", "spend", 30, "$30.00 vs $0.00"],
+    ["error_rate", "reliability", 8, "8% vs 0%"],
   ] as const)("shows %s from a zero baseline without an infinite ratio", (metric, family, value, expected) => {
     const comparison = {
       metric,

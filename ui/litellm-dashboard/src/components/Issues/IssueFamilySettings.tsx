@@ -239,8 +239,8 @@ export default function IssueFamilySettings({ accessToken }: { accessToken: stri
       ) : (
         <>
           <p className="text-xs text-muted-foreground">
-            Daily monitoring is enabled by default. Checks wait for enough complete usage history. Model retirement
-            issues appear automatically for used models.
+            Daily monitoring is enabled by default. Checks wait for a usable baseline and complete usage data. Model
+            retirement issues appear automatically for used models.
           </p>
           <ul className="divide-y">
             {query.data.data.map((family) => (

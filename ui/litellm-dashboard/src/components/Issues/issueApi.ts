@@ -59,6 +59,7 @@ export function issueComparisonText(issue: Issue): string {
   if (!comparison) return "Comparison unavailable";
   const actual = formatAlertValue(comparison.metric, comparison.observed_value);
   const baseline = formatAlertValue(comparison.metric, comparison.baseline_value);
+  if (comparison.baseline_value === 0) return `${actual} vs ${baseline}`;
   return `${formatAlertChange(comparison)} · ${actual} vs ${baseline}`;
 }
 
