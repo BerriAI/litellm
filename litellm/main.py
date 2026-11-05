@@ -143,7 +143,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_route_for_request,
     bedrock_strict_tools_fallback,
     deployment_model_info,
-    without_bedrock_native_output_opt_in,
+    for_bedrock_json_tool_retry,
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
@@ -4369,7 +4369,7 @@ def _native_output_fallback(
     first_attempt_params: Mapping[str, object],
     first_attempt_litellm_params: Mapping[str, object],
 ) -> NativeOutputFallback:
-    litellm_params: Final = without_bedrock_native_output_opt_in(first_attempt_litellm_params)
+    litellm_params: Final = for_bedrock_json_tool_retry(first_attempt_litellm_params)
     remapped_params: Final = ctx.optional_params_for_model_info(deployment_model_info(litellm_params))
     return NativeOutputFallback(
         optional_params={
