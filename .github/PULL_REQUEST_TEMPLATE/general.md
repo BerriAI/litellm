@@ -6,10 +6,12 @@
 
 ## Handwritten 1-3 sentence description
 
-<!-- The author writes this in their own words, and it can be left empty. AI agents never write here,
-     and when updating an existing PR they keep whatever the author wrote. Keep this heading even when it is empty
+<!-- The author writes this in their own words, and it can be left empty. AI agents never write here and leave the
+     placeholder line below as is, and when updating an existing PR they keep whatever the author wrote. Keep this heading
      Say what the PR does for users and why, then anything that keeps it working over time (a sync job, a config someone owns)
      No bullets, tables, or code names here. Everything else goes inside the Details block below -->
+
+_Author, replace this line with 1-3 sentences in your own words_
 
 <details>
 <summary>Details</summary>
