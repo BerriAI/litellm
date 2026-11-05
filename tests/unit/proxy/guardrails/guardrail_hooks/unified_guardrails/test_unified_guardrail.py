@@ -3468,6 +3468,38 @@ async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_descr
     assert exc_info.value.status_code == 400
 
 
+def _nested_list(depth: int) -> list[object]:
+    return functools.reduce(lambda inner, _: [inner], range(depth), [])
+
+
+@pytest.mark.usefixtures("_real_translation_mappings")
+@pytest.mark.asyncio
+async def test_pre_call_rejects_tools_too_deep_to_scan_instead_of_forwarding_them_unscanned() -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "description": _POISONED_DESCRIPTION, "parameters": _WEATHER_SCHEMA},
+            "cache_control": {"padding": _nested_list(300)},
+        }
+    ]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data={
+                "guardrail_to_apply": PhraseGuardrail(mask=True, scan_tool_descriptions=True),
+                "model": "gpt-5.5",
+                "messages": [{"role": "user", "content": "weather in Paris?"}],
+                "tools": tools,
+            },
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["error"] == "tool_descriptions_unscannable"
+
+
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DESCRIPTION_SCAN_REQUESTS)
 @pytest.mark.asyncio
@@ -3563,8 +3595,19 @@ _NESTED_SCHEMA: Final = {
             "examples": [{"description": _INJECTION}],
         },
         "unit": {"$ref": "#/$defs/unit"},
+        "tags": {
+            "type": "array",
+            "contains": {"type": "string", "description": f"Tag. {_INJECTION}"},
+            "enum": [["a"], ["b"]],
+        },
+        "labels": {"type": "object", "propertyNames": {"description": f"Label key. {_INJECTION}"}},
     },
     "$defs": {"unit": {"type": "string", "description": f"Unit. {_INJECTION}"}},
+    "if": {"description": f"If. {_INJECTION}"},
+    "then": {"description": f"Then. {_INJECTION}"},
+    "else": {"description": f"Else. {_INJECTION}"},
+    "dependentSchemas": {"unit": {"description": f"Dependent. {_INJECTION}"}},
+    "dependencies": {"unit": ["filters"]},
 }
 _NESTED_SCHEMA_REQUESTS: Final = (
     pytest.param(
@@ -3621,4 +3664,13 @@ async def test_pre_call_masks_nested_schema_descriptions_but_not_schema_values(
     filters: Final = schema["properties"]["filters"]
     assert filters["items"]["anyOf"][0]["description"] == "Filter text. [MASKED]"
     assert schema["$defs"]["unit"]["description"] == "Unit. [MASKED]"
+    assert schema["properties"]["tags"]["contains"]["description"] == "Tag. [MASKED]"
+    assert schema["properties"]["labels"]["propertyNames"]["description"] == "Label key. [MASKED]"
+    assert [schema[key]["description"] for key in ("if", "then", "else")] == [
+        "If. [MASKED]",
+        "Then. [MASKED]",
+        "Else. [MASKED]",
+    ]
+    assert schema["dependentSchemas"]["unit"]["description"] == "Dependent. [MASKED]"
+    assert schema["dependencies"] == {"unit": ["filters"]}
     assert filters["default"] == filters["examples"] == [{"description": _INJECTION}]

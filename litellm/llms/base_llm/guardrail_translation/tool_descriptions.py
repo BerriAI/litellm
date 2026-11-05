@@ -6,9 +6,9 @@ import itertools
 from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, TypeAlias
 
+from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     unappliable_request_rewrite,
@@ -34,9 +34,28 @@ def effective_scan_tool_descriptions_as_text_for_guardrail(guardrail_to_apply: C
 
 _TOOL_SCHEMA_KEYS: Final = ("parameters", "input_schema", "parametersJsonSchema", "parameters_json_schema")
 _DECLARATION_KEYS: Final = ("functionDeclarations", "function_declarations")
-_SUBSCHEMA_KEYWORDS: Final = ("items", "additionalProperties", "not")
+_SUBSCHEMA_KEYWORDS: Final = (
+    "items",
+    "additionalItems",
+    "unevaluatedItems",
+    "contains",
+    "additionalProperties",
+    "unevaluatedProperties",
+    "propertyNames",
+    "not",
+    "if",
+    "then",
+    "else",
+)
 _SUBSCHEMA_LIST_KEYWORDS: Final = ("items", "prefixItems", "anyOf", "oneOf", "allOf")
-_SUBSCHEMA_MAP_KEYWORDS: Final = ("properties", "patternProperties", "$defs", "definitions")
+_SUBSCHEMA_MAP_KEYWORDS: Final = (
+    "properties",
+    "patternProperties",
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+    "dependencies",
+)
 
 
 def tool_description_entries(tools: Sequence[JsonValue]) -> tuple[tuple[DescriptionPath, str], ...]:
@@ -128,12 +147,18 @@ async def scan_tool_descriptions(
         return data
     try:
         tools: Final = _TOOLS.validate_python(raw_tools)
-    except ValidationError:
-        verbose_proxy_logger.warning(
-            "Guardrail %s: tools[] is not plain JSON, so its descriptions were not scanned",
-            guardrail_to_apply.guardrail_name,
-        )
-        return data
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "tool_descriptions_unscannable",
+                "message": (
+                    f"Guardrail '{guardrail_to_apply.guardrail_name}' has scan_tool_descriptions_as_text on, "
+                    "but tools[] is not plain JSON or is nested too deeply to read, so the request was rejected "
+                    "rather than sent with unscanned tool descriptions"
+                ),
+            },
+        ) from error
     entries: Final = tool_description_entries(tools)
     if not entries:
         return data
