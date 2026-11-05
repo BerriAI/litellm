@@ -74,6 +74,10 @@ def captured_model_windows(kwargs: Mapping[str, object] | None) -> tuple[WindowS
     return value.transactions if isinstance(value, CapturedModelWindows) else ()
 
 
+def capturing_model_windows() -> bool:
+    return _MODEL_WINDOWS.get() is not None
+
+
 @contextmanager
 def capture_model_windows(enabled: bool) -> Generator[Callable[[], CapturedModelWindows]]:
     token: Final = _MODEL_WINDOWS.set(() if enabled else None)
