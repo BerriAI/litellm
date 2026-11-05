@@ -218,6 +218,10 @@ DEFAULT_USER_CONTINUE_MESSAGE: Final = ChatCompletionUserMessage(content="Please
 
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE: Final = ChatCompletionAssistantMessage(content="Please continue.", role="assistant")
 
+_extract_reasoning_content: Final = extract_reasoning_content
+_get_image_mime_type_from_url: Final = get_image_mime_type_from_url
+_parse_content_for_reasoning: Final = parse_content_for_reasoning
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
 
