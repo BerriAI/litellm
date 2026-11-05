@@ -1882,7 +1882,7 @@ class _CallbackCapabilities:
     last_custom_pre_call_hook: int = -1
     routes_on_sensitive_data: bool = False
     has_parallel_guardrail_before_last_custom_hook: bool = False
-    never_skipped_guardrail_names: frozenset[str] = frozenset()
+    never_skipped_guardrails: tuple[CustomGuardrail, ...] = ()
 
 
 def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
@@ -1931,7 +1931,11 @@ async def _skipped_for_unroutable_model(
         or not await probe.refuses(data)
     ):
         return False
-    if guardrail.guardrail_name not in caps.never_skipped_guardrail_names:
+    if not any(
+        earlier.guardrail_name == guardrail.guardrail_name
+        and earlier.should_run_guardrail(data=data, event_type=event_type)  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+        for earlier in caps.never_skipped_guardrails
+    ):
         probe.record_skipped_guardrail(guardrail.guardrail_name)
     return True
 
@@ -3313,7 +3317,7 @@ class ProxyLogging:
         data, and no ``run_in_parallel`` guardrail sits at or before the last operator-written guardrail or hook.
         The hooks after a skipped sequential guardrail see the request with every field it could have rewritten
         redacted, and a skipped guardrail is left out of ``applied_guardrails`` unless a guardrail at or before
-        the last operator-written one shares its name.
+        the last operator-written one shares its name and runs for this request.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
@@ -3856,11 +3860,7 @@ class ProxyLogging:
             has_parallel_guardrail_before_last_custom_hook=any(
                 getattr(guardrail, "run_in_parallel", False) for guardrail in never_skipped_guardrails
             ),
-            never_skipped_guardrail_names=frozenset(
-                name
-                for name in (getattr(guardrail, "guardrail_name", None) for guardrail in never_skipped_guardrails)
-                if isinstance(name, str)
-            ),
+            never_skipped_guardrails=never_skipped_guardrails,
         )
         # Limit cache to handle test churn without leaking; production
         # callback lists are stable so this rarely grows past 1 entry.

@@ -4054,6 +4054,21 @@ async def test_pre_call_hook_keeps_a_name_that_ran_when_a_guardrail_sharing_it_i
     assert result["metadata"].get("applied_guardrails") == named
 
 
+async def test_pre_call_hook_leaves_out_a_skipped_name_when_the_guardrail_sharing_it_does_not_run(monkeypatch):
+    post_call: Final = _OperatorGuardrail(name="shared", default_on=False, event_hook=GuardrailEventHooks.post_call)
+    skipped: Final = _ShippedGuardrail(name="shared", default_on=False)
+
+    result: Final = await _walk(
+        monkeypatch,
+        [post_call, skipped],
+        "no-such-model",
+        _unroutable_model_probe(),
+        metadata={"guardrails": ["shared"]},
+    )
+
+    assert (post_call.seen, skipped.seen, result["metadata"].get("applied_guardrails")) == ((), (), None)
+
+
 @pytest.mark.parametrize(
     ("event_hook", "guardrail_skipped"),
     [
