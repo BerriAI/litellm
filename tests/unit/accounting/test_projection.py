@@ -521,7 +521,9 @@ def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> N
     assert dict(daily_user.increments)["compression_saved_tokens"] == 7
 
 
-def test_caller_supplied_savings_that_cannot_be_computed_never_drop_the_charge(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_caller_supplied_savings_beyond_json_range_are_clamped_and_never_drop_the_charge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm
 
     monkeypatch.setitem(
@@ -552,6 +554,8 @@ def test_caller_supplied_savings_that_cannot_be_computed_never_drop_the_charge(m
     )
     restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
     assert dict(restored["metadata"])["accounting_savings"]["compression"] == 0.0
-    assert [dict(item.increments)["spend"] for item in project(restored) if item.table == "LiteLLM_VerificationToken"] == [
-        0.5
-    ]
+    assert dict(restored["metadata"])["compression_savings"] == {"tokens_saved": 2**53 - 1}
+    assert dict(restored["metadata"])["compression_savings"] == {"tokens_saved": 2**53 - 1}
+    assert [
+        dict(item.increments)["spend"] for item in project(restored) if item.table == "LiteLLM_VerificationToken"
+    ] == [0.5]

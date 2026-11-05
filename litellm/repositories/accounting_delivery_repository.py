@@ -5,7 +5,7 @@ from itertools import chain
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.repositories.prisma_protocols import TableActions
 
@@ -41,7 +41,10 @@ class _Delivery(BaseModel):
 
     delivery_id: str
     attempts: int
-    accounting_payload: JsonValue
+
+
+class _ClaimedDelivery(_Delivery):
+    accounting_payload: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,9 +71,11 @@ class DeliveryMetrics(BaseModel):
 
 
 _DELIVERIES: Final = TypeAdapter(tuple[_Delivery, ...])
+_CLAIMED: Final = TypeAdapter(tuple[_ClaimedDelivery, ...])
 _PAYLOAD: Final = TypeAdapter(dict[str, object])
 _TIMEOUT: Final = timedelta(seconds=60)
-_CLAIM: Final = """SELECT delivery_id, attempts, accounting_payload FROM "LiteLLM_SpendLogDelivery"
+_CLAIM: Final = """SELECT delivery_id, attempts, accounting_payload::text AS accounting_payload
+FROM "LiteLLM_SpendLogDelivery"
 WHERE state = 'pending' AND next_attempt_at <= CURRENT_TIMESTAMP
   AND (attempts > 0) = $2::boolean
 ORDER BY next_attempt_at, delivery_id LIMIT $1::integer FOR UPDATE SKIP LOCKED"""
@@ -82,7 +87,17 @@ SET attempts = attempts + 1, last_error = $3,
     next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)))::integer),
     state = $4::"AccountingDeliveryState"
 WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer
-RETURNING delivery_id, attempts, accounting_payload"""
+RETURNING delivery_id, attempts"""
+_UNDECODABLE: Final = """UPDATE "LiteLLM_SpendLogDelivery"
+SET state = 'parked', attempts = attempts + 1, last_error = 'UndecodablePayload'
+WHERE delivery_id = ANY($1::text[]) AND state = 'pending'"""
+
+
+def _decoded(delivery: _ClaimedDelivery) -> DeliveryProjection | None:
+    try:
+        return DeliveryProjection(_PAYLOAD.validate_json(delivery.accounting_payload))
+    except ValueError:
+        return None
 
 
 def _is_permanent_failure(error: Exception) -> bool:
@@ -138,26 +153,25 @@ class AccountingDeliveryRepository:
         try:
             async with self._database.tx(timeout=_TIMEOUT) as transaction:
                 retries: Final = (
-                    _DELIVERIES.validate_python(await transaction.query_raw(_CLAIM, 1, True))
+                    _CLAIMED.validate_python(await transaction.query_raw(_CLAIM, 1, True))
                     if retry_only is not False
                     else ()
                 )
-                claimed = retries or (  # rebind-ok: retain claimed identities after rollback
-                    _DELIVERIES.validate_python(await transaction.query_raw(_CLAIM, batch_size, False))
+                rows: Final = retries or (
+                    _CLAIMED.validate_python(await transaction.query_raw(_CLAIM, batch_size, False))
                     if retry_only is not True
                     else ()
                 )
-                if not claimed:
-                    return DeliveryBatchResult()
-                await apply(
-                    transaction,
-                    tuple(
-                        DeliveryProjection(_PAYLOAD.validate_python(delivery.accounting_payload))
-                        for delivery in claimed
-                    ),
-                )
-                await transaction.execute_raw(_APPLIED, tuple(delivery.delivery_id for delivery in claimed))
-            return DeliveryBatchResult(applied=len(claimed))
+                decoded: Final = tuple((row, _decoded(row)) for row in rows)
+                undecodable: Final = tuple(row.delivery_id for row, projection in decoded if projection is None)
+                applicable: Final = tuple((row, projection) for row, projection in decoded if projection is not None)
+                if undecodable:
+                    await transaction.execute_raw(_UNDECODABLE, undecodable)
+                claimed = tuple(row for row, _ in applicable)  # rebind-ok: retain claimed identities after rollback
+                if claimed:
+                    await apply(transaction, tuple(projection for _, projection in applicable))
+                    await transaction.execute_raw(_APPLIED, tuple(row.delivery_id for row in claimed))
+            return DeliveryBatchResult(applied=len(claimed), parked=undecodable)
         except Exception as error:  # noqa: BLE001  # roll back all destinations before recording a retry
             if not claimed:
                 raise
