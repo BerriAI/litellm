@@ -18,6 +18,10 @@ DeprecationStatus = Literal["upcoming", "imminent", "deprecated"]
 
 class ModelDeprecationInfo(LiteLLMBaseModel):
     model_name: str = Field(description="The public name of the model on the proxy (model_group).")
+    team_public_model_name: str | None = Field(
+        default=None,
+        description="The model name visible to the team, when configured.",
+    )
     litellm_model: str | None = Field(
         default=None,
         description="The underlying litellm model string the deprecation date is sourced from.",
