@@ -83377,6 +83377,27 @@
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/kimi-k3"
     },
+    "empiriolabs/kimi-k3-1-pro": {
+        "litellm_provider": "empiriolabs",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+        "cache_read_input_token_cost": 1.8e-06,
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.015,
+            "search_context_size_medium": 0.015,
+            "search_context_size_high": 0.015
+        },
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "source": "https://empiriolabs.ai/models/kimi-k3-1-pro"
+    },
     "empiriolabs/mimo-v2-6-flash": {
         "litellm_provider": "empiriolabs",
         "mode": "chat",
