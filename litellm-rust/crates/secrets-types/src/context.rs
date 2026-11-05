@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, time::Duration};
 
-use crate::{Error, KeyManagementSystem, SecretValue};
+use crate::{Error, KeyManagementSystem};
+use litellm_secret_value::SecretValue;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum SecretOperationContext {

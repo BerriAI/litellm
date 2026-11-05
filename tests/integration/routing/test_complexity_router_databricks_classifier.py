@@ -30,6 +30,8 @@ from pydantic import JsonValue, TypeAdapter
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _MODEL: Final = "ai_decide"
 _ROUTE: Final = "/api/2.0/ai-functions/ai-decide"
 _API_KEY: Final = "synthetic-databricks-key"

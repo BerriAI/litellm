@@ -1,7 +1,9 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
-use litellm_auth::{InputSource, SecretValue, TokenProviderHandle};
+use litellm_auth::{InputSource, TokenProviderHandle};
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::call_arguments::CallArguments;
 use litellm_llms::base_llm::ocr::{
     error::Error,
@@ -67,6 +69,7 @@ impl OcrConnectionInputs {
                     .map(|value| (name.clone(), value.to_string()))
                     .ok_or_else(|| Error::RequestField {
                         path: format!("extra_headers.{name}"),
+                        cause: None,
                     })
             })
             .collect()
@@ -75,6 +78,8 @@ impl OcrConnectionInputs {
 
 pub struct LiteLLMOcrRequest<D = OcrDocumentInput> {
     pub model: String,
+    pub(crate) requested_model: String,
+    pub(crate) custom_llm_provider: Option<String>,
     pub document: D,
     pub credentials: OcrCredentialInputs,
     pub transport: OcrTransportConfig,
@@ -91,7 +96,8 @@ impl LiteLLMOcrRequest {
         custom_llm_provider: Option<&str>,
         optional_params: CallArguments,
     ) -> Result<Self, Error> {
-        let (model, config) = resolve_provider_config(&model, custom_llm_provider)?;
+        let (provider, config) = resolve_provider_config(&model, custom_llm_provider)?;
+        let resolved_model = provider.model.to_owned();
         let default_transport = OcrTransportConfig::default();
         let max_response_bytes = optional_params
             .get("max_response_bytes")
@@ -102,6 +108,7 @@ impl LiteLLMOcrRequest {
                     .filter(|value| *value > 0 && *value <= default_transport.max_response_bytes)
                     .ok_or_else(|| Error::RequestField {
                         path: "max_response_bytes".into(),
+                        cause: None,
                     })
             })
             .transpose()?
@@ -116,7 +123,9 @@ impl LiteLLMOcrRequest {
             .collect();
 
         Ok(Self {
-            model,
+            model: resolved_model,
+            requested_model: model,
+            custom_llm_provider: custom_llm_provider.map(str::to_owned),
             document: document.into(),
             credentials: OcrCredentialInputs::default(),
             transport,
@@ -135,6 +144,8 @@ impl<D> LiteLLMOcrRequest<D> {
     ) -> Result<LiteLLMOcrRequest<T>, E> {
         Ok(LiteLLMOcrRequest {
             model: self.model,
+            requested_model: self.requested_model,
+            custom_llm_provider: self.custom_llm_provider,
             document: map(self.document)?,
             credentials: self.credentials,
             transport: self.transport,
@@ -148,6 +159,8 @@ impl<D> LiteLLMOcrRequest<D> {
     pub fn with_document<T>(self, document: T) -> LiteLLMOcrRequest<T> {
         LiteLLMOcrRequest {
             model: self.model,
+            requested_model: self.requested_model,
+            custom_llm_provider: self.custom_llm_provider,
             document,
             credentials: self.credentials,
             transport: self.transport,
@@ -304,7 +317,7 @@ mod tests {
         };
         assert!(matches!(
             error,
-            Error::RequestField { ref path } if path == "extra_headers.x-a"
+            Error::RequestField { ref path, .. } if path == "extra_headers.x-a"
         ));
     }
 }

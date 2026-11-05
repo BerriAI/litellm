@@ -1,3 +1,4 @@
+import { observeResponseHeaders, type ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 import Anthropic from "@anthropic-ai/sdk";
 import { MessageType } from "@/components/chat_ui/types";
 import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
@@ -5,6 +6,7 @@ import { buildMcpToolBlocks } from "@/components/llm_calls/mcp_tool_blocks";
 import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { getGatewayBaseUrl } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 
@@ -36,6 +38,7 @@ export async function makeAnthropicMessagesRequest(
   mcpToolsets?: MCPToolset[],
   streamingEnabled: boolean = true,
   customHeaders?: CustomHeaders,
+  onResponseHeaders?: ResponseHeadersListener,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -55,6 +58,7 @@ export async function makeAnthropicMessagesRequest(
     baseURL: proxyBaseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders: headers,
+    ...(onResponseHeaders ? { fetch: observeResponseHeaders(onResponseHeaders) } : {}),
   });
 
   try {
@@ -131,7 +135,7 @@ export async function makeAnthropicMessagesRequest(
   } catch (error) {
     if (signal?.aborted) {
     } else {
-      toast.fromError(`Error occurred while generating model response. Please try again. Error: ${error}`);
+      toast.fromError(i18n.t("playground.llmCalls.anthropicMessages.requestFailed", { error: String(error) }));
     }
     throw error;
   }

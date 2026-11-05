@@ -33,6 +33,12 @@ export const CREDENTIAL_LABELS: Record<string, string> = {
   false: "Configured key",
 };
 
+export const KUBERNETES_POD_ROUTING_LABELS = {
+  round_robin: "logs.common.podRouting.roundRobin",
+  session_affinity: "logs.common.podRouting.sessionAffinity",
+  session_affinity_retry: "logs.common.podRouting.sessionAffinityRetry",
+} as const;
+
 export const QUICK_SELECT_OPTIONS: { label: string; value: number; unit: string }[] = [
   { label: "Last Minute", value: 1, unit: "minutes" },
   { label: "Last 15 Minutes", value: 15, unit: "minutes" },

@@ -9,14 +9,7 @@ Has 4 methods:
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final
-
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = _Span | Any
-else:
-    Span = Any
+from typing import Final
 
 
 class BaseCache(ABC):

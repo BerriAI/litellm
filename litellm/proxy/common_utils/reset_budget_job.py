@@ -65,6 +65,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
     LinkedSpendResetWrites,
+    SpendResetWrites,
     budget_cascade_unit_of_work,
     enduser_spend_reset_unit_of_work,
     spend_reset_unit_of_work,
@@ -235,7 +236,7 @@ def _enduser_invalidation_where(budget_ids: Sequence[str]) -> dict[str, object]:
 
 
 def _queue_budget_linked_resets(
-    writes: LinkedSpendResetWrites,
+    writes: SpendResetWrites,
     cascade: "_BudgetCascade",
     extra: Mapping[str, object] = MappingProxyType({}),
 ) -> None:
@@ -908,6 +909,7 @@ class ResetBudgetJob:
             db_span("reset_budget_cascade", "LiteLLM_BudgetTable"),
             budget_cascade_unit_of_work(self._new_batch) as uow,
         ):
+            uow.team_memberships.queue_total_spend_repair(cascade.budget_ids)
             _queue_budget_linked_resets(uow.team_memberships, cascade)
             _queue_budget_linked_resets(uow.keys, cascade, extra=_LINKED_KEYS_WHERE)
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)

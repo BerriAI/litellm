@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import { isMaskedSecret } from "@/utils/maskedSecretUtils";
 import { isBlank, type FederationField } from "./federation_field";
 
@@ -235,9 +237,15 @@ export const inferIdentitySource = (credentialValues: Record<string, unknown> | 
 
 export const identitySourceOptions = (
   storedValues: Record<string, unknown>,
+  t: TFunction = i18n.t.bind(i18n),
 ): readonly { value: IdentitySourceId; label: string }[] => [
   ...(inferIdentitySource(storedValues) === "unrecognized"
-    ? [{ value: "unrecognized" as const, label: `Stored: ${String(storedValues[IDENTITY_SOURCE_KEY])}` }]
+    ? [
+        {
+          value: "unrecognized" as const,
+          label: t("modelAdd.anthropicFederation.storedSource", { source: String(storedValues[IDENTITY_SOURCE_KEY]) }),
+        },
+      ]
     : []),
   ...IDENTITY_SOURCES.map((source) => ({ value: source.id, label: source.label })),
 ];
@@ -246,7 +254,7 @@ export const validateFederationValueStored =
   (identitySource: IdentitySourceId) =>
   (_value: unknown, formValues: Record<string, unknown>): string | true =>
     identitySource === "environment" && FEDERATION_CORE_FIELDS.every((field) => isBlank(formValues[field.key]))
-      ? "Enter at least one of these ids, or pick an identity source that stores a token. The proxy rejects a credential with no values"
+      ? i18n.t("modelAdd.anthropicFederation.storedValueRequired")
       : true;
 
 export const validateIdentityTokenReference = (value: unknown): string | true => {
@@ -255,7 +263,7 @@ export const validateIdentityTokenReference = (value: unknown): string | true =>
   }
   return value.startsWith(ACCEPTED_REFERENCE_PREFIX) && !value.startsWith(REJECTED_REFERENCE_PREFIX)
     ? true
-    : "Enter an oidc/ secret reference such as oidc/env/VAR_NAME. Raw tokens and oidc/env_path/ references are not accepted";
+    : i18n.t("modelAdd.anthropicFederation.invalidTokenReference");
 };
 
 export const validateIssuerTtlSeconds = (value: unknown): string | true => {
@@ -265,7 +273,7 @@ export const validateIssuerTtlSeconds = (value: unknown): string | true => {
   const seconds = Number(value);
   return Number.isInteger(seconds) && seconds >= 1 && seconds <= MAX_ISSUER_TTL_SECONDS
     ? true
-    : `Enter a whole number of seconds from 1 to ${MAX_ISSUER_TTL_SECONDS}`;
+    : i18n.t("modelAdd.anthropicFederation.invalidTtl", { max: MAX_ISSUER_TTL_SECONDS });
 };
 
 export const otherIdentitySourceKeys = (identitySource: IdentitySourceId): readonly string[] => {

@@ -43,6 +43,8 @@ from tests.integration.cost_calculation.cost_tracking_case import (
     SseResponse,
 )
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _Route = tuple[str, str, tuple[str, ...], dict[str, JsonValue], str]
 _EVAL_DATA_SOURCE_CONFIG: Final[dict[str, JsonValue]] = {
     "type": "custom",
@@ -252,8 +254,13 @@ _ROUTES: Final[dict[str, _Route]] = {
     "acreate_agent": (
         "/v1beta/agents",
         "/v1beta/agents",
-        ("name",),
-        {"name": "agent", "base_agent": "waverunner", "instructions": "You are a helpful assistant."},
+        ("id",),
+        {
+            "id": "agent",
+            "base_agent": "antigravity-preview-09-2026",
+            "system_instruction": "You are a helpful assistant.",
+            "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
+        },
         "gemini/gemini-2.5-flash",
     ),
     "acreate_interaction": (
@@ -639,7 +646,7 @@ class _Observations:
             )
         requests: Final = payload.get("requests")
         assert isinstance(requests, list)
-        self.items = (*self.items, *(object_value(item) for item in requests if isinstance(item, dict)))
+        self.items = tuple(object_value(item) for item in requests if isinstance(item, dict))
         return self.items
 
     def for_scenario(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
@@ -1192,7 +1199,7 @@ def test_anthropic_messages_explicit_null_reaches_upstream(gateway: Gateway) -> 
             "anthropic_messages",
             deployment_params={"max_tokens": 32},
             provider_model="openai/gpt-4o-mini",
-            response_route="acompletion",
+            response_route="aresponses",
         )
         response: Final = _post(
             gateway,
@@ -1248,11 +1255,7 @@ def test_valid_agent_creation_reaches_upstream(gateway: Gateway) -> None:
         _assert_scripted_response("acreate_agent", caller)
         matches: Final = _observed(_Observations(gateway.upstream_url), identity)
         outbound: Final = object_value(matches[0]["body"])
-        assert outbound == {
-            "name": "agent",
-            "base_agent": "waverunner",
-            "instructions": "You are a helpful assistant.",
-        }, matches
+        assert outbound == body, matches
 
 
 def test_valid_speech_returns_binary_audio_and_reaches_upstream(gateway: Gateway) -> None:
@@ -1695,15 +1698,19 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
             record_property("chaos_spend_row_counts", str(tuple(len(rows) for rows in spend_rows)))
             with owned.replacing_worker(min(workers)) as kill:
                 kill()
-                post_kill: Final = tuple(
-                    _post(candidate, path, body) for path, body, _expected, _identity in missing_calls[:5]
-                )
-                assert all(
-                    response.status_code == 400 and response.json() == expected
-                    for response, (_path, _body, expected, _identity) in zip(post_kill, missing_calls[:5])
-                ), [response.text for response in post_kill]
-                recovered: Final = _post(candidate, "/v1/chat/completions", _chat_body(chat_model, "recovered", True))
-                assert recovered.status_code == 200, recovered.text
+                with httpx.Client(base_url=candidate.client.base_url, timeout=15, trust_env=False) as fresh:
+                    survivor: Final = Gateway(fresh, candidate.key, candidate.upstream_url)
+                    post_kill: Final = tuple(
+                        _post(survivor, path, body) for path, body, _expected, _identity in missing_calls[:5]
+                    )
+                    assert all(
+                        response.status_code == 400 and response.json() == expected
+                        for response, (_path, _body, expected, _identity) in zip(post_kill, missing_calls[:5])
+                    ), [response.text for response in post_kill]
+                    recovered: Final = _post(
+                        survivor, "/v1/chat/completions", _chat_body(chat_model, "recovered", True)
+                    )
+                    assert recovered.status_code == 200, recovered.text
 
 
 def test_eval_create_and_run_forward_client_metadata(gateway: Gateway) -> None:

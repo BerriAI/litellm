@@ -2,14 +2,17 @@ mod cache;
 mod callable;
 mod coercion;
 mod credentials;
+mod db;
 mod diagnostics;
 mod errors;
 mod execution;
 mod http;
 mod logger;
 mod marshal;
+mod model_registry;
 mod preflight;
 mod python_settings;
+mod router;
 mod routes;
 mod secrets;
 mod tokenizer;
@@ -20,6 +23,8 @@ mod _native {
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
     use pyo3::{prelude::*, types::PyModule};
 
+    #[pymodule_export]
+    use crate::db::NativeDatabase;
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -29,6 +34,10 @@ mod _native {
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
+    #[pymodule_export]
+    use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::router::{RouterCall, RouterCoreHandle};
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -60,10 +69,6 @@ mod _native {
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
-            "NativeCacheHandle",
-            py.get_type::<crate::cache::NativeCacheHandle>(),
-        )?;
-        dict.set_item(
             "_SecretManagerRuntime",
             py.get_type::<crate::secrets::runtime::NativeSecretManager>(),
         )
@@ -86,7 +91,6 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let mut expected = vec![
-                "NativeCacheHandle",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",
@@ -109,9 +113,13 @@ mod tests {
                 "NativeDiagnosticProcessor",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
+                "NativeDatabase",
                 "trace_encode_error",
+                "bundled_model_cost_map",
                 "TokenCounter",
                 "Tokenizer",
+                "RouterCoreHandle",
+                "RouterCall",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",

@@ -19,6 +19,8 @@ from integration._support.process import group_members, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 BACKEND: Final = "gemini-embedding-001"
 TARGET: Final = f"/models/{BACKEND}:batchEmbedContents"
 END_OFFSETS: Final = {"fast": "3s", "slow": "5s", "malformed": "3s", "dropped": "9s"}

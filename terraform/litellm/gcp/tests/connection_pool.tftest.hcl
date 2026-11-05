@@ -18,6 +18,7 @@ mock_provider "google-beta" {}
 mock_provider "random" {}
 
 variables {
+  image_tag          = "v9.9.9"
   project_id         = "test-project"
   tenant             = "tenant"
   env                = "test"

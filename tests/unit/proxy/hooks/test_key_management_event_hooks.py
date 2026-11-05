@@ -6,6 +6,7 @@ Validates that email and secret manager operations are independent and non-block
 
 import asyncio
 import json
+from collections.abc import Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -715,14 +716,14 @@ async def test_key_deleted_hook_writes_audit_log_for_alias_deletion():
 
     captured: Final[list[LiteLLM_AuditLogs]] = []
 
-    async def capture_audit_log(request_data: LiteLLM_AuditLogs) -> None:
-        captured.append(request_data)
+    async def capture_audit_logs(rows: Sequence[LiteLLM_AuditLogs]) -> None:
+        captured.extend(rows)
 
     with (
         patch("litellm.store_audit_logs", True),
         patch(
-            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
-            new=capture_audit_log,
+            "litellm.proxy.management_helpers.audit_logs.create_audit_logs_for_updates",
+            new=capture_audit_logs,
         ),
         patch.object(
             KeyManagementEventHooks,
@@ -747,3 +748,34 @@ async def test_key_deleted_hook_writes_audit_log_for_alias_deletion():
     assert audit_row.object_id == "hashed"
     assert audit_row.table_name == LitellmTableNames.KEY_TABLE_NAME
     assert audit_row.changed_by == "admin"
+
+
+@pytest.mark.asyncio
+async def test_deleting_many_keys_writes_every_audit_row_in_one_insert():
+    from litellm.proxy._types import LiteLLM_VerificationToken, LitellmTableNames, UserAPIKeyAuth
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+
+    tokens: Final = tuple(f"hashed-{index}" for index in range(50))
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_auditlog.create = AsyncMock()
+    prisma_client.db.litellm_auditlog.create_many = AsyncMock(return_value=len(tokens))
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+    ):
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=[LiteLLM_VerificationToken(token=token) for token in tokens],
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", token="callertok"),
+        )
+        await drain_audit_tasks()
+
+    prisma_client.db.litellm_auditlog.create.assert_not_called()
+    prisma_client.db.litellm_auditlog.create_many.assert_awaited_once()
+    rows: Final = prisma_client.db.litellm_auditlog.create_many.await_args.kwargs["data"]
+    assert [row["object_id"] for row in rows] == list(tokens)
+    assert [json.loads(row["before_value"])["token"] for row in rows] == list(tokens)
+    assert {(row["table_name"], row["action"], row["changed_by"]) for row in rows} == {
+        (LitellmTableNames.KEY_TABLE_NAME, "deleted", "admin")
+    }

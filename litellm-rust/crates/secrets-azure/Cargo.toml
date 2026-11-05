@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-secret-value.workspace = true
 litellm-http.workspace = true
 tokio.workspace = true
 litellm-auth-azure.workspace = true
@@ -15,6 +16,7 @@ litellm-core-utils.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+url.workspace = true
 veil.workspace = true
 percent-encoding = "2.3"
 
