@@ -30,13 +30,13 @@ def activity_url(alert: UsageAlert, base_url: str | None) -> str:
     return base_url.rstrip("/") + "/ui" + alert.activity_path
 
 
-def incident_message(alert: UsageAlert, url: str) -> str:
+def incident_message(alert: UsageAlert, url: str | None) -> str:
     scope: Final = "Gateway" if alert.scope_type == "deployment" else f"{alert.scope_type}: {alert.scope_id}"
     unit: Final = " ms" if alert.metric == "latency" else " USD" if alert.metric == "spend" else ""
     return (
         f"{alert.rule_name}\n{scope}\n{alert.day.isoformat()} UTC: "
         f"{alert.observed_value:,.2f}{unit}; baseline {alert.baseline_value:,.2f}{unit}; "
-        f"threshold {alert.threshold:,.2f}{unit}.\nView activity: {url}"
+        f"threshold {alert.threshold:,.2f}{unit}." + (f"\nView activity: {url}" if url is not None else "")
     )
 
 
@@ -49,7 +49,7 @@ class UsageAlertDelivery:
         if channel not in configured:
             return False
         url: Final = activity_url(alert, os.getenv("PROXY_BASE_URL"))
-        message: Final = incident_message(alert, url)
+        message: Final = incident_message(alert, None if channel == "email" else url)
         if channel == "email":
             from litellm.proxy.utils import send_email
 

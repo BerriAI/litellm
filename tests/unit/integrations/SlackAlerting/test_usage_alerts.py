@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
-from litellm.integrations.SlackAlerting.usage_alerts import UsageAlertDelivery, activity_url
+from litellm.integrations.SlackAlerting.usage_alerts import UsageAlertDelivery, activity_url, incident_message
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertRule
 
@@ -49,6 +49,13 @@ def test_activity_link_retains_dashboard_mount_and_entity_query() -> None:
         "https://gateway.example.com/ui/api-keys?key=reporting-key&detail_tab=activity"
     )
     assert activity_url(_ALERT, None) == _ALERT.activity_path
+
+
+def test_email_summary_omits_the_plain_text_link_used_by_slack() -> None:
+    summary: Final = incident_message(_ALERT, None)
+    assert summary.endswith("1,000.00; baseline 200.00; threshold 600.00.")
+    assert "View activity" not in summary
+    assert incident_message(_ALERT, _ALERT.activity_path) == f"{summary}\nView activity: {_ALERT.activity_path}"
 
 
 @pytest.mark.asyncio
