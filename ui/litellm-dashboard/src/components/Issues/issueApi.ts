@@ -126,7 +126,7 @@ export function useIssues(accessToken: string | null, listOptions: IssueListOpti
 
 export function useIssue(accessToken: string | null, id: string) {
   const { data: user } = useCurrentUser(accessToken);
-  const enabled = Boolean(accessToken && user?.user_id && hasCapability(user.user_role, "viewGlobalSpend"));
+  const enabled = Boolean(accessToken && user?.user_id);
   const options = {
     queryKey: ["issues", getProxyBaseUrl(), user?.user_id, user?.user_role, "detail", id],
     enabled,
@@ -142,7 +142,7 @@ export function useIssue(accessToken: string | null, id: string) {
     retry: false,
   };
   const query = useQuery(options);
-  return { ...query, enabled, data: enabled ? query.data : undefined };
+  return { ...query, enabled, data: enabled && !query.isError ? query.data : undefined };
 }
 
 export async function updateIssueStatus(issue: Issue, status: IssueStatus) {

@@ -64,6 +64,7 @@ export default function IssueSignals({ issue }: { issue: Issue }) {
               ) : (
                 <p>Model retirement · {signal.deprecation?.usage_model}</p>
               )}
+              {signal.explanation && <p className="mt-1 text-xs text-muted-foreground">{signal.explanation}</p>}
             </li>
           );
         })}

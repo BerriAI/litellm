@@ -30,8 +30,14 @@ export default function IssueComparisonTable({ issue }: { issue: Issue }) {
               </p>
             </TableCell>
             <TableCell className="tabular-nums">
-              {comparison.direction === "increase" ? "At least" : "At most"}{" "}
-              {formatAlertValue(comparison.metric, comparison.threshold)}
+              {typeof comparison.threshold === "number" ? (
+                <>
+                  {comparison.direction === "increase" ? "At least" : "At most"}{" "}
+                  {formatAlertValue(comparison.metric, comparison.threshold)}
+                </>
+              ) : (
+                <span className="text-muted-foreground">Context only</span>
+              )}
             </TableCell>
           </TableRow>
         ))}

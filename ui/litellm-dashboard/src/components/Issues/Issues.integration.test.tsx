@@ -30,6 +30,7 @@ let failActivity = false;
 let staleStatus = false;
 let empty = false;
 let allFailed = false;
+let deniedDetail = false;
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -86,8 +87,11 @@ describe("unified issue investigations", () => {
     staleStatus = false;
     empty = false;
     allFailed = false;
+    deniedDetail = false;
     auth.isViewOnly = false;
     auth.isAuthorized = true;
+    auth.userRole = "Admin";
+    auth.userId = "test-admin";
     vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) =>
       setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 50 }), 0),
     );
@@ -97,7 +101,9 @@ describe("unified issue investigations", () => {
       const body = request.method === "GET" ? null : await request.clone().json();
       const call = { path: url.pathname, query: url.searchParams, method: request.method, body };
       calls.push(call);
-      if (url.pathname === "/management/v1/users/me") return json({ user_id: "test-admin", user_role: "proxy_admin" });
+      if (url.pathname === "/management/v1/users/me")
+        return json({ user_id: auth.userId, user_role: auth.userRole === "Admin" ? "proxy_admin" : "internal_user" });
+      if (url.pathname === "/issues/foreign-issue") return json({ detail: "Forbidden private-project metadata" }, 403);
       if (url.pathname === "/issues") return listResponse(url.searchParams);
       if (url.pathname === "/issues/families") return json(FAMILY_SETTINGS);
       if (url.pathname === "/issues/families/spend") return json(FAMILY_SETTINGS.data[0]);
@@ -134,6 +140,7 @@ describe("unified issue investigations", () => {
         return json(page);
       }
       if (url.pathname.startsWith("/issues/")) {
+        if (deniedDetail) return json({ detail: "Access revoked" }, 403);
         if (request.method === "PATCH") {
           if (staleStatus) return json({ detail: "Issue changed" }, 409);
           detail = { ...detail, ...body };
@@ -320,6 +327,63 @@ describe("unified issue investigations", () => {
     expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
+  });
+
+  it("opens an authorized key issue for an internal user without reading global issues", async () => {
+    auth.userRole = "Internal User";
+    auth.userId = "member-owner";
+    renderWithProviders(<IssueDetail id={detail.id} />);
+    await screen.findByText("Total Requests");
+    expect(screen.getByRole("heading", { name: SPEND_ISSUE.title })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Resource activity" })).toHaveAttribute(
+      "href",
+      "/ui/api-keys?key=reporting-test-id&detail_tab=activity&activity_from=2026-10-28&activity_to=2026-11-04",
+    );
+    expect(calls.some((call) => call.path === "/issues")).toBe(false);
+    expect(calls.some((call) => call.path.includes("/user/daily"))).toBe(false);
+  });
+
+  it("shows a scoped permission failure without exposing foreign metadata or fetching activity", async () => {
+    auth.userRole = "Internal User";
+    auth.userId = "member-owner";
+    renderWithProviders(<IssueDetail id="foreign-issue" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("You don’t have access to this issue.");
+    expect(screen.getByRole("link", { name: "My usage" })).toHaveAttribute("href", "/ui/usage?view=my-usage");
+    expect(screen.queryByText(/private-project/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: SPEND_ISSUE.title })).not.toBeInTheDocument();
+    expect(calls.filter((call) => call.path.startsWith("/issues"))).toHaveLength(1);
+    expect(calls.some((call) => call.path.endsWith("/activity") || call.path.endsWith("/keys"))).toBe(false);
+  });
+
+  it("removes cached issue details after a scoped permission revocation", async () => {
+    auth.userRole = "Internal User";
+    auth.userId = "member-owner";
+    renderWithProviders(<IssueDetail id={detail.id} />);
+    await screen.findByText("Total Requests");
+    deniedDetail = true;
+    await act(async () => {
+      await testQueryClient.invalidateQueries({ queryKey: ["issues"] });
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("You don’t have access to this issue.");
+    expect(screen.queryByRole("heading", { name: SPEND_ISSUE.title })).not.toBeInTheDocument();
+    expect(screen.queryByText("Total Requests")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Resource activity" })).not.toBeInTheDocument();
+  });
+
+  it("does not present supporting request context as another triggered condition", async () => {
+    detail = {
+      ...SPEND_ISSUE,
+      comparisons: SPEND_ISSUE.comparisons?.map((comparison) =>
+        comparison.metric === "requests" ? { ...comparison, threshold: null } : comparison,
+      ),
+    };
+    renderWithProviders(<IssueDetail id={detail.id} />);
+    const table = await screen.findByRole("table", { name: "Saved issue comparisons" });
+    const row = within(table).getByRole("row", { name: /^Requests/ });
+    expect(row).toHaveTextContent("1,200");
+    expect(row).toHaveTextContent("Context only");
+    expect(row).not.toHaveTextContent(/At least|At most/);
+    expect(within(table).getByRole("row", { name: /^Spend/ })).toHaveTextContent("At least $90.00");
   });
 
   it.each(["resolved", "dismissed"] as const)("only reopens active %s retirement issues", async (status) => {

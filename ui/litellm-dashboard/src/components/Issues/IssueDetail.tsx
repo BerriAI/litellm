@@ -12,6 +12,7 @@ import { migrationHref } from "@/components/ModelDeprecationAlerts/migrationRout
 import { entityActivityHref } from "@/utils/entityLinks";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { hasCapability } from "@/utils/capabilities";
+import { uiHref } from "@/utils/uiHref";
 import { ApiError } from "@/lib/http/client";
 import {
   Issue,
@@ -209,16 +210,24 @@ function IssueBody({ issue }: { issue: Issue }) {
 export default function IssueDetail({ id }: { id: string }) {
   const { accessToken, userRole } = useAuthorized();
   const query = useIssue(accessToken, id);
+  const globalAccess = hasCapability(userRole, "viewGlobalSpend");
+  const denied = query.error instanceof ApiError && query.error.status === 403;
+  let back = { href: uiHref("usage?view=my-usage"), label: "My usage" };
+  if (globalAccess) back = { href: issuesHref(), label: "Issues" };
+  else if (query.data) {
+    const href = resourceHref(query.data);
+    if (href) back = { href, label: "Resource activity" };
+  }
   let content = (
     <p role="status" className="text-sm text-muted-foreground">
       Loading issue…
     </p>
   );
-  if (!hasCapability(userRole, "viewGlobalSpend")) content = <p>Gateway admin access is required.</p>;
+  if (!accessToken) content = <p>Sign in to view this issue.</p>;
   else if (query.isError)
     content = (
       <div role="alert" className="space-y-2">
-        <p>Could not load this issue.</p>
+        <p>{denied ? "You don’t have access to this issue." : "Could not load this issue."}</p>
         <Button variant="outline" onClick={() => void query.refetch()}>
           Retry
         </Button>
@@ -229,10 +238,10 @@ export default function IssueDetail({ id }: { id: string }) {
     <div className="min-w-0 space-y-5">
       <a
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        href={issuesHref()}
+        href={back.href}
       >
         <ArrowLeft className="size-4" />
-        Issues
+        {back.label}
       </a>
       {content}
     </div>
