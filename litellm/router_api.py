@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from litellm.router_strategy.auto_router.auto_router import AutoRouter
     from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
     from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
+    from litellm.router_strategy.oracle_router.oracle_router import OracleRouter
     from litellm.router_strategy.quality_router.quality_router import QualityRouter
     from litellm.router_utils.cooldown_cache import CooldownCache
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets as _AttemptedFallbackTargets
@@ -106,6 +107,7 @@ if TYPE_CHECKING:
         | dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]]
         | dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]]
         | dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]]
+        | dict[str, list[TaggedPreRoutingStrategy[OracleRouter]]]
         | list[RoutingPlugin]
         | RouterBudgetLimiting
         | DualCache
@@ -168,6 +170,7 @@ PluginKind: TypeAlias = Literal[
     "complexity",
     "quality",
     "adaptive",
+    "oracle",
     "routing",
     "budget_limiter",
     "prompt_caching_pins",
@@ -1075,6 +1078,11 @@ class RouterRegistry:
     ) -> "dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]]": ...  # mutable-ok: the live dict
 
     @overload
+    def plugins(
+        self, kind: Literal["oracle"]
+    ) -> "dict[str, list[TaggedPreRoutingStrategy[OracleRouter]]]": ...  # mutable-ok: the live dict
+
+    @overload
     def plugins(self, kind: Literal["routing"]) -> "list[RoutingPlugin]": ...  # mutable-ok: the live list
 
     @overload
@@ -1085,7 +1093,7 @@ class RouterRegistry:
 
     def plugins(self, kind: PluginKind) -> "RegistryPlugins":
         """
-        Plugins configured by the deployments: ``auto``, ``complexity``, ``quality`` and ``adaptive``
+        Plugins configured by the deployments: ``auto``, ``complexity``, ``quality``, ``adaptive`` and ``oracle``
         sub-routers by deployment name, ``routing`` plugins, the deployment ``budget_limiter`` and
         the ``prompt_caching_pins`` store (were ``auto_routers``, ``complexity_routers``,
         ``quality_routers``, ``adaptive_routers``, ``routing_plugins``,
@@ -1100,6 +1108,8 @@ class RouterRegistry:
             return r._core_quality_routers
         if kind == "adaptive":
             return r._core_adaptive_routers
+        if kind == "oracle":
+            return r._core_oracle_routers
         if kind == "routing":
             return r._core_routing_plugins
         if kind == "budget_limiter":

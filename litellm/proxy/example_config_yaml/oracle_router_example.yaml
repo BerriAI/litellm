@@ -1,0 +1,51 @@
+# ORACLE router: one model per agentic program, learned from verified outcomes.
+#
+# Clients call `model: oracle-router` and tag every request of a task with the same program id:
+#   POST /v1/chat/completions { "model": "oracle-router", "metadata": { "program_id": "task-17" }, ... }
+# The first request binds the program to a model; later requests reuse it. On the last request add
+#   "metadata": { "program_id": "task-17", "program_done": true, "program_score": 1.0 }
+# or POST /oracle_router/feedback { "program_id": "task-17", "score": 1.0 } once the task is graded.
+#
+# Required env vars: OPENAI_API_KEY, LITELLM_MASTER_KEY.
+
+model_list:
+  - model_name: oracle-router
+    litellm_params:
+      model: auto_router/oracle_router
+      oracle_router_config:
+        available_models: ["smart", "fast"]   # strongest first
+        decision_maker:
+          type: thompson                      # fixed | pre_routing | custom
+          weights: { quality: 0.7, cost: 0.3 } # the adaptive router's quality/cost trade-off
+        verifier:
+          type: guardrail                     # reported | custom
+          guardrail: answer-judge
+
+  # Let LiteLLM's complexity router propose the model and have ORACLE bind, verify and report it:
+  #   decision_maker: { type: pre_routing, router: tiered-router }
+
+  - model_name: smart
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: fast
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: answer-judge
+    litellm_params:
+      guardrail: llm_as_a_judge
+      mode: post_call
+      default_on: false
+      judge_model: smart
+      overall_threshold: 50
+      criteria:
+        - name: task_completed
+          weight: 100
+          description: The assistant completed the user's task correctly, judged from the whole conversation.
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

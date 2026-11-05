@@ -1085,7 +1085,7 @@ class TestClearCache:
         Test that clear_cache successfully clears router model caches and reloads models.
         """
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "oracle": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = ["openai/gpt-4o", "openai/gpt-4o-mini"]
 
@@ -1125,7 +1125,7 @@ class TestClearCache:
         # entries are auto_router/* deployments (so their router-map entries should be
         # cleared for reload); the config-defined router is preserved.
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "oracle": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = [
             {
@@ -1209,7 +1209,7 @@ class TestClearCache:
         )
 
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "oracle": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = [
             {
@@ -1270,7 +1270,7 @@ class TestClearCachePreservesConfigRouters:
         )
 
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "oracle": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = [
             {
@@ -1315,7 +1315,7 @@ class TestClearCachePreservesConfigRouters:
         from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
 
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "oracle": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = [
             {
@@ -1354,7 +1354,7 @@ class TestClearCachePreservesConfigRouters:
         from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
 
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "oracle": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = [
             {
@@ -1367,11 +1367,17 @@ class TestClearCachePreservesConfigRouters:
                 "model_info": {"id": "db-a", "db_model": True},
                 "litellm_params": {"model": "auto_router/adaptive_router/a1"},
             },
+            {
+                "model_name": "o1",
+                "model_info": {"id": "db-o", "db_model": True},
+                "litellm_params": {"model": "auto_router/oracle_router/o1"},
+            },
         ]
         plugins["auto"] = {}
         plugins["complexity"] = {}
         plugins["quality"] = {"q1": MagicMock()}
         plugins["adaptive"] = {"a1": MagicMock()}
+        plugins["oracle"] = {"o1": MagicMock()}
 
         mock_config = MagicMock()
         mock_config.add_deployment_locked = AsyncMock(
@@ -1389,6 +1395,7 @@ class TestClearCachePreservesConfigRouters:
 
         assert "q1" not in plugins["quality"]
         assert "a1" not in plugins["adaptive"]
+        assert "o1" not in plugins["oracle"]
 
 
 class TestDeleteModelClearsRouterRegistry:
@@ -1503,7 +1510,7 @@ class TestDeleteModelClearsRouterRegistry:
         mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
 
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "oracle": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.apply.return_value = ApplyResult(
             version=1,
