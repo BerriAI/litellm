@@ -32,6 +32,32 @@ The latest scan result is retained with the submission. Running scans have a dea
 
 Set `use_llm: true` to request semantic analysis and configure the provider on the scanner machine using [SkillSpector's provider instructions](https://github.com/NVIDIA/skillspector#llm-analysis). Provider credentials stay on that machine. Static analysis can also call OSV for dependency checks
 
+## Gen Agent Trust Hub and Socket
+
+The configured endpoint must implement the [HTTP contract below](#http-contract). Gen and Socket vendor URLs are not interchangeable with this adapter. Their public contracts were checked on November 5, 2026
+
+| Service | Published capability | Private uploaded skills |
+| --- | --- | --- |
+| [Gen Agent Trust Hub](https://ai.gendigital.com/skill-scanner) | JSON lookup of a public ClawHub skill URL, returning a severity and reasons | No supported arbitrary skill ZIP upload contract is exposed in the public documentation |
+| [Socket](https://docs.socket.dev/docs/language-support) | Experimental skills.sh scanning, with access available by contacting Socket | Custom skills are listed as planned, so private skill scanning needs a confirmed vendor contract and access |
+| [skills.sh audits](https://skills.sh/docs/api) | Previously generated reports from partners including Gen and Socket | Catalog lookup only, with no uploaded bytes sent for analysis |
+
+Gen documents this request without an API key
+
+```sh
+curl --request POST 'https://ai.gendigital.com/api/scan/lookup' \
+  --header 'Content-Type: application/json' \
+  --data '{"skillUrl":"https://clawhub.ai/steipete/weather"}'
+```
+
+The checked response included `severity`, `reasons`, `author` and `displayName`. It provided no content digest or revision. GitHub and skills.sh skill URLs returned HTTP 400 with `Invalid skill URL`. This cannot verify the stored bytes of a Skills Hub submission
+
+Socket's [archive scan API](https://docs.socket.dev/reference/createorgfullscanarchive) accepts ZIPs but extracts supported dependency manifests for a full scan. Its [skills.sh integration](https://www.socket.dev/blog/socket-brings-supply-chain-security-to-skills) describes a separate source-analysis flow. A general Socket API token and successful archive upload do not establish that skill instructions and scripts were analyzed
+
+The skills.sh audit endpoint, `GET /api/v1/skills/audit/{source}/{skill}`, returns partner verdicts, summaries and audit timestamps. Its documented authentication uses a Vercel OIDC token. The audit response does not bind those verdicts to a content digest or commit. Treat these results as historical catalog information, even when the skill detail endpoint separately provides a hash
+
+For private uploads, use the adapter above or another service implementing the complete HTTP contract. A Gen or Socket adapter requires vendor-confirmed private source submission, authentication, result and retention contracts before it can claim to scan submitted bytes. Keep the skill private, send content only to the configured scanner, and preserve unknown or incomplete results instead of translating a lookup into an exact-archive safety verdict
+
 ## HTTP contract
 
 The gateway sends an authenticated `POST` to the configured endpoint. The body contains form fields `source` (JSON source descriptor), `use_llm` (boolean), and `expires_at` (timezone-aware ISO timestamp), plus `file` (ZIP) when bytes are available. The service returns HTTP 200 with this JSON shape
