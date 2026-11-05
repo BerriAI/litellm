@@ -1,4 +1,5 @@
 import { createParser, parseAsString } from "nuqs";
+import { relativeTimeOptions } from "@/components/shared/date_range_presets";
 
 export const parseActivityDay = createParser({
   parse(value) {
@@ -26,3 +27,19 @@ export function defaultActivityDays() {
   from.setUTCDate(from.getUTCDate() - 29);
   return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
 }
+
+export const activityPresets = relativeTimeOptions.map((option) => ({
+  ...option,
+  getValue: () => {
+    const to = new Date();
+    const from = new Date(to);
+    if (option.settingValue === "last_7_days") from.setUTCDate(from.getUTCDate() - 6);
+    if (option.settingValue === "last_30_days") from.setUTCDate(from.getUTCDate() - 29);
+    if (option.settingValue === "month_to_date") from.setUTCDate(1);
+    if (option.settingValue === "year_to_date") from.setUTCMonth(0, 1);
+    return {
+      from: new Date(`${from.toISOString().slice(0, 10)}T00:00:00`),
+      to: new Date(`${to.toISOString().slice(0, 10)}T23:59:59`),
+    };
+  },
+}));

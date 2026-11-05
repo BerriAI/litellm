@@ -11,7 +11,7 @@ import { hasProxyWideSpendView, spendScopeUserId } from "@/utils/roles";
 import type { ActivityScope } from "@/utils/entityLinks";
 import { EMPTY_DAILY_ACTIVITY_METADATA, toDailyData, type DailyActivityRequest } from "./dailyActivityApi";
 import { keyDetailFromResponse, overallUsageMetrics, reportingKeyId } from "./keyActivityData";
-import { defaultActivityDays, entityActivityParsers, localActivityDay } from "./entityActivityState";
+import { activityPresets, defaultActivityDays, entityActivityParsers, localActivityDay } from "./entityActivityState";
 
 interface Props {
   scope: ActivityScope;
@@ -63,6 +63,8 @@ export default function EntityActivity({ scope, id }: Props) {
       <div className="flex items-center justify-end gap-2">
         <span className="text-sm text-muted-foreground">UTC</span>
         <AdvancedDatePicker
+          presets={activityPresets}
+          showTimeRange={false}
           value={{ from: request.startTime, to: request.endTime }}
           onValueChange={(range) => {
             if (range.from && range.to) {

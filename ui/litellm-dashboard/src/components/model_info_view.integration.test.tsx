@@ -197,7 +197,11 @@ describe("ModelInfoView", () => {
   });
 
   const wrapper = ({ children }: { children: ReactNode }) =>
-    React.createElement(NuqsTestingAdapter, { hasMemory: true }, React.createElement(QueryClientProvider, { client: queryClient }, children));
+    React.createElement(
+      NuqsTestingAdapter,
+      { hasMemory: true },
+      React.createElement(QueryClientProvider, { client: queryClient }, children),
+    );
 
   it("should render", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });

@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { EMPTY_DAILY_ACTIVITY_METADATA, EMPTY_DAILY_ACTIVITY_RESPONSE } from "./dailyActivityApi";
 import EntityActivity from "./EntityActivity";
 
@@ -19,9 +19,29 @@ beforeEach(() => {
   auth.userRole = "Admin";
   fetchMock.mockReset().mockImplementation(async () => response(EMPTY_DAILY_ACTIVITY_RESPONSE));
   vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) =>
+    setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 50 }), 0),
+  );
 });
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("entity activity", () => {
+  it("updates date filters without losing the linked incident", async () => {
+    const onUrlUpdate = vi.fn();
+    const { container } = renderWithProviders(<EntityActivity scope="key" id="key-hash" />, {
+      searchParams: dates,
+      onUrlUpdate,
+    });
+    await screen.findByText("No activity in this date range.");
+    fireEvent.click(container.querySelector('[data-slot="advanced-date-picker-trigger"]')!);
+    fireEvent.change(screen.getByDisplayValue("2026-10-01"), { target: { value: "2026-10-03" } });
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(urls().at(-1)?.searchParams.get("start_date")).toBe("2026-10-03"));
+    expect(urls().at(-1)?.searchParams.get("api_key")).toBe("key-hash");
+    expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("alert")).toBe("incident-1");
+  });
+
   it.each([
     ["key", "key-hash", "user", "api_key"],
     ["team", "team-1", "team", "team_ids"],
