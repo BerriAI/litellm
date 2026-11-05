@@ -37,11 +37,22 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._internal_context import internal_sub_call
 from litellm._logging import redact_string, verbose_logger
-from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, update_headers_with_filtered_beta
+from litellm.anthropic_beta_headers_manager import (
+    aload_beta_headers_config,
+    resolve_beta_provider,
+    update_headers_with_filtered_beta,
+)
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
+from litellm.litellm_core_utils.agentic_loop_refusal import (
+    every_claimed_tool_call,
+    finalize_refused_responses_turn,
+    is_refused_item,
+    refused_tool_call_identifiers,
+)
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -51,11 +62,11 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
-from litellm.litellm_core_utils.core_helpers import (
-    as_str_mapping,
-    qualify_agentic_followup_model,
-    set_provider_response_headers_in_hidden_params,
+from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    bill_first_round_on_failure,
+    run_chat_completion_agentic_hooks,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
@@ -145,6 +156,7 @@ from litellm.types.extraction import ExtractionResponse
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    AgenticLoopLimitError,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
@@ -453,6 +465,20 @@ def _google_genai_streaming_hidden_params(
         "response_cost": "",
         "additional_headers": process_response_headers(response_headers),
     }
+
+
+def _log_generate_content_request(
+    logging_obj: LiteLLMLoggingObj,
+    contents: object,
+    api_base: str,
+    headers: Mapping[str, object],
+    body: Mapping[str, object],
+) -> None:
+    logging_obj.pre_call(
+        input=contents,
+        api_key="",
+        additional_args={"complete_input_dict": body, "api_base": api_base, "headers": headers},
+    )
 
 
 @lru_cache(maxsize=None)
@@ -2581,14 +2607,16 @@ class BaseLLMHTTPHandler:
             litellm_params.get("additional_drop_params") or (),
             anthropic_messages_optional_request_params,
         )
-        if (
-            request_params.get("safeguards") is not None
-            and anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
-        ):
-            await aload_beta_headers_config()
         affinity_api_base: Final = (
             AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
         )
+        takes_another_beta_row: Final = (
+            resolve_beta_provider(custom_llm_provider, affinity_api_base) != custom_llm_provider
+        )
+        provider_filters_betas: Final = anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
+        filters_beta_headers: Final = provider_filters_betas or takes_another_beta_row
+        if request_params.get("safeguards") is not None and filters_beta_headers:
+            await aload_beta_headers_config()
         default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
         (
             headers,
@@ -2607,8 +2635,14 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
         )
 
-        if anthropic_messages_provider_config.should_filter_anthropic_beta_headers():
-            headers = update_headers_with_filtered_beta(headers=headers, provider=custom_llm_provider)
+        if filters_beta_headers and headers.get("anthropic-beta") is not None:
+            await aload_beta_headers_config()
+            headers = update_headers_with_filtered_beta(
+                headers=headers,
+                provider=custom_llm_provider,
+                api_base=affinity_api_base,
+                unlisted="drop" if provider_filters_betas else "forward",
+            )
 
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
@@ -5978,7 +6012,7 @@ class BaseLLMHTTPHandler:
     @staticmethod
     def _check_agentic_loop_safety(
         tool_calls: object,
-        fingerprints: list[str],
+        fingerprints: Sequence[str],
         depth: int,
         max_loops: int,
         model: str,
@@ -5997,7 +6031,7 @@ class BaseLLMHTTPHandler:
         if fingerprint in fingerprints:
             raise AgenticLoopSafetyError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
         if depth >= max_loops:
-            raise AgenticLoopSafetyError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
+            raise AgenticLoopLimitError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
         return fingerprint
 
     @staticmethod
@@ -6006,26 +6040,6 @@ class BaseLLMHTTPHandler:
             return json.dumps(tools, sort_keys=True, default=str)
         except Exception:
             return str(tools)
-
-    @staticmethod
-    def _refused_agentic_tool_identifiers(tool_calls: object) -> tuple[frozenset[str], frozenset[str]]:
-        """
-        Collect the ids and names of the tool calls a safety rail just refused.
-
-        Callbacks hand back either a bare list of tool calls or a dict wrapping
-        that list under ``tool_calls``, and both the anthropic and responses
-        shapes carry an ``id`` (or ``call_id``) plus a ``name``.
-        """
-        calls: Final = tool_calls.get("tool_calls") if isinstance(tool_calls, dict) else tool_calls
-        if not isinstance(calls, list):
-            return frozenset(), frozenset()
-        dict_calls: Final = (call for call in calls if isinstance(call, dict))
-        fields: Final = tuple((call.get("id"), call.get("call_id"), call.get("name")) for call in dict_calls)
-        ids: Final = frozenset(
-            value for call_id, caller_id, _ in fields for value in (call_id, caller_id) if isinstance(value, str)
-        )
-        names: Final = frozenset(name for _, _, name in fields if isinstance(name, str))
-        return ids, names
 
     @staticmethod
     def _is_refused_tool_use_block(block: object, refused_ids: frozenset[str], refused_names: frozenset[str]) -> bool:
@@ -6037,21 +6051,12 @@ class BaseLLMHTTPHandler:
         share a name with a refused one. The name is only consulted for tool call
         shapes that arrive without an id.
         """
-        if not isinstance(block, dict) or block.get("type") != "tool_use":
-            return False
-        block_id: Final = block.get("id")
-        if isinstance(block_id, str) and refused_ids:
-            return block_id in refused_ids
-        return block.get("name") in refused_names
+        return is_refused_item(block, "tool_use", "id", refused_ids, refused_names)
 
     @staticmethod
     def _can_replace_turn_with_terminal_response(stream: bool, api_surface: str) -> bool:
         """
         Whether a refused rerun can still be answered with a finalized turn.
-
-        Only the anthropic messages surface can. The responses surface carries a
-        pydantic model the finalizer does not rewrite, so it keeps raising, which
-        is what every surface did before this path learned to end the turn.
 
         The messages and responses call sites pass ``stream=False``, because
         interception converts an intercepted stream to non-streaming before the
@@ -6061,7 +6066,7 @@ class BaseLLMHTTPHandler:
         finalized turn would reach the client as a second message rather than
         as a replacement.
         """
-        return not stream and api_surface == "anthropic_messages"
+        return not stream and api_surface in ("anthropic_messages", "responses")
 
     @staticmethod
     def _finalize_refused_agentic_response(response: object, tool_calls: object) -> object:
@@ -6078,10 +6083,12 @@ class BaseLLMHTTPHandler:
         one is still in the response the stop reason stays ``tool_use`` so the
         client knows to answer it.
         """
+        if isinstance(response, ResponsesAPIResponse):
+            return finalize_refused_responses_turn(response, tool_calls)
         if not isinstance(response, dict):
             return response
 
-        refused_ids, refused_names = BaseLLMHTTPHandler._refused_agentic_tool_identifiers(tool_calls)
+        refused_ids, refused_names = refused_tool_call_identifiers(tool_calls)
         finalized: Final = dict(response)
         content: Final = finalized.get("content")
         if isinstance(content, list):
@@ -6108,7 +6115,7 @@ class BaseLLMHTTPHandler:
         kwargs: dict,
         depth: int,
         max_loops: int,
-        fingerprints: list[str],
+        fingerprints: Sequence[str],
         fingerprint: str,
         stream: bool = False,
         callback: Optional["CustomLogger"] = None,
@@ -6149,7 +6156,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup.update(patch.kwargs)
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
-        kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
+        kwargs_for_followup["_agentic_loop_fingerprints"] = [*fingerprints, fingerprint]
 
         response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
             **{
@@ -6188,7 +6195,7 @@ class BaseLLMHTTPHandler:
         kwargs: dict,
         depth: int,
         max_loops: int,
-        fingerprints: list[str],
+        fingerprints: Sequence[str],
         fingerprint: str,
         callback: Optional["CustomLogger"] = None,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
@@ -6226,12 +6233,13 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
-                model=patch.model or model,
-                input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
-                **optional_params,
-                **kwargs_for_followup,
-            )
+            with internal_sub_call(logging_obj.litellm_call_id):
+                response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
+                    model=patch.model or model,
+                    input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
+                    **optional_params,
+                    **kwargs_for_followup,
+                )
 
             if callback is not None:
                 try:
@@ -6306,64 +6314,6 @@ class BaseLLMHTTPHandler:
             responses_api_provider_config=responses_api_provider_config,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
-        )
-
-    async def _execute_chat_completion_agentic_plan(
-        self,
-        plan: AgenticLoopPlan,
-        model: str,
-        messages: list[dict],
-        optional_params: dict,
-        kwargs: dict,
-        custom_llm_provider: str,
-        depth: int,
-        max_loops: int,
-        fingerprints: list[str],
-        fingerprint: str,
-    ) -> ModelResponse | CustomStreamWrapper:
-        patch: Final = plan.request_patch or AgenticLoopRequestPatch()
-        if patch.messages is None:
-            raise ValueError("Agentic loop plan missing patched messages")
-
-        full_model_name: Final = qualify_agentic_followup_model(patch.model, model, custom_llm_provider)
-
-        optional_params_for_followup: Final = dict(optional_params)
-        optional_params_for_followup.update(patch.optional_params)
-        if patch.tools is not None:
-            optional_params_for_followup["tools"] = patch.tools
-
-        internal_params: Final = {
-            "_websearch_interception",
-            "acompletion",
-            "litellm_logging_obj",
-            "custom_llm_provider",
-            "model_alias_map",
-            "stream_response",
-            "custom_prompt_dict",
-        }
-        kwargs_for_followup: Final = build_agentic_followup_kwargs(
-            request_kwargs=MappingProxyType(
-                {
-                    k: v
-                    for k, v in kwargs.items()
-                    if not k.startswith("_websearch_interception")
-                    and not k.startswith("_compression_interception")
-                    and k not in internal_params
-                }
-            ),
-            patch_kwargs=patch.kwargs,
-            request_params=frozenset((*optional_params_for_followup, "model", "messages")),
-            depth=depth,
-            max_loops=max_loops,
-            fingerprints=fingerprints,
-            fingerprint=fingerprint,
-        )
-
-        return await litellm.acompletion(
-            model=full_model_name,
-            messages=patch.messages,
-            **optional_params_for_followup,
-            **kwargs_for_followup,
         )
 
     def _maybe_wrap_in_fake_stream(
@@ -6482,26 +6432,38 @@ class BaseLLMHTTPHandler:
             except AgenticLoopSafetyError as e:
                 if not self._can_replace_turn_with_terminal_response(stream, api_surface):
                     raise
-                verbose_logger.warning(
-                    "LiteLLM.AgenticLoopRefused: ending turn [call_id=%s model=%s]: %s",
-                    logging_obj.litellm_call_id,
-                    model,
-                    str(e),
-                )
+                verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [rail=%s]", type(e).__name__)
                 return self._maybe_wrap_in_fake_stream(
-                    self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
+                    self._finalize_refused_agentic_response(
+                        response=response,
+                        tool_calls=await every_claimed_tool_call(
+                            tool_calls,
+                            (
+                                other.async_should_run_agentic_loop(
+                                    response=response,
+                                    model=model,
+                                    messages=messages,
+                                    tools=tools,
+                                    stream=stream,
+                                    custom_llm_provider=custom_llm_provider,
+                                    kwargs=hook_kwargs,
+                                )
+                                for other in callbacks
+                                if isinstance(other, CustomLogger) and other is not callback
+                            ),
+                        ),
+                    ),
                     logging_obj,
                     api_surface,
                 )
 
-            try:
-                kwargs_with_provider = hook_kwargs.copy()
-                kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
-                build_plan_overridden = (
-                    callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan
-                )
-                if not build_plan_overridden:
-                    agentic_result: object = await callback.async_run_agentic_loop(
+            kwargs_with_provider = {**hook_kwargs, "custom_llm_provider": custom_llm_provider}
+            build_plan_overridden = (
+                callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan
+            )
+            if not build_plan_overridden:
+                agentic_result: object = await bill_first_round_on_failure(
+                    callback.async_run_agentic_loop(
                         tools=tool_calls,
                         model=model,
                         messages=messages,
@@ -6511,10 +6473,15 @@ class BaseLLMHTTPHandler:
                         logging_obj=logging_obj,
                         stream=stream,
                         kwargs=kwargs_with_provider,
-                    )
-                    return self._maybe_wrap_in_fake_stream(agentic_result, logging_obj, api_surface)
+                    ),
+                    logging_obj=logging_obj,
+                    response=response,
+                    stream=stream,
+                )
+                return self._maybe_wrap_in_fake_stream(agentic_result, logging_obj, api_surface)
 
-                plan = await callback.async_build_agentic_loop_plan(
+            plan = await bill_first_round_on_failure(
+                callback.async_build_agentic_loop_plan(
                     tools=tool_calls,
                     model=model,
                     messages=messages,
@@ -6524,30 +6491,35 @@ class BaseLLMHTTPHandler:
                     logging_obj=logging_obj,
                     stream=stream,
                     kwargs=kwargs_with_provider,
+                ),
+                logging_obj=logging_obj,
+                response=response,
+                stream=stream,
+            )
+
+            if plan.response_override is not None:
+                return self._maybe_wrap_in_fake_stream(plan.response_override, logging_obj, api_surface)
+            if plan.terminate:
+                verbose_logger.debug(
+                    "Agentic loop terminated by callback=%s reason=%s",
+                    callback.__class__.__name__,
+                    plan.stop_reason,
                 )
+                return self._maybe_wrap_in_fake_stream(
+                    await callback.async_post_agentic_loop_response_hook(
+                        response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
+                        plan=plan,
+                        kwargs=kwargs_with_provider,
+                    ),
+                    logging_obj,
+                    api_surface,
+                )
+            if not plan.run_agentic_loop:
+                continue
 
-                if plan.response_override is not None:
-                    return self._maybe_wrap_in_fake_stream(plan.response_override, logging_obj, api_surface)
-                if plan.terminate:
-                    verbose_logger.debug(
-                        "Agentic loop terminated by callback=%s reason=%s",
-                        callback.__class__.__name__,
-                        plan.stop_reason,
-                    )
-                    return self._maybe_wrap_in_fake_stream(
-                        await callback.async_post_agentic_loop_response_hook(
-                            response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
-                            plan=plan,
-                            kwargs=kwargs_with_provider,
-                        ),
-                        logging_obj,
-                        api_surface,
-                    )
-                if not plan.run_agentic_loop:
-                    continue
-
-                if api_surface == "responses":
-                    return await self._execute_responses_agentic_plan(
+            if api_surface == "responses":
+                return await bill_first_round_on_failure(
+                    self._execute_responses_agentic_plan(
                         plan=plan,
                         model=model,
                         response_api_optional_request_params=anthropic_messages_optional_request_params,
@@ -6558,10 +6530,15 @@ class BaseLLMHTTPHandler:
                         fingerprints=fingerprints,
                         fingerprint=fingerprint,
                         callback=callback,
-                    )
+                    ),
+                    logging_obj=logging_obj,
+                    response=response,
+                    stream=stream,
+                )
 
-                return self._maybe_wrap_in_fake_stream(
-                    await self._execute_anthropic_agentic_plan(
+            return self._maybe_wrap_in_fake_stream(
+                await bill_first_round_on_failure(
+                    self._execute_anthropic_agentic_plan(
                         plan=plan,
                         model=model,
                         messages=messages,
@@ -6575,17 +6552,13 @@ class BaseLLMHTTPHandler:
                         stream=stream,
                         callback=callback,
                     ),
-                    logging_obj,
-                    api_surface,
-                )
-            except Exception as e:
-                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
-                verbose_logger.exception(
-                    "LiteLLM.AgenticHookError: Exception in agentic completion hooks [call_id=%s model=%s]: %s",
-                    _call_id,
-                    model,
-                    str(e),
-                )
+                    logging_obj=logging_obj,
+                    response=response,
+                    stream=stream,
+                ),
+                logging_obj,
+                api_surface,
+            )
 
         # Check if we need to convert response to fake stream
         # This happens when:
@@ -6617,110 +6590,23 @@ class BaseLLMHTTPHandler:
 
         Returns the response from agentic loop, or None if no hook runs.
         """
-        from litellm._logging import verbose_logger
-        from litellm.integrations.custom_logger import CustomLogger
-
-        callbacks: Final = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
-        tools: Final = optional_params.get("tools", [])
-        depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
-
-        for callback in callbacks:
-            if not isinstance(callback, CustomLogger):
-                continue
-            if not hasattr(callback, "async_should_run_chat_completion_agentic_loop"):
-                continue
-
-            should_run: bool = False
-            tool_calls: object = None
-            try:
-                (
-                    should_run,
-                    tool_calls,
-                ) = await callback.async_should_run_chat_completion_agentic_loop(
-                    response=response,
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    stream=stream,
-                    custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
-                )
-            except Exception as e:
-                verbose_logger.exception(
-                    "LiteLLM.AgenticHookError: Exception in async_should_run_chat_completion_agentic_loop: %s",
-                    str(e),
-                )
-                continue
-
-            if not should_run:
-                continue
-
-            # Safety guards must run OUTSIDE the callback try/except — they are
-            # bounded-loop / cycle-break rails that must propagate to the caller.
-            fingerprint = self._check_agentic_loop_safety(
-                tool_calls=tool_calls,
-                fingerprints=fingerprints,
-                depth=depth,
-                max_loops=max_loops,
+        agentic_response: Final = await bill_first_round_on_failure(
+            run_chat_completion_agentic_hooks(
+                response=response,
                 model=model,
-            )
-
-            try:
-                kwargs_with_provider = kwargs.copy() if kwargs else {}
-                kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
-                build_plan_overridden = (
-                    callback.__class__.async_build_chat_completion_agentic_loop_plan
-                    is not CustomLogger.async_build_chat_completion_agentic_loop_plan
-                )
-                if not build_plan_overridden:
-                    return await callback.async_run_chat_completion_agentic_loop(
-                        tools=tool_calls,
-                        model=model,
-                        messages=messages,
-                        response=response,
-                        optional_params=optional_params,
-                        logging_obj=logging_obj,
-                        stream=stream,
-                        kwargs=kwargs_with_provider,
-                    )
-
-                plan = await callback.async_build_chat_completion_agentic_loop_plan(
-                    tools=tool_calls,
-                    model=model,
-                    messages=messages,
-                    response=response,
-                    optional_params=optional_params,
-                    logging_obj=logging_obj,
-                    stream=stream,
-                    kwargs=kwargs_with_provider,
-                )
-
-                if plan.response_override is not None:
-                    return plan.response_override
-                if plan.terminate:
-                    verbose_logger.debug(
-                        "Agentic chat loop terminated by callback=%s reason=%s",
-                        callback.__class__.__name__,
-                        plan.stop_reason,
-                    )
-                    return response
-                if not plan.run_agentic_loop:
-                    continue
-
-                return await self._execute_chat_completion_agentic_plan(
-                    plan=plan,
-                    model=model,
-                    messages=messages,
-                    optional_params=optional_params,
-                    kwargs=kwargs_with_provider,
-                    custom_llm_provider=custom_llm_provider,
-                    depth=depth,
-                    max_loops=max_loops,
-                    fingerprints=fingerprints,
-                    fingerprint=fingerprint,
-                )
-            except Exception as e:
-                verbose_logger.exception("LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: %s", e)
+                messages=messages,
+                optional_params=optional_params,
+                kwargs=kwargs or {},
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                stream=stream,
+            ),
+            logging_obj=logging_obj,
+            response=response,
+            stream=stream,
+        )
+        if agentic_response is not None:
+            return agentic_response
 
         # Check if we need to convert response to fake stream for chat completions
         # This happens when:
@@ -7065,7 +6951,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        extra_headers: dict[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
     ) -> httpx.Response:
@@ -7098,7 +6984,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        extra_headers: dict[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
     ) -> httpx.Response:
@@ -7117,9 +7003,8 @@ class BaseLLMHTTPHandler:
             api_version=api_version,
         )
 
-    async def _async_realtime_session_post(
+    async def async_realtime_translation_client_secret_handler(
         self,
-        endpoint: Literal["client_secrets", "transcription_sessions"],
         api_base: str,
         api_key: str,
         request_data: dict[str, object],
@@ -7127,7 +7012,35 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        extra_headers: dict[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_version: str | None = None,
+    ) -> httpx.Response:
+        return await self._async_realtime_session_post(
+            endpoint="translation_client_secrets",
+            api_base=api_base,
+            api_key=api_key,
+            request_data=request_data,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            provider_config=provider_config,
+            model=model,
+            extra_headers=extra_headers,
+            client=client,
+            api_version=api_version,
+        )
+
+    async def _async_realtime_session_post(
+        self,
+        endpoint: Literal["client_secrets", "transcription_sessions", "translation_client_secrets"],
+        api_base: str,
+        api_key: str,
+        request_data: dict[str, object],
+        logging_obj: LiteLLMLoggingObj,
+        timeout: float | httpx.Timeout,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
+        model: str | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
     ) -> httpx.Response:
@@ -7150,13 +7063,20 @@ class BaseLLMHTTPHandler:
                 url = provider_config.get_transcription_session_url(
                     api_base=api_base, model=model or "", api_version=api_version
                 )
+            elif endpoint == "translation_client_secrets":
+                url = provider_config.get_translation_client_secret_url(
+                    api_base=api_base, model=model or "", api_version=api_version
+                )
             else:
                 url = provider_config.get_complete_url(api_base=api_base, model=model or "", api_version=api_version)
             headers: dict[str, object] = provider_config.validate_environment(
                 headers={}, model=model or "", api_key=api_key
             )
         else:
-            url = join_api_base(api_base, f"v1/realtime/{endpoint}")
+            endpoint_path: Final = (
+                "translations/client_secrets" if endpoint == "translation_client_secrets" else endpoint
+            )
+            url = join_api_base(api_base, f"v1/realtime/{endpoint_path}")
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -7190,6 +7110,12 @@ class BaseLLMHTTPHandler:
                 )
             raise
 
+    @staticmethod
+    def _get_realtime_async_http_client(client: object | None) -> AsyncHTTPHandler:
+        if isinstance(client, AsyncHTTPHandler):
+            return client
+        return get_async_httpx_client(llm_provider=litellm.LlmProviders.OPENAI)
+
     async def async_realtime_calls_handler(
         self,
         api_base: str,
@@ -7199,10 +7125,11 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
-        session_config: dict[str, object] | None = None,
-        extra_headers: dict[str, object] | None = None,
+        session_config: Mapping[str, object] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
+        translation: bool = False,
     ) -> httpx.Response:
         """
         Forward POST /v1/realtime/calls (SDP exchange) to upstream provider.
@@ -7214,18 +7141,30 @@ class BaseLLMHTTPHandler:
           - sdp: the SDP offer (text)
           - session: JSON string with {"type": "realtime", "model": "...", ...}
         """
-        if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.OPENAI,
-            )
-        else:
-            async_httpx_client = client
+        session_data: Final[dict[str, object]] = {  # mutable-ok: model and session type are resolved locally
+            **(session_config or {})
+        }
+        if "type" not in session_data:
+            session_data["type"] = "translation" if translation else "realtime"
+        if "model" not in session_data and model:
+            session_data["model"] = model
+
+        sdp_text: Final = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
+
+        async_httpx_client: Final = self._get_realtime_async_http_client(client)
 
         if provider_config is not None:
-            url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
+            url = (
+                provider_config.get_translation_calls_url(api_base=api_base, model=model or "", api_version=api_version)
+                if translation
+                else provider_config.get_realtime_calls_url(
+                    api_base=api_base, model=model or "", api_version=api_version
+                )
+            )
             headers: dict[str, object] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
         else:
-            url = join_api_base(api_base, "v1/realtime/calls")
+            path: Final = "translations/calls" if translation else "calls"
+            url = join_api_base(api_base, f"v1/realtime/{path}")
             headers = {
                 "Authorization": f"Bearer {openai_ephemeral_key}",
             }
@@ -7233,14 +7172,8 @@ class BaseLLMHTTPHandler:
         if extra_headers:
             headers.update(extra_headers)
 
-        # Build multipart form data: sdp + session JSON
-        session_data: Final = session_config or {}
-        if "type" not in session_data:
-            session_data["type"] = "realtime"
-        if "model" not in session_data and model:
-            session_data["model"] = model
-
-        sdp_text: Final = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
+        if translation:
+            headers["Content-Type"] = "application/sdp"
 
         files: Final = {
             "sdp": (None, sdp_text, "text/plain"),
@@ -7258,12 +7191,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            return await async_httpx_client.post(
-                url=url,
-                headers=headers,
-                files=files,
-                timeout=timeout,
-            )
+            if translation:
+                return await async_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    content=sdp_text,
+                    timeout=timeout,
+                )
+            return await async_httpx_client.post(url=url, headers=headers, files=files, timeout=timeout)
         except Exception as e:
             if provider_config is not None:
                 raise self._handle_error(
@@ -8073,7 +8008,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8269,7 +8204,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8450,7 +8385,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8614,7 +8549,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8755,7 +8690,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -8928,7 +8863,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9115,7 +9050,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9248,7 +9183,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9330,7 +9265,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -9515,7 +9450,7 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
@@ -12443,6 +12378,10 @@ class BaseLLMHTTPHandler:
         from litellm.google_genai.streaming_iterator import (
             GoogleGenAIGenerateContentStreamingIterator,
         )
+        from litellm.llms.vertex_ai.gemini.rejected_thought_signature_retry import (
+            post_with_accepted_thought_signatures_sync,
+            with_placeholder_native_thought_signatures,
+        )
 
         if _is_async:
             return self.async_generate_content_handler(
@@ -12494,27 +12433,19 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=contents,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_content_request, logging_obj, contents, api_base, headers)
+        log_request(data)
+
+        def post(body: Mapping[str, object]) -> httpx.Response:
+            return sync_httpx_client.post(
+                url=api_base, headers=headers, json=dict(body), timeout=timeout, stream=stream
+            )
 
         try:
+            sent_body, response = post_with_accepted_thought_signatures_sync(
+                data, with_placeholder_native_thought_signatures, None, post, log_request
+            )
             if stream:
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                    stream=True,
-                )
-                # Return streaming iterator
                 return GoogleGenAIGenerateContentStreamingIterator(
                     response=response,
                     model=model,
@@ -12522,20 +12453,13 @@ class BaseLLMHTTPHandler:
                     generate_content_provider_config=generate_content_provider_config,
                     litellm_metadata=litellm_metadata or {},
                     custom_llm_provider=custom_llm_provider,
-                    request_body=data,
+                    request_body=dict(sent_body),
                     hidden_params=_google_genai_streaming_hidden_params(
                         api_base=api_base,
                         litellm_params=litellm_params,
                         logging_obj=logging_obj,
                         response_headers=response.headers,
                     ),
-                )
-            else:
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
                 )
         except Exception as e:
             raise self._handle_error(
@@ -12574,6 +12498,10 @@ class BaseLLMHTTPHandler:
         from litellm.google_genai.streaming_iterator import (
             AsyncGoogleGenAIGenerateContentStreamingIterator,
         )
+        from litellm.llms.vertex_ai.gemini.rejected_thought_signature_retry import (
+            post_with_accepted_thought_signatures_async,
+            with_placeholder_native_thought_signatures,
+        )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -12609,27 +12537,19 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=contents,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_content_request, logging_obj, contents, api_base, headers)
+        log_request(data)
+
+        async def post(body: Mapping[str, object]) -> httpx.Response:
+            return await async_httpx_client.post(
+                url=api_base, headers=headers, json=dict(body), timeout=timeout, stream=stream
+            )
 
         try:
+            sent_body, response = await post_with_accepted_thought_signatures_async(
+                data, with_placeholder_native_thought_signatures, None, post, log_request
+            )
             if stream:
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                    stream=True,
-                )
-                # Return async streaming iterator
                 return AsyncGoogleGenAIGenerateContentStreamingIterator(
                     response=response,
                     model=model,
@@ -12637,20 +12557,13 @@ class BaseLLMHTTPHandler:
                     generate_content_provider_config=generate_content_provider_config,
                     litellm_metadata=litellm_metadata or {},
                     custom_llm_provider=custom_llm_provider,
-                    request_body=data,
+                    request_body=dict(sent_body),
                     hidden_params=_google_genai_streaming_hidden_params(
                         api_base=api_base,
                         litellm_params=litellm_params,
                         logging_obj=logging_obj,
                         response_headers=response.headers,
                     ),
-                )
-            else:
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
                 )
         except Exception as e:
             raise self._handle_error(

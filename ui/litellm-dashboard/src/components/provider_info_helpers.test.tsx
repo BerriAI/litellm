@@ -73,6 +73,12 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderLogoAndName", () => {
+    it("shows the Parallel AI logo for the parallel_ai slug", () => {
+      const { logo, displayName } = getProviderLogoAndName("parallel_ai");
+      expect(displayName).toBe(Providers.PARALLEL_AI);
+      expect(logo).toContain("parallel_ai");
+    });
+
     it("should return empty logo and dash display name when providerValue is empty", () => {
       const result = getProviderLogoAndName("");
       expect(result).toEqual({ logo: "", displayName: "-" });
@@ -246,6 +252,7 @@ describe("provider_info_helpers", () => {
         Providers.DATAROBOT,
         Providers.DOCKER_MODEL_RUNNER,
         Providers.DOTPROMPT,
+        Providers.EMPIRIOLABS,
         Providers.EMPOWER,
         Providers.GALADRIEL,
         Providers.GradientAI,
@@ -577,6 +584,16 @@ describe("provider_info_helpers", () => {
       expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
     });
 
+    it("lists Parallel decision models with their provider and model placeholder", () => {
+      const modelMap = {
+        "parallel_ai/decision": { litellm_provider: "parallel_ai", mode: "evaluation" },
+      };
+
+      expect(getProviderModels("PARALLEL_AI", modelMap)).toEqual(["parallel_ai/decision"]);
+      expect(getProviderLogoAndName("parallel_ai").displayName).toBe("Parallel AI");
+      expect(getPlaceholder("PARALLEL_AI")).toBe("parallel_ai/decision");
+    });
+
     it("lists Nace decision models and resolves the provider name and model placeholder", () => {
       const modelMap = {
         "nace/drex-latest": { litellm_provider: "nace", mode: "evaluation" },
@@ -598,6 +615,24 @@ describe("provider_info_helpers", () => {
         "typesafe/jev-latest",
         "typesafe/jev-preview",
       ]);
+    });
+
+    it("should list EmpirioLabs AI chat and decision models for the 'EMPIRIOLABS' provider key", () => {
+      const modelMap = {
+        "empiriolabs/aplomb-1": {
+          litellm_provider: "empiriolabs",
+          mode: "chat",
+          supported_endpoints: ["/v1/chat/completions", "/v1/decisions"],
+        },
+        "empiriolabs/qwen3-7-plus": { litellm_provider: "empiriolabs", mode: "chat" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      };
+      expect(getProviderModels("EMPIRIOLABS" as Providers, modelMap)).toEqual([
+        "empiriolabs/aplomb-1",
+        "empiriolabs/qwen3-7-plus",
+      ]);
+      expect(getProviderLogoAndName("empiriolabs").displayName).toBe("EmpirioLabs AI");
+      expect(getPlaceholder("EMPIRIOLABS")).toBe("empiriolabs/aplomb-1");
     });
 
     it("should list only strands_decider models for the 'StrandsDecider' provider key", () => {
