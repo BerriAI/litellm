@@ -277,6 +277,11 @@ fn expected_view(fields: serde_json::Value) -> serde_json::Value {
     &[],
     Err("ssl_validate_ocsp asks for OCSP revocation checks, which rustls cannot perform, so Redis is not connected without them"),
 )]
+#[case::ssl_include_verify_flags_is_unsupported(
+    json!({"host": "redis", "ssl": true, "ssl_include_verify_flags": ["VERIFY_CRL_CHECK_LEAF"]}),
+    &[],
+    Err("ssl_include_verify_flags asks for X.509 verify flags such as CRL checking, which rustls cannot perform, so Redis is not connected without them"),
+)]
 #[case::ssl_password_is_unsupported(
     json!({"host": "redis", "ssl": true, "ssl_certfile": "/client.pem", "ssl_password": "key-secret"}),
     &[],

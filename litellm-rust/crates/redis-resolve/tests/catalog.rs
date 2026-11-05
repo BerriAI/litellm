@@ -1,18 +1,37 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use litellm_redis_resolve::{Error, Handling, SETTINGS, Shape, interpret, kwargs};
+use litellm_redis_resolve::{Asked, Error, Handling, SETTINGS, Setting, Shape, interpret, kwargs};
 use rstest::rstest;
 use serde::Deserialize;
 use serde_json::json;
 
 #[derive(Deserialize)]
 struct Catalog {
+    meta: Meta,
     args: BTreeMap<String, Arg>,
+}
+
+#[derive(Deserialize)]
+struct Meta {
+    redis_py_locked: String,
 }
 
 #[derive(Deserialize)]
 struct Arg {
     environment: bool,
+    redis_py: BTreeMap<String, Vec<String>>,
+}
+
+// the signatures of the clients the proxy builds, where an unknown kwarg raises TypeError
+const PROXY_SIGNATURES: &[&str] = &["async", "cluster", "connection"];
+
+fn rejected() -> impl Iterator<Item = (&'static Setting, Asked)> {
+    SETTINGS
+        .iter()
+        .filter_map(|setting| match setting.handling {
+            Handling::Reject { asked, .. } => Some((setting, asked)),
+            Handling::Read | Handling::Warn { .. } => None,
+        })
 }
 
 fn catalog() -> Catalog {
@@ -78,17 +97,38 @@ fn every_warned_setting_is_reported_and_still_reaches_the_host() {
 }
 
 #[rstest]
-fn every_rejected_setting_fails_when_asked_for() {
-    let rejected = SETTINGS
-        .iter()
-        .filter(|setting| matches!(setting.handling, Handling::Reject { .. }));
+fn every_rejected_setting_fails_when_asked_for_and_not_otherwise() {
+    for (setting, asked) in rejected() {
+        let (asking, not_asking) = match asked {
+            Asked::WhenTrue => (json!(true), json!(false)),
+            Asked::WhenSet => (json!(["VERIFY_CRL_CHECK_LEAF"]), json!([])),
+        };
 
-    for setting in rejected {
-        let error = interpret(&host_with(setting.kwarg, json!(true)), None).unwrap_err();
-
+        let error = interpret(&host_with(setting.kwarg, asking), None).unwrap_err();
         assert!(
             matches!(&error, Error::Unenforceable { setting: source, .. } if source == setting.kwarg),
             "{error:?}"
         );
+        assert!(interpret(&host_with(setting.kwarg, not_asking), None).is_ok());
     }
+}
+
+#[rstest]
+fn python_already_refuses_every_rejected_setting() {
+    let catalog = catalog();
+
+    let accepted: Vec<&str> = rejected()
+        .map(|(setting, _)| setting.kwarg)
+        .filter(|kwarg| {
+            catalog.args[*kwarg]
+                .redis_py
+                .get(&catalog.meta.redis_py_locked)
+                .is_some_and(|signatures| {
+                    signatures
+                        .iter()
+                        .any(|signature| PROXY_SIGNATURES.contains(&signature.as_str()))
+                })
+        })
+        .collect();
+    assert!(accepted.is_empty(), "{accepted:?}");
 }

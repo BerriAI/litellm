@@ -12,8 +12,18 @@ pub enum Handling {
         consequence: &'static str,
         met: Option<fn(&Value) -> bool>,
     },
-    /// A security check the Rust client cannot perform, so setting it to true fails instead of connecting without it.
-    Reject { check: &'static str },
+    /// A security check the Rust client cannot perform and Python's async client already refuses, so asking for it
+    /// fails instead of connecting without it.
+    Reject { check: &'static str, asked: Asked },
+}
+
+/// Which values of a `Reject` row ask for its check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Asked {
+    /// A flag read as true. False asks for nothing.
+    WhenTrue,
+    /// Any present value, like a list of flags. An empty one asks for nothing.
+    WhenSet,
 }
 
 /// What the value is, which decides where an unread setting lands in a `Resolution`.
@@ -127,8 +137,8 @@ const fn warn_unless(
     )
 }
 
-const fn reject(kwarg: &'static str, check: &'static str) -> Setting {
-    Setting::new(kwarg, Handling::Reject { check })
+const fn reject(kwarg: &'static str, check: &'static str, asked: Asked) -> Setting {
+    Setting::new(kwarg, Handling::Reject { check, asked })
 }
 
 const NO_EQUIVALENT: &str = "the Rust client has no equivalent";
@@ -139,7 +149,7 @@ const MAINTENANCE: &str = "the Rust client does not follow server maintenance no
 const RUSTLS: &str = "rustls negotiates TLS 1.2+ with its own ECDHE AEAD suites";
 const REVOCATION: &str = "OCSP revocation checks";
 const OCSP: &str = "it only configures ssl_validate_ocsp, which the Rust client refuses when set";
-const VERIFY_FLAGS: &str = "rustls verifies certificates with its own fixed rules, so no extra X.509 flag such as CRL checking applies";
+const VERIFY_FLAGS: &str = "X.509 verify flags such as CRL checking";
 
 /// Every Redis kwarg redis-py or `litellm/_redis.py` accepts, one row each. `redis-py-kwargs.json` records which
 /// redis-py versions and `REDIS_*` names accept them, and `tests/catalog.rs` keeps the two in step.
@@ -243,15 +253,15 @@ pub const SETTINGS: &[Setting] = &[
     read("ssl_certfile").env().in_url(FromUrl::Rediss),
     read("ssl_check_hostname").env().in_url(FromUrl::Rediss),
     warn("ssl_ciphers", RUSTLS).env(),
-    warn("ssl_exclude_verify_flags", VERIFY_FLAGS),
-    warn("ssl_include_verify_flags", VERIFY_FLAGS),
+    reject("ssl_exclude_verify_flags", VERIFY_FLAGS, Asked::WhenSet),
+    reject("ssl_include_verify_flags", VERIFY_FLAGS, Asked::WhenSet),
     read("ssl_keyfile").env().in_url(FromUrl::Rediss),
     warn_unless("ssl_min_version", RUSTLS, is_met_by_rustls).env(),
     warn("ssl_ocsp_context", OCSP).env().object(),
     warn("ssl_ocsp_expected_cert", OCSP).env(),
     read("ssl_password").env().in_url(FromUrl::Rediss),
-    reject("ssl_validate_ocsp", REVOCATION).env(),
-    reject("ssl_validate_ocsp_stapled", REVOCATION).env(),
+    reject("ssl_validate_ocsp", REVOCATION, Asked::WhenTrue).env(),
+    reject("ssl_validate_ocsp_stapled", REVOCATION, Asked::WhenTrue).env(),
     read("startup_nodes").or_secrets(&["REDIS_CLUSTER_NODES"]),
     read("unix_socket_path").env(),
     read("url").env(),
@@ -278,10 +288,10 @@ pub fn setting(kwarg: &str) -> Option<&'static Setting> {
     SETTINGS.iter().find(|setting| setting.kwarg == kwarg)
 }
 
-/// The check a `Reject` row asks for when it is set to true.
-pub(crate) fn refused_check(kwarg: &str) -> Option<&'static str> {
+/// The check a `Reject` row stands for and which values ask for it.
+pub(crate) fn refusal(kwarg: &str) -> Option<(&'static str, Asked)> {
     match setting(kwarg)?.handling {
-        Handling::Reject { check } => Some(check),
+        Handling::Reject { check, asked } => Some((check, asked)),
         Handling::Read | Handling::Warn { .. } => None,
     }
 }

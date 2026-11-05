@@ -11,7 +11,7 @@ mod options;
 mod tls;
 
 pub use error::{Error, Expected};
-pub use keys::{FromUrl, Handling, SETTINGS, Setting, Shape, setting};
+pub use keys::{Asked, FromUrl, Handling, SETTINGS, Setting, Shape, setting};
 pub use options::is_present;
 
 use options::Options;

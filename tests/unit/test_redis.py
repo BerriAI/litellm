@@ -2171,6 +2171,18 @@ def _expected_view(fields: dict[str, object]) -> dict[str, object]:
             id="ssl_validate_ocsp_is_unsupported",
         ),
         pytest.param(
+            {"host": "redis", "ssl": True, "ssl_include_verify_flags": ["VERIFY_CRL_CHECK_LEAF"]},
+            {},
+            {"host": "redis", "ssl": True, "ssl_include_verify_flags": ["VERIFY_CRL_CHECK_LEAF"]},
+            {
+                "rejected": {
+                    "message": "Redis.__init__() got an unexpected keyword argument 'ssl_include_verify_flags'",
+                    "type": "TypeError",
+                }
+            },
+            id="ssl_include_verify_flags_is_unsupported",
+        ),
+        pytest.param(
             {
                 "db": 2,
                 "host": "redis",

@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::{
     Entry, Error, Expected, Kwargs,
-    keys::{self, Shape},
+    keys::{self, Asked, Shape},
 };
 
 /// Every setting the resolver reads. A setting is `None` when it is unset, null or empty.
@@ -168,19 +168,25 @@ impl Options {
     }
 }
 
-/// A `Reject` row that is set to true asks for a check Rust cannot perform. One set to false asks for nothing.
+/// A `Reject` row whose value asks for its check fails, because Rust cannot perform it.
 pub(super) fn refuse_unenforceable<'a>(
     entries: impl IntoIterator<Item = (&'a String, &'a Entry)>,
 ) -> Result<(), Error> {
     entries
         .into_iter()
-        .filter_map(|(key, entry)| Some((keys::refused_check(key)?, entry)))
-        .try_for_each(|(check, entry)| match flag(Some(entry))? {
-            true => Err(Error::Unenforceable {
-                setting: entry.source.clone(),
-                check,
-            }),
-            false => Ok(()),
+        .filter_map(|(key, entry)| Some((keys::refusal(key)?, entry)))
+        .try_for_each(|((check, asked), entry)| {
+            let asks = match asked {
+                Asked::WhenTrue => flag(Some(entry))?,
+                Asked::WhenSet => is_present(&entry.value),
+            };
+            match asks {
+                true => Err(Error::Unenforceable {
+                    setting: entry.source.clone(),
+                    check,
+                }),
+                false => Ok(()),
+            }
         })
 }
 
