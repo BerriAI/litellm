@@ -1,5 +1,6 @@
 "use client";
 
+import type { ParseKeys } from "i18next";
 import { ArrowDownWideNarrow, ArrowUpNarrowWide, Boxes, ChevronLeft, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -21,15 +22,15 @@ import { Joined, ProviderAvatar, RowTitle, SearchInput } from "./HubParts";
 import { type HubData, useOpenedModel } from "./useHubData";
 import { ModelInspector } from "./ModelInspector";
 
-const SORTS = [
-  { value: "model_group", label: "Name", desc: false },
-  { value: "providers", label: "Provider", desc: false },
-  { value: "mode", label: "Mode", desc: false },
-  { value: "input_cost_per_token", label: "Input price", desc: false },
-  { value: "output_cost_per_token", label: "Output price", desc: false },
-  { value: "max_input_tokens", label: "Context", desc: true },
-  { value: "max_output_tokens", label: "Max output", desc: true },
-  { value: "rpm", label: "Rate limit", desc: true },
+const SORTS: { value: string; label: ParseKeys; desc: boolean }[] = [
+  { value: "model_group", label: "publicModelHub.modelsPane.sorts.name", desc: false },
+  { value: "providers", label: "publicModelHub.modelsPane.sorts.provider", desc: false },
+  { value: "mode", label: "publicModelHub.modelsPane.sorts.mode", desc: false },
+  { value: "input_cost_per_token", label: "publicModelHub.modelsPane.sorts.inputPrice", desc: false },
+  { value: "output_cost_per_token", label: "publicModelHub.modelsPane.sorts.outputPrice", desc: false },
+  { value: "max_input_tokens", label: "publicModelHub.modelsPane.sorts.context", desc: true },
+  { value: "max_output_tokens", label: "publicModelHub.modelsPane.sorts.maxOutput", desc: true },
+  { value: "rpm", label: "publicModelHub.modelsPane.sorts.rateLimit", desc: true },
 ];
 
 type Models = HubData["models"];
@@ -78,7 +79,7 @@ function SortControl({ models }: { models: Models }) {
   };
   return (
     <ButtonGroup>
-      <Select items={SORTS} value={field} onValueChange={pick}>
+      <Select items={SORTS.map((sort) => ({ ...sort, label: t(sort.label) }))} value={field} onValueChange={pick}>
         <SelectTrigger size="sm" className="w-auto gap-1.5" aria-label={t("publicModelHub.sortControl.sortBy")}>
           <span className="hidden text-muted-foreground sm:inline">{t("publicModelHub.sortControl.sort")}</span>
           <SelectValue />
@@ -86,7 +87,7 @@ function SortControl({ models }: { models: Models }) {
         <SelectContent align="end" className="w-auto min-w-(--anchor-width)">
           {SORTS.map((sort) => (
             <SelectItem key={sort.value} value={sort.value}>
-              {sort.label}
+              {t(sort.label)}
             </SelectItem>
           ))}
         </SelectContent>

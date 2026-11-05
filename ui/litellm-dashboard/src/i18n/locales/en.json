@@ -7004,6 +7004,10 @@
       "lastChecked": "Last checked"
     },
     "format": {
+      "health": {
+        "healthy": "Healthy",
+        "unhealthy": "Unhealthy"
+      },
       "modes": {
         "chat": "Chat",
         "completion": "Completion",
@@ -7124,6 +7128,16 @@
       "context": "{{tokens}} context"
     },
     "modelsPane": {
+      "sorts": {
+        "name": "Name",
+        "provider": "Provider",
+        "mode": "Mode",
+        "inputPrice": "Input price",
+        "outputPrice": "Output price",
+        "context": "Context",
+        "maxOutput": "Max output",
+        "rateLimit": "Rate limit"
+      },
       "noun": "models"
     },
     "modelInspector": {
@@ -7219,6 +7233,157 @@
     }
   },
   "shell": {
+    "nav": {
+      "groups": {
+        "aiGateway": "AI GATEWAY",
+        "observability": "OBSERVABILITY",
+        "accessControl": "ACCESS CONTROL",
+        "developerTools": "DEVELOPER TOOLS",
+        "settings": "SETTINGS"
+      },
+      "sections": {
+        "aiGateway": "AI Gateway",
+        "observability": "Observability",
+        "accessControl": "Access Control",
+        "developerTools": "Developer Tools",
+        "settings": "Settings"
+      },
+      "items": {
+        "home": "Home",
+        "virtualKeys": "Virtual Keys",
+        "playground": "Playground",
+        "modelsAndEndpoints": "Models + Endpoints",
+        "agentic": "Agentic",
+        "agents": "Agents",
+        "workflowRuns": "Workflow Runs",
+        "memory": "Memory",
+        "mcpServers": "MCP Servers",
+        "skills": "Skills",
+        "guardrails": "Guardrails",
+        "policies": "Policies",
+        "tools": "Tools",
+        "searchTools": "Search Tools",
+        "vectorStores": "Vector Stores",
+        "toolPolicies": "Tool Policies",
+        "usage": "Usage",
+        "modelLeaderboard": "Model Leaderboard",
+        "costOptimization": "Cost Optimization",
+        "logs": "Logs",
+        "lens": "Lens",
+        "guardrailsMonitor": "Guardrails Monitor",
+        "teams": "Teams",
+        "projects": "Projects",
+        "internalUsers": "Internal Users",
+        "organizations": "Organizations",
+        "accessGroups": "Access Groups",
+        "budgets": "Budgets",
+        "apiReference": "API Reference",
+        "aiHub": "AI Hub",
+        "learningResources": "Learning Resources",
+        "responseCache": "Response Cache",
+        "experimental": "Experimental",
+        "prompts": "Prompts",
+        "apiPlayground": "API Playground",
+        "tagManagement": "Tag Management",
+        "settings": "Settings",
+        "routerSettings": "Router Settings",
+        "loggingAndAlerts": "Logging & Alerts",
+        "adminSettings": "Admin Settings",
+        "costTracking": "Cost Tracking",
+        "uiTheme": "UI Theme",
+        "telemetry": "Telemetry"
+      },
+      "homeLink": "LiteLLM home",
+      "expandSidebar": "Expand sidebar",
+      "collapseSidebar": "Collapse sidebar"
+    },
+    "pageDescriptions": {
+      "home": "Usage at a glance, recent launches and blog updates",
+      "apiKeys": "Manage virtual keys for API access and authentication",
+      "llmPlayground": "Interactive playground for testing LLM requests",
+      "models": "Configure and manage LLM models and endpoints",
+      "agents": "Create and manage AI agents",
+      "agentic": "Manage agentic resources: agents, workflow runs, and memory",
+      "workflows": "Track and inspect durable workflow run history",
+      "mcpServers": "Configure Model Context Protocol servers",
+      "memory": "Inspect and manage agent memory entries stored under /v1/memory",
+      "guardrails": "Set up content moderation and safety guardrails",
+      "policies": "Define access control and usage policies",
+      "searchTools": "Configure RAG search and retrieval tools",
+      "toolPolicies": "Configure tool use policies and permissions",
+      "vectorStores": "Manage vector databases for embeddings",
+      "newUsage": "View usage analytics and metrics",
+      "costOptimization": "Track and configure cost-saving features: prompt compression, caching, and auto routing",
+      "modelInsights": "Model Leaderboard: compare usage, spend, tokens, and task mix across this gateway",
+      "logs": "Access request and response logs",
+      "lens": "Review agent activity and investigate patterns with supporting evidence",
+      "guardrailsMonitor": "Monitor guardrail performance and view logs",
+      "users": "Manage internal user accounts and permissions",
+      "teams": "Create and manage teams for access control",
+      "organizations": "Manage organizations and their members",
+      "projects": "Manage projects within teams",
+      "accessGroups": "Manage access groups for role-based permissions",
+      "budgets": "Set and monitor spending budgets",
+      "apiRef": "Browse API documentation and endpoints",
+      "modelHubTable": "Explore available AI models and providers",
+      "learningResources": "Access tutorials and documentation",
+      "caching": "Configure response caching and coordination Redis settings",
+      "transformRequest": "Set up request transformation rules",
+      "costTracking": "Track and analyze API costs",
+      "uiTheme": "Customize dashboard appearance",
+      "tagManagement": "Organize resources with tags",
+      "prompts": "Manage and version prompt templates",
+      "skills": "Browse and manage Claude Code skills",
+      "routerSettings": "Configure routing and load balancing settings",
+      "telemetry": "Choose which anonymous usage telemetry this proxy collects and see the last report",
+      "loggingAndAlerts": "Set up logging and alert configurations",
+      "adminPanel": "Access admin panel and settings"
+    },
+    "sidebarAccountMenu": {
+      "toggles": {
+        "newBadge": {
+          "label": "Hide New Feature Indicators",
+          "ariaLabel": "Toggle hide new feature indicators"
+        },
+        "prompts": {
+          "label": "Hide All Prompts",
+          "ariaLabel": "Toggle hide all prompts"
+        },
+        "blogPosts": {
+          "label": "Hide Blog Posts",
+          "ariaLabel": "Toggle hide blog posts"
+        },
+        "bouncingIcon": {
+          "label": "Hide Bouncing Icon",
+          "ariaLabel": "Toggle hide bouncing icon"
+        }
+      },
+      "triggerLabel": "Account menu — {{role}} — signed in as {{identity}}",
+      "unknownRole": "Unknown role",
+      "unknownIdentity": "unknown",
+      "thanks": "Thanks for using LiteLLM!",
+      "tier": "Tier",
+      "premium": "Premium",
+      "upgradeHint": "Upgrade to Premium for advanced features",
+      "standard": "Standard",
+      "role": "Role",
+      "email": "Email",
+      "copyEmail": "Copy email",
+      "userId": "User ID",
+      "copyUserId": "Copy user ID",
+      "hideAria": "Hide <name/>",
+      "toggleHideAria": "Toggle hide {{name}}",
+      "changePassword": "Change Password",
+      "logout": "Logout"
+    },
+    "sidebarUsageCard": {
+      "title": "Enterprise usage",
+      "activePlan": "Active plan",
+      "loading": "Loading…",
+      "seats": "Seats",
+      "teams": "Teams",
+      "meterValue": "{{used}} of {{total}}"
+    },
     "navbar": {
       "expandSidebar": "Expand sidebar",
       "collapseSidebar": "Collapse sidebar",
@@ -7264,6 +7429,11 @@
       "logout": "Logout"
     },
     "notifications": {
+      "autoRouter": {
+        "title": "LiteLLM Auto Router",
+        "description": "Route every request to the cheapest model that can handle it, no prompt changes needed.",
+        "link": "Read the docs"
+      },
       "release": {
         "newFeatures_one": "{{count}} new feature",
         "newFeatures_other": "{{count}} new features",
@@ -7293,6 +7463,11 @@
       "github": "LiteLLM on GitHub"
     },
     "dashboardResources": {
+      "links": {
+        "docs": "Docs",
+        "releases": "Releases",
+        "blog": "Blog"
+      },
       "latestPosts": "Latest posts",
       "loadingPosts": "Loading posts…",
       "retryPosts": "Retry loading posts",
@@ -7389,12 +7564,15 @@
     },
     "deploymentWarnings": {
       "envCredentialLogin": {
+        "title": "Environment-credential login is enabled",
         "fix": "Anyone with <username/>/<password/> (or the master key, when <password/> is unset) can sign in as a proxy admin with a shared static secret. Create a regular admin account with its own password, then set <setting/>"
       },
       "noRedis": {
+        "title": "No Redis configured",
         "fix": "This proxy runs more than one worker (or the worker count could not be verified). Without Redis, rate limits, budgets, router state and cache invalidation are per worker, so limits are enforced once per worker and spend can overshoot"
       },
       "detailedDebug": {
+        "title": "Detailed debug logging is on",
         "fix": "<loglevel/> logs extensive diagnostic information and significantly slows the proxy. Use it only while troubleshooting and turn it off in production"
       },
       "license": {
@@ -7679,6 +7857,68 @@
     }
   },
   "shared": {
+    "credentialOptions": {
+      "none": "None"
+    },
+    "dateRangePresets": {
+      "today": "Today",
+      "last7Days": "Last 7 days",
+      "last30Days": "Last 30 days",
+      "monthToDate": "Month to date",
+      "yearToDate": "Year to date"
+    },
+    "searchBox": {
+      "operators": {
+        "equals": "equals",
+        "notEquals": "not equals",
+        "wildcardMatch": "wildcard match",
+        "doesNotContain": "does not contain"
+      },
+      "loadingResults": "Loading results",
+      "suggestions": "Search suggestions",
+      "loadingValues": "Loading values…",
+      "navigate": "Navigate",
+      "select": "Select",
+      "copyCommand": {
+        "copy": "Copy as curl",
+        "copied": "Copied",
+        "failed": "Copy failed"
+      },
+      "comparisonOperators": "Comparison operators"
+    },
+    "inspector": {
+      "resizePanel": "Resize {{noun}} panel",
+      "close": "Close (Esc)",
+      "next": "Next {{noun}} (J)",
+      "previous": "Previous {{noun}} (K)",
+      "enterFullScreen": "Enter full screen",
+      "exitFullScreen": "Exit full screen",
+      "closeNoun": "Close {{noun}} (Esc)"
+    },
+    "inspectorTable": {
+      "collapse": "Collapse",
+      "expand": "Expand"
+    },
+    "timeline": {
+      "tooltip": {
+        "range": "{{start}} to {{end}}",
+        "failed_one": ", {{count}} failed",
+        "failed_other": ", {{count}} failed",
+        "dragToZoom": "drag to zoom"
+      },
+      "clearZoom": "Clear time zoom"
+    },
+    "durationInput": {
+      "units": {
+        "minutes": "minutes",
+        "hours": "hours",
+        "days": "days"
+      },
+      "unitLabel": "{{label}} unit"
+    },
+    "shortcutHints": {
+      "label": "Keyboard shortcuts"
+    },
     "advancedDatePicker": {
       "selectTimeRange": "Select Time Range",
       "invalidDateFormat": "Invalid date format",
@@ -7793,6 +8033,12 @@
       "unknownError": "An unknown error occurred"
     },
     "inheritedBudgetHint": {
+      "scopes": {
+        "team": "Team",
+        "teamMember": "Team member",
+        "organization": "Organization",
+        "user": "User"
+      },
       "memberAlias": "{{member}} in {{team}}",
       "intro": "This key has no budget of its own, but its spend still counts toward:"
     },
@@ -7864,6 +8110,22 @@
       "infoLabel": "How {{label}} is calculated"
     },
     "tableCells": {
+      "dateCell": {
+        "months": {
+          "jan": "Jan",
+          "feb": "Feb",
+          "mar": "Mar",
+          "apr": "Apr",
+          "may": "May",
+          "jun": "Jun",
+          "jul": "Jul",
+          "aug": "Aug",
+          "sep": "Sep",
+          "oct": "Oct",
+          "nov": "Nov",
+          "dec": "Dec"
+        }
+      },
       "autoRouterTag": {
         "title": "Routed by auto-router \"{{modelGroup}}\""
       },
@@ -7936,6 +8198,10 @@
     }
   },
   "networking": {
+    "connectionTestFailed": "Connection test failed: {{status}} {{statusText}}",
+    "mcpToolsFetchFailed": "Failed to fetch MCP tools",
+    "mcpToolsParseFailed": "Failed to parse MCP tools response",
+    "mcpToolsListFailed": "MCP tools list failed: {{status}} {{statusText}}",
     "sessionExpired": "UI Session Expired. Logging out.",
     "modelCreated": "Model {{modelName}} created successfully",
     "noModelsExist": "No Models Exist. Click Add Model to get started.",
@@ -7961,6 +8227,22 @@
     }
   },
   "utils": {
+    "licenseUtils": {
+      "noExpiration": "No expiration",
+      "expired": "Expired {{date}}",
+      "expires": "Expires {{date}}"
+    },
+    "roles": {
+      "undefinedRole": "Undefined Role",
+      "appOwner": "App Owner",
+      "admin": "Admin",
+      "adminViewer": "Admin Viewer",
+      "orgAdmin": "Org Admin",
+      "internalUser": "Internal User",
+      "internalViewer": "Internal Viewer",
+      "appUser": "App User",
+      "unknownRole": "Unknown Role"
+    },
     "dataUtils": {
       "copiedToClipboard": "Copied to clipboard",
       "copyFailed": "Failed to copy to clipboard"
@@ -7971,6 +8253,10 @@
   },
   "codeBlock": {
     "copyCode": "Copy code"
+  },
+  "keyScope": {
+    "management": "Management",
+    "readOnly": "Read-only"
   },
   "chat": {
     "page": {
@@ -12659,6 +12945,28 @@
     }
   },
   "mcpTools": {
+    "authTypes": {
+      "none": "None",
+      "apiKey": "API Key",
+      "bearerToken": "Bearer Token",
+      "token": "Token",
+      "basic": "Basic Auth",
+      "authorization": "Authorization (raw header)",
+      "oauth2": "OAuth",
+      "oauth2TokenExchange": "OAuth Token Exchange (OBO)",
+      "oauth2IdJag": "ID-JAG (Okta Cross App Access)",
+      "awsSigv4": "AWS SigV4 (Bedrock AgentCore MCPs)",
+      "truePassthrough": "True Passthrough (no LiteLLM auth)",
+      "oauthDelegate": "OAuth Delegate (client-supplied upstream token)"
+    },
+    "transports": {
+      "http": "Streamable HTTP (Recommended)",
+      "sse": "Server-Sent Events (SSE)",
+      "stdio": "Standard Input/Output (stdio)",
+      "openapi": "OpenAPI Spec"
+    },
+    "reachableDescription": "Server responded. Authentication and tools were not checked",
+    "previewForbidden": "Tool preview is not available for submissions. Tools will be verified by an admin during review.",
     "byokCredentialModal": {
       "errors": {
         "connectFailed": "Failed to connect"

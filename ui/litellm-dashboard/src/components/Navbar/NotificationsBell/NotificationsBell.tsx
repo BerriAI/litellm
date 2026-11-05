@@ -32,13 +32,13 @@ interface Announcement {
   href: string;
 }
 
-const AUTO_ROUTER_ANNOUNCEMENT: Announcement = {
+const autoRouterAnnouncement = (): Announcement => ({
   readKey: "litellmHideAutoRouterAnnouncement",
-  title: "LiteLLM Auto Router",
-  description: "Route every request to the cheapest model that can handle it, no prompt changes needed.",
-  linkLabel: "Read the docs",
+  title: i18n.t("shell.notifications.autoRouter.title"),
+  description: i18n.t("shell.notifications.autoRouter.description"),
+  linkLabel: i18n.t("shell.notifications.autoRouter.link"),
   href: AUTO_ROUTER_DOCS_URL,
-};
+});
 
 const describeRelease = ({ new_features, bug_fixes, other_updates }: LatestReleaseInfo): string =>
   [
@@ -114,7 +114,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
 }) => {
   const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
-  const announcements = upgrade ? [upgrade, AUTO_ROUTER_ANNOUNCEMENT] : [AUTO_ROUTER_ANNOUNCEMENT];
+  const announcements = upgrade ? [upgrade, autoRouterAnnouncement()] : [autoRouterAnnouncement()];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
 
   return (

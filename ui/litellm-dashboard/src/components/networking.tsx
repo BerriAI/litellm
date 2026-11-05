@@ -2024,7 +2024,9 @@ export const testConnectionRequest = async (
       } else {
         return {
           status: "error",
-          message: data.error?.message || `Connection test failed: ${response.status} ${response.statusText}`,
+          message:
+            data.error?.message ||
+            i18n.t("networking.connectionTestFailed", { status: response.status, statusText: response.statusText }),
         };
       }
     }
@@ -4870,7 +4872,7 @@ export const listMCPTools = async (
     return {
       tools: [],
       error: "network_error",
-      message: error instanceof Error ? error.message : "Failed to fetch MCP tools",
+      message: error instanceof Error ? error.message : i18n.t("networking.mcpToolsFetchFailed"),
       stack_trace: null,
     };
   }
@@ -4883,7 +4885,7 @@ export const listMCPTools = async (
     return {
       tools: [],
       error: "parse_error",
-      message: "Failed to parse MCP tools response",
+      message: i18n.t("networking.mcpToolsParseFailed"),
       status: response.status,
       statusText: response.statusText,
       stack_trace: null,
@@ -4896,7 +4898,7 @@ export const listMCPTools = async (
     // to inspect `result.error` / `result.message`. Attach `status` so
     // callers that need to react to auth failures (e.g. the useQuery in
     // mcp_tools.tsx) can still detect 401s from the returned object.
-    const errorMessage = (data && (data.message || data.error)) || "Failed to fetch MCP tools";
+    const errorMessage = (data && (data.message || data.error)) || i18n.t("networking.mcpToolsFetchFailed");
     return {
       tools: [],
       error: (data && data.error) || `http_${response.status}`,
@@ -6333,7 +6335,7 @@ export const testMCPToolsListRequest = async (
           tools: [],
           error: true,
           status: 403,
-          message: MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE,
+          message: i18n.t(MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE),
         };
       }
       // Return the error response instead of throwing an error
@@ -6345,7 +6347,9 @@ export const testMCPToolsListRequest = async (
         tools: [],
         error: "request_failed",
         status: response.status,
-        message: data.message || `MCP tools list failed: ${response.status} ${response.statusText}`,
+        message:
+          data.message ||
+          i18n.t("networking.mcpToolsListFailed", { status: response.status, statusText: response.statusText }),
       };
     }
 
