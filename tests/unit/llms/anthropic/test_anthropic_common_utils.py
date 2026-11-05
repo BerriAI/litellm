@@ -1512,14 +1512,25 @@ class TestAnthropicThinkingSignatureSelfHeal:
         raw = '{"message":"messages.2.content.0.thinking.signature.str: Input should be a valid string"}'
         assert is_anthropic_invalid_thinking_block_error(raw) is True
 
-    def test_is_anthropic_invalid_thinking_block_error_positive_bedrock_signature_unsupported(self):
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        (
+            (
+                '{"message":"This model doesn\'t support the reasoningContent.reasoningText.signature field. '
+                'Remove reasoningContent.reasoningText.signature and try again."}',
+                True,
+            ),
+            ("This model doesn't support reasoningText.signature", True),
+            ("This model does not support reasoningText.signature", True),
+            ("unrelated failure mentioning reasoningText.signature", False),
+        ),
+    )
+    def test_bedrock_unsupported_signature_error_is_recognized(self, raw: str, expected: bool) -> None:
         from litellm.llms.anthropic.common_utils import (
             is_anthropic_invalid_thinking_block_error,
         )
 
-        # Bedrock error when non-Anthropic models are passed reasoningText.signature (#49969)
-        raw = '''{"message":"This model doesn\'t support the reasoningContent.reasoningText.signature field. Remove reasoningContent.reasoningText.signature and try again."}'''
-        assert is_anthropic_invalid_thinking_block_error(raw) is True
+        assert is_anthropic_invalid_thinking_block_error(raw) is expected
 
     def test_is_anthropic_invalid_thinking_block_error_positive_vertex(self):
         from litellm.llms.anthropic.common_utils import (

@@ -41,7 +41,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     sanitize_messages_for_tool_calling,
     THOUGHT_SIGNATURE_SEPARATOR,
 )
-from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
+from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage, ChatCompletionUserMessage
 from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
@@ -432,6 +432,45 @@ def test_anthropic_messages_pt_drops_the_stream_index_from_replayed_thinking_blo
         {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
         {"type": "redacted_thinking", "data": "EmwKAhgB"},
         {"type": "text", "text": "Paris"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_content"),
+    (
+        (
+            "global.anthropic.claude-haiku-5-5",
+            [
+                {"reasoningContent": {"reasoningText": {"text": "pondering", "signature": "signed-reasoning"}}},
+                {"text": "hello"},
+            ],
+        ),
+        ("global.zai.glm-5.3", [{"text": "pondering"}, {"text": "hello"}]),
+        ("amazon.nova-pro-v1:0", [{"text": "pondering"}, {"text": "hello"}]),
+    ),
+)
+def test_bedrock_converse_replays_signed_thinking_only_to_claude(
+    model: str, expected_content: Sequence[Mapping[str, object]]
+) -> None:
+    body: Final = litellm.AmazonConverseConfig().transform_request(
+        model=model,
+        messages=[
+            ChatCompletionUserMessage(role="user", content="hi"),
+            ChatCompletionAssistantMessage(
+                role="assistant",
+                content="hello",
+                thinking_blocks=[{"type": "thinking", "thinking": "pondering", "signature": "signed-reasoning"}],
+            ),
+            ChatCompletionUserMessage(role="user", content="continue"),
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert body["messages"] == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": expected_content},
+        {"role": "user", "content": [{"text": "continue"}]},
     ]
 
 
