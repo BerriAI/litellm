@@ -60,7 +60,8 @@ def stuck_at_two(history: SeriesHistory) -> tuple[DeploymentStateSeries, ...]:
 class DeploymentStateSeriesTracker:
     """
     A cooldown marks each series written since the last success, as its config labels can differ from the request
-    labels. The next success clears them.
+    labels. The next success clears them. Serving and cooling deployments are capped separately, and a forgotten
+    deployment keeps the state last written.
     """
 
     def __init__(
@@ -69,18 +70,19 @@ class DeploymentStateSeriesTracker:
         lock: AbstractContextManager[object] | None = None,
     ) -> None:
         self._write = write
-        self._by_id: OrderedDict[str | None, SeriesHistory] = OrderedDict()  # mutable-ok: O(1) LRU
+        self._serving: OrderedDict[str | None, Serving] = OrderedDict()  # mutable-ok: O(1) LRU
+        self._cooling: OrderedDict[str | None, CoolingDown] = OrderedDict()  # mutable-ok: O(1) LRU
         self._lock: AbstractContextManager[object] = Lock() if lock is None else lock
 
     def healthy(self, series: DeploymentStateSeries) -> None:
         with self._lock:
-            history: Final = self._by_id.get(series.model_id, Serving())
+            history: Final = self._history(series.model_id)
             self._write_all(DeploymentState.HEALTHY, including(stuck_at_two(history), series))
             self._remember(series.model_id, Serving(written=(series,)))
 
     def partial_outage(self, series: DeploymentStateSeries) -> None:
         with self._lock:
-            history: Final = self._by_id.get(series.model_id, Serving())
+            history: Final = self._history(series.model_id)
             listed: Final = including(history.written, series)
             tracked: Final = listed[-MAX_SERIES_PER_DEPLOYMENT:]
             match history:
@@ -96,7 +98,7 @@ class DeploymentStateSeriesTracker:
 
     def complete_outage(self, derived_from_config: DeploymentStateSeries) -> None:
         with self._lock:
-            history: Final = self._by_id.get(derived_from_config.model_id, Serving())
+            history: Final = self._history(derived_from_config.model_id)
             marked: Final = history.written or (derived_from_config,)
             self._write_all(DeploymentState.COMPLETE_OUTAGE, marked)
             self._remember(derived_from_config.model_id, CoolingDown(written=marked))
@@ -105,10 +107,23 @@ class DeploymentStateSeriesTracker:
         for item in series:
             self._write(state, item.litellm_model_name, item.model_id, item.api_base, item.api_provider)
 
+    def _history(self, model_id: str | None) -> SeriesHistory:
+        cooling: Final = self._cooling.get(model_id)
+        return self._serving.get(model_id, Serving()) if cooling is None else cooling
+
     def _remember(self, model_id: str | None, history: SeriesHistory) -> None:
-        self._by_id[model_id] = history
-        self._by_id.move_to_end(model_id)
-        if len(self._by_id) <= MAX_TRACKED_DEPLOYMENTS:
-            return
-        _, evicted = self._by_id.popitem(last=False)
-        self._write_all(DeploymentState.HEALTHY, stuck_at_two(evicted))
+        match history:
+            case Serving():
+                self._cooling.pop(model_id, None)
+                self._serving[model_id] = history
+                self._serving.move_to_end(model_id)
+                if len(self._serving) > MAX_TRACKED_DEPLOYMENTS:
+                    self._serving.popitem(last=False)
+            case CoolingDown():
+                self._serving.pop(model_id, None)
+                self._cooling[model_id] = history
+                self._cooling.move_to_end(model_id)
+                if len(self._cooling) > MAX_TRACKED_DEPLOYMENTS:
+                    self._cooling.popitem(last=False)
+            case _:
+                assert_never(history)

@@ -1263,7 +1263,7 @@ def test_a_second_cooldown_leaves_no_series_stuck_at_two_after_the_next_success(
 def test_cooldown_marks_every_series_written_since_the_last_success_and_the_next_success_clears_them(
     prometheus_logger, deployment_state_values
 ):
-    streaming_series = {**REQUEST_SERIES, "api_base": "https://api.openai.com/v1/streaming"}
+    streaming_series: Final = {**REQUEST_SERIES, "api_base": "https://api.openai.com/v1/streaming"}
     prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
     prometheus_logger.set_deployment_partial_outage(**streaming_series)
 
@@ -1301,7 +1301,7 @@ def test_every_failure_logged_after_a_cooldown_stays_at_two(prometheus_logger, d
 def test_a_cooldown_leaves_a_series_the_deployment_stopped_reporting_before_its_last_success_alone(
     prometheus_logger, deployment_state_values
 ):
-    stale_series = {**REQUEST_SERIES, "api_base": "https://api.openai.com/v1/stale"}
+    stale_series: Final = {**REQUEST_SERIES, "api_base": "https://api.openai.com/v1/stale"}
     prometheus_logger.set_deployment_partial_outage(**stale_series)
     prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
 
@@ -1313,7 +1313,7 @@ def test_a_cooldown_leaves_a_series_the_deployment_stopped_reporting_before_its_
 def test_a_success_leaves_the_partial_outage_of_another_series_alone_when_no_cooldown_happened(
     prometheus_logger, deployment_state_values
 ):
-    other_series = {**REQUEST_SERIES, "litellm_model_name": "gpt-5.6"}
+    other_series: Final = {**REQUEST_SERIES, "litellm_model_name": "gpt-5.6"}
     prometheus_logger.set_deployment_partial_outage(**other_series)
 
     prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)

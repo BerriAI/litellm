@@ -3538,7 +3538,7 @@ class PrometheusLogger(CustomLogger):
             litellm_model_name: Final = request_kwargs.get("model", None)
             llm_provider: Final = _litellm_params.get("custom_llm_provider", None)
             _model_info: Final = _metadata.get("model_info") or {}
-            model_id: Final = standard_logging_payload.get("model_id") or _model_info.get("id", None)
+            model_id: Final = standard_logging_payload["model_id"] or _model_info.get("id", None)
 
             if _model_info or _litellm_params:
                 self._set_deployment_tpm_rpm_limit_metrics(

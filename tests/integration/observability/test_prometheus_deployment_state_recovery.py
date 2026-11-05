@@ -51,8 +51,6 @@ CELLS: Final = (
 
 
 class Provider:
-    """Rejects the deployment's own credential for every upstream model in `rejecting`, answers the rest."""
-
     def __init__(self) -> None:
         self._lock: Final = threading.Lock()
         self._rejecting: frozenset[str] = frozenset()

@@ -184,18 +184,38 @@ def test_a_deployment_pushed_out_of_the_tracker_keeps_the_state_its_requests_las
     }
 
 
-def test_a_cooling_deployment_pushed_out_of_the_tracker_is_cleared_instead_of_left_at_two():
+def test_a_cooling_deployment_stays_at_two_and_recovers_after_other_deployments_fill_the_tracker():
     tracker, gauge = tracker_and_gauge()
-    cooling: Final = request_series("cooling")
-    tracker.healthy(cooling)
+    chat: Final = request_series("cooling")
+    responses: Final = request_series("cooling", "https://api.example/v1/responses")
+    tracker.healthy(chat)
+    tracker.partial_outage(responses)
     tracker.complete_outage(config_series("cooling"))
-    for index in range(MAX_TRACKED_DEPLOYMENTS):
+    for index in range(MAX_TRACKED_DEPLOYMENTS + 1):
         tracker.healthy(request_series(f"dep-{index}"))
+    during_cooldown: Final = {chat: gauge[chat], responses: gauge[responses]}
 
-    assert gauge == {
-        cooling: HEALTHY,
-        **{request_series(f"dep-{index}"): HEALTHY for index in range(MAX_TRACKED_DEPLOYMENTS)},
-    }
+    tracker.healthy(chat)
+
+    assert during_cooldown == {chat: COMPLETE_OUTAGE, responses: COMPLETE_OUTAGE}
+    assert (gauge[chat], gauge[responses]) == (HEALTHY, HEALTHY)
+
+
+def test_the_oldest_cooldown_is_forgotten_with_its_series_left_at_two_once_more_than_the_cap_are_cooling():
+    tracker, gauge = tracker_and_gauge()
+    chat: Final = request_series("oldest")
+    responses: Final = request_series("oldest", "https://api.example/v1/responses")
+    tracker.healthy(chat)
+    tracker.partial_outage(responses)
+    tracker.complete_outage(config_series("oldest"))
+    for index in range(MAX_TRACKED_DEPLOYMENTS):
+        tracker.complete_outage(config_series(f"dep-{index}"))
+    during_cooldown: Final = {chat: gauge[chat], responses: gauge[responses]}
+
+    tracker.healthy(chat)
+
+    assert during_cooldown == {chat: COMPLETE_OUTAGE, responses: COMPLETE_OUTAGE}
+    assert (gauge[chat], gauge[responses]) == (HEALTHY, COMPLETE_OUTAGE)
 
 
 @pytest.mark.timeout(60)
