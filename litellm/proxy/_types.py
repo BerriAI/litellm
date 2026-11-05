@@ -646,6 +646,10 @@ class LiteLLMRoutes(enum.Enum):
 
     management_routes = (
         [
+            "/usage/alert-rules",
+            "/usage/alert-rules/{rule_id}",
+            "/usage/alerts",
+            "/usage/alerts/{alert_id}",
             # user
             "/user/new",
             "/management/v1/users/bulk",
@@ -855,7 +859,15 @@ class LiteLLMRoutes(enum.Enum):
         ]
     )
 
+    usage_alert_routes = [
+        "/usage/alert-rules",
+        "/usage/alert-rules/{rule_id}",
+        "/usage/alerts",
+        "/usage/alerts/{alert_id}",
+    ]
+
     self_managed_routes = [
+        *usage_alert_routes,
         "/lens",
         "/lens/{path:path}",
         "/telemetry/ui_events",

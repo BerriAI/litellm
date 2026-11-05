@@ -2109,3 +2109,43 @@ model LiteLLM_SubscriptionAccountTable {
 
   @@unique([custom_llm_provider, account_id], map: "LiteLLM_SubscriptionAccountTable_provider_account_key")
 }
+
+// Daily alerts consume existing aggregate tables; no request-path writes.
+model LiteLLM_UsageAlertRule {
+  id String @id
+  scope_type String
+  scope_id String?
+  enabled Boolean @default(true)
+  record Json
+  deleted Boolean @default(false)
+  @@index([enabled, deleted, id])
+  @@index([scope_type, scope_id, deleted])
+}
+
+model LiteLLM_UsageAlertIncident {
+  id String @id
+  rule_id String
+  scope_key String
+  scope_type String
+  scope_id String?
+  metric String
+  status String
+  day String
+  evaluation_day String
+  breached Boolean
+  record Json
+  notified_channels String[] @default([])
+  updated_at DateTime @default(now())
+  @@index([rule_id, scope_key, evaluation_day])
+  @@index([scope_type, scope_id, day])
+  @@index([status, day])
+  @@index([updated_at])
+}
+
+model LiteLLM_UsageAlertCheckpoint {
+  id String @id
+  completed Boolean @default(false)
+  owner String?
+  expires_at DateTime @default(now())
+  @@index([expires_at])
+}

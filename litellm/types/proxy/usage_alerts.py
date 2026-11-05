@@ -1,0 +1,116 @@
+"""Daily usage alert rules and incidents shared by the API and evaluator."""
+
+from datetime import date, datetime
+from typing import Literal, Self
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+UsageAlertScope = Literal["deployment", "key", "user", "team", "model"]
+UsageAlertMetric = Literal["spend", "requests", "latency", "errors"]
+UsageAlertDirection = Literal["increase", "decrease"]
+UsageAlertStatus = Literal["open", "resolved", "dismissed"]
+UsageAlertChannel = Literal["email", "slack"]
+UsageAlertEvaluationStatus = Literal["pending", "complete", "insufficient_coverage", "insufficient_history"]
+
+
+class UsageAlertRuleInput(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    name: str = Field(min_length=1, max_length=200)
+    scope_type: UsageAlertScope
+    scope_id: str | None = Field(default=None, min_length=1, max_length=1024)
+    metric: UsageAlertMetric
+    direction: UsageAlertDirection
+    multiplier: float = Field(default=3, gt=1, le=1000)
+    baseline_days: int = Field(default=7, ge=1, le=30)
+    min_history_days: int = Field(default=3, ge=1, le=30)
+    min_requests: int = Field(default=100, ge=0)
+    min_value: float = Field(default=0, ge=0, description="Minimum absolute change in the metric's units")
+    enabled: bool = True
+    notification_channels: tuple[UsageAlertChannel, ...] = Field(default=(), max_length=2)
+    email_recipients: tuple[str, ...] = Field(default=(), max_length=20)
+
+    @model_validator(mode="after")
+    def validate_rule(self) -> Self:
+        if self.min_history_days > self.baseline_days:
+            raise ValueError("min_history_days must not exceed baseline_days")
+        if self.scope_type == "deployment" and self.scope_id is not None:
+            raise ValueError("Deployment alerts cover the whole gateway; omit scope_id")
+        if self.scope_type == "key" and self.scope_id is not None and self.scope_id.startswith("sk-"):
+            raise ValueError("Use the key's reporting ID, never the secret key")
+        if len(set(self.notification_channels)) != len(self.notification_channels):
+            raise ValueError("notification_channels must be unique")
+        if "email" in self.notification_channels and not self.email_recipients:
+            raise ValueError("Email notifications require at least one recipient")
+        if any(
+            "@" not in email or "\n" in email or "\r" in email or len(email) > 254 for email in self.email_recipients
+        ):
+            raise ValueError("Invalid email recipient")
+        return self
+
+
+class UsageAlertRule(UsageAlertRuleInput):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+    created_by: str | None
+    last_evaluated_day: date | None = None
+    evaluation_status: UsageAlertEvaluationStatus = "pending"
+
+
+class UsageAlert(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    id: str
+    rule_id: str
+    rule_name: str
+    scope_type: UsageAlertScope
+    scope_id: str | None
+    metric: UsageAlertMetric
+    direction: UsageAlertDirection
+    status: UsageAlertStatus
+    day: date
+    baseline_start: date
+    baseline_end: date
+    observed_value: float
+    baseline_value: float
+    threshold: float
+    first_seen: datetime
+    last_seen: datetime
+    activity_path: str
+
+
+class UsageAlertUpdate(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    status: UsageAlertStatus
+
+
+class UsageAlertRuleList(BaseModel):
+    data: tuple[UsageAlertRule, ...]
+    total: int
+    limit: int
+    offset: int
+
+
+class UsageAlertList(BaseModel):
+    data: tuple[UsageAlert, ...]
+    total: int
+    limit: int
+    offset: int
+
+
+class UsageAlertNotification(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    incident: UsageAlert
+    rule: UsageAlertRule
+    pending_channels: tuple[UsageAlertChannel, ...]
+
+
+class UsageAlertObservation(BaseModel):
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    entity_id: str | None
+    day: date
+    observed: float
+    baseline: float
+    threshold: float
+    breached: bool
