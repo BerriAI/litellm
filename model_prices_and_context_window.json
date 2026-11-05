@@ -4046,6 +4046,8 @@
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
+        "deprecation_date": "2027-09-01",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "litellm_provider": "azure_ai",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -4068,7 +4070,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": false,
         "prompt_cache_min_tokens": 512,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement"
     },
     "azure_ai/claude-opus-5": {
         "deprecation_date": "2027-07-08",
@@ -78497,7 +78499,7 @@
         "cache_creation_input_token_cost": 1e-05,
         "cache_creation_input_token_cost_above_1hr": 1.6e-05,
         "cache_read_input_token_cost": 4e-07,
-        "deprecation_date": "2027-10-01",
+        "deprecation_date": "2027-01-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "input_cost_per_token": 8e-06,
         "litellm_provider": "azure_ai",
@@ -78507,7 +78509,7 @@
         "output_cost_per_token": 4e-05,
         "prompt_cache_min_tokens": 512.0,
         "search_context_cost_per_query": {"search_context_size_high":0.02,"search_context_size_low":0.02,"search_context_size_medium":0.02},
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models",
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
