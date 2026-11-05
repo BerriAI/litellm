@@ -1,16 +1,14 @@
 {
   "meta": {
     "description": "What redis-py and litellm/_redis.py accept for every Redis kwarg the Rust resolver can be handed. SETTINGS in src/keys.rs has exactly one row per arg here",
-    "generated": "2026-11-05",
     "redis_py_versions": [
       "5.3.1",
       "6.4.0",
       "7.4.1",
       "8.0.1"
     ],
-    "redis_py_locked": "5.3.1",
     "python": "3.12",
-    "method": "uv run --no-project --python 3.12 --with redis==<version> python -I, reading inspect.getfullargspec(inspect.unwrap(cls.__init__)) args and kwonlyargs, minus self",
+    "method": "python redis_py_kwargs.py next to this file, see its docstring. It reads inspect.getfullargspec(inspect.unwrap(cls.__init__)) args and kwonlyargs, minus self",
     "signatures": {
       "sync": "redis.Redis.__init__. _get_redis_kwargs uses it as the config allowlist and the REDIS_<KWARG> environment mapping",
       "async": "redis.asyncio.Redis.__init__, which the proxy constructs. A kwarg in sync but not async raises TypeError when the client is built",
@@ -19,7 +17,8 @@
     },
     "environment": "true when _get_redis_env_kwarg_mapping reads the arg as REDIS_<ARG> under the locked redis-py",
     "redis_py": "each redis-py version whose signatures name the arg, with which ones. An empty object means only litellm reads it",
-    "checked_by": "test_redis_py_kwargs_catalog_matches_the_installed_redis_py in tests/unit/test_redis.py checks the locked version against the installed redis-py, and tests/catalog.rs checks SETTINGS against this file"
+    "checked_by": "tests/unit/test_redis.py checks the installed redis-py's column and the REDIS_* names against this file, and tests/catalog.rs checks SETTINGS against it",
+    "redis_py_locked": "5.3.1"
   },
   "args": {
     "address_remap": {"environment": false, "redis_py": {"5.3.1": ["cluster"], "6.4.0": ["cluster"], "7.4.1": ["cluster"], "8.0.1": ["cluster"]}},

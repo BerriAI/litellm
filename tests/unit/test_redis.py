@@ -1,9 +1,10 @@
+import importlib.util
 import inspect
 import json
 import os
 import ssl
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3264,37 +3265,27 @@ def test_redis_settings_resolve_like_the_rust_resolver_expects(monkeypatch, kwar
     assert outcome == expected
 
 
-_REDIS_PY_KWARGS: Final = json.loads(
-    (Path(__file__).parents[2] / "litellm-rust/crates/redis-resolve/redis-py-kwargs.json").read_text()
-)
+_REDIS_RESOLVE: Final = Path(__file__).parents[2] / "litellm-rust/crates/redis-resolve"
+_REDIS_PY_KWARGS: Final = json.loads((_REDIS_RESOLVE / "redis-py-kwargs.json").read_text())
 
 
-def _named_args(*classes: type) -> frozenset[str]:
-    return frozenset(
-        name
-        for cls in classes
-        for spec in (inspect.getfullargspec(inspect.unwrap(cls.__init__)),)
-        for name in spec.args + spec.kwonlyargs
-        if name != "self"
-    )
+def _catalog_script() -> ModuleType:
+    spec: Final = importlib.util.spec_from_file_location("redis_py_kwargs", _REDIS_RESOLVE / "redis_py_kwargs.py")
+    assert spec is not None and spec.loader is not None
+    module: Final = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_redis_py_kwargs_catalog_matches_the_installed_redis_py():
     assert redis.__version__ in _REDIS_PY_KWARGS["meta"]["redis_py_versions"]
-    signatures: Final = {
-        "sync": _named_args(redis.Redis),
-        "async": _named_args(async_redis.Redis),
-        "connection": _named_args(
-            *(cls for cls in (*redis.Connection.__mro__, *async_redis.Connection.__mro__) if cls is not object)
-        ),
-        "cluster": _named_args(async_redis.RedisCluster),
+    catalogued: Final = {
+        name: arg["redis_py"][redis.__version__]
+        for name, arg in _REDIS_PY_KWARGS["args"].items()
+        if redis.__version__ in arg["redis_py"]
     }
-    args: Final = _REDIS_PY_KWARGS["args"]
-    names: Final = frozenset(args).union(*signatures.values())
 
-    catalogued: Final = {name: args.get(name, {}).get("redis_py", {}).get(redis.__version__, []) for name in names}
-    installed: Final = {name: [kind for kind, named in signatures.items() if name in named] for name in names}
-    assert catalogued == installed
+    assert catalogued == _catalog_script().arg_signatures()
 
 
 @pytest.mark.skipif(
