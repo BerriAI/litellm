@@ -132,7 +132,43 @@ def _span_error_from_exception(
     )
 
 
-_scrub_texts_by_span: Final[weakref.WeakKeyDictionary[Span, frozenset[str] | None]] = weakref.WeakKeyDictionary()
+_scrub_texts_by_span: Final[weakref.WeakKeyDictionary[Span, frozenset[str]]] = weakref.WeakKeyDictionary()
+
+
+def _keep_scrub_texts_for_restamp(
+    span: Span, exception: Exception, traceback_str: str | None, scrub_texts: frozenset[str] | None
+) -> None:
+    """Keep for the exception handler's restamp of ``span`` the request text that ``exception``'s error quotes, and
+    nothing for a failure that is not redacted or quotes none of it. A span the map cannot hold keeps nothing."""
+    quoted: Final[frozenset[str]] = (
+        frozenset() if scrub_texts is None else _quoted_request_texts(exception, traceback_str, scrub_texts)
+    )
+    try:
+        if quoted:
+            _scrub_texts_by_span[span] = quoted
+        else:
+            _scrub_texts_by_span.pop(span, None)
+    except TypeError:
+        return
+
+
+def _quoted_request_texts(exception: Exception, traceback_str: str | None, texts: frozenset[str]) -> frozenset[str]:
+    """The request ``texts`` that the error logged for ``exception`` quotes."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.redact_messages import quoted_request_texts
+
+    info: Final = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=exception, traceback_str=traceback_str
+    )
+    return quoted_request_texts(f"{info.get('error_message') or ''}\n{info.get('traceback') or ''}", texts)
+
+
+def _restamp_scrub_texts(span: Span) -> frozenset[str] | None:
+    """The request text the failure hook kept for ``span``'s restamp, forgotten once read."""
+    try:
+        return _scrub_texts_by_span.pop(span, None)
+    except TypeError:
+        return None
 
 
 # Any callback whose class belongs to one of these modules is "the OTel
@@ -858,7 +894,7 @@ class OpenTelemetryV2(CustomLogger):
         already_stamped: Final = Error.TYPE in (getattr(span, "attributes", None) or ())
         stamp_error(
             span,
-            _span_error_from_exception(exception, status_code=status_code, scrub_texts=_scrub_texts_by_span.get(span)),
+            _span_error_from_exception(exception, status_code=status_code, scrub_texts=_restamp_scrub_texts(span)),
             record_event=not already_stamped,
         )
 
@@ -887,7 +923,7 @@ class OpenTelemetryV2(CustomLogger):
         from litellm.litellm_core_utils.redact_messages import failure_request_texts, should_redact_failed_request
 
         scrub_texts: Final = failure_request_texts(request_data) if should_redact_failed_request(request_data) else None
-        _scrub_texts_by_span[span] = scrub_texts
+        _keep_scrub_texts_for_restamp(span, original_exception, traceback_str, scrub_texts)
         stamp_error(
             span,
             _span_error_from_exception(original_exception, traceback_str=traceback_str, scrub_texts=scrub_texts),
