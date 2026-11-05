@@ -57,7 +57,8 @@ describe("entity activity", () => {
     expect(url.searchParams.get("start_date")).toBe("2026-10-01");
     expect(url.searchParams.get("end_date")).toBe("2026-10-07");
     expect(url.searchParams.get("timezone")).toBe("0");
-    expect(url.searchParams.get("api_key_limit")).toBe("1");
+    expect(url.searchParams.get("bounded")).toBe("true");
+    expect(url.searchParams.get("include_model_breakdown")).toBe(scope === "key" ? "true" : null);
     expect(url.searchParams.has("alert")).toBe(false);
   });
 

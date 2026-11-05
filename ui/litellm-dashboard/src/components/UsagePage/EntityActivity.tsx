@@ -9,8 +9,8 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { hasProxyWideSpendView, spendScopeUserId } from "@/utils/roles";
 import type { ActivityScope } from "@/utils/entityLinks";
-import { EMPTY_DAILY_ACTIVITY_METADATA, toDailyData, type DailyActivityRequest } from "./dailyActivityApi";
-import { keyDetailFromResponse, overallUsageMetrics, reportingKeyId } from "./keyActivityData";
+import type { DailyActivityRequest } from "./dailyActivityApi";
+import { boundedActivityMetrics } from "./keyActivityData";
 import { activityPresets, defaultActivityDays, entityActivityParsers, localActivityDay } from "./entityActivityState";
 
 interface Props {
@@ -43,7 +43,8 @@ export default function EntityActivity({ scope, id, teamId }: Props) {
       entityIds,
       apiKey: scope === "key" ? id : null,
       model: scope === "model" ? id : null,
-      apiKeyLimit: 1,
+      bounded: true,
+      includeModelBreakdown: scope === "key",
       includeCurrentUtcDay: true,
     };
   }, [accessToken, currentUser, scope, id, keyTeamId, from, to]);
@@ -58,9 +59,7 @@ export default function EntityActivity({ scope, id, teamId }: Props) {
     (model: string) => ENTITY_API.user.modelTopKeys(request, model, false),
     [request],
   );
-  const metrics =
-    (scope === "key" ? keyDetailFromResponse(data, reportingKeyId(id), []) : undefined) ??
-    overallUsageMetrics(toDailyData(data), data.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA);
+  const { metrics, otherModels } = boundedActivityMetrics(data);
 
   if (!allowed) return <p className="text-sm text-muted-foreground">{t("entityActivity.modelRequiresGlobal")}</p>;
 
@@ -91,6 +90,7 @@ export default function EntityActivity({ scope, id, teamId }: Props) {
       <ModelSection
         modelName={id}
         metrics={metrics}
+        otherModels={otherModels}
         fetchTopApiKeys={scope === "model" ? fetchTopApiKeys : undefined}
       />
     );

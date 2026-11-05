@@ -25,7 +25,7 @@ import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
 import { keyActivityLabel } from "./UsagePage/keyActivityLabel";
 import type { ModelTopKeysResponse } from "./UsagePage/dailyActivityApi";
-import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopModelData } from "./UsagePage/types";
+import { DailyData, KeyMetricWithMetadata, ModelActivityData, OtherModelData, TopModelData } from "./UsagePage/types";
 import { averageResponseTimeMs, formatResponseTime, valueFormatter } from "./UsagePage/utils/value_formatters";
 
 interface ActivityMetricsProps {
@@ -255,13 +255,16 @@ export const ModelSection = ({
   metrics,
   hidePromptCachingMetrics = false,
   fetchTopApiKeys,
+  otherModels,
 }: {
   modelName: string;
   metrics: ModelActivityData;
   hidePromptCachingMetrics?: boolean;
   fetchTopApiKeys?: (model: string) => Promise<ModelTopKeysResponse>;
+  otherModels?: OtherModelData;
 }) => {
   const { t } = useTranslation();
+  const hasModelUsage = Boolean(metrics.top_models?.length || otherModels);
   return (
     <div className="grid grid-cols-1 gap-3">
       <StatStrip columns={5}>
@@ -308,7 +311,7 @@ export const ModelSection = ({
 
       {fetchTopApiKeys && <ModelTopKeys modelName={modelName} fetchTopApiKeys={fetchTopApiKeys} />}
 
-      {metrics.top_models && metrics.top_models.length > 0 && <KeyModelUsageView topModels={metrics.top_models} />}
+      {hasModelUsage && <KeyModelUsageView topModels={metrics.top_models ?? []} otherModels={otherModels} />}
 
       <Panel
         icon={Coins}
