@@ -630,7 +630,6 @@ class ResetBudgetJob:
         for attempt in range(RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS):
             try:
                 await redis_cache.async_delete_cache(key=counter_key)
-                return
             except Exception as redis_err:  # noqa: BLE001  # any Redis failure here is worth a retry, not just specific ones
                 verbose_proxy_logger.warning(
                     "Attempt %d/%d to reset spend counter %s in Redis failed: %s",
@@ -641,6 +640,8 @@ class ResetBudgetJob:
                 )
                 if attempt < RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS - 1:
                     await asyncio.sleep(RESET_BUDGET_SPEND_COUNTER_RESET_RETRY_DELAY_SECONDS)
+            else:
+                return
         verbose_proxy_logger.error(
             "Failed to reset spend counter %s in Redis after %d attempts; budget may be "
             "over-enforced until the counter expires.",
