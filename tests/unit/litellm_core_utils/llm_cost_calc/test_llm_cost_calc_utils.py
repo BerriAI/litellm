@@ -2791,6 +2791,14 @@ def test_regional_uplift_reads_the_multiplier_named_by_each_residency(model_info
 
 
 @pytest.mark.parametrize(
+    "model_info",
+    [{"regional_processing_uplift_multiplier_us": value} for value in (1.25, "1.25", b"1.25", bytearray(b"1.25"))],
+)
+def test_regional_uplift_accepts_every_value_float_converts(model_info: ModelInfo):
+    assert get_regional_uplift_multiplier(model_info, "us") == 1.25
+
+
+@pytest.mark.parametrize(
     "model_info, data_residency",
     [
         ({"regional_processing_uplift_multiplier_eu": "not-a-number"}, "eu"),

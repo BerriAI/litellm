@@ -6,10 +6,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, SupportsFloat, TypedDict, cast
+from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from typing_extensions import ReadOnly
+from typing_extensions import Buffer, ReadOnly
 
 import litellm
 from litellm._internal_context import current_billing_time
@@ -1427,7 +1427,7 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
     multiplier: Final = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
     if multiplier is None:
         return 1.0
-    if not isinstance(multiplier, (str, SupportsFloat)):
+    if not isinstance(multiplier, (str, Buffer, SupportsFloat, SupportsIndex)):
         verbose_logger.error(
             "Invalid regional_processing_uplift_multiplier_%s for model; defaulting to 1.0",
             residency,
