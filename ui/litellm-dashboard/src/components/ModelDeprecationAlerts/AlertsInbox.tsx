@@ -17,7 +17,7 @@ const columns: ColumnDef<DeprecationAlert>[] = [
     cell: ({ row }) => (
       <div className="py-1">
         <DeprecationModel alert={row.original} />
-        <RecommendedReplacement model={row.original.model.successor_model} />
+        <RecommendedReplacement recommendation={row.original.model} />
       </div>
     ),
   },

@@ -39115,6 +39115,11 @@ export interface components {
              */
             deprecation_date: string;
             /**
+             * Deprecation Source
+             * @description Provider deprecation notice linked by the selected model cost-map entry.
+             */
+            deprecation_source?: string | null;
+            /**
              * Litellm Model
              * @description The underlying litellm model string the deprecation date is sourced from.
              */
@@ -39140,6 +39145,8 @@ export interface components {
              * @description The model to migrate to: model_info.successor_model on the deployment when set, else the successor_model the cost map names for the deprecated model.
              */
             successor_model?: string | null;
+            /** @description Whether the recommended successor comes from the model cost map or deployment configuration. */
+            successor_model_source?: components["schemas"]["SuccessorModelSource"] | null;
             /**
              * Team Public Model Name
              * @description The model name visible to the team, when configured.
@@ -46923,6 +46930,11 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * SuccessorModelSource
+         * @enum {string}
+         */
+        SuccessorModelSource: "model_cost_map" | "deployment_config";
         /** SuggestTemplatesRequest */
         SuggestTemplatesRequest: {
             /** Attack Examples */

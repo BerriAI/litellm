@@ -17,6 +17,11 @@ DEPRECATION_IDLE_POLL_SECONDS: Final = 30
 DeprecationStatus = Literal["upcoming", "imminent", "deprecated"]
 
 
+class SuccessorModelSource(str, Enum):
+    MODEL_COST_MAP = "model_cost_map"
+    DEPLOYMENT_CONFIG = "deployment_config"
+
+
 class ModelDeprecationInfo(LiteLLMBaseModel):
     model_name: str = Field(description="The public name of the model on the proxy (model_group).")
     team_public_model_name: str | None = Field(
@@ -43,6 +48,14 @@ class ModelDeprecationInfo(LiteLLMBaseModel):
             "The model to migrate to: model_info.successor_model on the deployment when set, "
             "else the successor_model the cost map names for the deprecated model."
         ),
+    )
+
+    successor_model_source: SuccessorModelSource | None = Field(
+        default=None,
+        description="Whether the recommended successor comes from the model cost map or deployment configuration.",
+    )
+    deprecation_source: str | None = Field(
+        default=None, description="Provider deprecation notice linked by the selected model cost-map entry."
     )
 
 

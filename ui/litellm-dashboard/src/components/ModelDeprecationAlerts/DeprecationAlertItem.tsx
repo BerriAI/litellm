@@ -24,7 +24,7 @@ export default function DeprecationAlertItem({ alert }: { alert: DeprecationAler
           <p className="mt-1 text-xs text-muted-foreground">
             {alert.requests.toLocaleString()} requests in the last 30 days · Last seen {alert.lastUsedDate} UTC
           </p>
-          <RecommendedReplacement model={alert.model.successor_model} />
+          <RecommendedReplacement recommendation={alert.model} />
         </div>
       </div>
       <a className={cn(buttonVariants({ size: "sm" }), "self-start")} href={migrationHref(alert.usageModel)}>
