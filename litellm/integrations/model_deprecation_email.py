@@ -125,7 +125,7 @@ def _receipt_key(email: ModelDeprecationEmail) -> str:
 
 
 class ModelDeprecationEmailSender:
-    def __init__(self, prisma_client: PrismaClient):
+    def __init__(self, prisma_client: PrismaClient) -> None:
         self.prisma: Final = prisma_client
         self.config: Final = ConfigRepository(prisma_client, use_writer=True)
 
