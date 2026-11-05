@@ -127,6 +127,7 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -322,6 +323,7 @@ from litellm.router_utils.cooldown_handlers import (
     mark_deployment_selection_failure,
     set_cooldown_deployments,
 )
+from litellm.router_utils.deployment_numbers import refuse_unservable_numbers
 from litellm.router_utils.embedding_batch_size_check import (
     async_log_rejection_before_provider_call,
     clear_rejected_before_provider_call,
@@ -365,6 +367,11 @@ from litellm.router_utils.fallback_event_handlers import (
     record_retry_attempt,
     routed_deployment_id,
     run_async_fallback,
+)
+from litellm.router_utils.global_callback_holders import (
+    live_check_owners,
+    routers_holding_global_callbacks,
+    routers_holding_global_callbacks_lock,
 )
 from litellm.router_utils.handle_error import (
     async_raise_no_deployment_exception,
@@ -1233,8 +1240,9 @@ class RoutingArgs(enum.Enum):
 # as the per-request one built from a caller-supplied user_config, drops out on its
 # own rather than leaving entries behind that nothing can withdraw.
 _live_routers: Final["weakref.WeakSet[PythonCore]"] = weakref.WeakSet()
-_routers_holding_global_callbacks: Final["weakref.WeakSet[PythonCore]"] = weakref.WeakSet()
-_routers_holding_global_callbacks_lock: Final = threading.Lock()
+# Shared with the other router cores of the process (litellm/router_utils/global_callback_holders.py).
+_routers_holding_global_callbacks: Final["weakref.WeakSet[PythonCore]"] = routers_holding_global_callbacks  # pyright: ignore[reportAssignmentType]  # every member serves the holder members
+_routers_holding_global_callbacks_lock: Final = routers_holding_global_callbacks_lock
 
 
 def _replay_live_router_model_cost() -> None:
@@ -1878,6 +1886,7 @@ class PythonCore(DeprecatedRouterMembers):
         # cost-map entries from the list it is serving at that moment, whether
         # those deployments came from model_list or were added later from the DB.
         _live_routers.add(self)
+        live_check_owners.add(self)
 
         if allowed_fails is not None:
             self._core_allowed_fails = allowed_fails
@@ -2103,6 +2112,7 @@ class PythonCore(DeprecatedRouterMembers):
         # Stop contributing to cost-map rebuilds straight away rather than waiting
         # for this router to be collected.
         _live_routers.discard(self)
+        live_check_owners.discard(self)
         self.retire_routing_state()
         self._release_global_callbacks()
 
@@ -3414,7 +3424,7 @@ class PythonCore(DeprecatedRouterMembers):
         self.optional_callbacks = [cb for cb in self.optional_callbacks if type(cb) is not callback_cls]
         if any(
             router is not self and any(type(cb) is callback_cls for cb in (router.optional_callbacks or []))
-            for router in tuple(_live_routers)
+            for router in (*_live_routers, *(owner for owner in live_check_owners if not isinstance(owner, PythonCore)))
         ):
             return
         for cb in tuple(self._host.callback_list("callbacks")):
@@ -7150,6 +7160,8 @@ class PythonCore(DeprecatedRouterMembers):
                 or self._stream_can_fall_back(model, initial_kwargs)
             )
             buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
+            # An error this loop raises off a frame, not the provider's.
+            raised_here: BaseException | None = None  # rebind-ok: set when the loop raises off a frame
             try:
                 async for chunk in source_iterator:
                     if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
@@ -7180,25 +7192,27 @@ class PythonCore(DeprecatedRouterMembers):
                         and self._refusal_fallback_available(model, initial_kwargs)
                     ):
                         refusal_error = safeguard_refusal_error(model=model, stop_details=refusal_stop_details)
-                        raise MidStreamFallbackError(
+                        raised_here = MidStreamFallbackError(
                             message=refusal_error.message,
                             model=model,
                             llm_provider="anthropic",
                             original_exception=refusal_error,
                             is_pre_first_chunk=True,
                         )
+                        raise raised_here
                     if not has_generated_content and error_event is None:
                         buffered_lifecycle_chunks = (*buffered_lifecycle_chunks, chunk)
                         continue
                     if recoverable_frame_error is not None:
                         assert error_event is not None
-                        raise MidStreamFallbackError(
+                        raised_here = MidStreamFallbackError(
                             message=error_event[1],
                             model=model,
                             llm_provider="anthropic",
                             original_exception=recoverable_frame_error,
                             is_pre_first_chunk=True,
                         )
+                        raise raised_here
                     for buffered_chunk in buffered_lifecycle_chunks:
                         yield buffered_chunk
                     buffered_lifecycle_chunks = ()
@@ -7206,6 +7220,8 @@ class PythonCore(DeprecatedRouterMembers):
                 for buffered_chunk in buffered_lifecycle_chunks:
                     yield buffered_chunk
             except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
+                if stream_error is not raised_here:
+                    await self._areport_raised_messages_stream_failure(stream_error, initial_kwargs, source_iterator)
                 async for item in self._aanthropic_messages_recover_stream_error(
                     stream_error,
                     has_generated_content,
@@ -7224,6 +7240,52 @@ class PythonCore(DeprecatedRouterMembers):
         # being defined textually after the function that captures it.
         wrapper: Final = FallbackAwareAnthropicMessagesStream(stream_with_fallbacks(), source_iterator)
         return wrapper
+
+    async def _areport_raised_messages_stream_failure(
+        self, stream_error: Exception, attempt_kwargs: Mapping[str, object], source: object
+    ) -> None:
+        """A /v1/messages stream whose provider iterator raised, counted against the deployment
+        that served it and cooled down by the rules, the same as a non-stream call's failure, so a
+        retry picks another deployment. A stream that logs itself (litellm's own stream logging
+        reaches the router's failure callback), or a failure the request's logging object already
+        logged, is not counted twice."""
+        from litellm.exceptions import MidStreamFallbackError
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        if isinstance(getattr(source, "logging_obj", None), Logging):
+            return
+        logging_obj: Final = attempt_kwargs.get("litellm_logging_obj")
+        if isinstance(logging_obj, Logging) and logging_obj.model_call_details.get("has_logged_async_failure") is True:
+            return
+        bucket: Final = as_str_mapping(attempt_kwargs.get(get_metadata_variable_name_from_kwargs(attempt_kwargs))) or {}
+        model_info: Final = as_str_mapping(bucket.get("model_info")) or {}
+        deployment_id: Final = model_info.get("id")
+        if deployment_id is None:
+            return
+        deployment: Final = self.get_deployment(model_id=str(deployment_id))
+        deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
+        provider_error: Final = (
+            stream_error.original_exception
+            if isinstance(stream_error, MidStreamFallbackError) and stream_error.original_exception is not None
+            else stream_error
+        )
+        now: Final = datetime.now()  # noqa: DTZ005  # naive, as the logging pipeline's times
+        logged: Final = {
+            "call_type": "anthropic_messages",
+            "exception": provider_error,
+            "litellm_params": {
+                **{
+                    name: deployment_params[name] for name in ("api_base", "cooldown_time") if name in deployment_params
+                },
+                "metadata": dict(bucket),
+                "model_info": dict(model_info),
+            },
+        }
+        try:
+            _ = self.deployment_callback_on_failure(logged, None, now, now)  # pyright: ignore[reportUnknownMemberType]  # an untyped callback
+            await self.async_deployment_callback_on_failure(logged, None, now, now)  # pyright: ignore[reportUnknownMemberType]  # see above
+        except Exception as error:  # noqa: BLE001  # a recording never fails the stream
+            verbose_router_logger.warning("a stream's failure was not recorded: %s", error)
 
     async def _aanthropic_messages_recover_stream_error(
         self,
@@ -11235,6 +11297,7 @@ class PythonCore(DeprecatedRouterMembers):
                     model_info=_model_info,
                 )
             )
+            refuse_unservable_numbers(deployment.to_json(exclude_none=True, warnings=False))  # pyright: ignore[reportUnknownMemberType]  # pydantic's to_json
             PythonCore._register_deployment_pricing(deployment)
 
             ## Check if LLM Deployment is allowed for this deployment
@@ -11738,6 +11801,16 @@ class PythonCore(DeprecatedRouterMembers):
         return model_info_is_active_for_environment(model_info=deployment.model_info)
 
     def set_model_list(self, model_list: list):
+        """Replace every deployment. All or nothing: when an entry raises, the deployments served
+        before the call are put back and the error is raised."""
+        previous: Final = copy.deepcopy(list(self.__dict__.get("_core_model_list") or ()))
+        try:
+            self._replace_model_list(model_list)  # pyright: ignore[reportUnknownMemberType]  # the legacy untyped model list
+        except Exception:
+            self._replace_model_list(previous)  # pyright: ignore[reportUnknownMemberType]  # see above
+            raise
+
+    def _replace_model_list(self, model_list: list) -> None:  # pyright: ignore[reportUnknownParameterType, reportMissingTypeArgument]  # the legacy untyped model list
         original_model_list: Final = copy.deepcopy(model_list)
         self._discovered_model_info_cache.flush_cache()
         with self._deployment_index_lock:
@@ -12031,6 +12104,7 @@ class PythonCore(DeprecatedRouterMembers):
 
         # add to model list
         _deployment: Final = served.to_json(exclude_none=True)
+        refuse_unservable_numbers(_deployment)
         # initialize client
         self._add_deployment(deployment=served)
 
@@ -12174,6 +12248,9 @@ class PythonCore(DeprecatedRouterMembers):
         _deployment_model_id: Final = deployment.model_info.id or ""
         _deployment_on_router: Final[Deployment | None] = self._core_get_deployment(model_id=_deployment_model_id)
         served: Final = without_model_capability_flags(deployment)
+        # `_create_deployment` lists the model name before it can still fail; a dropped deployment
+        # takes its name back off the list.
+        names_before: Final = len(self._core_deployment_names)
         try:
             if _deployment_on_router is not None:
                 # deployment with this model_id exists on the router
@@ -12223,6 +12300,7 @@ class PythonCore(DeprecatedRouterMembers):
                     deployment.model_info.id,
                     e,
                 )
+                del self._core_deployment_names[names_before:]
                 self._restore_deployment_after_failed_upsert(
                     previous_deployment=_deployment_on_router, model_id=_deployment_model_id
                 )
@@ -14713,9 +14791,7 @@ class PythonCore(DeprecatedRouterMembers):
         """
         if team_id is not None and self._team_deployments_named(team_id, model_group):
             return self._core_get_all_deployments(model_name=model_group, team_id=team_id)
-        own: Final = cast(  # cast-ok: the private alias returns what get_all_deployments returns
-            list[DeploymentTypedDict], self._get_all_deployments(model_name=model_group)
-        )
+        own: Final = self._get_all_deployments(model_name=model_group)
         named: Final = [*own, *self._core_get_model_list_from_routing_groups(model_name=model_group)]
         return named or self._get_wildcard_deployments(model_name=model_group)
 
@@ -15923,10 +15999,15 @@ class PythonCore(DeprecatedRouterMembers):
 
         # IF TEAM ID SPECIFIED ON MODEL, AND REQUEST CONTAINS USER_API_KEY_TEAM_ID, FILTER OUT MODELS THAT ARE NOT IN THE TEAM
         ## THIS PREVENTS WRITING FILES OF OTHER TEAMS TO MODELS THAT ARE TEAM-ONLY MODELS
+        by_id: Final = healthy_deployments if isinstance(healthy_deployments, dict) else None  # pyright: ignore[reportUnknownVariableType]  # the legacy deployment dict
         healthy_deployments = filter_team_based_models(
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
+        if by_id is not None and not healthy_deployments:
+            # Another team's deployment asked for by id: refused under its group's name.
+            group_name: Final = str(by_id.get("model_name"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # see above
+            model = group_name  # rebind-ok: the error names the group
 
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug("healthy_deployments after team filter: %s", healthy_deployments)
@@ -17236,6 +17317,16 @@ class PythonCore(DeprecatedRouterMembers):
                 model,
             )
         )
+        # As the async pick: a team-owned deployment serves only its own team's callers, also when
+        # asked for by id (then refused under its group's name).
+        by_id: Final = healthy_deployments if isinstance(healthy_deployments, dict) else None  # pyright: ignore[reportUnknownVariableType]  # the legacy deployment dict
+        healthy_deployments = filter_team_based_models(  # rebind-ok: the team filter narrows  # pyright: ignore[reportUnknownVariableType]  # legacy selector type
+            healthy_deployments=healthy_deployments,  # pyright: ignore[reportArgumentType]  # legacy selector type
+            request_kwargs=request_kwargs,
+        )
+        if by_id is not None and not healthy_deployments:
+            group_name: Final = str(by_id.get("model_name"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # see above
+            model = group_name  # rebind-ok: the error names the group
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
         routing_kwargs: Final = _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)
         pick_attributes: Final = _deployment_pick_attributes(model, routing_kwargs)
