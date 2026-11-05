@@ -26164,6 +26164,8 @@ export interface components {
             access_model_names?: string[] | null;
             /** Access Skill Names */
             access_skill_names?: string[] | null;
+            /** Access Vector Store Ids */
+            access_vector_store_ids?: string[] | null;
             /** Assigned Key Ids */
             assigned_key_ids?: string[] | null;
             /** Assigned Team Ids */
@@ -26218,6 +26220,11 @@ export interface components {
              * @default []
              */
             access_skill_names: string[];
+            /**
+             * Access Vector Store Ids
+             * @default []
+             */
+            access_vector_store_ids: string[];
             /** Assigned Key Ids */
             assigned_key_ids: string[];
             /** Assigned Keys */
@@ -26270,6 +26277,8 @@ export interface components {
             access_model_names?: string[] | null;
             /** Access Skill Names */
             access_skill_names?: string[] | null;
+            /** Access Vector Store Ids */
+            access_vector_store_ids?: string[] | null;
             /** Assigned Key Ids */
             assigned_key_ids?: string[] | null;
             /** Assigned Team Ids */

@@ -39,7 +39,8 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 from litellm.proxy.rag_endpoints.upload_security import safe_download_headers
 from litellm.proxy.vector_store_endpoints.utils import (
-    assert_user_can_access_vector_store_id,
+    assert_user_can_change_vector_store_id,
+    assert_user_can_read_vector_store_id,
     is_allowed_to_call_vector_store_files_endpoint,
 )
 from litellm.router_rust.invoke.endpoints import PINNED_DEPLOYMENT_KEY
@@ -738,7 +739,7 @@ async def vector_store_file_create(
 
     data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     data["vector_store_id"] = vector_store_id
-    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_change_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
@@ -847,7 +848,7 @@ async def vector_store_file_list(
     data: dict[str, str | None] = {"vector_store_id": vector_store_id}
     data.update(query_params)
     data["vector_store_id"] = vector_store_id
-    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_read_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
@@ -955,7 +956,7 @@ async def vector_store_file_retrieve(
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
-    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_read_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
@@ -1063,7 +1064,7 @@ async def vector_store_file_content(
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
-    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_read_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
@@ -1174,7 +1175,7 @@ async def vector_store_file_update(
     data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     data["vector_store_id"] = vector_store_id
     data["file_id"] = file_id
-    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_change_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
@@ -1282,7 +1283,7 @@ async def vector_store_file_delete(
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
-    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_change_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )

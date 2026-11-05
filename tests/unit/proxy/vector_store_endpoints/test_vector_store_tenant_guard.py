@@ -194,7 +194,7 @@ async def test_vector_store_file_list_resolves_managed_ids_and_cursors():
 
     with (
         patch(
-            "litellm.proxy.vector_store_files_endpoints.endpoints.assert_user_can_access_vector_store_id",
+            "litellm.proxy.vector_store_files_endpoints.endpoints.assert_user_can_read_vector_store_id",
             new=AsyncMock(return_value=None),
         ),
         patch("litellm.proxy.proxy_server.llm_router", llm_router),

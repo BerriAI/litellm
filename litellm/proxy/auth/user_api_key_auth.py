@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.models.end_user import LiteLLM_EndUserTable
+from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
 from litellm.proxy.auth.access_group_rules import access_group_ids_for_identity
@@ -3320,7 +3321,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                     )
             except HTTPException:
                 token_team_models: Final = _token_team_models(valid_token)
-                _team_obj = LiteLLM_TeamTableCachedObj(
+                _team_obj = LiteLLM_TeamRebuiltFromToken(  # rebind-ok: pre-existing rebinding on a renamed line
                     team_id=valid_token.team_id,
                     max_budget=valid_token.team_max_budget,
                     soft_budget=valid_token.team_soft_budget,
@@ -3472,7 +3473,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     non-None (the caller gates on it)."""
     assert valid_token.team_id is not None
     token_team_models: Final = _token_team_models(valid_token)
-    return LiteLLM_TeamTableCachedObj(
+    return LiteLLM_TeamRebuiltFromToken(
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
         soft_budget=valid_token.team_soft_budget,
