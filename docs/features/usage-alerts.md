@@ -123,7 +123,7 @@ The response contains `updated_count`. Only incidents in that exact group that s
 
 ## Create a rule
 
-This example alerts when a team's daily spend is more than three times its baseline and the absolute change is at least $10. Replace `team-example` with the team's ID.
+This example alerts when a team's daily spend is at least three times its baseline and the absolute change is at least $10. Replace `team-example` with the team's ID.
 
 ```bash
 curl "$LITELLM_API_BASE/usage/alert-rules" \
@@ -169,7 +169,7 @@ Use `scope_type: "deployment"` with no `scope_id` for the gateway. For `model`, 
 - `DELETE /usage/alert-rules/{rule_id}` removes a rule from evaluation and preserves existing incidents. Deleted defaults stay deleted.
 - `PATCH /usage/alerts/{alert_id}` with `{"status":"dismissed"}` dismisses an incident. `open` and `resolved` are also accepted.
 
-Consecutive breached days update one incident. Re-evaluating the same day does not reopen a dismissed or resolved incident. After recovery, a later breach starts a new incident. Editing a rule does not rewrite historical comparisons.
+Consecutive breached days keep one incident. Its original day, comparison values, and Activity link stay fixed; `last_seen` advances. Re-evaluating the same day does not reopen a dismissed or resolved incident. After recovery, a later breach starts a new incident. Editing a rule does not rewrite historical comparisons.
 
 Rules can specify `notification_channels: ["slack", "email"]` and `email_recipients: ["alerts@example.com"]`. Notification transports must already be configured on the gateway. An empty channel list keeps incidents available through the API and dashboard. Issue delivery is recorded per channel and destination. A repeated projection does not resend a successful delivery. Failed deliveries retry in the background, and the worker rechecks the issue, source signal, and current rule immediately before transport. Disabling a rule or acknowledging an issue cannot recall a send already in flight. Delivery is at least once: an ambiguous transport timeout, or partial success across several configured Slack webhooks, can cause a retry after a destination accepted a message. Configure `PROXY_BASE_URL` for clickable links in email and Slack. Default rules notify through Slack only when `usage_alerts` is explicitly enabled in the gateway's alert types when those rules are first registered. Otherwise they start with in-app/API incidents. To enable notifications after the defaults already exist, edit their channels through the API or dashboard; changing the gateway alert types does not rewrite saved rules. Explicit rule channels use the configured transport without an additional alert-type switch. If legacy `user_spend_anomalies` notifications are enabled, the default daily user-spend increase rule stays in-app to avoid overlapping notifications. Email requires recipients on the rule.
 
