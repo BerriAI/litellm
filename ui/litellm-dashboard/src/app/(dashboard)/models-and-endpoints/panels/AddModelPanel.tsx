@@ -15,6 +15,7 @@ import { Providers, getPlaceholder, getProviderModels } from "@/components/provi
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
+import { invalidateModelQueries } from "@/app/(dashboard)/hooks/models/invalidateModelQueries";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { buildDecisionCatalog } from "@/lib/decisionModels";
@@ -65,7 +66,7 @@ export default function AddModelPanel() {
   const decisionCatalog = useMemo(() => buildDecisionCatalog(modelCostMapData), [modelCostMapData]);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+  const refresh = () => invalidateModelQueries(queryClient);
 
   const mountedValues = () => projectMountedValues(registry, form.getValues);
 

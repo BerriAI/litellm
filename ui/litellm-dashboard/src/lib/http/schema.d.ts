@@ -30261,27 +30261,6 @@ export interface components {
          * @description Documents all the fields supported by `general_settings` in config.yaml
          */
         ConfigGeneralSettings: {
-            /** @description Opt-in durable usage capture. Legacy spend updates remain active. Requires local Prisma writes. */
-            accounting_capture?: components["schemas"]["UsageCaptureSettings"] | null;
-            /**
-             * Accounting Sync Ack
-             * @description Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. Other requests remain supported with asynchronous usage capture.
-             * @default false
-             */
-            accounting_sync_ack: boolean;
-            /**
-             * Accounting Sync Ack Failure Policy
-             * @description Return 503 or log the persistence failure after the response wait expires
-             * @default fail_closed
-             * @enum {string}
-             */
-            accounting_sync_ack_failure_policy: "fail_closed" | "log";
-            /**
-             * Accounting Sync Ack Timeout Seconds
-             * @description Maximum response wait for usage commit, including the batch flush interval
-             * @default 20
-             */
-            accounting_sync_ack_timeout_seconds: number;
             /**
              * Admission Queue Timeout Seconds
              * @description maximum time a request waits for a worker slot
@@ -30883,6 +30862,12 @@ export interface components {
              * @description decrypt keys with google kms
              */
             use_google_kms?: boolean | null;
+            /**
+             * Use Spend Logs Ledger
+             * @description Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.
+             * @default false
+             */
+            use_spend_logs_ledger: boolean;
             /**
              * Use Spend Logs Partitioning
              * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
@@ -39064,6 +39049,11 @@ export interface components {
              * @description The model to migrate to: model_info.successor_model on the deployment when set, else the successor_model the cost map names for the deprecated model.
              */
             successor_model?: string | null;
+            /**
+             * Team Public Model Name
+             * @description The model name visible to the team, when configured.
+             */
+            team_public_model_name?: string | null;
         };
         /** ModelDeprecationResponse */
         ModelDeprecationResponse: {
@@ -48171,7 +48161,7 @@ export interface components {
             id: string;
             /**
              * Tool Name
-             * @description Regex pattern applied to the tool's function name
+             * @description Regex pattern applied to the tool's name, or to its type when the tool has no name
              */
             tool_name?: string | null;
             /**
@@ -49982,29 +49972,6 @@ export interface components {
              * @default 1.0.0
              */
             version: string | null;
-        };
-        /** UsageCaptureSettings */
-        UsageCaptureSettings: {
-            /**
-             * Batch Size
-             * @default 1000
-             */
-            batch_size: number;
-            /**
-             * Flush Interval Seconds
-             * @default 5
-             */
-            flush_interval_seconds: number;
-            /**
-             * Max Pending Bytes
-             * @default 16777216
-             */
-            max_pending_bytes: number;
-            /**
-             * Max Pending Records
-             * @default 10000
-             */
-            max_pending_records: number;
         };
         /** UsageChartPoint */
         UsageChartPoint: {

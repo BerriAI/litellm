@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
@@ -42,6 +43,7 @@ const PROPAGATE_WAIT_MS = 100;
 
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
   ({ accessToken, value, onChange, modelData, teamId }, ref) => {
+    const { t } = useTranslation();
     const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
       routerSettings: {},
       selectedStrategy: null,
@@ -346,8 +348,8 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       <div className="w-full">
         <Tabs defaultValue="1" className="w-full">
           <TabsList variant="line" className="px-8 pt-4">
-            <TabsTrigger value="1">Loadbalancing</TabsTrigger>
-            <TabsTrigger value="2">Fallbacks</TabsTrigger>
+            <TabsTrigger value="1">{t("routerSettingsAccordion.loadbalancing")}</TabsTrigger>
+            <TabsTrigger value="2">{t("routerSettingsAccordion.fallbacks")}</TabsTrigger>
           </TabsList>
           <div className="px-8 py-6">
             <TabsContent value="1" keepMounted>
