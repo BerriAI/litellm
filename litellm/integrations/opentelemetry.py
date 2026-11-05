@@ -36,7 +36,7 @@ from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
-from litellm.litellm_core_utils.redact_messages import scrubbed_exception_text
+from litellm.litellm_core_utils.redact_messages import scrubbed_exception_record
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.service_tier_utils import (
@@ -2272,7 +2272,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             # Get the exception object if available
             exception: Final = kwargs.get("exception")
-            scrubbed: Final = scrubbed_exception_text(kwargs)
+            scrubbed: Final = scrubbed_exception_record(kwargs)
 
             if exception is not None and scrubbed is not None:
                 span.record_exception(

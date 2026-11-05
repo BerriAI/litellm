@@ -2,6 +2,7 @@ import asyncio
 import json
 import threading
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
@@ -321,3 +322,42 @@ def test_mlflow_failure_event_records_the_error_text_the_payload_logged(scrubbed
         assert event.attributes["exception.type"] == "ValueError"
         assert event.attributes["exception.message"] == error_message
         assert event.attributes["exception.stacktrace"] == ("frames" if scrubbed else "raw")
+
+
+def _raise_provider_error(message: str) -> None:
+    raise ValueError(message)
+
+
+def test_mlflow_failure_event_records_the_exceptions_own_frames_when_no_traceback_was_logged() -> None:
+    secret: Final = "my ssn is 123-45-6789"
+    modules: Final = _mock_mlflow_modules()
+    modules["mlflow"].get_current_active_span.return_value = None
+    modules["mlflow.entities"].SpanEvent = _ExceptionSpanEvent
+    with pytest.raises(ValueError, match="bad input") as raised:
+        _raise_provider_error(f"bad input: {secret}")
+    with patch.dict("sys.modules", modules):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger: Final = MlflowLogger()
+        span: Final = MagicMock(parent_id=None, request_id="req-1")
+        mlflow_logger._client = MagicMock(**{"start_trace.return_value": span})
+
+        mlflow_logger._handle_failure(
+            kwargs={
+                "litellm_call_id": "x",
+                "messages": [{"role": "user", "content": "hi"}],
+                "exception": raised.value,
+                "standard_logging_object": {
+                    "request_tags": [],
+                    "error_information": {"error_message": "bad input: redacted-by-litellm", "traceback": ""},
+                },
+            },
+            response_obj=None,
+            start_time=datetime(2025, 1, 1),
+            end_time=datetime(2025, 1, 1),
+        )
+
+    stacktrace: Final = span.add_event.call_args.args[0].attributes["exception.stacktrace"]
+    assert secret not in stacktrace
+    assert "in _raise_provider_error" in stacktrace
+    assert stacktrace.endswith("ValueError: bad input: redacted-by-litellm\n")
