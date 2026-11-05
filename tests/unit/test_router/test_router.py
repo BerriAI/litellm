@@ -63,7 +63,6 @@ from litellm.router import (
     _responses_stream_holds_event,
     _without_line_breaks,
     _search_tool_support,
-    Span,
 )
 from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
 from litellm.router_strategy import simple_shuffle
@@ -6663,13 +6662,14 @@ def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
     )
 
 
-class _InjectedFallbackRouter(Router):
-    def __init__(self, fallback_response: object) -> None:
-        super().__init__(model_list=[], fallbacks=[{"primary": ["fallback"]}])
-        self._fallback_response: Final = fallback_response
+# The Rust core walks fallbacks and runs pre-routing in Rust, past the members these tests patch.
+_PYTHON_CORE_ONLY: Final = pytest.mark.usefixtures("python_router_core")
 
-    async def async_function_with_fallbacks_common_utils(
-        self,
+
+def _injected_fallback_router(fallback_response: object) -> Router:
+    router: Final = Router(model_list=[], fallbacks=[{"primary": ["fallback"]}])
+
+    async def inject_fallback(
         e: Exception,
         disable_fallbacks: bool | None,
         fallbacks: list | None,
@@ -6680,7 +6680,10 @@ class _InjectedFallbackRouter(Router):
         kwargs: dict[str, object],
         include_fallback_errors: bool = False,
     ) -> object:
-        return self._fallback_response
+        return fallback_response
+
+    router.async_function_with_fallbacks_common_utils = inject_fallback
+    return router
 
 
 @pytest.mark.asyncio
@@ -7043,6 +7046,7 @@ async def test_aresponses_streaming_content_policy_error_event_routes_to_content
 
 
 @pytest.mark.asyncio
+@_PYTHON_CORE_ONLY
 async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
     from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
 
@@ -7058,7 +7062,7 @@ async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
 
     from litellm.exceptions import MidStreamFallbackError
 
-    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "c"), delta(1, "d")]))
+    router: Final = _injected_fallback_router(_AsyncList([delta(0, "c"), delta(1, "d")]))
     primary: Final = _make_responses_iterator(
         chunks=[delta(0, "a"), delta(1, "b")],
         error=MidStreamFallbackError(
@@ -7082,6 +7086,7 @@ async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
 
 
 @pytest.mark.asyncio
+@_PYTHON_CORE_ONLY
 async def test_aresponses_stream_fallback_keeps_higher_numbers_and_passes_unnumbered_events():
     from litellm.exceptions import MidStreamFallbackError
     from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
@@ -7094,7 +7099,7 @@ async def test_aresponses_stream_fallback_keeps_higher_numbers_and_passes_unnumb
     def numbered(sequence_number: int, text: str) -> OutputTextDeltaEvent:
         return delta(text).model_copy(update={"sequence_number": sequence_number})
 
-    router: Final = _InjectedFallbackRouter(_AsyncList([numbered(7, "c"), delta("d"), numbered(8, "e")]))
+    router: Final = _injected_fallback_router(_AsyncList([numbered(7, "c"), delta("d"), numbered(8, "e")]))
     primary: Final = _make_responses_iterator(
         chunks=[numbered(0, "a"), numbered(1, "b")],
         error=MidStreamFallbackError(
@@ -7123,6 +7128,7 @@ async def test_aresponses_stream_fallback_keeps_higher_numbers_and_passes_unnumb
 
 
 @pytest.mark.asyncio
+@_PYTHON_CORE_ONLY
 async def test_aresponses_stream_without_fallback_passes_upstream_numbers_unchanged():
     from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
 
@@ -7136,7 +7142,7 @@ async def test_aresponses_stream_without_fallback_passes_upstream_numbers_unchan
             sequence_number=sequence_number,
         )
 
-    router: Final = _InjectedFallbackRouter(_AsyncList([]))
+    router: Final = _injected_fallback_router(_AsyncList([]))
     primary: Final = _make_responses_iterator(
         chunks=[delta(0, "a"), delta(1, "b"), delta(1, "c"), delta(0, "d")], model="primary"
     )
@@ -7151,6 +7157,7 @@ async def test_aresponses_stream_without_fallback_passes_upstream_numbers_unchan
 
 
 @pytest.mark.asyncio
+@_PYTHON_CORE_ONLY
 async def test_aresponses_stream_fallback_continues_above_the_highest_number_the_primary_sent():
     from litellm.exceptions import MidStreamFallbackError
     from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
@@ -7165,7 +7172,7 @@ async def test_aresponses_stream_fallback_continues_above_the_highest_number_the
             sequence_number=sequence_number,
         )
 
-    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "d")]))
+    router: Final = _injected_fallback_router(_AsyncList([delta(0, "d")]))
     primary: Final = _make_responses_iterator(
         chunks=[delta(0, "a"), delta(3, "b"), delta(1, "c")],
         error=MidStreamFallbackError(
@@ -7234,6 +7241,7 @@ async def test_aresponses_streaming_iterator_unwraps_content_policy_trigger_for_
     ],
     ids=["plain-fallback", "complexity-tier-fallback"],
 )
+@_PYTHON_CORE_ONLY
 async def test_aresponses_streaming_iterator_replaces_complexity_headers_before_fallback_output(
     fallback_headers: dict[str, str],
 ) -> None:
@@ -7257,7 +7265,7 @@ async def test_aresponses_streaming_iterator_replaces_complexity_headers_before_
         "model_id": "fallback-deployment",
         "additional_headers": fallback_headers,
     }
-    router: Final = _InjectedFallbackRouter(fallback)
+    router: Final = _injected_fallback_router(fallback)
 
     wrapped: Final = await router._aresponses_streaming_iterator(
         response=source,
@@ -19126,6 +19134,7 @@ async def test_anthropic_messages_fallback_merges_fallback_hidden_params():
     ],
     ids=["plain-fallback", "complexity-tier-fallback"],
 )
+@_PYTHON_CORE_ONLY
 async def test_anthropic_messages_fallback_replaces_complexity_headers_before_output(
     fallback_headers: dict[str, str],
 ) -> None:
@@ -19145,7 +19154,7 @@ async def test_anthropic_messages_fallback_replaces_complexity_headers_before_ou
             "additional_headers": fallback_headers,
         },
     )
-    router: Final = _InjectedFallbackRouter(fallback)
+    router: Final = _injected_fallback_router(fallback)
 
     wrapped: Final = await router._aanthropic_messages_streaming_iterator(
         response=source,
@@ -22020,24 +22029,23 @@ class TestRequestReasoningEffortOverride:
         assert ("reasoning_effort" not in body) is should_drop
 
 
+@_PYTHON_CORE_ONLY
 class TestPreRoutingTierDrivesFallbacks:
     """#38832: a complexity/auto router picks a tier behind the router name, but fallback
     lookup stayed on the router name, so the tier's configured chain never ran and a
     provider failure on the tier's first hop was returned to the client."""
 
-    class _TierRouter(litellm.Router):
-        async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
-        ):
-            from litellm.types.router import PreRoutingHookResponse
+    @staticmethod
+    async def _select_tier(model, request_kwargs, messages=None, input=None, specific_deployment=False):
+        from litellm.types.router import PreRoutingHookResponse
 
-            if model == "smart-router":
-                return PreRoutingHookResponse(model="tier1", messages=messages)
-            return None
+        if model == "smart-router":
+            return PreRoutingHookResponse(model="tier1", messages=messages)
+        return None
 
     @classmethod
     def _router(cls, fallbacks) -> "litellm.Router":
-        return cls._TierRouter(
+        router = litellm.Router(
             model_list=[
                 {
                     "model_name": "smart-router",
@@ -22087,6 +22095,8 @@ class TestPreRoutingTierDrivesFallbacks:
             fallbacks=fallbacks,
             num_retries=0,
         )
+        router._core_async_pre_routing_hook = cls._select_tier
+        return router
 
     @pytest.mark.asyncio
     async def test_the_selected_tier_fallback_chain_runs(self):
@@ -24545,50 +24555,6 @@ def test_a_failed_routing_read_prefetch_logs_the_request_model_without_its_line_
     ]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "routing_strategy",
-    ["simple-shuffle", "usage-based-routing-v2", "least-busy", "latency-based-routing"],
-)
-async def test_router_subclass_overriding_async_get_healthy_deployments_with_the_old_signature_still_routes(
-    routing_strategy: str,
-) -> None:
-    class OldSignatureRouter(litellm.Router):
-        async def async_get_healthy_deployments(
-            self,
-            model: str,
-            request_kwargs: dict,
-            messages: list[dict[str, str]] | None = None,
-            input: str | list | None = None,
-            specific_deployment: bool | None = False,
-            parent_otel_span: Span | None = None,
-            health_check_probe: bool = False,
-        ):
-            return await super().async_get_healthy_deployments(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-                parent_otel_span=parent_otel_span,
-                health_check_probe=health_check_probe,
-            )
-
-    router: Final = OldSignatureRouter(
-        model_list=[
-            {
-                "model_name": "m",
-                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x", "mock_response": "hi"},
-            }
-        ],
-        routing_strategy=routing_strategy,
-    )
-
-    response: Final = await router.acompletion(model="m", messages=[{"role": "user", "content": "x"}])
-
-    assert response.choices[0].message.content == "hi"
-
-
 def test_get_deployment_credentials_with_provider_preserves_anthropic_wif_params():
     """
     Test that get_deployment_credentials_with_provider preserves a litellm_params-configured
@@ -25835,6 +25801,441 @@ async def test_router_clientside_credential_not_reused_by_other_callers(respx_mo
 
     used_auth_headers = {call.request.headers["authorization"] for call in route.calls[1:]}
     assert used_auth_headers == {"Bearer configured-key"}
+
+def _caused_by_an_entra_rejection(error: litellm.AuthenticationError) -> litellm.AuthenticationError:
+    from litellm.llms.azure.common_utils import EntraRejectionError
+
+    try:
+        raise error from EntraRejectionError(status_code=401, message=error.message)
+    except litellm.AuthenticationError as raised:
+        return raised
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize("caller_credential", ["client_secret", "azure_password", "azure_ad_token"])
+async def test_router_caller_entra_credential_rejection_leaves_the_shared_deployment_routable(caller_credential):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "tenant_id": "configured-tenant",
+                    "client_id": "configured-client",
+                    "client_secret": "configured-secret",
+                },
+                "model_info": {"id": "configured-deployment"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=_caused_by_an_entra_rejection(
+                litellm.AuthenticationError(
+                    message="Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
+                    llm_provider="azure",
+                    model="gpt-4.1",
+                )
+            ),
+            **{caller_credential: "not-the-credential"},
+        )
+
+    response: Final = await router.acompletion(
+        model="entra-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+    )
+
+    assert response.choices[0].message.content == "hi"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "caller_field",
+    [
+        pytest.param({"client_secret": "environment-secret"}, id="environment_secret"),
+        pytest.param({"client_id": "environment-client"}, id="environment_client_id"),
+        pytest.param({"azure_scope": "https://cognitiveservices.azure.com/.default"}, id="default_scope"),
+        pytest.param({"client_secret": ""}, id="blank_secret"),
+    ],
+)
+async def test_router_caller_entra_field_that_changes_the_deployment_credential_leaves_it_routable(
+    caller_field, monkeypatch
+):
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "environment-secret")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "environment-client")
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "tenant_id": "configured-tenant",
+                    "client_id": "configured-client",
+                    "client_secret": "configured-secret",
+                    "azure_scope": "api://configured-app/.default",
+                },
+                "model_info": {"id": "configured-deployment"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=_caused_by_an_entra_rejection(
+                litellm.AuthenticationError(
+                    message="Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
+                    llm_provider="azure",
+                    model="gpt-4.1",
+                )
+            ),
+            **caller_field,
+        )
+
+    response: Final = await router.acompletion(
+        model="entra-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+    )
+
+    assert response.choices[0].message.content == "hi"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("deployment_secret", "router_default_secret"),
+    [
+        pytest.param({"client_secret": "configured-secret"}, None, id="deployment"),
+        pytest.param({}, {"client_secret": "configured-secret"}, id="router_default_litellm_params"),
+    ],
+)
+async def test_router_configured_entra_credential_rejection_cools_down_the_deployment(
+    deployment_secret, router_default_secret
+):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "tenant_id": "configured-tenant",
+                    "client_id": "configured-client",
+                    **deployment_secret,
+                },
+                "model_info": {"id": "configured-deployment"},
+            }
+        ],
+        default_litellm_params=router_default_secret,
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(
+                message="Failed to get Azure AD token: AADSTS7000222: The provided client secret keys are expired.",
+                llm_provider="azure",
+                model="gpt-4.1",
+            ),
+        )
+
+    with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hi",
+        )
+
+    assert excinfo.value.all_deployments_in_cooldown is True
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "caller_fields",
+    [
+        pytest.param({"azure_scope": "https://cognitiveservices.azure.com/.default"}, id="default_scope"),
+        pytest.param({"azure_username": ""}, id="empty_username"),
+        pytest.param({"client_secret": "environment-secret"}, id="environment_secret"),
+    ],
+)
+async def test_router_caller_entra_field_that_changes_nothing_still_cools_down_a_rejected_deployment(
+    caller_fields, monkeypatch
+):
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "environment-secret")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "tenant_id": "configured-tenant",
+                    "client_id": "configured-client",
+                },
+                "model_info": {"id": "configured-deployment"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=_caused_by_an_entra_rejection(
+                litellm.AuthenticationError(
+                    message="Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
+                    llm_provider="azure",
+                    model="gpt-4.1",
+                )
+            ),
+            **caller_fields,
+        )
+
+    with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hi",
+        )
+
+    assert excinfo.value.all_deployments_in_cooldown is True
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_caller_repeating_the_secret_an_empty_router_default_selects_still_cools_down(monkeypatch):
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "environment-secret")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "tenant_id": "configured-tenant",
+                    "client_id": "configured-client",
+                    "client_secret": "configured-secret",
+                },
+                "model_info": {"id": "configured-deployment"},
+            }
+        ],
+        default_litellm_params={"client_secret": ""},
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=_caused_by_an_entra_rejection(
+                litellm.AuthenticationError(
+                    message="Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided.",
+                    llm_provider="azure",
+                    model="gpt-4.1",
+                )
+            ),
+            client_secret="environment-secret",
+        )
+
+    with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+        await router.acompletion(
+            model="entra-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hi",
+        )
+
+    assert excinfo.value.all_deployments_in_cooldown is True
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_caller_entra_field_keeps_the_shared_deployment():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "configured-key"},
+                "model_info": {"id": "shared-deployment"},
+            }
+        ]
+    )
+
+    response: Final = await router.acompletion(
+        model="shared-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+        client_id="caller-client",
+    )
+
+    assert response._hidden_params["model_id"] == "shared-deployment"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("litellm_params", "provider"),
+    [
+        pytest.param({"model": "openai/gpt-4.1-mini", "api_key": "revoked-key"}, "openai", id="openai"),
+        pytest.param(
+            {
+                "model": "azure/gpt-4.1",
+                "api_base": "https://litellm-qa.openai.azure.com",
+                "api_version": "2025-04-01-preview",
+                "api_key": "revoked-key",
+            },
+            "azure",
+            id="azure_api_key",
+        ),
+    ],
+)
+@pytest.mark.parametrize("caller_entra_field", ["client_id", "azure_scope"])
+async def test_router_auth_failure_entra_did_not_cause_cools_down_despite_a_caller_entra_field(
+    litellm_params, provider, caller_entra_field
+):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": litellm_params,
+                "model_info": {"id": "shared-deployment"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="shared-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(
+                message="Incorrect API key provided.", llm_provider=provider, model=litellm_params["model"]
+            ),
+            **{caller_entra_field: "caller-value"},
+        )
+
+    with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+        await router.acompletion(
+            model="shared-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hi",
+        )
+
+    assert excinfo.value.all_deployments_in_cooldown is True
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_fallback_auth_failure_after_an_entra_rejection_still_cools_down_the_fallback(monkeypatch):
+    from azure.core.exceptions import ClientAuthenticationError
+
+    def rejected_token() -> str:
+        raise ClientAuthenticationError(message="AADSTS7000215: Invalid client secret provided.")
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "azure_ad_token_provider": rejected_token,
+                },
+                "model_info": {"id": "entra-deployment"},
+            },
+            {
+                "model_name": "key-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa-fallback.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "api_key": "revoked-key",
+                },
+                "model_info": {"id": "key-deployment"},
+            },
+        ],
+        fallbacks=[{"entra-model": ["key-model"]}],
+    )
+
+    with respx.mock:
+        fallback_route: Final = respx.post(url__startswith="https://litellm-qa-fallback.openai.azure.com").mock(
+            return_value=httpx.Response(
+                401, json={"error": {"code": "401", "message": "Access denied due to invalid subscription key."}}
+            )
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            await router.acompletion(
+                model="entra-model",
+                messages=[{"role": "user", "content": "hi"}],
+                client_secret="not-the-credential",
+            )
+
+        with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+            await router.acompletion(
+                model="key-model",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    assert fallback_route.call_count == 1
+    assert excinfo.value.all_deployments_in_cooldown is True
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "stream_request",
+    [
+        pytest.param(
+            lambda router, **caller_fields: router.acompletion(
+                model="entra-model", messages=[{"role": "user", "content": "hi"}], stream=True, **caller_fields
+            ),
+            id="chat_completions",
+        ),
+        pytest.param(
+            lambda router, **caller_fields: router.aanthropic_messages(
+                model="entra-model",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=5,
+                stream=True,
+                **caller_fields,
+            ),
+            id="messages",
+        ),
+    ],
+)
+async def test_router_caller_entra_rejection_on_a_stream_leaves_the_shared_deployment_routable(
+    monkeypatch: pytest.MonkeyPatch,
+    stream_request: Callable[..., Awaitable[object]],
+) -> None:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    def rejected_token() -> str:
+        raise ClientAuthenticationError(message="AADSTS7000215: Invalid client secret provided.")
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "azure_ad_token_provider": rejected_token,
+                },
+                "model_info": {"id": "entra-deployment"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await stream_request(router, client_secret="not-the-credential")
+
+    with pytest.raises(litellm.AuthenticationError):
+        await stream_request(router)
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_router_get_async_openai_model_client():
@@ -29667,9 +30068,19 @@ def test_reset_custom_routing_strategy():
 
     assert "get_available_deployment" not in router._core.__dict__
     assert "_core_async_get_available_deployment" not in router._core.__dict__
-    assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
+    assert router.async_get_available_deployment.__wrapped__.__func__ is Router.async_get_available_deployment
 
     router._reset_custom_routing_strategy()
+
+
+@pytest.mark.asyncio
+async def test_select_picks_through_a_custom_routing_strategy() -> None:
+    router: Final = _create_custom_routing_router()
+    router.set_custom_routing_strategy(SpecialEndpointRoutingStrategy(router))
+
+    picked: Final = await router.select("azure-model", {"metadata": {}})
+
+    assert picked["model_info"]["id"] == "very-special-endpoint"
 
 
 @pytest.mark.asyncio

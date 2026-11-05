@@ -257,23 +257,22 @@ _FIRST_HOP_FAILURE_MARKER: Final = datetime(2026, 1, 2)
 _FINAL_HOP_FAILURE_MARKER: Final = datetime(2026, 1, 3)
 
 
-class _TwoFailureFallbackRouter(Router):
-    def __init__(self) -> None:
-        super().__init__(
-            model_list=[
-                {
-                    "model_name": "fallback-model",
-                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
-                    "model_info": {"id": f"fallback-dep-{index}"},
-                }
-                for index in (1, 2)
-            ],
-            allowed_fails=0,
-            cooldown_time=60,
-            num_retries=0,
-        )
+def _two_failure_fallback_router() -> Router:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "fake-key"},
+                "model_info": {"id": f"fallback-dep-{index}"},
+            }
+            for index in (1, 2)
+        ],
+        allowed_fails=0,
+        cooldown_time=60,
+        num_retries=0,
+    )
 
-    async def async_function_with_fallbacks(self, *args: object, **kwargs: object) -> NoReturn:
+    async def fail_both_hops(*args: object, **kwargs: object) -> NoReturn:
         logging_obj: Final[object] = kwargs["litellm_logging_obj"]
         assert isinstance(logging_obj, Logging)
         assert logging_obj.model_call_details.get("has_logged_async_failure", False) is False
@@ -286,6 +285,9 @@ class _TwoFailureFallbackRouter(Router):
 
         logging_obj.model_call_details["current_attempt_api_call_start_time"] = _FINAL_HOP_FAILURE_MARKER
         raise _RateLimitedHop("fallback-dep-2")
+
+    router.async_function_with_fallbacks = fail_both_hops
+    return router
 
 
 def _two_deployment_router() -> Router:
@@ -300,6 +302,63 @@ def _two_deployment_router() -> Router:
         ],
         num_retries=0,
     )
+
+
+def _entra_fallback_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1",
+                    "api_base": "https://litellm-qa.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                    "tenant_id": "configured-tenant",
+                    "client_id": "configured-client",
+                    "client_secret": "configured-secret",
+                },
+                "model_info": {"id": f"fallback-dep-{index}"},
+            }
+            for index in (1, 2)
+        ],
+        num_retries=0,
+    )
+
+
+def _raised_from_an_entra_rejection(failed_deployment_id: str) -> litellm.AuthenticationError:
+    from litellm.llms.azure.common_utils import EntraRejectionError
+
+    reason: Final = "Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided."
+    try:
+        raise litellm.AuthenticationError(message=reason, llm_provider="azure", model="gpt-4.1") from (
+            EntraRejectionError(status_code=401, message=reason)
+        )
+    except litellm.AuthenticationError as raised:
+        raised.failed_deployment_id = failed_deployment_id
+        return raised
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_params", "cooled_down"),
+    [
+        pytest.param({"client_secret": "not-the-credential"}, [], id="caller-secret"),
+        pytest.param({"client_secret": "configured-secret"}, ["fallback-dep-1"], id="deployment-secret"),
+    ],
+)
+async def test_fallback_hop_cools_down_only_a_deployment_entra_rejected_its_own_credential(
+    call_params: Mapping[str, object], cooled_down: list[str]
+) -> None:
+    router: Final = _entra_fallback_router()
+
+    _trigger_cooldown_for_failed_deployment(
+        ctx=RoutingContext(router),
+        kwargs={},
+        exception=_raised_from_an_entra_rejection("fallback-dep-1"),
+        model_call_details={"litellm_params": call_params},
+    )
+
+    assert await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None) == cooled_down
 
 
 @pytest.mark.asyncio
@@ -340,8 +399,9 @@ async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_l
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("python_router_core")  # the Rust core walks fallbacks in Rust, so it has no such member
 async def test_run_async_fallback_cools_down_the_final_deployment_after_retry_failure_logging() -> None:
-    router: Final = _TwoFailureFallbackRouter()
+    router: Final = _two_failure_fallback_router()
     logging_obj: Final = _request_logging_obj()
     assert logging_obj.model_call_details.get("has_logged_async_failure", False) is False
 

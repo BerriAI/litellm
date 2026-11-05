@@ -18,6 +18,7 @@ from typing import Final
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.agentic_followup_failure import mark_agentic_followup_failure
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 from litellm.router_config import RouterDynamicConfig, build_router_config
 from litellm.router_core import RouterCore
@@ -136,6 +137,12 @@ def content_policy(model: str = "gpt-4o") -> litellm.ContentPolicyViolationError
 
 def server_error(model: str = "gpt-4o") -> litellm.InternalServerError:
     return litellm.InternalServerError(message="boom", llm_provider="openai", model=model)
+
+
+def agentic_followup_failure(error: Exception) -> Exception:
+    """``error`` as an agentic follow-up raises it, after the first call was served."""
+    mark_agentic_followup_failure(error, ())
+    return error
 
 
 def timeout(model: str = "gpt-4o") -> litellm.Timeout:
@@ -324,6 +331,9 @@ class ScriptedHost(PythonHost):
 
         return done()
 
+    def sleep_sync(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+
     def dynamic(self) -> RouterDynamicConfig:
         return self._dynamic
 
@@ -398,9 +408,9 @@ class ScriptedHost(PythonHost):
             return outcome, None
         return None, _default_response(op, call.model) if outcome is None else outcome
 
-    async def _answer_async(self, op: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> object:
-        call, outcome = self._outcome(op, args, kwargs)
-        error, response = self._finish(op, call, outcome)
+    async def log_async(self, call: Call, error: BaseException | None, response: object) -> None:
+        """Run the callbacks an async call's logging runs: the failure callbacks for ``error``, else
+        the async success callbacks for ``response``."""
         logged: Final = self._logging_kwargs(call, error, response)
         if error is not None:
             for callback in list(self.lists.get("failure_callback", ())):
@@ -409,24 +419,50 @@ class ScriptedHost(PythonHost):
             for callback in list(self.lists.get("_async_failure_callback", ())):
                 if callable(callback):
                     await callback(logged, None, 0.0, 0.0)
-            raise error
+            return
         for callback in list(self.lists.get("_async_success_callback", ())):
             if callable(callback):
                 await callback(logged, response, 0.0, 0.0)
-        return response
 
-    def _answer_sync(self, op: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> object:
-        call, outcome = self._outcome(op, args, kwargs)
-        error, response = self._finish(op, call, outcome)
+    def log_sync(self, call: Call, error: BaseException | None, response: object) -> None:
+        """``log_async`` for a sync call: the failure callbacks, else the sync success callbacks."""
         logged: Final = self._logging_kwargs(call, error, response)
         if error is not None:
             for callback in list(self.lists.get("failure_callback", ())):
                 if callable(callback):
                     callback(logged, None, 0.0, 0.0)
-            raise error
+            return
         for callback in list(self.lists.get("success_callback", ())):
             if callable(callback):
                 callback(logged, response, 0.0, 0.0)
+
+    def _logs_at_stream_end(self, call: Call, response: object) -> bool:
+        """A stream whose logging object logs through this host (``streaming_helpers.HostLogging``)
+        logs when it ends, as litellm's stream logging does, so the call logs nothing when it opens."""
+        bind: Final[object] = getattr(getattr(response, "logging_obj", None), "bind_host", None)
+        if not callable(bind):
+            return False
+        bind(self, call)
+        return True
+
+    async def _answer_async(self, op: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> object:
+        call, outcome = self._outcome(op, args, kwargs)
+        error, response = self._finish(op, call, outcome)
+        if error is not None:
+            await self.log_async(call, error, response)
+            raise error
+        if not self._logs_at_stream_end(call, response):
+            await self.log_async(call, None, response)
+        return response
+
+    def _answer_sync(self, op: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> object:
+        call, outcome = self._outcome(op, args, kwargs)
+        error, response = self._finish(op, call, outcome)
+        if error is not None:
+            self.log_sync(call, error, response)
+            raise error
+        if not self._logs_at_stream_end(call, response):
+            self.log_sync(call, None, response)
         return response
 
 
@@ -452,25 +488,46 @@ def python_core(host: ScriptedHost, **arguments: object) -> PythonCore:  # kwarg
     return PythonCore(**config.arguments, _host=host)  # pyright: ignore[reportArgumentType]  # the same arguments Router binds
 
 
-CoreBuilder = Callable[..., RouterCore]
-"""``builder(host, **router_arguments)``: a router core on ``host``."""
-
-CORE_BUILDERS: Final[dict[str, CoreBuilder]] = {"python": python_core}
-"""Every core the suite runs on. Another core adds its builder here; a builder that cannot take a
-configuration raises ``CoreDeclined``, and the test is skipped for that core."""
-
-
 class CoreDeclined(Exception):
     """The core does not serve this configuration (the router would stay on the Python core)."""
 
 
+CoreBuilder = Callable[..., RouterCore]
+"""``builder(host, **router_arguments)``: a router core on ``host``."""
+
+
+def rust_core(host: ScriptedHost, **arguments: object) -> RouterCore:  # kwargs-ok: the router's constructor arguments
+    """A ``RustCore`` on ``host``, built the way ``make_core`` builds one when the Rust router is on."""
+    from litellm.router_rust.core import RustCore
+    from litellm.rust_bridge._native import RustBridgeDeclined
+
+    config: Final = build_router_config(arguments)  # an invalid config raises here, as for the Python core
+    try:
+        return RustCore.build(config, host)
+    except RustBridgeDeclined as declined:  # make_core keeps such a router on the Python core
+        raise CoreDeclined(str(declined)) from declined
+
+
+CORE_BUILDERS: Final[dict[str, CoreBuilder]] = {"python": python_core, "rust": rust_core}
+
+
+def records_outcomes_through_callbacks(core: RouterCore) -> bool:
+    """Whether ``core`` learns attempt outcomes from callbacks it registers on its host. The Python
+    core does; the Rust core records every outcome from the attempt itself and registers none."""
+    return isinstance(core, PythonCore)
+
+
+"""Every core the suite runs on. Another core adds its builder here; a builder that cannot take a
+configuration raises ``CoreDeclined``, and the test is skipped for that core."""
+
+
 __all__ = [
-    "Call",
-    "HostCallbacks",
-    "INFERENCE_OPS",
     "CORE_BUILDERS",
+    "INFERENCE_OPS",
+    "Call",
     "CoreBuilder",
     "CoreDeclined",
+    "HostCallbacks",
     "ScriptedHost",
     "auth_error",
     "bad_request",
@@ -482,6 +539,7 @@ __all__ = [
     "embedding_response",
     "python_core",
     "rate_limit",
+    "rust_core",
     "server_error",
     "timeout",
 ]

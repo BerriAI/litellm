@@ -4473,6 +4473,13 @@ class _LiveDeploymentReplay:
     """
 
     callback: Callable[[], None] | None = None
+    # Replays other router cores add beside the slot, run after it.
+    extra: tuple[Callable[[], None], ...] = ()
+
+
+def add_live_deployment_replay(replay: Callable[[], None]) -> None:
+    """Add a callback that re-asserts another router core's live deployments after a refresh."""
+    _LiveDeploymentReplay.extra = (*_LiveDeploymentReplay.extra, replay)
 
 
 def set_live_deployment_replay(replay: Callable[[], None]) -> None:
@@ -4506,6 +4513,8 @@ def reapply_runtime_model_cost_registrations() -> None:
     """
     if _LiveDeploymentReplay.callback is not None:
         _LiveDeploymentReplay.callback()
+    for extra_replay in _LiveDeploymentReplay.extra:
+        extra_replay()
     if _runtime_registered_model_cost:
         register_model(
             model_cost=dict(
@@ -6506,7 +6515,15 @@ def get_deployment_order(deployment: Mapping[str, object]) -> int | None:
     resolved_order: Final = (
         order if order is not None else cast(Mapping[str, object], deployment.get("model_info", {})).get("order")
     )
-    return cast(int | None, resolved_order)
+    # One number for every spelling (`1`, `1.0`, `"1"`, `True`), so orders written different ways
+    # sort and compare together; anything else counts as no order.
+    if isinstance(resolved_order, bool | int):
+        return int(resolved_order)
+    if isinstance(resolved_order, float):
+        return int(resolved_order) if resolved_order.is_integer() else None
+    if isinstance(resolved_order, str) and re.fullmatch(r"[+-]?[0-9]+", resolved_order):
+        return int(resolved_order)
+    return None
 
 
 _get_deployment_order = get_deployment_order
@@ -7749,6 +7766,7 @@ def get_model_info_helper(
                 supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
                 supports_legacy_thinking=_model_info.get("supports_legacy_thinking", None),
                 thinking_always_on=_model_info.get("thinking_always_on", None),
+                thinking_on_by_default=_model_info.get("thinking_on_by_default", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),

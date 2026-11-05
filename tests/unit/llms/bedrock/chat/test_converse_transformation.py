@@ -15,6 +15,7 @@ import respx
 import litellm
 from litellm._logging import verbose_logger
 from litellm import ModelResponse, Router, completion
+from litellm.constants import RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
@@ -1440,18 +1441,27 @@ def test_thinking_request_adds_output_tokens_details_response_path():
     assert result["additionalModelResponseFieldPaths"] == ("/usage/output_tokens_details",)
 
 
-def test_request_without_thinking_omits_response_field_paths():
-    config = AmazonConverseConfig()
-
-    result = config._transform_request(
-        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+@pytest.mark.parametrize(
+    ("model", "thinks_by_default"),
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", False),
+        ("bedrock/converse/us.anthropic.claude-opus-5", True),
+        ("us.anthropic.claude-haiku-5-5", True),
+    ],
+    ids=["opus-4-7-thinking-off-by-default", "opus-5-thinking-on-by-default", "haiku-5-5-thinking-on-by-default"],
+)
+def test_request_without_thinking_asks_for_thinking_tokens_only_when_the_model_thinks_by_default(
+    local_model_cost_map: None, model: str, thinks_by_default: bool
+):
+    result = AmazonConverseConfig()._transform_request(
+        model=model,
         messages=[{"role": "user", "content": "hi"}],
         optional_params={"maxTokens": 256},
         litellm_params={},
         headers={},
     )
 
-    assert "additionalModelResponseFieldPaths" not in result
+    assert (result.get("additionalModelResponseFieldPaths") == ("/usage/output_tokens_details",)) is thinks_by_default
 
 
 def test_transform_usage_prefers_provider_reasoning_tokens():
@@ -4937,7 +4947,6 @@ def test_translate_response_format_native_output_config(monkeypatch):
             model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             optional_params=optional_params,
             non_default_params={"response_format": response_format},
-            is_thinking_enabled=False,
         )
 
         # Should have outputConfig, NOT tools
@@ -4965,18 +4974,18 @@ def test_translate_response_format_native_output_config(monkeypatch):
             monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
-CAPITAL_RESPONSE_FORMAT: Final = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "capital",
-        "schema": {
-            "type": "object",
-            "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
-            "required": ["city", "country"],
-            "additionalProperties": False,
-        },
+CAPITAL_JSON_SCHEMA: Final = {
+    "name": "capital",
+    "schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+        "required": ["city", "country"],
+        "additionalProperties": False,
     },
 }
+
+
+CAPITAL_RESPONSE_FORMAT: Final = {"type": "json_schema", "json_schema": CAPITAL_JSON_SCHEMA}
 
 
 ADAPTIVE_THINKING: Final = {"type": "adaptive"}
@@ -5030,24 +5039,124 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
     assert "fake_stream" not in native_params
     assert "outputConfig" not in tool_request
     assert [tool["toolSpec"]["name"] for tool in tool_request["toolConfig"]["tools"]] == ["json_tool_call"]
-    assert tool_request["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
+    assert "toolChoice" not in tool_request["toolConfig"]
     assert tool_params.get("fake_stream", False) is stream
 
 
+_JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
+
+
 @pytest.mark.parametrize(
-    ("native_key", "thinking_params", "native"),
+    ("model", "native_key", "model_info", "thinking_params", "forced"),
     [
-        ("legacy", {}, True),
-        ("bedrock", {}, False),
-        ("bedrock", {"thinking": ADAPTIVE_THINKING}, True),
-        ("bedrock", {"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
-        ("bedrock", {"reasoning_effort": "low"}, True),
-        ("bedrock", {"reasoning_effort": "none"}, False),
-        ("bedrock", {"thinking": {"type": "disabled"}}, False),
+        (
+            "us.anthropic.claude-opus-4-8",
+            "bedrock",
+            {"supports_bedrock_native_structured_output": False},
+            {"thinking": ADAPTIVE_THINKING},
+            False,
+        ),
+        ("us.anthropic.claude-opus-5", None, None, {}, False),
+        ("global.anthropic.claude-sonnet-5", None, None, {}, False),
+        ("us.anthropic.claude-haiku-5-5", None, None, {}, False),
+        ("us.anthropic.claude-fable-5", None, None, {}, False),
+        ("us.anthropic.claude-fable-5", None, None, {"reasoning_effort": "none"}, False),
+        ("us.anthropic.claude-opus-4-8", None, None, {}, True),
+        ("us.anthropic.claude-opus-5", None, None, {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-haiku-5-5", None, None, {"reasoning_effort": "none"}, True),
+    ],
+    ids=[
+        "opus-4-8-adaptive-native-output-fallback",
+        "opus-5-default-thinking",
+        "sonnet-5-default-thinking",
+        "haiku-5-5-default-thinking",
+        "fable-5-always-on",
+        "fable-5-always-on-reasoning-effort-none",
+        "opus-4-8-default-off",
+        "opus-5-thinking-disabled",
+        "haiku-5-5-reasoning-effort-none",
+    ],
+)
+def test_json_tool_is_forced_only_when_the_model_will_not_think(
+    set_native_structured_output, model, native_key, model_info, thinking_params, forced
+):
+    set_native_structured_output(model, native_key)
+    config: Final = AmazonConverseConfig()
+
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {**CAPITAL_JSON_SCHEMA, "description": "The capital of a country"},
+    }
+
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"response_format": response_format, **thinking_params},
+        optional_params={},
+        model=model,
+        drop_params=False,
+        model_info=model_info,
+    )
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
+    assert (request["toolConfig"].get("toolChoice") == _JSON_TOOL_CHOICE) is forced
+    assert request["toolConfig"]["tools"][0]["toolSpec"]["description"] == (
+        "The capital of a country"
+        if forced
+        else f"{RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION} The capital of a country"
+    )
+
+
+def test_unforced_json_tool_keeps_the_schema_description_on_a_non_claude_model(set_native_structured_output):
+    model: Final = "us.meta.llama3-3-70b-instruct-v1:0"
+    set_native_structured_output(model, None)
+    config: Final = AmazonConverseConfig()
+
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {**CAPITAL_JSON_SCHEMA, "description": "The capital of a country"},
+            }
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolChoice" not in request["toolConfig"]
+    assert [tool["toolSpec"]["description"] for tool in request["toolConfig"]["tools"]] == ["The capital of a country"]
+
+
+@pytest.mark.parametrize(
+    ("model", "native_key", "thinking_params", "native"),
+    [
+        ("us.anthropic.claude-haiku-5-5", "legacy", {}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {}, False),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"thinking": ADAPTIVE_THINKING}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"reasoning_effort": "none"}, False),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "disabled"}}, False),
     ],
     ids=[
         "legacy-key",
-        "bedrock-key-no-thinking",
+        "bedrock-key-thinking-by-default",
+        "bedrock-key-thinking-off-by-default",
         "bedrock-key-adaptive",
         "bedrock-key-enabled",
         "bedrock-key-effort",
@@ -5055,10 +5164,9 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
         "bedrock-key-thinking-disabled",
     ],
 )
-def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
-    set_native_structured_output, native_key, thinking_params, native
+def test_bedrock_native_output_key_applies_only_when_the_model_will_think(
+    set_native_structured_output, model, native_key, thinking_params, native
 ):
-    model: Final = "us.anthropic.claude-haiku-5-5"
     set_native_structured_output(model, native_key)
 
     _, request = _converse_request_for_json_schema(model, False, thinking_params)
@@ -5078,7 +5186,7 @@ _FORCED_JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
         (False, True, None, {"thinking": {"type": "adaptive"}}, True, None),
         (False, False, None, None, False, None),
         (False, None, {"supports_bedrock_native_structured_output": False}, None, False, None),
-        (True, True, None, None, False, _FORCED_JSON_TOOL_CHOICE),
+        (True, True, None, {"thinking": {"type": "disabled"}}, False, _FORCED_JSON_TOOL_CHOICE),
     ],
     ids=[
         "cannot-force-tool",
@@ -5596,7 +5704,6 @@ def test_translate_response_format_fallback_tool_call():
         model="anthropic.claude-3-haiku-20240307-v1:0",
         optional_params=optional_params,
         non_default_params={"response_format": response_format},
-        is_thinking_enabled=False,
     )
 
     # Should use tool-call approach, NOT outputConfig (model doesn't support native structured outputs)
@@ -5633,7 +5740,6 @@ def test_native_structured_output_no_fake_stream(monkeypatch):
             model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             optional_params=optional_params,
             non_default_params={"response_format": response_format, "stream": True},
-            is_thinking_enabled=False,
         )
 
         assert "outputConfig" in result
@@ -5954,7 +6060,6 @@ def test_json_object_no_schema_skips_tool_injection(monkeypatch):
             model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             optional_params=optional_params,
             non_default_params=non_default_params,
-            is_thinking_enabled=False,
         )
 
         # Should NOT use native outputConfig (no schema provided)
