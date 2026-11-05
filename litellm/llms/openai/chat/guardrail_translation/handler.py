@@ -1047,9 +1047,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         try:
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             stream_ended: Final = fold.ended
-            inspects_tool_calls: Final = (
-                inspecting_one_choice or stream_ended or len(fold.choices) > 1
-            ) and fold.carries_tool_calls
+            inspects_tool_calls: Final = (inspecting_one_choice or len(fold.choices) > 1) and fold.carries_tool_calls
             if inspects_tool_calls:
                 tool_arguments_complete: Final = self._arguments_are_complete(fold.arguments)
                 assembled: Final = (

@@ -858,16 +858,12 @@ def strip_client_guardrail_information(data: dict[str, object]) -> None:  # muta
             )
 
 
-# ``guardrail_choice_index`` is written by the OpenAI guardrail handler around each
-# per-choice inspection round and read by guardrail spend logs as fact; a client value
-# has no legitimate meaning and no key or team setting keeps it.
 _GUARDRAIL_RESERVED_REQUEST_FIELDS: Final = frozenset({"guardrail_choice_index"})
 
 
 def _strip_guardrail_reserved_fields(
     data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
-    """Drop the guardrail-owned per-choice label from the client request body."""
     stripped: Final = tuple(sorted(field for field in _GUARDRAIL_RESERVED_REQUEST_FIELDS if field in data))
     for field in stripped:
         data.pop(field, None)

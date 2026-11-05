@@ -1591,7 +1591,8 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
     async def test_diff_mode_withholds_tool_calls_until_their_arguments_are_complete(self) -> None:
         """Mid-round the assembled arguments are a truncated JSON fragment, so they are not sent.
 
-        Sending them would hand the guardrail something like `{"ci`, which main never did.
+        Sending them would hand the guardrail something like `{"ci`, which main never did. Shown
+        at n>1, the only shape where a sampled round reads tool calls at all.
         """
         from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
@@ -1607,12 +1608,15 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 return inputs
 
         def chunk(text: str, arguments: str, finish_reason: str | None) -> ModelResponseStream:
-            return ModelResponseStream(choices=[StreamingChoices(
-                index=0, delta=Delta(content=text, tool_calls=[{
-                    "index": 0, "id": "call_0", "type": "function",
-                    "function": {"name": "weather", "arguments": arguments},
-                }]), finish_reason=finish_reason,
-            )])
+            return ModelResponseStream(choices=[
+                StreamingChoices(
+                    index=index, delta=Delta(content=text, tool_calls=[{
+                        "index": 0, "id": f"call_{index}", "type": "function",
+                        "function": {"name": "weather", "arguments": arguments},
+                    }]), finish_reason=finish_reason,
+                )
+                for index in (0, 1)
+            ])
 
         RecordingGuardrail.seen = []
         handler: Final = OpenAIChatCompletionsHandler()
@@ -1630,9 +1634,9 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
             responses_so_far=complete, guardrail_to_apply=guardrail,
             litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
         )
-        sent: Final = RecordingGuardrail.seen[-1]
-        assert sent is not None
-        assert [call["function"]["arguments"] for call in sent] == ['{"city": "Paris"}']
+        assert [
+            call["function"]["arguments"] for calls in RecordingGuardrail.seen for call in calls or ()
+        ] == ['{"city": "Paris"}', '{"city": "Paris"}']
 
     @pytest.mark.asyncio
     async def test_diff_mode_withholds_parallel_tool_calls_until_every_one_is_complete(self) -> None:
@@ -1658,10 +1662,13 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         RecordingGuardrail.seen = []
         handler: Final = OpenAIChatCompletionsHandler()
         guardrail: Final = RecordingGuardrail(guardrail_name="recording")
-        one_still_empty: Final = [ModelResponseStream(choices=[StreamingChoices(
-            index=0, delta=Delta(content="looking", tool_calls=[call(0, '{"city": "Paris"}'), call(1, "")]),
-            finish_reason=None,
-        )])]
+        one_still_empty: Final = [ModelResponseStream(choices=[
+            StreamingChoices(
+                index=index, delta=Delta(content="looking", tool_calls=[call(0, '{"city": "Paris"}'), call(1, "")]),
+                finish_reason=None,
+            )
+            for index in (0, 1)
+        ])]
         await handler.process_output_streaming_response(
             responses_so_far=one_still_empty, guardrail_to_apply=guardrail,
             litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
@@ -1669,18 +1676,22 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert RecordingGuardrail.seen == [None]
 
         RecordingGuardrail.seen = []
-        both_complete: Final = [ModelResponseStream(choices=[StreamingChoices(
-            index=0,
-            delta=Delta(content="looking", tool_calls=[call(0, '{"city": "Paris"}'), call(1, '{"city": "Rome"}')]),
-            finish_reason="tool_calls",
-        )])]
+        both_complete: Final = [ModelResponseStream(choices=[
+            StreamingChoices(
+                index=index,
+                delta=Delta(content="looking",
+                            tool_calls=[call(0, '{"city": "Paris"}'), call(1, '{"city": "Rome"}')]),
+                finish_reason="tool_calls",
+            )
+            for index in (0, 1)
+        ])]
         await handler.process_output_streaming_response(
             responses_so_far=both_complete, guardrail_to_apply=guardrail,
             litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
         )
-        sent: Final = RecordingGuardrail.seen[-1]
-        assert sent is not None
-        assert [c["function"]["arguments"] for c in sent] == ['{"city": "Paris"}', '{"city": "Rome"}']
+        assert [c["function"]["arguments"] for calls in RecordingGuardrail.seen for c in calls or ()] == [
+            '{"city": "Paris"}', '{"city": "Rome"}', '{"city": "Paris"}', '{"city": "Rome"}'
+        ]
 
     @pytest.mark.asyncio
     async def test_a_legacy_post_call_hook_sees_the_whole_response_once(self) -> None:
@@ -1969,7 +1980,11 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
 
     @pytest.mark.asyncio
     async def test_a_one_choice_round_keeps_the_shape_it_always_had(self) -> None:
-        """One choice has nothing to keep apart, so a sampled round still sends only its text."""
+        """One choice has nothing to keep apart, so a sampled round still sends only its text.
+
+        Including the round that sees the stream end, which is where the block inspection, not
+        this path, hands the guardrail the assembled tool calls, as it does on main.
+        """
         from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
@@ -1984,21 +1999,25 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 return inputs
 
         RecordingGuardrail.seen = []
-        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
-            index=0,
-            delta=Delta(content="looking", tool_calls=[
-                {"index": 0, "id": "call_0", "type": "function",
-                 "function": {"name": "weather", "arguments": '{"city": "Paris"}'}},
-            ]),
-        )])]
-        await OpenAIChatCompletionsHandler().process_output_streaming_response(
-            responses_so_far=chunks,
-            guardrail_to_apply=RecordingGuardrail(guardrail_name="one-choice"),
-            litellm_logging_obj=None,
-            request_data={"model": "gpt-4"},
-            stream_transform_sink=StreamTransformSink(),
-        )
-        assert RecordingGuardrail.seen == [(None, None)]
+        def chunk(finish_reason: str | None) -> ModelResponseStream:
+            return ModelResponseStream(choices=[StreamingChoices(
+                index=0,
+                delta=Delta(content="looking", tool_calls=[
+                    {"index": 0, "id": "call_0", "type": "function",
+                     "function": {"name": "weather", "arguments": '{"city": "Paris"}'}},
+                ]),
+                finish_reason=finish_reason,
+            )])
+
+        for finish_reason in (None, "tool_calls"):
+            await OpenAIChatCompletionsHandler().process_output_streaming_response(
+                responses_so_far=[chunk(finish_reason)],
+                guardrail_to_apply=RecordingGuardrail(guardrail_name="one-choice"),
+                litellm_logging_obj=None,
+                request_data={"model": "gpt-4"},
+                stream_transform_sink=StreamTransformSink(),
+            )
+        assert RecordingGuardrail.seen == [(None, None), (None, None)]
 
     @pytest.mark.asyncio
     async def test_a_parallel_round_still_inspects_each_choice(self) -> None:
@@ -2092,17 +2111,20 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         RecordingGuardrail.seen_response = []
         handler: Final = OpenAIChatCompletionsHandler()
         request_data: Final[dict[str, object]] = {}
-        ended_with_one_unfinished: Final = [ModelResponseStream(choices=[StreamingChoices(
-            index=0, delta=Delta(content="looking", tool_calls=[call(0, '{"city": "Paris"}'), call(1, "")]),
-            finish_reason="tool_calls",
-        )])]
+        ended_with_one_unfinished: Final = [ModelResponseStream(choices=[
+            StreamingChoices(
+                index=index, delta=Delta(content="looking", tool_calls=[call(0, '{"city": "Paris"}'), call(1, "")]),
+                finish_reason="tool_calls",
+            )
+            for index in (0, 1)
+        ])]
         await handler.process_output_streaming_response(
             responses_so_far=ended_with_one_unfinished,
             guardrail_to_apply=RecordingGuardrail(guardrail_name="recording"),
             litellm_logging_obj=None, request_data=request_data,
             stream_transform_sink=StreamTransformSink(),
         )
-        assert RecordingGuardrail.seen_calls == [None]
+        assert RecordingGuardrail.seen_calls == [None, None]
         inspected: Final = RecordingGuardrail.seen_response[-1]
         arguments: Final = tuple(
             tool_call.function.arguments

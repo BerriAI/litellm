@@ -3813,3 +3813,26 @@ def test_merged_guardrail_entries_names_each_guardrail_once_preferring_its_first
         {"pii": {"extra_body": {"threshold": 1}}},
         "model-guard",
     ]
+
+
+def _logged_choice_index(request_data: dict[str, object]) -> object:
+    guardrail: Final = CustomGuardrail(guardrail_name="choice-label-test")
+    guardrail.add_standard_logging_guardrail_information_to_request_data(
+        guardrail_json_response={},
+        request_data=request_data,
+        guardrail_status="success",
+    )
+    metadata: Final = request_data["metadata"]
+    assert isinstance(metadata, dict)
+    rows: Final = metadata["standard_logging_guardrail_information"]
+    assert isinstance(rows, list)
+    return rows[0]["choice_index"]
+
+
+def test_a_non_integer_choice_index_is_not_logged() -> None:
+    """The label rides on the request body, so only one the handler wrote may be persisted."""
+    assert _logged_choice_index({"guardrail_choice_index": "1; drop"}) is None
+
+
+def test_an_integer_choice_index_is_logged() -> None:
+    assert _logged_choice_index({"guardrail_choice_index": 1}) == 1
