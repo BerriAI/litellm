@@ -41,6 +41,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     Deployment,
+    ModelGroupInfo,
     reject_server_owned_wif_fields,
     server_owned_wif_fields_present,
 )
@@ -211,6 +212,18 @@ def _is_param_allowed(
     return False
 
 
+def _model_group_info(model: str, llm_router: Router | None) -> ModelGroupInfo | None:
+    """The router's group for ``model``, or for its provider when ``model`` only matches a wildcard deployment."""
+    if llm_router is None:
+        return None
+    registry: Final = llm_router.registry()
+    model_info: Final = registry.group(model)
+    if model_info is not None:
+        return model_info
+    provider: Final = model.split("/", 1)[0]
+    return registry.group(provider) if provider in provider_list else None
+
+
 def _allow_model_level_clientside_configurable_parameters(
     model: str, param: str, request_body_value: object, llm_router: Router | None
 ) -> bool:
@@ -220,19 +233,7 @@ def _allow_model_level_clientside_configurable_parameters(
     - check if 'clientside_configurable_parameters' is set for model
     -
     """
-    if llm_router is None:
-        return False
-    # check if model is set
-    registry: Final = llm_router.registry()
-    model_info = registry.group(model)
-    if model_info is None:
-        # check if wildcard model is set
-        if model.split("/", 1)[0] in provider_list:
-            model_info = registry.group(model.split("/", 1)[0])
-
-    if model_info is None:
-        return False
-
+    model_info: Final = _model_group_info(model, llm_router)
     if model_info is None or model_info.configurable_clientside_auth_params is None:
         return False
 
@@ -319,6 +320,9 @@ def route_manages_mcp_servers(route: str | None) -> bool:
 
 
 _LLM_CALL_ONLY_BANNED_PARAMS: Final[frozenset[str]] = frozenset(("model_id",))
+# Hands its body to the router like /chat/completions but belongs to no route group.
+_UNLISTED_LLM_ROUTES: Final[frozenset[str]] = frozenset(("/queue/chat/completions",))
+_MODEL_ID_STEERING_PROVIDERS: Final[frozenset[str]] = frozenset(("bedrock",))
 
 
 def route_calls_an_llm(route: str | None) -> bool:
@@ -327,7 +331,16 @@ def route_calls_an_llm(route: str | None) -> bool:
     Admin routes such as ``/health?model_id=`` and ``/spend/logs/ui?model_id=`` take it as a deployment
     id instead. ``None`` is a body checked with no route, which callers only do before a provider call.
     """
-    return route is None or RouteChecks.is_llm_api_route(route)
+    return route is None or route in _UNLISTED_LLM_ROUTES or RouteChecks.is_llm_api_route(route)
+
+
+def model_id_steers_the_upstream_model(model: str, llm_router: Router | None) -> bool:
+    """Bedrock runs the body's ``model_id`` in place of the deployment's model. SageMaker reads it as an
+    inference component on the deployment's own endpoint and Vertex as a private endpoint in its own
+    project, so neither leaves what the deployment already reaches. A model the router cannot resolve
+    fails closed."""
+    group: Final = _model_group_info(model, llm_router)
+    return group is None or any(provider in _MODEL_ID_STEERING_PROVIDERS for provider in group.providers)
 
 
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
@@ -522,7 +535,9 @@ def _check_banned_params(
     for param in _BANNED_REQUEST_BODY_PARAMS:
         if param not in body:
             continue
-        if not calls_an_llm and param in _LLM_CALL_ONLY_BANNED_PARAMS:
+        if param in _LLM_CALL_ONLY_BANNED_PARAMS and not (
+            calls_an_llm and model_id_steers_the_upstream_model(model, llm_router)
+        ):
             continue
         if general_settings.get("allow_client_side_credentials") is True:
             # Proxy-wide opt-in: every banned param is permitted, exit
