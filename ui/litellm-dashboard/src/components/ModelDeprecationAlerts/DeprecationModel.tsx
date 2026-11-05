@@ -16,8 +16,26 @@ export function DeprecationModel({ alert }: { alert: DeprecationAlert }) {
   );
 }
 
-export function DeprecationTiming({ alert }: { alert: DeprecationAlert }) {
+export function DeprecationTiming({
+  alert,
+  format = "sentence",
+}: {
+  alert: DeprecationAlert;
+  format?: "sentence" | "duration";
+}) {
   const days = alert.model.days_until_deprecation;
+  if (format === "duration") {
+    if (days === 0) return <span title={alert.model.deprecation_date}>Today</span>;
+    return (
+      <span title={alert.model.deprecation_date}>
+        {Math.abs(days)}{" "}
+        <span className="text-sm font-normal text-muted-foreground">
+          {Math.abs(days) === 1 ? "day" : "days"}
+          {days < 0 ? " ago" : ""}
+        </span>
+      </span>
+    );
+  }
   let label = `Deprecates in ${days} ${days === 1 ? "day" : "days"}`;
   if (days === 0) label = "Deprecates today";
   if (days < 0) label = `Deprecated ${Math.abs(days)} ${days === -1 ? "day" : "days"} ago`;
