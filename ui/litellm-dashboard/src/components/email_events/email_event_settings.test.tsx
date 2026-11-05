@@ -129,4 +129,19 @@ describe("EmailEventSettings", () => {
       expect(getEmailEventSettings).not.toHaveBeenCalled();
     });
   });
+  it("should show model deprecation reminders off and save explicit opt-in", async () => {
+    const user = userEvent.setup();
+    getEmailEventSettings.mockResolvedValue({ settings: [{ event: "Model Deprecations", enabled: false }] });
+    renderWithProviders(<EmailEventSettings accessToken="test-access" />);
+    const toggle = await screen.findByRole("switch", { name: "Model deprecation email reminders" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(/30 days and 1 day before model retirement/)).toBeInTheDocument();
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() =>
+      expect(updateEmailEventSettings).toHaveBeenCalledWith("test-access", {
+        settings: [{ event: "Model Deprecations", enabled: true }],
+      }),
+    );
+  });
 });

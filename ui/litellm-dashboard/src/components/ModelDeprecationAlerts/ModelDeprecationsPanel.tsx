@@ -9,6 +9,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
 import { hasCapability } from "@/utils/capabilities";
 import { migrationUrlParsers, migrationHref } from "./migrationRoute";
+import DeprecationEmailSetup from "./DeprecationEmailSetup";
 import AlertsInbox from "./AlertsInbox";
 import MigrationDetail from "./MigrationDetail";
 
@@ -45,6 +46,7 @@ export default function ModelDeprecationsPanel() {
           </a>
         </header>
       )}
+      <DeprecationEmailSetup />
       {alerts.isError ? (
         <div role="alert">
           <p>Could not load alerts. No alert status has been changed.</p>

@@ -1,3 +1,4 @@
+import { Switch } from "@/components/ui/switch";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -74,6 +75,9 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
 
   // Helper function to get a description for each event type
   const getEventDescription = (event: EmailEvent): string => {
+    if (event === "Model Deprecations") {
+      return "Email affected key owners and team admins 30 days and 1 day before model retirement. Uses requests from the last 30 days. Off by default.";
+    }
     // Convert event name to a sentence with more context
     if (event.includes("Virtual Key Created")) {
       return t("loggingAndAlerts.emailEvents.descriptions.virtualKeyCreated");
@@ -108,11 +112,20 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
           <div className="space-y-4">
             {eventSettings.map((setting) => (
               <div key={setting.event} className="flex items-start">
-                <Checkbox
-                  checked={setting.enabled}
-                  onCheckedChange={(checked) => handleCheckboxChange(setting.event, checked === true)}
-                  className="mt-1"
-                />
+                {setting.event === "Model Deprecations" ? (
+                  <Switch
+                    checked={setting.enabled}
+                    onCheckedChange={(checked) => handleCheckboxChange(setting.event, checked)}
+                    aria-label="Model deprecation email reminders"
+                    className="mt-1"
+                  />
+                ) : (
+                  <Checkbox
+                    checked={setting.enabled}
+                    onCheckedChange={(checked) => handleCheckboxChange(setting.event, checked === true)}
+                    className="mt-1"
+                  />
+                )}
                 <div className="ml-3">
                   <p className="text-sm">{setting.event}</p>
                   <div className="block text-sm text-muted-foreground">{getEventDescription(setting.event)}</div>
