@@ -160,7 +160,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return response
 
         except Exception as e:
-            raise ValueError(f"Error transforming ElevenLabs response: {e}\nResponse: {raw_response.text}")
+            raise ValueError(f"Error transforming ElevenLabs response: {type(e).__name__}") from None
 
     def get_complete_url(
         self,

@@ -1,5 +1,6 @@
 import base64
 import json
+import traceback
 
 import httpx
 import pytest
@@ -288,27 +289,41 @@ class TestNonCompletedInteractionThroughRouter:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_incomplete_interaction_fails_once_as_bad_request_without_transcript(self, router):
+    async def test_retry_recovers_an_incomplete_interaction(self, router):
         route = respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            return_value=httpx.Response(200, json=self._interaction("incomplete"))
+            side_effect=[
+                httpx.Response(200, json=self._interaction("incomplete")),
+                httpx.Response(200, json=COMPLETED_RESPONSE),
+            ]
         )
-        with pytest.raises(litellm.BadRequestError) as excinfo:
+        response = await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))
+        assert route.call_count == 2
+        assert response.text == COMPLETED_RESPONSE["steps"][0]["content"][0]["text"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.parametrize("status", ["incomplete", "failed", "cancelled", "in_progress", None])
+    async def test_non_completed_interaction_retries_then_fails_without_transcript(self, router, status):
+        route = respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(200, json=self._interaction(status))
+        )
+        with pytest.raises(litellm.APIConnectionError) as excinfo:
             await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))
-        assert route.call_count == 1
-        assert excinfo.value.status_code == 400
-        assert "status=incomplete" in str(excinfo.value)
+        assert route.call_count == 3
+        assert f"status={status}" in str(excinfo.value)
         assert "sensitive transcript text" not in str(excinfo.value)
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_failed_interaction_is_retried(self, router):
-        route = respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            return_value=httpx.Response(200, json=self._interaction("failed"))
+    async def test_response_field_of_unexpected_type_keeps_transcript_out_of_the_error(self, router):
+        payload = self._interaction("incomplete")
+        payload["steps"][0]["content"] = "sensitive transcript text"
+        respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(200, json=payload)
         )
-        with pytest.raises(litellm.InternalServerError) as excinfo:
+        with pytest.raises(litellm.APIConnectionError) as excinfo:
             await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))
-        assert route.call_count == 3
-        assert "sensitive transcript text" not in str(excinfo.value)
+        assert "sensitive transcript text" not in "".join(traceback.format_exception(excinfo.value))
 
 
 class TestSubtitleSynthesisThroughHandler:

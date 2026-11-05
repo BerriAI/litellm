@@ -1,3 +1,4 @@
+import traceback
 from collections.abc import Iterator
 from typing import Final
 
@@ -109,24 +110,23 @@ def test_transform_audio_transcription_response_without_words_key_has_no_word_li
 @pytest.mark.parametrize(
     "payload",
     [
-        ["not", "an", "object"],
-        "plain text",
-        7,
-        {"text": ["not", "text"]},
-        {"text": "t", "words": None},
-        {"text": "t", "words": 7},
-        {"text": "t", "words": "not a list"},
-        {"text": "t", "words": ["not an object"]},
-        {"text": "t", "words": [{"type": "word", "text": "ok"}, None]},
+        ["sensitive", "an", "object"],
+        "sensitive text",
+        {"text": ["sensitive", "text"]},
+        {"text": "sensitive", "words": None},
+        {"text": "sensitive", "words": 7},
+        {"text": "sensitive", "words": "not a list"},
+        {"text": "sensitive", "words": ["not an object"]},
+        {"text": "sensitive", "words": [{"type": "word", "text": "ok"}, None]},
     ],
 )
-def test_transform_audio_transcription_response_wraps_malformed_payloads_with_the_raw_body(payload: object):
+def test_transform_audio_transcription_response_keeps_the_body_out_of_malformed_payload_errors(payload: object):
     raw_response = httpx.Response(200, json=payload)
 
     with pytest.raises(ValueError, match="Error transforming ElevenLabs response: ") as exc_info:
         ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
 
-    assert str(exc_info.value).endswith(f"\nResponse: {raw_response.text}")
+    assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))
 
 
 class TestElevenLabsAudioTranscription:

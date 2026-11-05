@@ -1,6 +1,7 @@
 import io
 import os
 import pathlib
+import traceback
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -588,31 +589,30 @@ def test_transform_response_maps_words_to_openai_word_timestamps(words: object, 
         [{"word": "hello", "start": 0.0}],
     ],
 )
-def test_transform_response_wraps_malformed_words_with_the_raw_body(words: object):
+def test_transform_response_keeps_the_transcript_out_of_malformed_words_errors(words: object):
     raw_response = httpx.Response(200, json=_deepgram_payload({"transcript": "hello", "words": words}, {}))
 
     with pytest.raises(ValueError, match="Error transforming Deepgram response: ") as exc_info:
         DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
 
-    assert str(exc_info.value).endswith(f"\nResponse: {raw_response.text}")
+    assert "hello" not in "".join(traceback.format_exception(exc_info.value))
 
 
 @pytest.mark.parametrize(
     ("payload", "error"),
     [
-        ({"results": None}, "'NoneType' object is not subscriptable"),
-        (_deepgram_payload({"transcript": "hello", "words": 5}, {}), "object of type 'int' has no len()"),
-        (
-            {**_deepgram_payload({"transcript": "hello"}, {}), "metadata": None},
-            "'NoneType' object is not subscriptable",
-        ),
+        ({"results": None}, "TypeError"),
+        (_deepgram_payload({"transcript": "hello", "words": 5}, {}), "TypeError"),
+        ({**_deepgram_payload({"transcript": "hello"}, {}), "metadata": None}, "TypeError"),
+        (_deepgram_payload({"transcript": ["hello"]}, {}), "ValidationError"),
     ],
 )
-def test_transform_response_wraps_the_error_of_the_failing_lookup_in_a_malformed_body(payload: object, error: str):
+def test_transform_response_names_only_the_failure_type_of_a_malformed_body(payload: object, error: str):
     raw_response: Final = httpx.Response(200, json=payload)
 
     with pytest.raises(ValueError, match="Error transforming Deepgram response: ") as exc_info:
         DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
 
     assert exc_info.type is ValueError
-    assert str(exc_info.value) == f"Error transforming Deepgram response: {error}\nResponse: {raw_response.text}"
+    assert str(exc_info.value) == f"Error transforming Deepgram response: {error}"
+    assert "hello" not in "".join(traceback.format_exception(exc_info.value))
