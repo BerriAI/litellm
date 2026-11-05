@@ -18,6 +18,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         send_user_api_key_alias=litellm_params.send_user_api_key_alias,
         send_user_api_key_user_id=litellm_params.send_user_api_key_user_id,
         send_user_api_key_team_id=litellm_params.send_user_api_key_team_id,
+        # Not a shared LitellmParams field: config's extra keys are kept (extra="allow"), so read it by name
+        scan_full_conversation=getattr(litellm_params, "scan_full_conversation", None),
         timeout=litellm_params.timeout,
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,

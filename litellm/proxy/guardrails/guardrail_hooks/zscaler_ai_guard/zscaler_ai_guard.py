@@ -49,6 +49,7 @@ class ZscalerAIGuard(CustomGuardrail):
         send_user_api_key_user_id: bool | None = None,
         send_user_api_key_team_id: bool | None = None,
         timeout: float | None = None,
+        scan_full_conversation: bool | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -74,6 +75,7 @@ class ZscalerAIGuard(CustomGuardrail):
             if send_user_api_key_team_id is not None
             else os.getenv("SEND_USER_API_KEY_TEAM_ID", "False").lower() in ("true", "1")
         )
+        self.scan_full_conversation = self._resolve_scan_full_conversation(scan_full_conversation)
         verbose_proxy_logger.debug(
             "send_user_api_key_alias: %s, \n            send_user_api_key_user_id:%s, \n            send_user_api_key_team_id:%s",
             self.send_user_api_key_alias,
@@ -105,9 +107,19 @@ class ZscalerAIGuard(CustomGuardrail):
 
         return timeout
 
+    @staticmethod
+    def _resolve_scan_full_conversation(scan_full_conversation: bool | None) -> bool:
+        """The configured value, else ZSCALER_AI_GUARD_SCAN_FULL_CONVERSATION, else off (last user turn only)."""
+        if scan_full_conversation is not None:
+            return scan_full_conversation
+        return os.getenv("ZSCALER_AI_GUARD_SCAN_FULL_CONVERSATION", "False").lower() in ("true", "1")
+
     def update_in_memory_litellm_params(self, litellm_params: "LitellmParams") -> None:
         super().update_in_memory_litellm_params(litellm_params)
         self.timeout = self._resolve_timeout(litellm_params.timeout)
+        self.scan_full_conversation = self._resolve_scan_full_conversation(
+            getattr(litellm_params, "scan_full_conversation", None)
+        )
 
     @staticmethod
     def _resolve_request_user(request_data: Mapping[str, object]) -> str | None:
@@ -221,7 +233,7 @@ class ZscalerAIGuard(CustomGuardrail):
             zscaler_ai_guard_result = None
             direction: Final = "OUT" if input_type == "response" else "IN"
             verbose_proxy_logger.debug("direction: %s", direction)
-            content: Final = self._content_to_scan(inputs, input_type)
+            content: Final = self._content_to_scan(inputs, input_type, self.scan_full_conversation)
             if content:
                 zscaler_ai_guard_result = await self.make_zscaler_ai_guard_api_call(
                     zscaler_ai_guard_url=self.zscaler_ai_guard_url,
@@ -250,6 +262,7 @@ class ZscalerAIGuard(CustomGuardrail):
     def _content_to_scan(
         inputs: GenericGuardrailAPIInputs,
         input_type: Literal["request", "response"],
+        scan_full_conversation: bool = False,
     ) -> str | None:
         """
         Pick the text sent to Zscaler AI Guard.
@@ -262,11 +275,14 @@ class ZscalerAIGuard(CustomGuardrail):
         A response (OUT), a request whose route supplies no `structured_messages`, or a user turn
         whose text isn't in chat-completions `content` (an A2A message carries `parts`) falls back
         to every extracted text joined with spaces, so user input is never left unscanned.
+
+        With `scan_full_conversation`, a request is scanned like a response: every extracted text,
+        for callers whose supplied history can't be trusted.
         """
         texts: Final = inputs.get("texts", [])
         joined: Final = " ".join(texts) if texts else None
         structured_messages: Final = inputs.get("structured_messages")
-        if input_type != "request" or not structured_messages:
+        if input_type != "request" or scan_full_conversation or not structured_messages:
             return joined
         messages: Final = list(structured_messages)
         if messages[-1].get("role") != "user":

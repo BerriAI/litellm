@@ -253,6 +253,65 @@ async def test_response_sends_every_text_and_ignores_structured_messages(respx_m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "last_turn",
+    [{"role": "user", "content": "And three plus three?"}, {"role": "assistant", "content": "Prefilled answer:"}],
+    ids=["ends-on-user", "ends-on-assistant"],
+)
+async def test_scan_full_conversation_sends_every_text_of_the_request(
+    respx_mock: respx.MockRouter, last_turn: dict[str, object]
+) -> None:
+    guardrail, bodies = _guardrail_recording_bodies(respx_mock)
+    guardrail.scan_full_conversation = True
+    messages: Final = [*_CONVERSATION, last_turn]
+    inputs: Final = {"texts": [str(m["content"]) for m in messages], "structured_messages": messages}
+
+    await guardrail.apply_guardrail(inputs, {}, "request")
+
+    assert bodies == [{"direction": "IN", "content": " ".join(inputs["texts"]), "policyId": 1}]
+
+
+@pytest.mark.parametrize(
+    ("configured", "env", "expected"),
+    [(None, None, False), (True, None, True), (None, "true", True), (False, "true", False)],
+    ids=["default-off", "configured", "from-env", "configured-wins"],
+)
+def test_scan_full_conversation_is_configured_then_env_then_off(
+    monkeypatch: pytest.MonkeyPatch, configured: bool | None, env: str | None, expected: bool
+) -> None:
+    if env is None:
+        monkeypatch.delenv("ZSCALER_AI_GUARD_SCAN_FULL_CONVERSATION", raising=False)
+    else:
+        monkeypatch.setenv("ZSCALER_AI_GUARD_SCAN_FULL_CONVERSATION", env)
+
+    guardrail: Final = ZscalerAIGuard(api_key="test_key", policy_id=1, scan_full_conversation=configured)
+
+    assert guardrail.scan_full_conversation is expected
+
+
+def test_scan_full_conversation_reaches_the_guardrail_from_config_and_survives_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    monkeypatch.delenv("ZSCALER_AI_GUARD_SCAN_FULL_CONVERSATION", raising=False)
+    params: Final = LitellmParams(
+        guardrail="zscaler_ai_guard", mode="pre_call", api_key="test_key", policy_id=1, scan_full_conversation=True
+    )
+
+    guardrail: Final = initialize_guardrail(params, {"guardrail_name": "zscaler-full-conversation"})
+    assert guardrail.scan_full_conversation is True
+    assert "scan_full_conversation" in ZscalerAIGuard.get_config_model().model_fields
+
+    # The base update copies every LitellmParams attribute, so an unset value must re-resolve, not become None
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="zscaler_ai_guard", mode="pre_call", api_key="test_key")
+    )
+    assert guardrail.scan_full_conversation is False
+
+
+@pytest.mark.asyncio
 @patch(
     "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
     new_callable=AsyncMock,

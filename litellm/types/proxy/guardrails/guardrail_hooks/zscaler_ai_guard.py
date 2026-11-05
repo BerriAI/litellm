@@ -79,6 +79,20 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
     )
 
+    scan_full_conversation: bool | None = Field(
+        default=False,
+        description=(
+            "Scan every message of a request instead of only its last user turn. "
+            "By default a request is scanned by its trailing user turn, and one that ends on an "
+            "assistant or tool message is not scanned, because earlier turns were scanned when they "
+            "were sent. Turn this on when callers supply their own conversation history and that "
+            "history can't be trusted: every extracted text (system prompt and earlier turns "
+            "included) is then sent, as before. Responses are always scanned in full. "
+            "Falls back to the ZSCALER_AI_GUARD_SCAN_FULL_CONVERSATION environment variable."
+        ),
+        json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
+    )
+
     timeout: float | None = Field(
         default=None,
         description=(
