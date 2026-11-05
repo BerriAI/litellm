@@ -23,7 +23,11 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
     aggregate_tool_discoveries,
 )
-from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry, db_write_failure_is_requeue_safe
+from litellm.proxy.db.exception_handler import (
+    call_with_db_reconnect_retry,
+    db_write_failure_is_requeue_safe,
+    db_write_never_sent,
+)
 from litellm.proxy.db.tool_table_bulk_upsert import build_tool_bulk_upsert
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -135,7 +139,7 @@ async def flush_tool_discovery_queue(prisma_client: "PrismaClient", tool_discove
     try:
         await batch_upsert_tools(prisma_client=prisma_client, items=items)
     except Exception as e:  # noqa: BLE001  # the rows go back to the queue or are dropped, the scheduler job must not fail
-        if db_write_failure_is_requeue_safe(e):
+        if db_write_never_sent(e):
             tool_discovery_queue.requeue(items)
             verbose_proxy_logger.warning(
                 "Tool discovery - %d tool rows went back to the queue for the next tick. Error: %s", len(items), str(e)

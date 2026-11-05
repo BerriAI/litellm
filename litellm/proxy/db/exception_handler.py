@@ -157,7 +157,7 @@ class PrismaDBExceptionHandler:
             return True
         if PrismaDBExceptionHandler.is_database_capacity_error(e):
             return True
-        if PrismaDBExceptionHandler.is_database_lifecycle_error(e):
+        if PrismaDBExceptionHandler.is_database_not_accepting_connections_error(e):
             return True
         return isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection
 

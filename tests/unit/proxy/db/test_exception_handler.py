@@ -1055,10 +1055,18 @@ _SERVER_TERMINATED: Final = (
 )
 
 
-@pytest.mark.parametrize("error", [*_NOT_ACCEPTING_CONNECTIONS, *_SERVER_TERMINATED])
-def test_postgres_lifecycle_errors_mean_the_database_is_unavailable(error: Exception) -> None:
+@pytest.mark.parametrize(
+    ("error", "connection_error"),
+    [
+        *((error, True) for error in _NOT_ACCEPTING_CONNECTIONS),
+        *((error, False) for error in _SERVER_TERMINATED),
+    ],
+)
+def test_postgres_lifecycle_errors_mean_the_database_is_unavailable(error: Exception, connection_error: bool) -> None:
     """A server that is restarting, shutting down or cutting sessions is a transient outage:
-    auth answers 503 rather than 401, and the spend-log writer must not take the rows for poison."""
+    auth answers 503 rather than 401, and the spend-log writer must not take the rows for poison.
+    Only a server refusing connections opens the ``allow_requests_on_db_unavailable`` fallback,
+    one terminated session does not prove the database is down."""
     assert {
         "lifecycle": PrismaDBExceptionHandler.is_database_lifecycle_error(error),
         "service_unavailable": PrismaDBExceptionHandler.is_database_service_unavailable_error(error),
@@ -1067,7 +1075,7 @@ def test_postgres_lifecycle_errors_mean_the_database_is_unavailable(error: Excep
     } == {
         "lifecycle": True,
         "service_unavailable": True,
-        "connection_error": True,
+        "connection_error": connection_error,
         "permanent": False,
     }
 

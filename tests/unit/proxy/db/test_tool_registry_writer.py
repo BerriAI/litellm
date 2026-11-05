@@ -568,9 +568,16 @@ async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably
     ("failure", "requeued"),
     [
         (_postgres_rejection("57P03"), True),
+        (_postgres_rejection("57P01"), False),
+        (_postgres_rejection("54000"), False),
         (_postgres_rejection("23502"), False),
     ],
-    ids=["restarting_server_keeps_the_rows", "rejected_row_is_dropped"],
+    ids=[
+        "restarting_server_keeps_the_rows",
+        "terminated_session_may_have_counted_so_the_rows_are_dropped",
+        "oversized_value_is_dropped",
+        "rejected_row_is_dropped",
+    ],
 )
 async def test_failed_write_without_redis_keeps_the_rows_in_the_queue_only_when_they_provably_did_not_apply(
     failure: Exception, requeued: bool

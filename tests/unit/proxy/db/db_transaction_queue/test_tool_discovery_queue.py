@@ -64,7 +64,7 @@ def test_aggregate_sums_call_counts_across_workers_flushes():
     )
 
 
-def test_requeued_rows_go_ahead_of_and_merge_with_sightings_since_the_flush(queue):
+def test_requeued_rows_go_ahead_of_and_merge_with_sightings_since_the_flush(queue: ToolDiscoveryQueue) -> None:
     queue.add_update({"tool_name": "get_weather", "origin": "mcp_server"})
     queue.add_update({"tool_name": "search", "origin": "user_defined"})
     failed_write = queue.flush()
