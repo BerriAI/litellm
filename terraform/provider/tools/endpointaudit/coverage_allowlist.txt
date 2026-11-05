@@ -170,8 +170,3 @@ DELETE /team/{team_id}/callback/{callback_name}   # known gap: team callback res
 GET /access_group/{access_group}/budget           # known gap: budget attributes on litellm_access_group
 PUT /access_group/{access_group}/budget           # known gap: budget attributes on litellm_access_group
 DELETE /access_group/{access_group}/budget        # known gap: budget attributes on litellm_access_group
-
-# UI migration acknowledgements and usage analytics are operational state, not declarative infrastructure.
-GET /model/deprecations/alerts/state
-PUT /model/deprecations/alerts/state
-GET /model/deprecations/alerts/tags
