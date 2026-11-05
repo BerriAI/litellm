@@ -12936,10 +12936,16 @@ def _routing_router(fallbacks: list[dict[str, list[str]]] | None = None) -> Rout
     )
 
 
-def _mask_emails(data: dict) -> None:
-    for message in data.get("messages") or []:
-        if isinstance(message.get("content"), str):
-            message["content"] = message["content"].replace(_RAW_EMAIL, "[EMAIL]")
+def _mask_emails(data: dict[str, object]) -> None:
+    messages: Final = data.get("messages")
+    for message in messages if isinstance(messages, list) else []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            message["content"] = content.replace(_RAW_EMAIL, "[EMAIL]")
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
 
 
 class _VendorGuardrail(CustomGuardrail):
@@ -12961,7 +12967,9 @@ class _VendorGuardrail(CustomGuardrail):
         self.order: Final = order if order is not None else []
         self.calls = 0
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         self.calls += 1
         self.order.append(self.guardrail_name or "")
         if self.behavior == "block":
@@ -12974,7 +12982,9 @@ class _VendorGuardrail(CustomGuardrail):
             _mask_emails(data)
         return data
 
-    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+    async def async_moderation_hook(
+        self, data: dict, user_api_key_dict: ProxyUserAPIKeyAuth, call_type: CallTypesLiteral
+    ) -> None:
         self.calls += 1
 
 
@@ -12986,7 +12996,9 @@ class _CustomerRoutingGuardrail(CustomGuardrail):
         self.run_in_parallel = run_in_parallel
         self.calls = 0
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         self.calls += 1
         if data.get("model") == "virtual-model":
             data["model"] = "gpt-4o-mini"
@@ -13059,7 +13071,9 @@ class _ModelMappingHook(CustomLogger):
         self.returns_new_request: Final = returns_new_request
         self.order: Final = order if order is not None else []
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         self.order.append("mapping-hook")
         if data.get("model") != self.source:
             return data
@@ -13072,12 +13086,16 @@ class _ModelMappingHook(CustomLogger):
 class _TaggingHook(CustomLogger):
     """A customer callback that adds a tag to the request."""
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         return {**data, "metadata": {**(data.get("metadata") or {}), "tags": ["over-budget-tag"]}}
 
 
 class _EmailMaskingHook(CustomLogger):
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         _mask_emails(data)
         return data
 
@@ -13087,7 +13105,9 @@ class _RejectingHook(CustomLogger):
         super().__init__()
         self.model: Final = model
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         if self.model in (None, data.get("model")):
             raise HTTPException(status_code=403, detail="rejected by hook")
         return data
@@ -13098,7 +13118,9 @@ class _RateLimitingHook(CustomLogger):
         super().__init__()
         self.model: Final = model
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         if data.get("model") == self.model:
             raise ProxyRateLimitError(detail=f"rpm limit reached for {self.model}")
         return data
@@ -13112,7 +13134,9 @@ class _ContentEnforcer(CustomLogger):
         self.order: Final = order if order is not None else []
         self.calls = 0
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         self.calls += 1
         self.order.append("content-enforcer")
         return data
@@ -13123,7 +13147,9 @@ class _ModerationHook(CustomLogger):
         super().__init__()
         self.calls = 0
 
-    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+    async def async_moderation_hook(
+        self, data: dict, user_api_key_dict: ProxyUserAPIKeyAuth, call_type: CallTypesLiteral
+    ) -> None:
         self.calls += 1
 
 
@@ -13133,10 +13159,16 @@ class _FailureLogRecorder(CustomLogger):
         self.logs: Final[list[dict[str, object]]] = []
         self.dumps: Final[list[str]] = []
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        litellm_params: Final = kwargs.get("litellm_params") or {}
-        logged_request: Final = (litellm_params.get("proxy_server_request") or {}).get("body") or {}
-        standard: Final = kwargs.get("standard_logging_object") or {}
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        litellm_params: Final = _as_mapping(kwargs.get("litellm_params"))
+        logged_request: Final = _as_mapping(_as_mapping(litellm_params.get("proxy_server_request")).get("body"))
+        standard: Final = _as_mapping(kwargs.get("standard_logging_object"))
         self.dumps.append(json.dumps(kwargs, default=str))
         self.logs.append(
             {
@@ -13148,13 +13180,17 @@ class _FailureLogRecorder(CustomLogger):
                 "request_model": logged_request.get("model"),
                 "request_messages": logged_request.get("messages"),
                 "request_has_call_id": "litellm_call_id" in logged_request,
-                "applied_guardrails": (standard.get("metadata") or {}).get("applied_guardrails"),
+                "applied_guardrails": _as_mapping(standard.get("metadata")).get("applied_guardrails"),
             }
         )
 
     async def async_post_call_failure_hook(
-        self, request_data, original_exception, user_api_key_dict, traceback_str=None
-    ):
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
         self.dumps.append(json.dumps(request_data, default=str))
 
 
