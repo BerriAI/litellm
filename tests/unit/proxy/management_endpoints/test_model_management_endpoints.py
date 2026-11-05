@@ -11427,3 +11427,46 @@ async def test_add_new_model_reports_a_database_outage_during_the_insert_as_503(
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
+
+
+@pytest.mark.asyncio
+async def test_rename_rewrites_only_in_a_transaction_holding_every_locked_teams_advisory_lock():
+    """A team that starts listing the old name between the advisory snapshot and the row lock must not be
+    rewritten without its advisory lock, or a roster change on that team can still deadlock with the rename."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
+
+    snapshots = iter(([{"team_id": "team-1"}], [{"team_id": "team-1"}, {"team_id": "team-2"}]))
+    transactions: list[list[tuple[str, tuple[str, ...]]]] = []
+
+    async def query_raw(sql: str, *params: str) -> list[dict[str, object]]:
+        if transactions:
+            transactions[-1].append((sql, params))
+        if sql.startswith("SELECT COUNT(*)"):
+            return [{"deployment_count": 0}]
+        if sql.startswith('SELECT team_id FROM "LiteLLM_TeamTable"') and not sql.endswith("FOR UPDATE"):
+            return next(snapshots)
+        if sql.startswith('SELECT team_id FROM "LiteLLM_TeamTable"'):
+            return [{"team_id": "team-1"}, {"team_id": "team-2"}]
+        return []
+
+    @contextlib.asynccontextmanager
+    async def transaction():
+        transactions.append([])
+        yield db
+
+    db = SimpleNamespace(query_raw=query_raw, tx=transaction)
+    with patch("litellm.proxy.management_helpers.model_allowlist_rename_sync.evict_and_broadcast", AsyncMock()):
+        await sync_model_allowlists_for_renamed_model(
+            SimpleNamespace(db=db),
+            model_id="deployment",
+            old_name="old-model",
+            new_name="new-model",
+            llm_router=None,
+            user_api_key_cache=UserApiKeyCache(),
+        )
+
+    rewrites = [calls for calls in transactions if any(sql.startswith("WITH ") for sql, _ in calls)]
+    assert len(rewrites) == 1
+    advisory = [params[0] for sql, params in rewrites[0] if "pg_advisory_xact_lock" in sql]
+    assert advisory == ["team-1", "team-2"]
