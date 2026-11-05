@@ -436,7 +436,7 @@ class UsageAlertJob:
         return None
 
     async def _notify(self) -> None:
-        while page := await self._store.pending_notifications(limit=100):
+        while page := await self._store.pending_notifications(limit=10):
             for pending in page:
                 await self._notify_incident(pending)
 

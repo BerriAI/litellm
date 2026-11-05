@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -406,6 +407,21 @@ async def test_entity_page_progress_resumes_old_day_without_early_completion(db:
         assert "evaluation_progress" not in UsageAlertRule.model_json_schema(mode="serialization")["properties"]
         first: Final = await job._store.list_alerts(limit=500)
         assert first.total == 10
+        projector: Final = job._performance_projection
+        assert projector is not None
+        work: Final = await job._store.pending_projection_work()
+        assert work is not None
+        assert await projector.run_pending(_NOW, work, job._store, asyncio.get_running_loop().time() + 10)
+        await job._store.finish_projection_work(work)
+        assert (await IssuesRepository.from_prisma(prisma).list_issues()).total == 10
+        await job._scope_page((partial,), _DAY, True)
+        next_work: Final = await job._store.pending_projection_work()
+        assert next_work is not None and next_work.version != work.version
+        assert await projector.run_pending(
+            _NOW + timedelta(hours=1), next_work, job._store, asyncio.get_running_loop().time() + 10
+        )
+        await job._store.finish_projection_work(next_work)
+        assert (await IssuesRepository.from_prisma(prisma).list_issues()).total == 20
         await job._run(_NOW + timedelta(days=1))
         assert await job._store.is_day_complete(rule, _DAY)
         final: Final = await job._store.list_alerts(limit=500)
@@ -550,6 +566,15 @@ async def test_partial_broad_default_waits_for_its_key_family_only(db: Managemen
 
     async with _isolated(db) as prisma:
         await _seed(prisma)
+        await prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,model,custom_llm_provider,spend,api_requests,
+                 successful_requests,failed_requests,total_response_time_ms,timed_requests,updated_at)
+            SELECT 'extra-'||k||'-'||d,'owner',($1::date-d)::text,repeat('f',60)||lpad(k::text,4,'0'),
+                'model','example-provider',0.01,1000,1000,0,100000,1000,CURRENT_TIMESTAMP
+            FROM generate_series(1,30) k CROSS JOIN generate_series(0,7) d RETURNING id""",
+            _DAY.isoformat(),
+        )
         job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
         await job._store.ensure_default_rules(default_usage_rules())
         broad: Final = await job._store.enabled_rule_page("deployment", True, None)
@@ -560,9 +585,54 @@ async def test_partial_broad_default_waits_for_its_key_family_only(db: Managemen
         key_rules: Final = await job._store.enabled_rule_page("key", True, None)
         spend: Final = tuple(rule for rule in key_rules if rule.metric == "spend")
         await job._scope_page(spend, _DAY, True)
+        assert await sources.active_signals(_DAY, scope_type="key", metric="spend", completed_only=True)
+        assert not await sources.active_signals(_DAY, scope_type="deployment", metric="spend", completed_only=True)
+        projector: Final = job._performance_projection
+        assert projector is not None
+        work: Final = await job._store.pending_projection_work()
+        assert work is not None
+        assert await projector.run_pending(_NOW, work, job._store, asyncio.get_running_loop().time() + 10)
+        partial: Final = await sources.list_issues()
+        assert len(partial.data) == 1 and partial.data[0].cohort.scope_type == "key"
+        while not await job._store.is_day_complete(spend[0], _DAY):
+            current: Final = await job._store.get_rule(spend[0].id)
+            assert current is not None
+            await job._scope_page((current,), _DAY, True)
         assert await sources.active_signals(_DAY, scope_type="deployment", metric="spend", completed_only=True)
         unfinished: Final = tuple(rule for rule in key_rules if rule.metric != "spend")
         assert not await job._store.completed_rule_ids(unfinished, _DAY)
         await job._run(_NOW)
         result: Final = await sources.list_issues()
         assert result.total == 1 and result.data[0].cohort.scope_id == _KEY_A
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_projection_resume_keeps_spend_and_traffic_in_one_episode(db: ManagementDatabase) -> None:
+    from litellm.types.proxy.usage_alerts import UsageAlertProjectionCursor
+
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        await job._store.ensure_default_rules(job._defaults)
+        await job._evaluate(_DAY, asyncio.get_running_loop().time() + 10)
+        work: Final = await job._store.pending_projection_work()
+        projector: Final = job._performance_projection
+        assert work is not None and projector is not None
+        observed_at: Final = _NOW.replace(microsecond=987000)
+        position = UsageAlertProjectionCursor(version=work.version, observed_at=observed_at)  # rebind-ok: cursor
+        while position.step < 21:
+            next_position: Final = await projector._projection_page(position, work, observed_at)
+            assert next_position is not None
+            position = next_position
+        await job._store.save_projection_cursor(position)
+        before: Final = await IssuesRepository.from_prisma(prisma).list_issues()
+        assert len(before.data) == 1 and before.data[0].family == "spend"
+        restarted: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        assert restarted._performance_projection is not None
+        assert await restarted._performance_projection.run_pending(
+            _NOW + timedelta(hours=1), work, restarted._store, asyncio.get_running_loop().time() + 10
+        )
+        after: Final = await IssuesRepository.from_prisma(prisma).list_issues()
+        assert tuple(item.id for item in after.data) == tuple(item.id for item in before.data)
+        links: Final = await IssuesRepository.from_prisma(prisma).list_signals(after.data[0].id)
+        assert any(link.usage_alert is not None and link.usage_alert.metric == "requests" for link in links.data)

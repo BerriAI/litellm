@@ -361,9 +361,6 @@ class IssuesRepository:
                     AND ($2::text IS NULL OR a.id>$2) AND ($4::text IS NULL OR a.scope_type=$4)
                     AND ($5::text IS NULL OR a.metric=$5)
                     AND ($6::text[] IS NULL OR a.scope_id=ANY($6::text[]))
-                    AND (NOT $7::boolean OR EXISTS (
-                        SELECT 1 FROM "LiteLLM_UsageAlertCheckpoint" c WHERE c.completed
-                        AND c.id=r.id||':'||replace(r.record->>'updated_at','Z','+00:00')||':'||$1::text))
                     AND (NOT $7::boolean OR NOT(r.id=ANY($8::text[])) OR NOT EXISTS (
                         SELECT 1 FROM "LiteLLM_UsageAlertRule" dependency
                         WHERE dependency.enabled AND NOT dependency.deleted AND dependency.id=ANY($8::text[])
@@ -372,7 +369,12 @@ class IssuesRepository:
                             AND dependency.record->>'direction'=r.record->>'direction')
                             OR (r.record->>'metric'='requests' AND r.record->>'direction'='increase'
                                 AND dependency.record->>'metric'='spend' AND dependency.record->>'direction'='increase'
-                                AND dependency.scope_type IN ('key',r.scope_type)))
+                                AND dependency.scope_type IN ('key',r.scope_type)
+                                AND NOT COALESCE(a.scope_type='key' AND dependency.scope_type='key'
+                                    AND dependency.record->'evaluation_progress'->>'day'=$1::text
+                                    AND (dependency.record->'evaluation_progress'->>'revision')::timestamptz=
+                                        (dependency.record->>'updated_at')::timestamptz
+                                    AND dependency.record->'evaluation_progress'->>'cursor'>=a.scope_id,false)))
                         AND NOT (dependency.record->>'evaluation_status'='insufficient_coverage'
                             AND dependency.record->>'last_evaluated_day'=$1::text)
                         AND NOT EXISTS (SELECT 1 FROM "LiteLLM_UsageAlertCheckpoint" completed WHERE completed.completed

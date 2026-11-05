@@ -79,6 +79,7 @@ class UsageAlertProjectionCursor(BaseModel, frozen=True):
     version: str
     step: int = Field(default=0, ge=0, le=26)
     after_id: str | None = None
+    observed_at: datetime | None = None
 
 
 class UsageAlertRule(UsageAlertRuleInput):

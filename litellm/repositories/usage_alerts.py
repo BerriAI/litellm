@@ -883,18 +883,23 @@ class UsageAlertsRepository:
                 FROM prior p WHERE i.id=p.prior_id
                     AND (p.evaluation_day<p.day OR (p.evaluation_day=p.day AND p.prior_revision IS DISTINCT FROM $3))
                     AND (NOT p.breached OR p.prior_breached)
-                RETURNING i.record
+                RETURNING i.record,i.evaluation_day
             ), inserted AS (
                 INSERT INTO "LiteLLM_UsageAlertIncident" (id,rule_id,scope_key,scope_type,scope_id,metric,status,day,evaluation_day,evaluation_revision,breached,record)
                 SELECT p.record->>'id',$1,p.scope_key,p.record->>'scope_type',p.record->>'scope_id',p.record->>'metric','open',p.day,p.day,$3,true,p.record
                 FROM prior p WHERE p.breached AND (p.prior_id IS NULL OR (NOT p.prior_breached AND
                     (p.evaluation_day<p.day OR (p.evaluation_day=p.day AND p.prior_revision IS DISTINCT FROM $3))))
-                ON CONFLICT(id) DO NOTHING RETURNING record
-            ) SELECT record FROM updated UNION ALL SELECT record FROM inserted
+                ON CONFLICT(id) DO NOTHING RETURNING record,evaluation_day
+            ), changed AS (SELECT * FROM updated UNION ALL SELECT * FROM inserted), dirty AS (
+                INSERT INTO "LiteLLM_UsageAlertCheckpoint" (id,owner,completed)
+                SELECT DISTINCT 'performance-dirty:'||evaluation_day,$4,false FROM changed
+                ON CONFLICT(id) DO UPDATE SET owner=EXCLUDED.owner,completed=false
+            ) SELECT record FROM changed
             """,
                 rule.id,
                 json.dumps(records),
                 rule.updated_at.isoformat(),
+                str(uuid4()),
             )
         )
         return tuple(UsageAlert.model_validate(row.record) for row in rows)

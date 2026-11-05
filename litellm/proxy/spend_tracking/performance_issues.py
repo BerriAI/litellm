@@ -224,7 +224,7 @@ class PerformanceIssueProjector:
                 self._provider_rule = rule
                 break
         position = await rules.projection_cursor(work)  # rebind-ok: persisted bounded source cursor
-        observed_at: Final = now.replace(microsecond=now.microsecond // 1000 * 1000)
+        observed_at: Final = position.observed_at or now.replace(microsecond=now.microsecond // 1000 * 1000)
         projection_deadline: Final = deadline - min(2, max(0, deadline - asyncio.get_running_loop().time()) / 4)
         while asyncio.get_running_loop().time() < projection_deadline:
             if (next_position := await self._projection_page(position, work, observed_at)) is None:
@@ -246,14 +246,14 @@ class PerformanceIssueProjector:
             if prior:
                 if self._provider_rule is not None:
                     await self._prior_provider_page(prior, work.day, self._provider_rule, observed_at)
-                return UsageAlertProjectionCursor(version=work.version, after_id=prior[-1].id)
-            return UsageAlertProjectionCursor(version=work.version, step=1)
+                return UsageAlertProjectionCursor(version=work.version, after_id=prior[-1].id, observed_at=observed_at)
+            return UsageAlertProjectionCursor(version=work.version, step=1, observed_at=observed_at)
         if position.step > len(_SCOPES) * len(_METRICS):
             identities: Final = await self._store.active_resource_issue_ids(position.after_id)
             if identities:
-                await self._store.recover_issues(work.day, completed_only=True, issue_ids=identities)
+                await self._store.recover_issues(work.day, issue_ids=identities)
                 return UsageAlertProjectionCursor(
-                    version=work.version, step=position.step, after_id=identities[-1]
+                    version=work.version, step=position.step, after_id=identities[-1], observed_at=observed_at
                 )
             return None
         metric: Final = _METRICS[(position.step - 1) // len(_SCOPES)]
@@ -263,8 +263,10 @@ class PerformanceIssueProjector:
         )
         if sources:
             await self._project_page(sources, scope, work.day, observed_at)
-            return UsageAlertProjectionCursor(version=work.version, step=position.step, after_id=sources[-1].alert.id)
-        return UsageAlertProjectionCursor(version=work.version, step=position.step + 1)
+            return UsageAlertProjectionCursor(
+                version=work.version, step=position.step, after_id=sources[-1].alert.id, observed_at=observed_at
+            )
+        return UsageAlertProjectionCursor(version=work.version, step=position.step + 1, observed_at=observed_at)
 
     async def _candidates(
         self, sources: tuple[IssueProjectionSignal, ...], scope: UsageAlertScope, day: date
@@ -683,12 +685,14 @@ class PerformanceIssueProjector:
             _bindings(candidate, saved[targets[candidate.source.alert.id].issue.cohort_key].id)
             for candidate in candidates
         )
-        while batch := tuple(islice(bindings, 500)):
+        while batch := tuple(islice(bindings, 10)):
             await self._store.queue_deliveries(batch)
 
     async def _notify(self, stop_at: float | None = None) -> None:
         deadline: Final = stop_at if stop_at is not None else asyncio.get_running_loop().time() + 60
-        while asyncio.get_running_loop().time() + 2 < deadline and (pending := await self._store.pending_deliveries()):
+        while asyncio.get_running_loop().time() + 2 < deadline and (
+            pending := await self._store.pending_deliveries(limit=10)
+        ):
             for item in pending:
                 if asyncio.get_running_loop().time() + 2 >= deadline:
                     return
