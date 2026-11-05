@@ -203,7 +203,7 @@ export default function MigrationDetail({
           <p className="mt-1 text-sm text-muted-foreground">
             Last seen {selected.lastUsedDate} UTC · {selected.requests.toLocaleString()} requests in the last 30 days
           </p>
-          <RecommendedReplacement model={selected.model.successor_model} />
+          <RecommendedReplacement recommendation={selected.model} />
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={copyFollowUp}>
