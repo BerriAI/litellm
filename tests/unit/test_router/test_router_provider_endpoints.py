@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import io
 import json
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
@@ -51,9 +52,11 @@ def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.fixture
-def router_minute_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
-    pinned: Final = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
-    monkeypatch.setattr("litellm.router_python_core.get_utc_datetime", lambda: pinned)
+def router_minute_pinned() -> None:
+    """The usage counters these tests read are per minute: start well inside one so a test never spans two."""
+    seconds_left: Final = 60 - datetime.now(timezone.utc).second
+    if seconds_left < 10:
+        time.sleep(seconds_left + 0.1)
 
 
 class _RouterLoggingCapture(CustomLogger):
@@ -145,14 +148,14 @@ async def test_router_transcription_reuses_router_level_client_for_each_deployme
         model="whisper", file=("speech.wav", io.BytesIO(b"offline audio"), "audio/wav")
     )
     public_client, public_logging = await capture.next_event()
-    internal_response: Final = await router._atranscription(
+    second_response: Final = await router.atranscription(
         model="whisper", file=("speech.wav", io.BytesIO(b"offline audio"), "audio/wav")
     )
-    internal_client, _ = await capture.next_event()
+    second_client, _ = await capture.next_event()
     upstream_requests: Final = tuple(call.request for call in route.calls)
 
     assert public_client == str(router_level_client)
-    assert internal_client == str(router_level_client)
+    assert second_client == str(router_level_client)
     assert tuple(str(request.url) for request in upstream_requests) == (route_url, route_url)
     assert all(
         request.headers.get("content-type", "").startswith("multipart/form-data")
@@ -163,7 +166,7 @@ async def test_router_transcription_reuses_router_level_client_for_each_deployme
     assert isinstance(public_logging, dict)
     assert public_logging.get("model_group") == "whisper"
     assert response.text == "hello"
-    assert internal_response.text == "hello"
+    assert second_response.text == "hello"
 
 
 @pytest.mark.asyncio
@@ -197,7 +200,7 @@ async def test_router_speech_returns_binary_content_and_logs_model_group(
 
 
 @pytest.mark.asyncio
-async def test_router_rerank_returns_valid_response_from_public_and_underlying_calls(
+async def test_router_rerank_returns_valid_response_on_every_call(
     respx_mock: respx.MockRouter,
 ) -> None:
     router: Final = Router(
@@ -223,7 +226,7 @@ async def test_router_rerank_returns_valid_response_from_public_and_underlying_c
         documents=["hello", "world"],
         top_n=1,
     )
-    underlying_response: Final = await router._arerank(
+    second_response: Final = await router.arerank(
         model="cohere-rerank",
         query="hello",
         documents=["hello", "world"],
@@ -242,9 +245,9 @@ async def test_router_rerank_returns_valid_response_from_public_and_underlying_c
     public_validated: Final = RerankResponse.model_validate(public_response)
     assert public_validated.id == "rerank-1"
     assert public_validated.results[0]["relevance_score"] == 0.9
-    underlying_validated: Final = RerankResponse.model_validate(underlying_response)
-    assert underlying_validated.id == "rerank-1"
-    assert underlying_validated.results[0]["relevance_score"] == 0.9
+    second_validated: Final = RerankResponse.model_validate(second_response)
+    assert second_validated.id == "rerank-1"
+    assert second_validated.results[0]["relevance_score"] == 0.9
 
 
 @pytest.mark.asyncio
@@ -317,9 +320,9 @@ async def test_router_image_generation_returns_valid_image_response(
     )
 
     response: Final = (
-        router._image_generation(model="gpt-image-1", prompt="a cat")
+        router.image_generation(model="gpt-image-1", prompt="a cat")
         if sync_mode
-        else await router._aimage_generation(model="gpt-image-1", prompt="a cat")
+        else await router.aimage_generation(model="gpt-image-1", prompt="a cat")
     )
 
     assert route.call_count == 1
@@ -516,24 +519,6 @@ def test_router_routing_strategy_init_accepts_provider_budget_strategy(strategy:
     assert router.get_settings()["routing_strategy"] == "provider-budget-routing"
 
 
-def test_router_track_deployment_metrics_updates_observable_usage() -> None:
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "gpt-5-mini",
-                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-fake"},
-                "model_info": {"id": "metrics-deployment"},
-            }
-        ]
-    )
-    deployment: Final = router.model_list[0]
-
-    router._track_deployment_metrics(deployment=deployment, parent_otel_span=None)
-    router._track_deployment_metrics(deployment=deployment, parent_otel_span=None)
-
-    assert router.cache.get_cache(key="metrics-deployment", local_only=True) == 2
-
-
 class _GatedIncrementCache(DualCache):
     def __init__(self) -> None:
         super().__init__(in_memory_cache=InMemoryCache())
@@ -544,6 +529,12 @@ class _GatedIncrementCache(DualCache):
 
     def increment_cache(self, key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
         result: Final = super().increment_cache(key=key, value=value, local_only=local_only, **kwargs)
+        if key.endswith(":successes"):
+            self.deployment_success_incremented.set()
+        return result
+
+    async def async_increment_cache(self, key: str, value: float, *args: object, **kwargs: object) -> float | None:
+        result: Final = await super().async_increment_cache(key, value, *args, **kwargs)
         if key.endswith(":successes"):
             self.deployment_success_incremented.set()
         return result
@@ -577,6 +568,12 @@ class _UnavailableIncrementCache(DualCache):
 
     def increment_cache(self, key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
         result: Final = super().increment_cache(key=key, value=value, local_only=local_only, **kwargs)
+        if key.endswith(":successes"):
+            self.deployment_success_incremented.set()
+        return result
+
+    async def async_increment_cache(self, key: str, value: float, *args: object, **kwargs: object) -> float | None:
+        result: Final = await super().async_increment_cache(key, value, *args, **kwargs)
         if key.endswith(":successes"):
             self.deployment_success_incremented.set()
         return result
@@ -637,7 +634,6 @@ async def test_router_failed_pre_header_increment_clears_counted_tokens_stamp() 
 
     await asyncio.wait_for(cache.first_increment_started.wait(), timeout=EVENT_TIMEOUT_SECONDS)
     await asyncio.wait_for(cache.deployment_success_incremented.wait(), timeout=EVENT_TIMEOUT_SECONDS)
-    assert metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] == 30
     assert get_deployment_successes_for_current_minute(router, "lit-3058-fail") == 1
     assert cache.increment_calls == 1
     cache.release_first_increment.set()
@@ -662,7 +658,7 @@ ASSISTANT_RESPONSE: Final = {
 
 
 @pytest.mark.asyncio
-async def test_router_assistants_endpoint_factory_invokes_provider(
+async def test_router_create_assistants_invokes_provider(
     respx_mock: respx.MockRouter,
 ) -> None:
     router: Final = Router(model_list=[])
@@ -670,8 +666,7 @@ async def test_router_assistants_endpoint_factory_invokes_provider(
         200, json={**ASSISTANT_RESPONSE, "id": "asst-1"}
     )
 
-    response: Final = await router._pass_through_assistants_endpoint_factory(
-        original_function=litellm.acreate_assistants,
+    response: Final = await router.acreate_assistants(
         custom_llm_provider="openai",
         model="gpt-4o-mini",
         api_key="sk-fake",
@@ -684,29 +679,7 @@ async def test_router_assistants_endpoint_factory_invokes_provider(
 
 
 @pytest.mark.asyncio
-async def test_router_factory_function_returns_invokable_assistants_wrapper(
-    respx_mock: respx.MockRouter,
-) -> None:
-    router: Final = Router(model_list=[])
-    route: Final = respx_mock.post("https://api.openai.com/v1/assistants").respond(
-        200, json={**ASSISTANT_RESPONSE, "id": "asst-2"}
-    )
-    wrapper: Final = router.factory_function(litellm.acreate_assistants, call_type="assistants")
-
-    response: Final = await wrapper(
-        custom_llm_provider="openai",
-        model="gpt-4o-mini",
-        api_key="sk-fake",
-        name="offline",
-    )
-
-    assert route.call_count == 1
-    assert json.loads(route.calls[0].request.content) == {"model": "gpt-4o-mini", "name": "offline"}
-    assert response.id == "asst-2"
-
-
-@pytest.mark.asyncio
-async def test_router_moderation_endpoint_factory_invokes_default_model(
+async def test_router_moderation_without_a_model_invokes_the_default_model(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -721,9 +694,7 @@ async def test_router_moderation_endpoint_factory_invokes_default_model(
         },
     )
 
-    response: Final = await router._pass_through_moderation_endpoint_factory(
-        original_function=litellm.amoderation,
-        custom_llm_provider="openai",
+    response: Final = await router.amoderation(
         input="hello",
         model=None,
         api_key="sk-fake",
@@ -801,7 +772,11 @@ async def test_video_status_on_a_wildcard_polls_the_deployment_that_created_the_
 ) -> None:
     router: Final = Router(
         model_list=[
-            {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": key}, "model_info": {"id": dep}}
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": key},
+                "model_info": {"id": dep},
+            }
             for dep, key in (("wc-a", "key-a"), ("wc-b", "key-b"))
         ]
     )

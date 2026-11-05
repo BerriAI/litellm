@@ -2069,7 +2069,10 @@ from litellm.proxy.credential_endpoints import user_provider_credentials as upc
 
 _DEVICE_CODE_URL = "https://github.com/login/device/code"
 _ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
-_COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
+_COPILOT_USER_URL = "https://api.github.com/copilot_internal/user"
+_COPILOT_API_BASE = "https://api.githubcopilot.com"
+_COPILOT_MODELS_URL = f"{_COPILOT_API_BASE}/models"
+_COPILOT_USER_RESPONSE = {"endpoints": {"api": _COPILOT_API_BASE}}
 _GITHUB_USER_URL = "https://api.github.com/user"
 
 
@@ -2245,7 +2248,8 @@ def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
             _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
-            _COPILOT_TOKEN_URL: {"token": "copilot-tok", "expires_at": 4102444800},
+            _COPILOT_USER_URL: _COPILOT_USER_RESPONSE,
+            _COPILOT_MODELS_URL: {},
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):
@@ -2276,19 +2280,18 @@ def test_poll_host_change_race_requires_reconnect_on_the_next_request(monkeypatc
 
     table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential(host="octo.ghe.com")])
 
-    def change_host_after_token_exchange(request: httpx.Request) -> dict[str, str]:
+    def change_host_after_access_token(request: httpx.Request) -> dict[str, str]:
         monkeypatch.setattr(litellm, "credential_list", [_per_user_credential()])
         return {"access_token": "gho_1"}
 
     with _github_http(
         {
             "https://octo.ghe.com/login/device/code": _DEVICE_FLOW_START,
-            "https://octo.ghe.com/login/oauth/access_token": change_host_after_token_exchange,
-            "https://api.octo.ghe.com/copilot_internal/v2/token": {
-                "token": "copilot-tok",
-                "expires_at": 4102444800,
-                "endpoints": {"api": "https://copilot-api.octo.ghe.com"},
+            "https://octo.ghe.com/login/oauth/access_token": change_host_after_access_token,
+            "https://api.octo.ghe.com/copilot_internal/user": {
+                "endpoints": {"api": "https://copilot-api.octo.ghe.com"}
             },
+            "https://copilot-api.octo.ghe.com/models": {},
             "https://api.octo.ghe.com/user": {"login": "octo"},
         }
     ):
@@ -2318,7 +2321,7 @@ def test_poll_host_change_race_requires_reconnect_on_the_next_request(monkeypatc
         },
     }
     module_level_client: Final = MagicMock()
-    module_level_client.get.side_effect = AssertionError("unexpected token exchange")
+    module_level_client.get.side_effect = AssertionError("unexpected GitHub user lookup")
     with _github_http({}), patch.object(litellm, "module_level_client", module_level_client):
         with pytest.raises(litellm.CallerCredentialAuthenticationError) as exc:
             attach_github_copilot_user_session(kwargs)
@@ -2326,17 +2329,16 @@ def test_poll_host_change_race_requires_reconnect_on_the_next_request(monkeypatc
     assert stored_connection.github_host == "octo.ghe.com"
 
 
-def test_ghe_user_connection_uses_tenant_urls_for_device_flow_exchange_and_login(monkeypatch):
+def test_ghe_user_connection_uses_tenant_urls_for_device_flow_and_user_lookup(monkeypatch):
     table: Final = _patch_user_connection_env(monkeypatch, [_per_user_credential(host="octo.ghe.com")])
     with _github_http(
         {
             "https://octo.ghe.com/login/device/code": _DEVICE_FLOW_START,
             "https://octo.ghe.com/login/oauth/access_token": {"access_token": "gho_1"},
-            "https://api.octo.ghe.com/copilot_internal/v2/token": {
-                "token": "copilot-tok",
-                "expires_at": 4102444800,
-                "endpoints": {"api": "https://copilot-api.octo.ghe.com"},
+            "https://api.octo.ghe.com/copilot_internal/user": {
+                "endpoints": {"api": "https://copilot-api.octo.ghe.com"}
             },
+            "https://copilot-api.octo.ghe.com/models": {},
             "https://api.octo.ghe.com/user": {"login": "octo"},
         }
     ):
@@ -2471,7 +2473,9 @@ def test_user_connection_poll_reports_no_copilot_seat(monkeypatch, seat_status):
             return httpx.Response(200, json=_DEVICE_FLOW_START, request=request)
         if url == _ACCESS_TOKEN_URL:
             return httpx.Response(200, json={"access_token": "gho_seat"}, request=request)
-        if url == _COPILOT_TOKEN_URL:
+        if url == _COPILOT_USER_URL:
+            return httpx.Response(200, json=_COPILOT_USER_RESPONSE, request=request)
+        if url == _COPILOT_MODELS_URL:
             return httpx.Response(seat_status, json={}, request=request)
         pytest.fail(f"unexpected request to {url}")
 
@@ -2499,7 +2503,7 @@ def test_user_connection_poll_rate_limit_returns_429(monkeypatch):
             return httpx.Response(200, json=_DEVICE_FLOW_START, request=request)
         if url == _ACCESS_TOKEN_URL:
             return httpx.Response(200, json={"access_token": "gho_limited"}, request=request)
-        if url == _COPILOT_TOKEN_URL:
+        if url == _COPILOT_USER_URL:
             return httpx.Response(429, json={}, request=request)
         pytest.fail(f"unexpected request to {url}")
 
@@ -2875,7 +2879,8 @@ def test_user_connection_poll_valid_handle_works_with_a_fresh_cache(monkeypatch)
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
             _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
-            _COPILOT_TOKEN_URL: {"token": "copilot-tok", "expires_at": 4102444800},
+            _COPILOT_USER_URL: _COPILOT_USER_RESPONSE,
+            _COPILOT_MODELS_URL: {},
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):
@@ -2959,7 +2964,8 @@ def test_user_connection_poll_reports_503_when_the_cache_overwrite_cannot_land(m
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
             _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
-            _COPILOT_TOKEN_URL: {"token": "copilot-tok", "expires_at": 4102444800},
+            _COPILOT_USER_URL: _COPILOT_USER_RESPONSE,
+            _COPILOT_MODELS_URL: {},
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):
@@ -3166,18 +3172,34 @@ class TestCredentialDisplayName:
         repository.update_by_name.assert_not_awaited()
         assert litellm.credential_list == [_labeled_credential()]
 
-    def test_patch_accepts_the_same_credential_name_echoed_back(self, restore_credential_list, monkeypatch):
+    @pytest.mark.parametrize(
+        ("patch_info", "expected_info"),
+        [
+            ({}, {"custom_llm_provider": "openai"}),
+            ({"description": "y"}, {"custom_llm_provider": "openai", "description": "y"}),
+            ({"custom_llm_provider": "anthropic"}, {"custom_llm_provider": "anthropic"}),
+        ],
+    )
+    def test_patch_accepts_the_same_credential_name_echoed_back(
+        self, restore_credential_list, monkeypatch, patch_info: dict[str, str], expected_info: dict[str, str]
+    ):
         monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
         with _repository_holding(_labeled_credential()) as repository:
             response = _patch_credential(
                 "openai-prod",
-                {"credential_name": "openai-prod", "credential_values": {"api_key": "sk-new"}, "credential_info": {}},
+                {
+                    "credential_name": "openai-prod",
+                    "credential_values": {"api_key": "sk-new"},
+                    "credential_info": patch_info,
+                },
             )
 
         assert response.status_code == 200, response.text
         assert [(c.credential_name, c.credential_values) for c in litellm.credential_list] == [
             ("openai-prod", {"api_key": "sk-new"})
         ]
+        assert json.loads(repository.update_by_name.await_args.kwargs["data"]["credential_info"]) == expected_info
+        assert litellm.credential_list[0].credential_info == expected_info
 
     def test_patch_on_a_config_credential_is_rejected_as_config_owned(self, restore_credential_list, monkeypatch):
         config_credential = _labeled_credential(display_name=None).model_copy(update={"source": "config"})

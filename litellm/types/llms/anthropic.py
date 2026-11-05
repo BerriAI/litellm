@@ -660,6 +660,7 @@ class MessageChunk(TypedDict, total=False):
     stop_sequence: str | None
     usage: UsageDelta
     safeguard_results: ReadOnly[Sequence[SafeguardResult]]
+    input_transformations: ReadOnly[Sequence[Mapping[str, object]]]
 
 
 class MessageStartBlock(TypedDict):

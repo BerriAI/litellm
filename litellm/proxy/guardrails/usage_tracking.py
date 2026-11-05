@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from functools import partial
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import billed_guard
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.spend_log_batching import spend_log_write_batches
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
     DailyGuardrailUsageUnitsRepository,
@@ -40,7 +41,7 @@ _RowKey = TypeVar("_RowKey")
 _RowValue = TypeVar("_RowValue")
 
 
-class _UsageUnitKey(NamedTuple):
+class UsageUnitKey(NamedTuple):
     guardrail_id: str
     date: str
     team_id: str
@@ -48,7 +49,7 @@ class _UsageUnitKey(NamedTuple):
     usage_unit: str
 
 
-class _UsageUnitIncrement(NamedTuple):
+class UsageUnitIncrement(NamedTuple):
     units: int
     cost: float
     """USD for the priced share of units."""
@@ -56,14 +57,14 @@ class _UsageUnitIncrement(NamedTuple):
     """Units recorded with no known price, the share cost leaves out."""
 
 
-def _usage_unit_key(entry: tuple[_UsageUnitKey, _UsageUnitIncrement]) -> _UsageUnitKey:
+def _usage_unit_key(entry: tuple[UsageUnitKey, UsageUnitIncrement]) -> UsageUnitKey:
     return entry[0]
 
 
-def _usage_unit_increment(units: int, cost: float | None) -> _UsageUnitIncrement:
+def _usage_unit_increment(units: int, cost: float | None) -> UsageUnitIncrement:
     if cost is None:
-        return _UsageUnitIncrement(units=units, cost=0.0, untracked_units=units)
-    return _UsageUnitIncrement(units=units, cost=cost, untracked_units=0)
+        return UsageUnitIncrement(units=units, cost=0.0, untracked_units=units)
+    return UsageUnitIncrement(units=units, cost=cost, untracked_units=0)
 
 
 class _MetricsKey(NamedTuple):
@@ -89,22 +90,22 @@ class PendingRollups:
     def __init__(self) -> None:
         self.lock: Final = asyncio.Lock()
         self.metrics: Mapping[_MetricsKey, Mapping[str, int]] = MappingProxyType({})
-        self.units: Mapping[_UsageUnitKey, _UsageUnitIncrement] = MappingProxyType({})
+        self.units: Mapping[UsageUnitKey, UsageUnitIncrement] = MappingProxyType({})
 
 
 _PENDING_ROLLUPS: Final = PendingRollups()
 
 _NO_COUNTERS: Final[Mapping[str, int]] = MappingProxyType({})
-_NO_INCREMENT: Final = _UsageUnitIncrement(units=0, cost=0.0, untracked_units=0)
+_NO_INCREMENT: Final = UsageUnitIncrement(units=0, cost=0.0, untracked_units=0)
 
 
 def _merged_keys(base: Mapping[_RowKey, object], extra: Mapping[_RowKey, object]) -> tuple[_RowKey, ...]:
     return (*base, *(key for key in extra if key not in base))
 
 
-def _summed_increments(increments: Iterable[_UsageUnitIncrement]) -> _UsageUnitIncrement:
+def _summed_increments(increments: Iterable[UsageUnitIncrement]) -> UsageUnitIncrement:
     materialized: Final = tuple(increments)
-    return _UsageUnitIncrement(
+    return UsageUnitIncrement(
         units=sum(i.units for i in materialized),
         cost=sum(i.cost for i in materialized),
         untracked_units=sum(i.untracked_units for i in materialized),
@@ -112,8 +113,8 @@ def _summed_increments(increments: Iterable[_UsageUnitIncrement]) -> _UsageUnitI
 
 
 def _merged_unit_rows(
-    base: Mapping[_UsageUnitKey, _UsageUnitIncrement], extra: Mapping[_UsageUnitKey, _UsageUnitIncrement]
-) -> Mapping[_UsageUnitKey, _UsageUnitIncrement]:
+    base: Mapping[UsageUnitKey, UsageUnitIncrement], extra: Mapping[UsageUnitKey, UsageUnitIncrement]
+) -> Mapping[UsageUnitKey, UsageUnitIncrement]:
     return MappingProxyType(
         {
             key: _summed_increments((base.get(key, _NO_INCREMENT), extra.get(key, _NO_INCREMENT)))
@@ -250,7 +251,7 @@ def _parse_payload_start_time(payload: Mapping[str, object]) -> datetime | None:
 
 def _iter_usage_unit_increments(
     logs_to_process: Sequence[Mapping[str, object]],
-) -> Iterator[tuple[_UsageUnitKey, _UsageUnitIncrement]]:
+) -> Iterator[tuple[UsageUnitKey, UsageUnitIncrement]]:
     for payload in logs_to_process:
         start_time = _parse_payload_start_time(payload)
         if not payload.get("request_id") or start_time is None:
@@ -266,14 +267,14 @@ def _iter_usage_unit_increments(
             cost_by_unit = billed_guardrail_cost_by_unit(entry)
             for unit_name, units in usage.items():
                 if isinstance(units, int) and not isinstance(units, bool) and units > 0:
-                    key = _UsageUnitKey(guardrail_id, date_key, team_id, api_key, str(unit_name))
+                    key = UsageUnitKey(guardrail_id, date_key, team_id, api_key, str(unit_name))
                     cost = cost_by_unit.get(str(unit_name)) if cost_by_unit is not None else None
                     yield key, _usage_unit_increment(units=units, cost=cost)
 
 
 def _sum_usage_unit_increments(
     logs_to_process: Sequence[Mapping[str, object]],
-) -> Mapping[_UsageUnitKey, _UsageUnitIncrement]:
+) -> Mapping[UsageUnitKey, UsageUnitIncrement]:
     ordered: Final = sorted(_iter_usage_unit_increments(logs_to_process), key=_usage_unit_key)
     return MappingProxyType(
         {
@@ -283,8 +284,16 @@ def _sum_usage_unit_increments(
     )
 
 
-async def _upsert_usage_unit_row(
-    prisma_client: PrismaClient, key: _UsageUnitKey, increment: _UsageUnitIncrement
+class GuardrailUsageDatabase(Protocol):
+    @property
+    def litellm_dailyguardrailusageunits(self) -> TableActions[object]: ...
+
+
+async def upsert_usage_unit_row(
+    prisma_client: PrismaClient,
+    key: UsageUnitKey,
+    increment: UsageUnitIncrement,
+    outer_transaction: GuardrailUsageDatabase | None = None,
 ) -> None:
     row: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsCreateInput] = {
         "guardrail_id": key.guardrail_id,
@@ -314,7 +323,12 @@ async def _upsert_usage_unit_row(
             "untracked_units": {"increment": increment.untracked_units},
         },
     }
-    await DailyGuardrailUsageUnitsRepository(prisma_client).table.upsert(where=where, data=data)
+    table: Final = (
+        outer_transaction.litellm_dailyguardrailusageunits
+        if outer_transaction is not None
+        else DailyGuardrailUsageUnitsRepository(prisma_client).table
+    )
+    await table.upsert(where=where, data=data)
 
 
 async def _upsert_metrics_row(prisma_client: PrismaClient, key: _MetricsKey, agg: Mapping[str, int]) -> None:
@@ -363,7 +377,7 @@ async def process_spend_logs_guardrail_usage(
     )
     index_rows_by_key: Final[dict[tuple[str, str], dict[str, object]]] = {}
 
-    for payload in logs_to_process:
+    for payload in (row for row in logs_to_process if row.get("accounting_log_disabled") is not True):
         request_id = payload.get("request_id")
         start_time = _parse_payload_start_time(payload)
         if not isinstance(request_id, str) or not request_id or start_time is None:
@@ -416,7 +430,10 @@ async def process_spend_logs_guardrail_usage(
         {key: agg for key, agg in daily_guardrail.items() if int(agg["requests_evaluated"]) > 0}
     )
     metrics_rows: Final = _merged_metric_rows(pending_metrics, evaluated_metrics)
-    unit_rows: Final = _merged_unit_rows(pending_units, _sum_usage_unit_increments(logs_to_process))
+    unit_rows: Final = _merged_unit_rows(
+        pending_units,
+        _sum_usage_unit_increments(tuple(row for row in logs_to_process if "accounting_payload" not in row)),
+    )
 
     if not metrics_rows and not index_rows and not unit_rows:
         return
@@ -435,7 +452,7 @@ async def process_spend_logs_guardrail_usage(
             metrics_rows, partial(_upsert_metrics_row, prisma_client), "daily metrics", sleep
         )
         failed_units: Final = await _upsert_rows_with_retry(
-            unit_rows, partial(_upsert_usage_unit_row, prisma_client), "usage unit", sleep
+            unit_rows, partial(upsert_usage_unit_row, prisma_client), "usage unit", sleep
         )
         if failed_metrics or failed_units:
             async with pending.lock:

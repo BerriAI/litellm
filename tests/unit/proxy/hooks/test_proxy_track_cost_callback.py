@@ -4,7 +4,7 @@ import logging
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
@@ -24,6 +24,7 @@ from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     ProxyDBLogger,
+    _charge_request_cost,
     _get_budget_reservation_from_metadata,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
@@ -42,6 +43,7 @@ from litellm.proxy.utils import (
 )
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.videos.main import VideoObject
 
 
 @pytest.mark.asyncio
@@ -1595,14 +1597,16 @@ def _retrieved_batch(status: str, output_file_id: str | None):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call_type", "status", "output_file_id", "row_claimed", "spend_written", "charged"),
+    ("call_type", "status", "output_file_id", "row_claimed", "spend_written", "charged", "redacted"),
     [
-        ("aretrieve_batch", "in_progress", None, True, False, False),
-        ("aretrieve_batch", "completed", None, True, False, False),
-        ("aretrieve_batch", "completed", "file-out", False, True, False),
-        ("aretrieve_batch", "completed", "file-out", True, True, True),
-        ("aretrieve_batch", "failed", None, True, True, True),
-        ("acreate_batch", "validating", None, True, True, True),
+        ("aretrieve_batch", "in_progress", None, True, False, False, False),
+        ("aretrieve_batch", "completed", None, True, False, False, False),
+        ("aretrieve_batch", "completed", "file-out", False, True, False, False),
+        ("aretrieve_batch", "completed", "file-out", True, True, True, False),
+        ("aretrieve_batch", "failed", None, True, True, True, False),
+        ("acreate_batch", "validating", None, True, True, True, False),
+        ("aretrieve_batch", "in_progress", None, True, False, False, True),
+        ("aretrieve_batch", "completed", "file-out", True, True, True, True),
     ],
     ids=[
         "retrieve_before_final",
@@ -1611,20 +1615,31 @@ def _retrieved_batch(status: str, output_file_id: str | None):
         "retrieve_first_final",
         "retrieve_failed_batch",
         "create_before_final",
+        "redacted_retrieve_before_final",
+        "redacted_retrieve_first_final",
     ],
 )
 async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # test-quality-ok: whether the spend writer runs, whether the counters move, and whether the poll's reservation is handed back is the whole observable contract of the gate
-    call_type, status, output_file_id, row_claimed, spend_written, charged
+    call_type, status, output_file_id, row_claimed, spend_written, charged, redacted
 ):
     """
     A poll before the batch is final used to pin its shared spend row at $0, and every
     completed retrieve after the first charged the key again (LIT-7048). Only retrieves
     are gated, since creating a batch is its own billable request, and a retrieve that
-    charges nothing hands its budget reservation back instead.
+    charges nothing hands its budget reservation back instead. Message redaction replaces
+    the logged batch, so the gate reads the batch logging stamped before redacting it.
     """
+    from litellm.litellm_core_utils.batch_utils import POLLED_BATCH_COST_IS_FINAL_KWARG, POLLED_BATCH_ID_KWARG
+
     logger = ProxyDBLogger()
     budget_reservation = None if charged else {"reserved_cost": 0.5, "entries": []}
-    kwargs = _batch_retrieve_kwargs(call_type, reservation=budget_reservation)
+    retrieved: Final = _retrieved_batch(status, output_file_id)
+    stamped: Final = (
+        {POLLED_BATCH_ID_KWARG: retrieved.id, POLLED_BATCH_COST_IS_FINAL_KWARG: status != "in_progress"}
+        if redacted
+        else {}
+    )
+    kwargs = {**_batch_retrieve_kwargs(call_type, reservation=budget_reservation), **stamped}
 
     with (
         patch(  # test-quality-ok: increment_spend_counters is a proxy_server global the callback reads lazily, no seam
@@ -1646,7 +1661,7 @@ async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # 
 
         await logger._PROXY_track_cost_callback(
             kwargs=kwargs,
-            completion_response=_retrieved_batch(status, output_file_id),
+            completion_response={"text": "redacted-by-litellm"} if redacted else retrieved,
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
@@ -2836,8 +2851,11 @@ async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_requ
     live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
 ):
     """The window row's one-time seed from the spend log stops at the request start, which keeps the failure row
-    it already logged from being counted twice."""
+    it already logged from being counted twice. Only the legacy writers queue this row, so the ledger is off."""
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import proxy_logging_obj
+
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
 
     window_queue: Final = proxy_logging_obj.db_spend_update_writer.window_spend_update_queue
     await window_queue.flush_and_get_aggregated_window_spend_transactions()
@@ -3376,18 +3394,8 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
     assert event.response_cost == 0.0125
 
 
-@pytest.mark.asyncio
-async def test_async_log_success_event_keeps_batch_retrieves_in_process():
-    producer = SpendEventProducer(
-        address=UnixAddress(path="/nonexistent/spend.sock"),
-        on_unavailable="drop",
-        buffer_size=10,
-        connect_timeout=1.0,
-        fallback=_no_fallback,
-    )
-    logger = ProxyDBLogger(producer)
-    kwargs = {**_offload_kwargs(), "call_type": CallTypes.aretrieve_batch.value}
-    completed_batch = LiteLLMBatch(
+def _completed_batch() -> LiteLLMBatch:
+    return LiteLLMBatch(
         id="batch_abc",
         completion_window="24h",
         created_at=1,
@@ -3397,6 +3405,29 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
         object="batch",
         status="completed",
     )
+
+
+def _completed_video() -> VideoObject:
+    return VideoObject(id="video_abc", object="video", status="completed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "polled_job"),
+    [(CallTypes.aretrieve_batch.value, _completed_batch), ("avideo_status", _completed_video)],
+)
+async def test_async_log_success_event_keeps_job_polls_in_process(call_type, polled_job):
+    """The spend event leaves out the polled video's status and id, which decide whether the poll charges the job."""
+    producer = SpendEventProducer(
+        address=UnixAddress(path="/nonexistent/spend.sock"),
+        on_unavailable="drop",
+        buffer_size=10,
+        connect_timeout=1.0,
+        fallback=_no_fallback,
+    )
+    logger = ProxyDBLogger(producer)
+    kwargs = {**_offload_kwargs(), "call_type": call_type}
+    completed_job = polled_job()
 
     with (
         patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
@@ -3411,7 +3442,7 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
-        await logger.async_log_success_event(kwargs, completed_batch, datetime.now(), datetime.now())
+        await logger.async_log_success_event(kwargs, completed_job, datetime.now(), datetime.now())
 
     mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
     assert producer.stats().queued == 0
@@ -3491,6 +3522,40 @@ async def test_sidecar_ignores_an_undecodable_event():  # test-quality-ok: a dis
     mock_proxy_logging.db_spend_update_writer.update_database.assert_not_awaited()
 
 
+def _spend_row_error_information(update_database_kwargs: Mapping[str, object]) -> dict[str, object]:
+    row: Final = get_logging_payload(
+        kwargs=cast(dict, update_database_kwargs["kwargs"]),
+        response_obj=update_database_kwargs["completion_response"],
+        start_time=cast(datetime, update_database_kwargs["start_time"]),
+        end_time=cast(datetime, update_database_kwargs["end_time"]),
+    )
+    return json.loads(row["metadata"])["error_information"]
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_spend_row_truncates_a_long_provider_error_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "100")
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
+    provider_error: Final = "upstream failure " + "x" * 1000
+
+    await logger.async_post_call_failure_hook(
+        request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        original_exception=litellm.InternalServerError(message=provider_error, llm_provider="openai", model="gpt-4o"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    stored_message: Final = _spend_row_error_information(writer.update_database.call_args.kwargs)["error_message"]
+    assert isinstance(stored_message, str)
+    assert stored_message.count("skipped") == 1
+    kept_chars: Final = len(stored_message.split("... (")[0]) + len(stored_message.rsplit(") ...", 1)[1])
+    skipped_chars: Final = int(stored_message.split("skipped ", 1)[1].split(" chars", 1)[0])
+    assert kept_chars + skipped_chars > len(provider_error)
+
+
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_model_rejection():
     raw_model: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
@@ -3504,9 +3569,7 @@ async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_
         user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
     )
 
-    error_information: Final = writer.update_database.call_args.kwargs["kwargs"]["litellm_params"]["metadata"][
-        "error_information"
-    ]
+    error_information: Final = _spend_row_error_information(writer.update_database.call_args.kwargs)
     assert "medical records" not in json.dumps(error_information)
     assert (
         error_information["error_message"]
@@ -3951,138 +4014,48 @@ async def test_async_post_call_failure_hook_disable_pre_routing_error_logs(
     assert len(writer.rows) == rows_written
 
 
-@pytest.mark.asyncio
-async def test_failure_capture_overload_does_not_skip_budget_release(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    from litellm.proxy import proxy_server
-    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
-    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
-    from tests.unit.proxy.spend_tracking.test_usage_meter import CommitBarrier, _write
+class _RecordedCharges:
+    def __init__(self, outcomes: tuple[bool, ...]) -> None:
+        self.outcomes = outcomes
+        self.calls: tuple[tuple[object, float, dict[str, object] | None], ...] = ()
 
-    database: Final = CommitBarrier()
-    runtime: Final = UsageCaptureRuntime()
-    runtime.start(database.write, UsageCaptureSettings(batch_size=2, max_pending_records=2))
-    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
-    monkeypatch.setattr(proxy_server, "prisma_client", None)
-    meter: Final = runtime.meter
-    assert meter is not None
-    receipt: Final = meter.submit((_write("occupied-one"), _write("occupied-two")))
-    auth: Final = UserAPIKeyAuth(budget_reservation={"reserved_cost": 0.5, "entries": [], "finalized": False})
-    request: Final = {
-        "call_type": "acompletion",
-        "litellm_call_id": "failed",
-        "model": "capture-model",
-        "start_time": _CALL_START,
-        "litellm_params": {},
+    async def __call__(
+        self, *, kwargs: dict, response_cost: float, budget_reservation: dict[str, object] | None
+    ) -> bool:
+        self.calls = (*self.calls, (kwargs.get("response_cost"), response_cost, budget_reservation))
+        return self.outcomes[len(self.calls) - 1]
+
+
+_GUARDED_POLL: Final = MappingProxyType(
+    {
+        "call_type": "avideo_status",
+        "response_cost": 0.43,
+        "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
     }
-    try:
-        await database.entered.wait()
-        await ProxyDBLogger().async_post_call_failure_hook(request, RuntimeError("provider failed"), auth)
-        assert auth.budget_reservation is not None and auth.budget_reservation["finalized"] is True
-        assert "Usage capture failed on the request failure path" in caplog.text
-        assert "_accounting_capture" not in request
-    finally:
-        database.release.set()
-        await runtime.stop(1)
-    await receipt
-    assert database.committed == ("occupied-one", "occupied-two")
+)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [False, True])
-@pytest.mark.parametrize("complete", [False, True])
-@pytest.mark.parametrize("deferred", [False, True])
-async def test_capture_and_legacy_share_resolved_key_attribution(
-    failure: bool, complete: bool, deferred: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from pydantic import TypeAdapter
+@pytest.mark.parametrize(
+    ("outcomes", "poll", "charged", "second_call"),
+    [
+        ((True,), _GUARDED_POLL, 0.43, None),
+        ((False, True), _GUARDED_POLL, 0.01, (0.01, 0.01, None)),
+        ((False, False), _GUARDED_POLL, None, (0.01, 0.01, None)),
+        ((False,), {"response_cost": 0.43}, None, None),
+        ((False,), {**_GUARDED_POLL, "call_type": "aretrieve_batch"}, None, None),
+    ],
+    ids=[
+        "first_poll_pays_the_job",
+        "repeat_poll_pays_its_guardrail",
+        "guardrail_charge_not_written",
+        "repeat_poll_free",
+        "repeat_batch_poll_free_whatever_its_guardrails_cost",
+    ],
+)
+async def test_a_poll_of_an_already_charged_job_still_charges_its_own_guardrails(outcomes, poll, charged, second_call):
+    charge_spend: Final = _RecordedCharges(outcomes)
+    reservation: Final = {"reserved": 0.43}
 
-    from litellm.accounting import DeliveryTarget, DimensionName
-    from litellm.proxy import proxy_server
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
-    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
-    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
-    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage
-
-    key: Final = UserAPIKeyAuth(
-        api_key="a" * 64,
-        user_id="owner",
-        team_id="team",
-        org_id="org",
-        project_id="project",
-        key_alias="key",
-        team_alias="team-alias",
-        request_route="/v1/chat/completions",
-    )
-    cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key="a" * 64, value=key)
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
-    monkeypatch.setattr(proxy_server, "prisma_client", object())
-    writer: Final = _RecordingSpendWriter()
-    monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(db_spend_update_writer=writer))
-    database: Final = StoredUsage()
-    runtime: Final = UsageCaptureRuntime()
-    runtime.start(database.insert, UsageCaptureSettings())
-    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
-    rejected: Final = failure and deferred and not complete
-    owner: Final = "original-owner" if deferred and not rejected else "owner"
-    metadata: Final = {
-        "user_api_key": "b" * 64 if rejected else "a" * 64,
-        **(
-            {
-                "user_api_key_user_id": "forged-owner" if rejected else owner,
-                "user_api_key_team_id": "forged-team" if rejected else "team",
-                "user_api_key_org_id": "forged-org" if rejected else "org",
-                "user_api_key_project_id": None if deferred and not complete else "project",
-                "user_api_key_alias": "key",
-                "user_api_key_team_alias": "team-alias",
-            }
-            if complete or deferred
-            else {}
-        ),
-    }
-    kwargs: Final = {
-        "call_type": "aretrieve_batch" if deferred else "call_mcp_tool",
-        "litellm_call_id": "attributed",
-        "model": "MCP: echo",
-        "response_cost": 0.25,
-        "start_time": _CALL_START,
-        "litellm_params": {"metadata": metadata},
-    }
-    if rejected:
-        from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP, REJECTED_BEFORE_REQUEST_SETUP_KEY
-
-        kwargs[REJECTED_BEFORE_REQUEST_SETUP_KEY] = REJECTED_BEFORE_REQUEST_SETUP
-    logger: Final = ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer))
-    try:
-        with track_batch_accounting("attributed" if deferred and not rejected else "other"):
-            if failure:
-                await logger.async_post_call_failure_hook(
-                    kwargs,
-                    HTTPException(401, "model not allowed"),
-                    key if complete else UserAPIKeyAuth(api_key="a" * 64, request_route="/v1/chat/completions"),
-                )
-            else:
-                await logger.async_log_success_event(kwargs, {"id": "tool"}, _CALL_START, _CALL_START)
-    finally:
-        await runtime.stop(1)
-    assert len(writer.rows) == 1
-    assert len(database.rows) == 2
-    dimensions: Final = {item.name: item.value for item in database.rows[-1].event.dimensions}
-    if rejected:
-        assert dimensions.get(DimensionName.KEY) == key.api_key
-    assert {
-        name: dimensions.get(name)
-        for name in (DimensionName.USER, DimensionName.TEAM, DimensionName.ORGANIZATION, DimensionName.PROJECT)
-    } == {
-        DimensionName.USER: owner,
-        DimensionName.TEAM: "team",
-        DimensionName.ORGANIZATION: "org",
-        DimensionName.PROJECT: None if deferred and not complete and not rejected else "project",
-    }
-    assert set(database.rows[-1].targets) >= {DeliveryTarget.DAILY_TEAM_SPEND, DeliveryTarget.DAILY_ORGANIZATION_SPEND}
-    legacy: Final = TypeAdapter(dict[str, object]).validate_python(writer.rows[0]["kwargs"])
-    payload: Final = get_logging_payload(legacy, {"id": "tool"}, _CALL_START, _CALL_START)
-    assert (payload["user"], payload["team_id"], payload["organization_id"]) == (owner, "team", "org")
+    assert await _charge_request_cost(charge_spend, dict(poll), 0.43, reservation) == charged
+    assert charge_spend.calls == ((0.43, 0.43, reservation), *(() if second_call is None else (second_call,)))
