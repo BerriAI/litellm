@@ -16,9 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol
 
-from pydantic import BaseModel, SecretStr, ValidationError
+from pydantic import SecretStr, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.types.llms.base import LiteLLMBaseModel
 
 CACHE_DIR_ENV: Final = "LITELLM_TOKEN_EXCHANGE_CACHE_DIR"
 
@@ -43,7 +44,7 @@ class SharedTokenStore(Protocol):
     def lock(self, key: str) -> contextlib.AbstractContextManager[None]: ...
 
 
-class _StoredTokenFile(BaseModel):
+class _StoredTokenFile(LiteLLMBaseModel):
     access_token: str
     expires_at_epoch: float | None
     assertion_sha256: str

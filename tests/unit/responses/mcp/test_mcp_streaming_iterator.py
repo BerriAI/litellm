@@ -1,6 +1,8 @@
 import sys
 import types
+from contextlib import nullcontext
 from types import SimpleNamespace
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,7 +10,6 @@ from mcp.types import CallToolResult, TextContent
 
 import litellm  # noqa: F401 - ensures litellm.responses.main is registered in sys.modules
 from litellm.responses.mcp.mcp_streaming_iterator import (
-    MAX_MCP_TOOL_CALL_ROUNDS,
     MCPEnhancedStreamingIterator,
 )
 from litellm.types.llms.openai import (
@@ -65,6 +66,14 @@ def _item_type(item: dict[str, object] | BaseLiteLLMOpenAIResponseObject) -> str
     return str(item["type"]) if isinstance(item, dict) else str(item.type)
 
 
+def _follow_up_tool_history(input_items: list[object]) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (str(item.get("type")), str(item.get("call_id")))
+        for item in input_items
+        if isinstance(item, dict) and item.get("type") in ("function_call", "function_call_output")
+    )
+
+
 def _tool_call_stream(call_id: str, tool_name: str, response_id: str = "resp-1") -> _FakeAsyncStream:
     return _FakeAsyncStream([_completed_chunk([_function_call(call_id, tool_name)], response_id=response_id)])
 
@@ -77,24 +86,25 @@ def _mock_mcp_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """Patch the MCP tool-call plumbing so _execute_tool_calls can run in tests."""
     call_tool = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="ok")], isError=False))
     fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         call_tool=call_tool,
-        _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_from_tool_name=MagicMock(return_value=None),
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
     monkeypatch.setitem(
         sys.modules,
         "litellm.proxy.proxy_server",
-        types.SimpleNamespace(proxy_logging_obj=MagicMock()),
+        types.SimpleNamespace(proxy_logging_obj=MagicMock(), prisma_client=None),
     )
     return call_tool
 
 
-def _make_iterator(initial_chunks) -> MCPEnhancedStreamingIterator:
+def _make_iterator(initial_chunks, max_agentic_loops: int | str | None = None) -> MCPEnhancedStreamingIterator:
     return MCPEnhancedStreamingIterator(
         base_iterator=_FakeAsyncStream(initial_chunks),
         mcp_events=[],
@@ -105,6 +115,7 @@ def _make_iterator(initial_chunks) -> MCPEnhancedStreamingIterator:
             "model": "gpt-4",
             "input": "what is berriai/litellm?",
             "tools": [{"type": "mcp"}],
+            **({"max_agentic_loops": max_agentic_loops} if max_agentic_loops is not None else {}),
         },
     )
 
@@ -155,24 +166,18 @@ async def test_second_round_tool_call_is_executed_and_reaches_final_text(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_tool_call_rounds_are_capped(monkeypatch):
-    """
-    A model that keeps calling tools every round must not loop forever —
-    auto-execution stops at MAX_MCP_TOOL_CALL_ROUNDS, and the follow-up made
-    at the cap drops "tools" from the request so the model is forced to
-    answer in text instead of the stream just hanging.
-    """
-    call_tool = _mock_mcp_environment(monkeypatch)
+async def test_follow_up_input_keeps_every_previous_tool_round(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_mcp_environment(monkeypatch)
 
-    # Rounds 2..MAX_MCP_TOOL_CALL_ROUNDS keep calling the tool; the call made
-    # once the cap is hit returns a text-only response.
-    tool_call_streams = [
-        _tool_call_stream(f"call_{i}", "read_wiki_contents") for i in range(2, MAX_MCP_TOOL_CALL_ROUNDS + 1)
-    ]
-    aresponses_mock = AsyncMock(side_effect=[*tool_call_streams, _text_only_stream("giving up on tools")])
+    aresponses_mock: Final = AsyncMock(
+        side_effect=[
+            _tool_call_stream("call_2", "read_wiki_contents"),
+            _tool_call_stream("call_3", "read_wiki_contents"),
+            _text_only_stream("All three tool rounds are done."),
+        ]
+    )
     monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
-
-    iterator = _make_iterator(
+    iterator: Final = _make_iterator(
         [
             _output_item_added_chunk(),
             _completed_chunk([_function_call("call_1", "read_wiki_contents")]),
@@ -181,14 +186,77 @@ async def test_tool_call_rounds_are_capped(monkeypatch):
 
     _ = [chunk async for chunk in iterator]
 
-    assert iterator.tool_call_round == MAX_MCP_TOOL_CALL_ROUNDS
-    assert call_tool.call_count == MAX_MCP_TOOL_CALL_ROUNDS
-    assert aresponses_mock.call_count == MAX_MCP_TOOL_CALL_ROUNDS
+    second_follow_up_input: Final = cast("list[object]", aresponses_mock.call_args_list[1].kwargs["input"])
+    third_follow_up_input: Final = cast("list[object]", aresponses_mock.call_args_list[2].kwargs["input"])
+    assert _follow_up_tool_history(second_follow_up_input) == (
+        ("function_call", "call_1"),
+        ("function_call_output", "call_1"),
+        ("function_call", "call_2"),
+        ("function_call_output", "call_2"),
+    )
+    assert _follow_up_tool_history(third_follow_up_input) == (
+        ("function_call", "call_1"),
+        ("function_call_output", "call_1"),
+        ("function_call", "call_2"),
+        ("function_call_output", "call_2"),
+        ("function_call", "call_3"),
+        ("function_call_output", "call_3"),
+    )
+    user_messages: Final = [
+        item for item in third_follow_up_input if isinstance(item, dict) and item.get("role") == "user"
+    ]
+    assert user_messages == [{"type": "message", "role": "user", "content": "what is berriai/litellm?"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("max_agentic_loops", "expected_cap"),
+    (
+        pytest.param(None, 5, id="unset"),
+        pytest.param(7, 7, id="integer"),
+        pytest.param("7", 7, id="integer-string"),
+        pytest.param(2, 2, id="custom-cap"),
+    ),
+)
+async def test_tool_call_rounds_are_capped(monkeypatch, max_agentic_loops, expected_cap):
+    """
+    A model that keeps calling tools every round must not loop forever —
+    auto-execution stops at the configured round cap, and the follow-up made
+    at the cap drops "tools" from the request so the model is forced to
+    answer in text instead of the stream just hanging.
+    """
+    call_tool = _mock_mcp_environment(monkeypatch)
+
+    tool_call_streams: Final = tuple(
+        _tool_call_stream(f"call_{i}", "read_wiki_contents") for i in range(2, expected_cap + 1)
+    )
+    aresponses_mock: Final = AsyncMock(side_effect=(*tool_call_streams, _text_only_stream("giving up on tools")))
+    monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
+
+    iterator = _make_iterator(
+        [
+            _output_item_added_chunk(),
+            _completed_chunk([_function_call("call_1", "read_wiki_contents")]),
+        ],
+        max_agentic_loops=max_agentic_loops,
+    )
+
+    _ = [chunk async for chunk in iterator]
+
+    assert iterator.tool_call_round == expected_cap
+    assert call_tool.call_count == expected_cap
+    assert aresponses_mock.call_count == expected_cap
 
     # Every follow-up before the cap still offered tools; only the capped one drops them.
     for call in aresponses_mock.call_args_list[:-1]:
         assert "tools" in call.kwargs
     assert "tools" not in aresponses_mock.call_args_list[-1].kwargs
+
+
+@pytest.mark.parametrize(("max_agentic_loops", "expected_error"), ((0, ValueError), ("three", TypeError)))
+def test_invalid_max_agentic_loops_raises_when_creating_iterator(max_agentic_loops, expected_error):
+    with pytest.raises(expected_error, match=r"litellm_params\.max_agentic_loops"):
+        _make_iterator([], max_agentic_loops=max_agentic_loops)
 
 
 @pytest.mark.asyncio
@@ -463,6 +531,31 @@ async def test_final_output_lists_executed_call_as_completed_mcp_call(monkeypatc
         c.item for c in chunks if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _item_type(c.item) == "mcp_call"
     ]
     assert [item.status for item in done_mcp_items] == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_executed_mcp_call_arguments_reach_a_snapshot_reader_once(monkeypatch):
+    _mock_mcp_environment(monkeypatch)
+    follow_up = _FakeAsyncStream(_lifecycle_round("resp-final", _text_message("Alpha.")))
+    monkeypatch.setattr(responses_main_module, "aresponses", AsyncMock(side_effect=[follow_up]))
+    arguments = '{"repoName": "berriai/litellm"}'
+    iterator = _make_iterator(
+        [
+            _created_chunk("resp-interim"),
+            _completed_chunk([_function_call("call_1", "read_wiki_contents", arguments)], response_id="resp-interim"),
+        ]
+    )
+
+    chunks = [chunk async for chunk in iterator]
+
+    opened = [
+        c.item.arguments
+        for c in chunks
+        if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _item_type(c.item) == "mcp_call"
+    ]
+    deltas = [c.delta for c in chunks if c.type == ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA]
+    assert len(opened) == 1
+    assert opened[0] + "".join(deltas) == arguments
 
 
 @pytest.mark.asyncio

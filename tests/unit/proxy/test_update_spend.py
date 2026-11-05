@@ -1,6 +1,6 @@
 import asyncio
 from unittest.mock import Mock
-from litellm.proxy.utils import _get_redoc_url, _get_docs_url
+from litellm.proxy.utils import get_redoc_url, get_docs_url
 
 import pytest
 from fastapi import Request
@@ -323,3 +323,153 @@ async def test_update_spend_logs_multiple_batches_with_failure():
 
     # Verify all logs were cleared from transactions
     assert len(prisma_client.spend_log_transactions) == 0
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_drops_row_prisma_cannot_encode_and_keeps_the_rest():
+    """A row the Prisma engine cannot utf-8 encode (a lone surrogate in a string
+    column) is permanent, so it must be dropped like any other poison row instead
+    of being requeued at the head of the queue where it would block every tenant."""
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+    prisma_client.spend_log_transactions = [
+        {"request_id": "good-1", "request_tags": '["a"]'},
+        {"request_id": "poison", "request_tags": "\ud800"},
+        {"request_id": "good-2", "request_tags": '["b"]'},
+    ]
+    written = []
+
+    async def create_many(data, skip_duplicates):
+        if any("\ud800" in row["request_tags"] for row in data):
+            raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed")
+        written.extend(row["request_id"] for row in data)
+
+    prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=create_many)
+
+    await update_spend(prisma_client, None, proxy_logging_obj)
+
+    assert sorted(written) == ["good-1", "good-2"]
+    assert prisma_client.spend_log_transactions == []
+    proxy_logging_obj.failure_handler.assert_not_called()
+
+
+def _raw_query_error(sqlstate: str):
+    from prisma.errors import RawQueryError
+
+    return RawQueryError(
+        {
+            "user_facing_error": {
+                "error_code": "P2010",
+                "meta": {"code": sqlstate, "message": f"ERROR: sqlstate {sqlstate}"},
+            }
+        }
+    )
+
+
+class _RawInsertRepository:
+    def __init__(self, sqlstate: str):
+        self.sqlstate = sqlstate
+        self.written: list[str] = []
+
+    async def insert_with_deliveries(self, rows):
+        if any(row["request_id"] == "rejected" for row in rows):
+            raise _raw_query_error(self.sqlstate)
+        self.written.extend(str(row["request_id"]) for row in rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sqlstate", ["22P02", "23502", "54000"])
+async def test_raw_insert_rejecting_one_row_drops_only_that_row(sqlstate):
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _RawInsertRepository(sqlstate)
+    rows = [{"request_id": "good-1"}, {"request_id": "rejected"}, {"request_id": "good-2"}]
+
+    await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
+
+    assert sorted(repo.written) == ["good-1", "good-2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sqlstate", ["42P01", "40P01"])
+async def test_systemic_raw_insert_failure_is_retried_not_dropped(sqlstate):
+    from prisma.errors import RawQueryError
+
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _RawInsertRepository(sqlstate)
+    rows = [{"request_id": "good-1"}, {"request_id": "rejected"}]
+
+    with pytest.raises(RawQueryError):
+        await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
+
+    assert repo.written == []
+
+
+class _RescueFailsRepository:
+    def __init__(self, rescue_error: Exception):
+        self.rescue_error = rescue_error
+
+    async def insert_with_deliveries(self, rows):
+        if any(row.get("accounting_log_disabled") for row in rows):
+            raise self.rescue_error
+        if any(row["request_id"] == "rejected" for row in rows):
+            raise _raw_query_error("22P02")
+
+
+@pytest.mark.asyncio
+async def test_a_transient_failure_while_keeping_a_dropped_rows_charge_is_retried_not_lost():
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    outage = _raw_query_error("40P01")
+    repo = _RescueFailsRepository(outage)
+    rows = [{"request_id": "rejected", "accounting_payload": {"spend": 1.0}}]
+
+    with pytest.raises(type(outage)):
+        await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_charge_rescue_is_logged_and_the_flush_continues():
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _RescueFailsRepository(_raw_query_error("22P02"))
+    rows = [{"request_id": "rejected", "accounting_payload": {"spend": 1.0}}]
+
+    assert await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10) == 9
+
+
+class _StatementValidatingRepository:
+    def __init__(self):
+        self.written = []
+        self.charges_kept = []
+
+    async def insert_with_deliveries(self, rows):
+        from litellm.repositories.spend_log_insert import spend_log_insert_statement
+
+        if all(row.get("accounting_log_disabled") for row in rows):
+            self.charges_kept.extend(row["request_id"] for row in rows)
+            return len(rows)
+        spend_log_insert_statement(rows)
+        self.written.extend(row["request_id"] for row in rows)
+        return len(rows)
+
+
+@pytest.mark.asyncio
+async def test_a_row_the_insert_statement_rejects_is_dropped_alone_and_keeps_its_charge():
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _StatementValidatingRepository()
+    rows = [
+        {"request_id": "good", "call_type": "acompletion", "messages": "[]"},
+        {
+            "request_id": "unparseable",
+            "call_type": "acompletion",
+            "messages": "not json",
+            "accounting_payload": {"spend": 1.0},
+        },
+    ]
+
+    assert await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10) < 10
+    assert repo.written == ["good"]
+    assert repo.charges_kept == ["unparseable"]

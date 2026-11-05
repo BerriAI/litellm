@@ -2,6 +2,7 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+from openai._legacy_response import LegacyAPIResponse
 from pydantic import BaseModel
 
 from litellm.llms.volcengine.chat.transformation import (
@@ -117,7 +118,7 @@ class TestVolcEngineConfig:
 
         client = OpenAI(api_key="test_api_key")
 
-        mock_raw_response = MagicMock()
+        mock_raw_response = MagicMock(spec=LegacyAPIResponse)
         mock_raw_response.headers = {
             "x-request-id": "123",
             "openai-organization": "org-123",
@@ -126,9 +127,7 @@ class TestVolcEngineConfig:
         }
         mock_raw_response.parse.return_value = ModelResponse()
 
-        with patch.object(
-            client.chat.completions.with_raw_response, "create", mock_raw_response
-        ) as mock_create:
+        with patch.object(client, "post", MagicMock(return_value=mock_raw_response)) as mock_create:
             completion(
                 model="volcengine/doubao-seed-1.6",
                 messages=[
@@ -144,11 +143,6 @@ class TestVolcEngineConfig:
             )
 
             mock_create.assert_called_once()
-            print(mock_create.call_args.kwargs)
+            print(mock_create.call_args.kwargs["body"])
             # Fixed: thinking disabled should appear in extra_body with original structure
-            assert (
-                "extra_body" in mock_create.call_args.kwargs
-                and "thinking" in mock_create.call_args.kwargs.get("extra_body", {})
-                and mock_create.call_args.kwargs.get("extra_body", {})["thinking"]
-                == {"type": "disabled"}
-            )
+            assert mock_create.call_args.kwargs["options"]["extra_json"]["thinking"] == {"type": "disabled"}

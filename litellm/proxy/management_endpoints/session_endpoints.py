@@ -30,8 +30,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import delete_cache_key_objects
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _persist_deleted_verification_tokens,
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
+    _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    persist_deleted_verification_tokens,
 )
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
@@ -86,7 +87,7 @@ async def revoke_ui_session_keys(
             return 0
         revoked_tokens: Final = _TOKEN_LIST.validate_python(tuple(row.token for row in revoked_rows))
 
-        await _persist_deleted_verification_tokens(
+        await persist_deleted_verification_tokens(
             keys=revoked_rows,
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
@@ -154,7 +155,7 @@ async def session_logout(
             caller_row: Final = cast(  # cast-ok: find_unique returns a prisma row shaped like the pydantic model
                 "LiteLLM_VerificationToken", row
             )
-            await _persist_deleted_verification_tokens(
+            await persist_deleted_verification_tokens(
                 keys=(caller_row,),
                 prisma_client=prisma_client,
                 user_api_key_dict=user_api_key_dict,

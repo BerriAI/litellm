@@ -12,6 +12,8 @@ import os
 import traceback
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -26,6 +28,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GcsPubSubLogger(CustomBatchLogger):
@@ -44,9 +48,9 @@ class GcsPubSubLogger(CustomBatchLogger):
             topic_id (str): Pub/Sub topic ID
             credentials_path (str, optional): Path to Google Cloud credentials JSON file
         """
-        from litellm.proxy.utils import _premium_user_check
+        from litellm.proxy.utils import premium_user_check
 
-        _premium_user_check()
+        premium_user_check()
 
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
@@ -69,13 +73,13 @@ class GcsPubSubLogger(CustomBatchLogger):
         (
             _auth_header,
             vertex_project,
-        ) = await vertex_chat_completion._ensure_access_token_async(
+        ) = await vertex_chat_completion.ensure_access_token_async(
             credentials=self.path_service_account_json,
             project_id=self.project_id,
             custom_llm_provider="vertex_ai",
         )
 
-        auth_header, _ = vertex_chat_completion._get_token_and_url(
+        auth_header, _ = vertex_chat_completion.get_token_and_url(
             model="pub-sub",
             auth_header=_auth_header,
             vertex_credentials=self.path_service_account_json,
@@ -107,9 +111,9 @@ class GcsPubSubLogger(CustomBatchLogger):
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
             get_logging_payload,
         )
-        from litellm.proxy.utils import _premium_user_check
+        from litellm.proxy.utils import premium_user_check
 
-        _premium_user_check()
+        premium_user_check()
 
         try:
             verbose_logger.debug("PubSub: Logging - Enters logging function for model %s", kwargs)
@@ -152,7 +156,7 @@ class GcsPubSubLogger(CustomBatchLogger):
         finally:
             self.log_queue.clear()
 
-    async def publish_message(self, message: SpendLogsPayload | StandardLoggingPayload) -> dict[str, Any] | None:
+    async def publish_message(self, message: SpendLogsPayload | StandardLoggingPayload) -> object:
         """
         Publish message to Google Cloud Pub/Sub using REST API
 
@@ -188,7 +192,7 @@ class GcsPubSubLogger(CustomBatchLogger):
                 raise Exception(f"Failed to publish message: {response.text}")
 
             verbose_logger.debug("Pub/Sub response: %s", response.text)
-            return response.json()
+            return _DECODED_JSON.validate_python(response.json())
 
         except Exception as e:
             verbose_logger.error("Pub/Sub publish error: %s", str(e))

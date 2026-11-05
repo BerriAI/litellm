@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal
 import httpx
 from fastapi import HTTPException
 from httpx import Response as HttpxResponse
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.compression.compress import get_protected_indices
@@ -33,6 +33,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.guardrails.guardrail_hooks.content_text import content_to_text
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -84,14 +85,14 @@ def _safe_response_text(response: HttpxResponse | None, limit: int = 500) -> str
     return (text or "")[:limit]
 
 
-class _JevNoulAnswer(BaseModel):
+class _JevNoulAnswer(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     type: Literal["noul"]
     noul: Annotated[float, Field(ge=0.0, le=1.0)]
 
 
-class _JevSystemOneResponse(BaseModel):
+class _JevSystemOneResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     answers: Mapping[str, _JevNoulAnswer]

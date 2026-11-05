@@ -9,6 +9,8 @@ from integration._support.database import read_rows
 from integration._support.mail import smtp_sink
 from integration._support.process import owned_proxy
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 MEMBER_BUDGET: Final = 0.10
 CALL_COST: Final = 20 * 0.001 + 20 * 0.002
 

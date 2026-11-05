@@ -24,9 +24,8 @@ describe("UsageViewSelect", () => {
     const user = userEvent.setup();
     const { container } = render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" />);
 
-    expect(screen.getByText("Usage View")).toBeInTheDocument();
-    expect(screen.getByText("Select the usage data you want to view")).toBeInTheDocument();
-    expect(screen.getByRole("combobox")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Usage" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Select the usage data you want to view" })).toBeInTheDocument();
 
     await openMenu(user);
     expect(offers(container, "Your Usage")).toBe(true);

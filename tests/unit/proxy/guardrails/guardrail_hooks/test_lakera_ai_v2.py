@@ -5,7 +5,9 @@ PR checklist requires at least one test in tests/test_litellm/.
 Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
-import logging
+import importlib, logging, os
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,6 +26,7 @@ from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
 )
 from litellm.types.guardrails import LitellmParams, Mode
 from litellm.types.utils import ModelResponse
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 @pytest.mark.asyncio
@@ -32,7 +35,7 @@ async def test_lakera_post_call_success_hook_returns_model_response_when_pii_mas
     Post-call hook must return a ModelResponse (not a dict) when PII is masked,
     so the parent async_post_call_success_deployment_hook accepts it via _is_valid_response_type.
     """
-    lakera_guardrail = LakeraAIGuardrail(api_key="test_key")
+    lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
     mock_response = {
         "payload": [{"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 1}],
         "flagged": True,
@@ -289,7 +292,7 @@ class TestAsyncPostCallSuccessHookSkipFlags:
         """The assistant-message slice point must track the filtered original-message
         count, not the raw count, or masked content lands on the wrong/no choice once
         skip filtering changes how many "original" messages precede the response."""
-        guardrail = LakeraAIGuardrail(api_key="test_key", skip_system_message_in_guardrail=True)
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask", skip_system_message_in_guardrail=True)
         data = {
             "messages": [SYSTEM_MSG.copy(), USER_MSG.copy()],
             "model": "gpt-3.5-turbo",
@@ -321,12 +324,86 @@ PII_ONLY_LAKERA_RESPONSE = {
     "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 0}],
     "payload": [{"detector_type": "pii/email", "start": 0, "end": 5, "message_id": 0}],
 }
+PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE = {
+    "flagged": True,
+    "breakdown": [
+        {"detector_type": "pii/email", "detected": True, "message_id": 0},
+        {"detector_type": "prompt_attack", "detected": True, "message_id": 0},
+    ],
+    "payload": [{"detector_type": "pii/email", "start": 0, "end": 5, "message_id": 0}],
+}
+
+
+def _hello_world_request() -> dict[str, object]:
+    return {"messages": [{"role": "user", "content": "hello world"}], "model": "gpt-3.5-turbo", "metadata": {}}
+
+
+async def _run_pre_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> dict[str, object]:
+    data: Final = _hello_world_request()
+    with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"), cache=MagicMock(), data=data, call_type="completion"
+        )
+    return data
+
+
+async def _run_during_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> None:
+    with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
+        await guardrail.async_moderation_hook(
+            data=_hello_world_request(), user_api_key_dict=UserAPIKeyAuth(api_key="test_key"), call_type="completion"
+        )
+
+
+async def _run_post_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> ModelResponse:
+    llm_response: Final = MagicMock()
+    llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "hello world"}}]}
+    with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
+        response: Final = await guardrail.async_post_call_success_hook(
+            data={"messages": [], "model": "gpt-3.5-turbo", "metadata": {}},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            response=llm_response,
+        )
+    assert isinstance(response, ModelResponse)
+    return response
+
+
+@pytest.mark.asyncio
+class TestOnFlaggedBlockVersusMask:
+    @pytest.mark.parametrize("run_hook", [_run_pre_call, _run_during_call, _run_post_call])
+    @pytest.mark.parametrize("on_flagged", ["block", None])
+    async def test_block_rejects_pii_only_violation(self, run_hook, on_flagged):
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged=on_flagged)
+        with pytest.raises(HTTPException) as blocked:
+            await run_hook(guardrail, PII_ONLY_LAKERA_RESPONSE)
+        assert blocked.value.status_code == 400
+        assert blocked.value.detail["error"] == "Violated guardrail policy"
+
+    @pytest.mark.parametrize(
+        ("run_hook", "lakera_response"),
+        [
+            (_run_pre_call, PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE),
+            (_run_post_call, PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE),
+            (_run_during_call, PII_ONLY_LAKERA_RESPONSE),
+        ],
+    )
+    async def test_mask_rejects_violation_it_cannot_mask(self, run_hook, lakera_response):
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
+        with pytest.raises(HTTPException) as blocked:
+            await run_hook(guardrail, lakera_response)
+        assert blocked.value.status_code == 400
+
+    async def test_mask_masks_pii_only_violation_before_and_after_call(self):
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
+        data = await _run_pre_call(guardrail, PII_ONLY_LAKERA_RESPONSE)
+        response = await _run_post_call(guardrail, PII_ONLY_LAKERA_RESPONSE)
+        assert data["messages"] == [{"role": "user", "content": "[MASKED EMAIL] world"}]
+        assert response.choices[0].message.content == "[MASKED EMAIL] world"
 
 
 @pytest.mark.asyncio
 class TestPiiMaskingSafetyGuard:
     async def test_pii_only_violation_masks_in_place_when_nothing_skipped(self):
-        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
         data = {
             "messages": [USER_MSG.copy()],
             "model": "gpt-3.5-turbo",
@@ -349,7 +426,7 @@ class TestPiiMaskingSafetyGuard:
         not degrade to blocking just because the masked message carries fields beyond
         role/content. It must patch content in place on a copy of the original message,
         preserving tool_call_id, rather than reconstructing from a role/content-only dict."""
-        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
         data = {
             "messages": [{"role": "tool", "content": "contact me at a@b.com", "tool_call_id": "call_123"}],
             "model": "gpt-3.5-turbo",
@@ -372,7 +449,7 @@ class TestPiiMaskingSafetyGuard:
         Regression (maintainer finding on BerriAI/litellm#34940): a message carrying
         tool_calls=None, name, or cache_control must not force a hard block either --
         those fields must survive untouched on the masked message."""
-        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
         data = {
             "messages": [
                 {
@@ -409,7 +486,7 @@ class TestPiiMaskingSafetyGuard:
         dropped. Masking would then write the combined list back into
         data["messages"], injecting input-derived content and losing the
         original empty message; this must degrade to blocking instead."""
-        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
         data = {
             "messages": [{"role": "user", "content": ""}, {"role": "user", "content": "contact me at a@b.com"}],
             "input": "responses-api content",
@@ -441,7 +518,7 @@ class TestPiiMaskingSafetyGuard:
         data["instructions"] -- masking here would leave the real field
         untouched or write a redacted duplicate somewhere the model never
         reads from. Must degrade to blocking instead."""
-        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
         data = {
             "instructions": "contact me at a@b.com",
             "input": "hi",
@@ -475,7 +552,7 @@ class TestPiiMaskingSafetyGuard:
         inspects. Since Lakera never saw instructions in that case, it can't
         have flagged anything there, and PII detected purely in the real
         message content must still be masked rather than force-blocked."""
-        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", skip_system_message_in_guardrail=True)
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask", skip_system_message_in_guardrail=True)
         data = {
             "instructions": "be nice",
             "messages": [USER_MSG.copy()],
@@ -500,7 +577,7 @@ class TestPiiMaskingSafetyGuard:
         skip_system_message_in_guardrail must not flip every Lakera request to
         hard-block. The skipped system message is out of Lakera's scope entirely
         and must be left untouched; only the in-scope user message gets masked."""
-        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", skip_system_message_in_guardrail=True)
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask", skip_system_message_in_guardrail=True)
         data = {
             "messages": [SYSTEM_MSG.copy(), USER_MSG.copy()],
             "model": "gpt-3.5-turbo",
@@ -762,7 +839,7 @@ class TestPiiMaskingSafetyGuard:
         sent to Lakera, so scope_indices and the masked results came back different
         lengths and the strict positional zip raised, turning a maskable PII-only
         violation into an unhandled request failure instead of a masked response."""
-        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", skip_system_message_in_guardrail=True)
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask", skip_system_message_in_guardrail=True)
         uppercase_system_msg = {"role": "System", "content": "be nice"}
         data = {
             "messages": [uppercase_system_msg.copy(), USER_MSG.copy()],
@@ -784,7 +861,7 @@ class TestPiiMaskingSafetyGuard:
         """build_inspection_messages drops empty-text messages before the skip filter
         ever sees them. The scope-index merge must leave that untouched empty message
         exactly where it was instead of losing it or degrading to a hard block."""
-        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
         empty_system_msg = {"role": "system", "content": ""}
         data = {
             "messages": [empty_system_msg.copy(), USER_MSG.copy()],
@@ -1048,6 +1125,11 @@ class TestAdvisoryModeRequiresPayloadAndBreakdown:
         guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
         assert guardrail.payload is True
         assert guardrail.breakdown is True
+
+    @pytest.mark.parametrize(("payload", "breakdown"), [(False, True), (True, False)])
+    def test_mask_without_payload_or_breakdown_raises_at_construction(self, payload, breakdown):
+        with pytest.raises(ValueError, match="on_flagged='mask' requires payload=True and breakdown=True"):
+            LakeraAIGuardrail(api_key="test_key", on_flagged="mask", payload=payload, breakdown=breakdown)
 
     def test_payload_false_with_block_mode_constructs_without_error(self):
         guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", payload=False)
@@ -1631,3 +1713,751 @@ class TestAdvisoryModePostCall:
             )
 
         assert result is llm_response, "Response must pass through unmodified, matching monitor mode"
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Saves and restores litellm callback/global state so tests don't leak
+    side effects. Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("set_verbose", "cache", "num_retries"):
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    yield
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception:
+            pass
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_lakera_pre_call_hook_for_pii_masking():
+    """Test for Lakera guardrail pre-call hook for PII masking"""
+    # Setup the guardrail with specific entities config
+    litellm.turn_on_debug()
+    lakera_guardrail = LakeraAIGuardrail(
+        api_key="test_key",
+        on_flagged="mask",
+    )
+
+    # Mock response with PII detections in payload (with start/end positions for masking)
+    mock_response = {
+        "payload": [
+            {
+                "detector_type": "pii/credit_card",
+                "start": 18,
+                "end": 37,
+                "message_id": 1,
+            },  # "4111-1111-1111-1111"
+            {
+                "detector_type": "pii/email",
+                "start": 54,
+                "end": 70,
+                "message_id": 1,
+            },  # "test@example.com"
+        ],
+        "flagged": True,
+        "breakdown": [
+            {"detector_type": "pii/credit_card", "detected": True, "message_id": 1},
+            {"detector_type": "pii/email", "detected": True, "message_id": 1},
+        ],
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        # Create a sample request with PII data
+        data = {
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {
+                    "role": "user",
+                    "content": "My credit card is 4111-1111-1111-1111 and my email is test@example.com. My phone number is 555-123-4567",
+                },
+            ],
+            "model": "gpt-5-mini",
+            "metadata": {},
+        }
+
+        # Mock objects needed for the pre-call hook
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        cache = DualCache()
+
+        # Call the pre-call hook with the specified call type
+        modified_data = await lakera_guardrail.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="completion",
+        )
+        print(modified_data)
+
+        # Verify the messages have been modified to mask PII
+        assert (
+            modified_data["messages"][0]["content"] == "You are a helpful assistant."
+        )  # System prompt should be unchanged
+
+        user_message = modified_data["messages"][1]["content"]
+        # Verify both credit card and email are masked
+        assert "4111-1111-1111-1111" not in user_message
+        assert "test@example.com" not in user_message
+        # Verify masking placeholders are present
+        assert "[MASKED CREDIT_CARD]" in user_message
+        assert "[MASKED EMAIL]" in user_message
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_lakera_blocks_non_pii_violations():
+    """Test that Lakera guardrail blocks requests with non-PII violations like hate speech, violence, etc."""
+
+    lakera_guardrail = LakeraAIGuardrail(
+        api_key="test_key",
+    )
+
+    # Mock the call_v2_guard method to return a response similar to the user's example
+    mock_response = {
+        "payload": [],
+        "flagged": True,
+        "dev_info": {
+            "git_revision": "f0bc093a",
+            "git_timestamp": "2025-09-23T15:28:06+00:00",
+            "model_version": "lakera-guard-1",
+            "version": "2.0.281",
+        },
+        "metadata": {"request_uuid": "b7cd4c8a-28aa-4285-a245-2befee514dbf"},
+        "breakdown": [
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-moderated-content",
+                "detector_type": "moderated_content/crime",
+                "detected": True,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-moderated-content",
+                "detector_type": "moderated_content/hate",
+                "detected": True,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-moderated-content",
+                "detector_type": "moderated_content/violence",
+                "detected": True,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-prompt-attack",
+                "detector_type": "prompt_attack",
+                "detected": True,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-pii",
+                "detector_type": "pii/email",
+                "detected": False,
+                "message_id": 0,
+            },
+        ],
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        # Create a sample request that would trigger violations
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Some harmful content that triggers violations",
+                }
+            ],
+            "model": "gpt-5-mini",
+            "metadata": {},
+        }
+
+        # Mock objects needed for the pre-call hook
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        cache = DualCache()
+
+        # The guardrail should raise an HTTPException for non-PII violations
+        with pytest.raises(HTTPException) as exc_info:
+            await lakera_guardrail.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type="completion",
+            )
+
+        # Verify the exception details include the Lakera response
+        assert exc_info.value.status_code == 400
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+        assert "lakera_guardrail_response" in exc_info.value.detail
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_lakera_only_pii_violations_are_masked():
+    """Test that Lakera guardrail only masks PII violations and doesn't block the request."""
+
+    lakera_guardrail = LakeraAIGuardrail(
+        api_key="test_key",
+        on_flagged="mask",
+    )
+
+    # Mock response with only PII violations
+    mock_response = {
+        "payload": [{"detector_type": "pii/email", "start": 10, "end": 25, "message_id": 0}],
+        "flagged": True,
+        "breakdown": [
+            {
+                "project_id": "project-9770817088",
+                "detector_type": "pii/email",
+                "detected": True,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "detector_type": "moderated_content/hate",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "detector_type": "prompt_attack",
+                "detected": False,
+                "message_id": 0,
+            },
+        ],
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        data = {
+            "messages": [{"role": "user", "content": "My email test@example.com here"}],
+            "model": "gpt-5-mini",
+            "metadata": {},
+        }
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        cache = DualCache()
+
+        # Should not raise an exception, just mask the PII
+        result = await lakera_guardrail.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="completion",
+        )
+
+        # Verify the request was not blocked
+        assert result is not None
+        assert "messages" in result
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_lakera_blocks_flagged_content_with_user_scenario():
+    """
+    Test the exact user scenario where Lakera flagged content but request went through.
+    This should now be blocked with the fix to check breakdown field instead of payload.
+    """
+
+    lakera_guardrail = LakeraAIGuardrail(
+        api_key="test_key",
+    )
+
+    # Mock response matching the exact user scenario
+    mock_response = {
+        "payload": [],  # Empty payload like in user's case
+        "flagged": True,
+        "dev_info": {
+            "git_revision": "f0bc093a",
+            "git_timestamp": "2025-09-23T15:28:06+00:00",
+            "model_version": "lakera-guard-1",
+            "version": "2.0.281",
+        },
+        "metadata": {"request_uuid": "b7cd4c8a-28aa-4285-a245-2befee514dbf"},
+        "breakdown": [
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-moderated-content",
+                "detector_type": "moderated_content/crime",
+                "detected": True,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-moderated-content",
+                "detector_type": "moderated_content/hate",
+                "detected": True,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-moderated-content",
+                "detector_type": "moderated_content/profanity",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-moderated-content",
+                "detector_type": "moderated_content/sexual",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-moderated-content",
+                "detector_type": "moderated_content/violence",
+                "detected": True,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-moderated-content",
+                "detector_type": "moderated_content/weapons",
+                "detected": True,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-pii",
+                "detector_type": "pii/address",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-pii",
+                "detector_type": "pii/credit_card",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-pii",
+                "detector_type": "pii/email",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-pii",
+                "detector_type": "pii/iban_code",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-pii",
+                "detector_type": "pii/ip_address",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-pii",
+                "detector_type": "pii/name",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-pii",
+                "detector_type": "pii/phone_number",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-pii",
+                "detector_type": "pii/us_social_security_number",
+                "detected": False,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-prompt-attack",
+                "detector_type": "prompt_attack",
+                "detected": True,
+                "message_id": 0,
+            },
+            {
+                "project_id": "project-9770817088",
+                "policy_id": "policy-lakera-default",
+                "detector_id": "detector-lakera-default-unknown-links",
+                "detector_type": "unknown_links",
+                "detected": False,
+                "message_id": 0,
+            },
+        ],
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        # Create a sample request that would trigger violations
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Some harmful content that should be blocked",
+                }
+            ],
+            "model": "gpt-5-mini",
+            "metadata": {},
+        }
+
+        # Mock objects needed for the pre-call hook
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        cache = DualCache()
+
+        # With the fix, this should now raise an HTTPException instead of letting the request through
+        with pytest.raises(HTTPException) as exc_info:
+            await lakera_guardrail.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type="completion",
+            )
+
+        # Verify the exception details
+        assert exc_info.value.status_code == 400
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+        assert "lakera_guardrail_response" in exc_info.value.detail
+
+        # Verify the full response is included in the exception
+        lakera_response = exc_info.value.detail["lakera_guardrail_response"]
+        assert lakera_response["flagged"] is True
+        assert lakera_response["metadata"]["request_uuid"] == "b7cd4c8a-28aa-4285-a245-2befee514dbf"
+        assert len(lakera_response["breakdown"]) == 16  # All the breakdown items from the user's scenario
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_lakera_monitor_mode_allows_flagged_content():
+    """Test that monitor mode logs violations but allows requests to proceed."""
+
+    lakera_guardrail = LakeraAIGuardrail(
+        api_key="test_key",
+        on_flagged="monitor",  # Monitor mode
+    )
+
+    # Mock response with violations
+    mock_response = {
+        "payload": [],
+        "flagged": True,
+        "breakdown": [
+            {
+                "detector_type": "moderated_content/violence",
+                "detected": True,
+                "message_id": 0,
+            },
+            {"detector_type": "prompt_attack", "detected": True, "message_id": 0},
+        ],
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        data = {
+            "messages": [{"role": "user", "content": "Some harmful content"}],
+            "model": "gpt-5-mini",
+            "metadata": {},
+        }
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        cache = DualCache()
+
+        # Should NOT raise an exception in monitor mode
+        result = await lakera_guardrail.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="completion",
+        )
+
+        # Verify request was allowed through
+        assert result is not None
+        assert "messages" in result
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_lakera_block_mode_raises_exception():
+    """Test that block mode (default) raises HTTPException for violations."""
+
+    lakera_guardrail = LakeraAIGuardrail(
+        api_key="test_key",
+        on_flagged="block",  # Block mode (default)
+    )
+
+    mock_response = {
+        "payload": [],
+        "flagged": True,
+        "breakdown": [
+            {
+                "detector_type": "moderated_content/violence",
+                "detected": True,
+                "message_id": 0,
+            },
+        ],
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        data = {
+            "messages": [{"role": "user", "content": "Harmful content"}],
+            "model": "gpt-5-mini",
+            "metadata": {},
+        }
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        cache = DualCache()
+
+        # Should raise HTTPException in block mode
+        with pytest.raises(HTTPException) as exc_info:
+            await lakera_guardrail.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type="completion",
+            )
+
+        assert exc_info.value.status_code == 400
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_lakera_monitor_mode_during_call():
+    """Test monitor mode works with during_call (moderation_hook)."""
+
+    lakera_guardrail = LakeraAIGuardrail(
+        api_key="test_key",
+        on_flagged="monitor",
+    )
+
+    mock_response = {
+        "payload": [],
+        "flagged": True,
+        "breakdown": [
+            {"detector_type": "prompt_attack", "detected": True, "message_id": 0},
+        ],
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        data = {
+            "messages": [{"role": "user", "content": "Test content"}],
+            "model": "gpt-5-mini",
+            "metadata": {},
+        }
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+
+        # Should NOT raise exception in monitor mode
+        result = await lakera_guardrail.async_moderation_hook(
+            data=data, user_api_key_dict=user_api_key_dict, call_type="completion"
+        )
+
+        assert result is not None
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_lakera_post_call_blocks_flagged_content():
+    """Post-call hook should block when violations are flagged."""
+
+    lakera_guardrail = LakeraAIGuardrail(api_key="test_key")
+
+    mock_response = {
+        "payload": [],
+        "flagged": True,
+        "breakdown": [
+            {
+                "detector_type": "moderated_content/violence",
+                "detected": True,
+                "message_id": 0,
+            },
+        ],
+    }
+
+    # Mock LLM response object
+    llm_response = MagicMock()
+    llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "some response"}}]}
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        data = {
+            "messages": [{"role": "user", "content": "Harmful content"}],
+            "model": "gpt-5-mini",
+            "metadata": {},
+        }
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await lakera_guardrail.async_post_call_success_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                response=llm_response,
+            )
+
+        assert exc_info.value.status_code == 400
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_lakera_post_call_allows_clean_content():
+    """Post-call hook should allow when not flagged."""
+
+    lakera_guardrail = LakeraAIGuardrail(api_key="test_key")
+
+    mock_response = {
+        "payload": [],
+        "flagged": False,
+        "breakdown": [],
+    }
+
+    llm_response = MagicMock()
+    llm_response.model_dump.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "clean response"}}]
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        data = {
+            "messages": [{"role": "user", "content": "Hello"}],
+            "model": "gpt-5-mini",
+            "metadata": {},
+        }
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+
+        result = await lakera_guardrail.async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=llm_response,
+        )
+
+        assert result is llm_response
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_lakera_post_call_masks_pii_and_allows():
+    """Post-call hook should mask PII-only violations and allow response."""
+
+    lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="mask")
+
+    mock_response = {
+        "payload": [{"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 1}],
+        "flagged": True,
+        "breakdown": [
+            {"detector_type": "pii/email", "detected": True, "message_id": 1},
+        ],
+    }
+
+    llm_response = MagicMock()
+    llm_response.model_dump.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "Your email is test@example.com",
+                }
+            },
+        ]
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        data = {
+            "messages": [{"role": "user", "content": "Hello"}],
+            "model": "gpt-5-mini",
+            "metadata": {},
+        }
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+
+        result = await lakera_guardrail.async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=llm_response,
+        )
+
+        assert isinstance(result, ModelResponse), "PII masking path must return ModelResponse"
+        result_dict = result.model_dump()
+        assert result_dict["choices"][0]["message"]["content"] != "Your email is test@example.com"
+        assert "[MASKED" in result_dict["choices"][0]["message"]["content"]

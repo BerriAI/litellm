@@ -21,7 +21,10 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.utils import _hash_token_if_needed
+from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
+    _hash_token_if_needed,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    hash_token_if_needed,
+)
 from litellm.secret_managers.base_secret_manager import BaseSecretManager
 
 if TYPE_CHECKING:
@@ -54,13 +57,6 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        # Send email notification - non-blocking, independent operation
-        if data.send_invite_email is True:
-            try:
-                await KeyManagementEventHooks._send_key_created_email(response.model_dump(exclude_none=True))
-            except Exception as e:
-                verbose_proxy_logger.warning("Failed to send key created email: %s", e)
-
         if is_audit_logging_enabled():
             _updated_values: Final = response.model_dump_json(exclude_none=True)
             asyncio.create_task(
@@ -82,6 +78,13 @@ class KeyManagementEventHooks:
                     )
                 )
             )
+
+        # Send email notification - non-blocking, independent operation
+        if data.send_invite_email is True:
+            try:
+                await KeyManagementEventHooks._send_key_created_email(response.model_dump(exclude_none=True))
+            except Exception as e:
+                verbose_proxy_logger.warning("Failed to send key created email: %s", e)
 
         # Store the generated key in the secret manager - non-blocking, independent operation
         try:
@@ -115,16 +118,6 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        if data.key_alias is not None and data.key_alias != existing_key_row.key_alias:
-            try:
-                await KeyManagementEventHooks._rename_virtual_key_in_secret_manager(
-                    current_secret_name=existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}",
-                    new_secret_name=data.key_alias,
-                    team_id=existing_key_row.team_id,
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning("Failed to rename virtual key in secret manager: %s", e)
-
         if is_audit_logging_enabled():
             updated_fields: Final = {
                 **data.model_dump(exclude_none=True),
@@ -140,7 +133,7 @@ class KeyManagementEventHooks:
                 ),
                 changed_by_api_key=user_api_key_dict.api_key,
                 table_name=LitellmTableNames.KEY_TABLE_NAME,
-                object_id=_hash_token_if_needed(data.key),
+                object_id=hash_token_if_needed(data.key),
                 action="updated",
                 updated_values=json.dumps(updated_fields, default=str),
                 before_value=json.dumps(existing_key_row.json(exclude_none=True), default=str),
@@ -152,6 +145,16 @@ class KeyManagementEventHooks:
                 else audit_log
             )
             asyncio.create_task(create_audit_log_for_update(request_data=request_data))
+
+        if data.key_alias is not None and data.key_alias != existing_key_row.key_alias:
+            try:
+                await KeyManagementEventHooks._rename_virtual_key_in_secret_manager(
+                    current_secret_name=existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}",
+                    new_secret_name=data.key_alias,
+                    team_id=existing_key_row.team_id,
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning("Failed to rename virtual key in secret manager: %s", e)
 
     @staticmethod
     async def async_key_rotated_hook(
@@ -167,6 +170,28 @@ class KeyManagementEventHooks:
             is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+        # store the audit log
+        if is_audit_logging_enabled() and existing_key_row.token is not None:
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.token,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=existing_key_row.token,
+                        action="rotated",
+                        updated_values=response.model_dump_json(exclude_none=True),
+                        before_value=existing_key_row.model_dump_json(exclude_none=True),
+                    )
+                )
+            )
 
         # Store the generated key in the secret manager - non-blocking, independent operation
         if response.token_id is not None:
@@ -201,28 +226,6 @@ class KeyManagementEventHooks:
         except Exception as e:
             verbose_proxy_logger.warning("Failed to send key rotated email: %s", e)
 
-        # store the audit log
-        if is_audit_logging_enabled() and existing_key_row.token is not None:
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.token,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=existing_key_row.token,
-                        action="rotated",
-                        updated_values=response.model_dump_json(exclude_none=True),
-                        before_value=existing_key_row.model_dump_json(exclude_none=True),
-                    )
-                )
-            )
-
     @staticmethod
     async def async_key_deleted_hook(
         data: KeyRequest,
@@ -251,39 +254,45 @@ class KeyManagementEventHooks:
         litellm_changed_by: str | None = None,
     ) -> None:
         from litellm.proxy.management_helpers.audit_logs import (
-            create_audit_log_for_update,
+            create_audit_logs_for_updates,
             get_audit_log_changed_by,
             is_audit_logging_enabled,
+            track_audit_task,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         if not is_audit_logging_enabled():
             return
-        for key in keys_being_deleted:
-            key_row = LiteLLM_VerificationToken.model_validate(key, from_attributes=True)
-            if key_row.token is None:
-                continue
-            _key_row = key_row.model_dump_json(exclude_none=True)
-
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.token,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=key_row.token,
-                        action="deleted",
-                        updated_values="{}",
-                        before_value=_key_row,
-                    )
-                )
+        changed_by: Final = get_audit_log_changed_by(
+            litellm_changed_by=litellm_changed_by,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+        key_rows: Final = (
+            LiteLLM_VerificationToken.model_validate(key, from_attributes=True) for key in keys_being_deleted
+        )
+        audit_rows: Final = tuple(
+            LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=changed_by,
+                changed_by_api_key=user_api_key_dict.token,
+                table_name=LitellmTableNames.KEY_TABLE_NAME,
+                object_id=key_row.token,
+                action="deleted",
+                updated_values="{}",
+                before_value=key_row.model_dump_json(exclude_none=True),
             )
+            for key_row in key_rows
+            if key_row.token is not None
+        )
+        if not audit_rows:
+            return
+        track_audit_task(
+            asyncio.create_task(
+                create_audit_logs_for_updates(audit_rows), name=f"{len(audit_rows)} deleted key audit logs"
+            )
+        )
 
     @staticmethod
     async def _store_virtual_key_in_secret_manager(secret_name: str, secret_token: str, team_id: str | None = None):
@@ -292,7 +301,7 @@ class KeyManagementEventHooks:
 
         Args:
             secret_name: Name of the virtual key
-            secret_token: Value of the virtual key (example: sk-1234)
+            secret_token: Value of the virtual key (example: $LITELLM_API_KEY)
         """
         if litellm._key_management_settings is not None:
             if litellm._key_management_settings.store_virtual_keys is True:
@@ -330,7 +339,7 @@ class KeyManagementEventHooks:
         Args:
             current_secret_name: Current name of the virtual key
             new_secret_name: New name of the virtual key
-            new_secret_value: New value of the virtual key (example: sk-1234)
+            new_secret_value: New value of the virtual key (example: $LITELLM_API_KEY)
             team_id: Optional team ID to get team-specific secret manager settings
         """
         secret_manager: Final = KeyManagementEventHooks._stored_virtual_key_secret_manager()
@@ -446,10 +455,10 @@ class KeyManagementEventHooks:
 
         try:
             from litellm.proxy import proxy_server as proxy_server_module
+            from litellm.proxy.proxy_server import prisma_client
         except ImportError:
             return None
 
-        prisma_client: Final = getattr(proxy_server_module, "prisma_client", None)
         user_api_key_cache: Final = getattr(proxy_server_module, "user_api_key_cache", None)
 
         if prisma_client is None or user_api_key_cache is None:

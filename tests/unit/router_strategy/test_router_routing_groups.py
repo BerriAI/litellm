@@ -20,6 +20,8 @@ import litellm
 from litellm import Router
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_api import RoutingContext
+from litellm.router_strategy.least_busy import picks_reserve
 from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup, RoutingStrategy
 from litellm.utils import Rules, function_setup
 
@@ -235,7 +237,7 @@ async def test_async_dispatch_uses_group_strategy_for_grouped_model():
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
         patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
+            "litellm.router_python_core.simple_shuffle", wraps=litellm.router_python_core.simple_shuffle
         ) as shuffle_spy,
     ):
         await router.async_get_available_deployment(
@@ -270,7 +272,7 @@ async def test_async_dispatch_falls_back_to_default_for_ungrouped_models():
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
         patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
+            "litellm.router_python_core.simple_shuffle", wraps=litellm.router_python_core.simple_shuffle
         ) as shuffle_spy,
     ):
         await router.async_get_available_deployment(
@@ -330,7 +332,7 @@ async def test_async_dispatch_uses_default_selector_when_constructed_with_enum()
             wraps=default_selector.async_get_available_deployments,
         ) as latency_spy,
         patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
+            "litellm.router_python_core.simple_shuffle", wraps=litellm.router_python_core.simple_shuffle
         ) as shuffle_spy,
     ):
         await router.async_get_available_deployment(
@@ -481,6 +483,38 @@ def test_two_least_busy_groups_count_a_request_once(monkeypatch):
     assert router.cache.get_cache("filtered-model_request_count:deploy-1") == 0
 
 
+def _filtered_model_pick(router: Router) -> str:
+    deployment: Final = router.get_available_deployment(
+        "filtered-model", request_kwargs=_proxy_shaped_request(model="filtered-model")
+    )
+    return deployment["model_info"]["id"]
+
+
+def test_a_least_busy_group_pick_stops_counting_once_its_request_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router: Final = _build_router(
+        routing_strategy="least-busy",
+        routing_groups=[{"group_name": "fast", "models": ["filtered-model"], "routing_strategy": "least-busy"}],
+    )
+
+    request: Final = _proxy_shaped_request(model="filtered-model")
+    with picks_reserve(True):
+        first: Final = router.get_available_deployment("filtered-model", request_kwargs=request)["model_info"]["id"]
+    kwargs: Final = {
+        "litellm_params": {"metadata": {"model_group": "filtered-model"}, "model_info": {"id": first}},
+        "litellm_call_id": request["litellm_call_id"],
+    }
+    for callback in litellm.input_callback:
+        if isinstance(callback, CustomLogger):
+            callback.log_pre_api_call(model="filtered-model", messages=[], kwargs=kwargs)
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            callback.log_success_event(kwargs, None, None, None)
+
+    assert _filtered_model_pick(router) == first
+
+
 def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
     """
     Least-busy hangs its counting off litellm's global callback lists, and those lists keep one
@@ -595,9 +629,9 @@ def test_init_routing_groups_with_none_clears_state():
             }
         ]
     )
-    assert router._routing_groups
+    assert router.routing_groups
     router._init_routing_groups(None)
-    assert router._routing_groups == {}
+    assert router.routing_groups == {}
     assert router._model_to_group == {}
     assert router._group_selectors == {}
 
@@ -613,6 +647,7 @@ async def test_select_deployment_async_returns_none_without_selector():
         messages=None,
         input=None,
         request_kwargs=None,
+        reserve=False,
     )
     assert result is None
 
@@ -627,6 +662,7 @@ def test_select_deployment_sync_returns_none_without_selector():
         messages=None,
         input=None,
         request_kwargs=None,
+        reserve=False,
     )
     assert result is None
 
@@ -661,6 +697,7 @@ def test_select_deployment_sync_does_not_dispatch_cost_based_routing():
         messages=None,
         input=None,
         request_kwargs=None,
+        reserve=False,
     )
     assert result is None
 
@@ -707,6 +744,7 @@ async def test_async_dispatch_falls_back_to_sync_for_usage_based_routing_v1():
             messages=[{"role": "user", "content": "hi"}],
             input=None,
             request_kwargs={},
+            reserve=False,
         )
 
     assert v1_spy.called, "async dispatch must route v1 strategy through sync method"
@@ -814,7 +852,7 @@ def _single_latency_group():
 
 
 def _assert_still_routes_with_original_group(router, selector):
-    assert list(router._routing_groups) == ["g1"]
+    assert list(router.routing_groups) == ["g1"]
     assert router._model_to_group == {"filtered-model": "g1"}
     assert router._group_selectors["g1"]["latency-based-routing"] is selector
     assert router._get_routing_context("filtered-model", None) == ("latency-based-routing", selector)
@@ -855,7 +893,7 @@ def test_failed_routing_groups_update_does_not_poison_later_strategy_changes(mon
 
     router.update_settings(routing_strategy="least-busy")
 
-    assert list(router._routing_groups) == ["g1"]
+    assert list(router.routing_groups) == ["g1"]
     assert [g["group_name"] for g in router.get_settings()["routing_groups"]] == ["g1"]
 
 
@@ -958,7 +996,7 @@ def test_replace_routing_groups_swaps_state_and_callbacks_in_one_step(monkeypatc
         )
     )
 
-    assert list(router._routing_groups) == ["g2", "g3"]
+    assert list(router.routing_groups) == ["g2", "g3"]
     assert router._model_to_group == {"other-model": "g2", "other-model-2": "g3"}
     assert router._group_selectors == {"g2": {"least-busy": new_selector}, "g3": {}}
     assert router._get_routing_context("other-model", None) == ("least-busy", new_selector)
@@ -1021,7 +1059,11 @@ async def test_usage_based_v2_override_stays_scoped_to_the_request_that_asked_fo
             await _mock_completion(router, routing_strategy="usage-based-routing-v2")
 
 
-def test_sync_usage_based_v2_override_stays_scoped_to_the_request_that_asked_for_it():
+def test_sync_usage_based_v2_override_stays_scoped_to_the_request_that_asked_for_it(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
+        lambda: datetime.datetime(2026, 1, 1, 12, 0, 30, tzinfo=datetime.timezone.utc),
+    )
     router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle", num_retries=0)
     messages = [{"role": "user", "content": "hi"}]
 
@@ -1249,7 +1291,7 @@ async def test_latency_based_override_learns_from_the_overriding_requests():
     )
 
     def samples(deployment_id: str) -> list[float]:
-        recorded = (router.cache.get_cache("grp_map") or {}).get(deployment_id, {}).get("latency", [])
+        recorded = (router.cache.get_cache("grp_map") or {}).get(deployment_id, {}).get("latency_normalized", [])
         return [latency for latency in recorded if latency > 0]
 
     async def overriding_call() -> str:
@@ -1316,7 +1358,7 @@ async def test_override_matching_a_routing_group_strategy_records_each_request_o
     deployment_id = response._hidden_params["model_id"]
     await _async_wait_until(lambda: (router.cache.get_cache("grp_map") or {}).get(deployment_id) is not None)
 
-    assert len(router.cache.get_cache("grp_map")[deployment_id]["latency"]) == 1
+    assert len(router.cache.get_cache("grp_map")[deployment_id]["latency_normalized"]) == 1
     assert request["litellm_logging_obj"].dynamic_success_callbacks is None
 
 
@@ -1375,7 +1417,7 @@ async def test_group_call_dispatches_via_group_selector():
             "async_get_available_deployments",
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
-        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
+        patch("litellm.router_python_core.simple_shuffle", wraps=litellm.router_python_core.simple_shuffle) as shuffle_spy,
     ):
         deployment = await router.async_get_available_deployment(model="quality", request_kwargs={})
 
@@ -1556,7 +1598,7 @@ def _pin_choice_to(deployment_id):
 
 
 async def _call_and_get_cooldowns(router, model):
-    from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+    from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
 
     with (
         patch("litellm.router_strategy.simple_shuffle.random.choice", side_effect=_pin_choice_to("deploy-3")),
@@ -1567,7 +1609,7 @@ async def _call_and_get_cooldowns(router, model):
             messages=[{"role": "user", "content": "hi"}],
             mock_response="litellm.RateLimitError",
         )
-    return await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    return await async_get_cooldown_deployments(ctx=router._core_ctx, parent_otel_span=None)
 
 
 @pytest.mark.asyncio
@@ -2034,7 +2076,7 @@ async def test_priority_group_ignores_cached_backup_affinity() -> None:
         "role": "user",
         "content": [{"type": "text", "text": "word " * 5000, "cache_control": {"type": "ephemeral"}}],
     }]
-    cache: Final = PromptCachingCache(cache=router.cache)
+    cache: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
     await cache.async_add_model_id(model_id="deploy-3", messages=messages, tools=None)
     assert await cache.async_get_model_id(messages=messages, tools=None) == {"model_id": "deploy-3"}
     response: Final = await router.acompletion(model="priority-group", messages=messages)
@@ -2060,7 +2102,7 @@ async def test_priority_group_preserves_responses_continuity_on_a_backup() -> No
 
 
 def _recording_fallback_gate(allowed: frozenset[str], checked: list[str]) -> FallbackAccessCheck:
-    async def check(*, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> bool:
+    async def check(*, model: str, request_kwargs: Mapping[str, object], ctx: RoutingContext) -> bool:
         checked.append(model)
         return model in allowed
 

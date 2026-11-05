@@ -1,11 +1,24 @@
 use std::{io::Write, time::Duration};
 
 use flate2::{Compression, write::GzEncoder};
+use litellm_error::Source;
 use litellm_http::Client;
 
 use crate::{Connection, Error, valid_identifier};
 
-const INSERT_TIMEOUT: Duration = Duration::from_secs(30);
+fn insert_timeout() -> Result<Duration, Error> {
+    let name = "CLICKHOUSE_INSERT_TIMEOUT_SECONDS";
+    match std::env::var(name) {
+        Ok(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .map(Duration::from_secs)
+            .ok_or(Error::InvalidLimit(name)),
+        Err(std::env::VarError::NotPresent) => Ok(Duration::from_secs(30)),
+        Err(_) => Err(Error::InvalidLimit(name)),
+    }
+}
 
 pub async fn insert_encoded_rows(
     client: &Client,
@@ -22,11 +35,13 @@ pub async fn insert_encoded_rows(
         return Err(Error::InvalidTable);
     }
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(encoded.as_bytes())
-        .map_err(|_| Error::InvalidRow)?;
-    let body = encoder.finish().map_err(|_| Error::InvalidRow)?;
+    encoder.write_all(encoded.as_bytes()).map_err(invalid_row)?;
+    let body = encoder.finish().map_err(invalid_row)?;
     insert_compressed_rows(client, connection, database, table, token, body).await
+}
+
+fn invalid_row(error: std::io::Error) -> Error {
+    Error::InvalidRow(Source::new(error))
 }
 
 pub async fn insert_compressed_rows(
@@ -74,12 +89,12 @@ pub async fn insert_compressed_rows(
         .append_pair("date_time_input_format", "best_effort");
     let response = client
         .post(url)
-        .timeout(INSERT_TIMEOUT)
+        .timeout(insert_timeout()?)
         .header("Content-Encoding", "gzip")
         .body(body)
         .send()
         .await
-        .map_err(|_| Error::Transport)?;
+        .map_err(litellm_http::Error::from)?;
     if !response.status().is_success() {
         return Err(Error::InsertFailed(response.status().as_u16()));
     }

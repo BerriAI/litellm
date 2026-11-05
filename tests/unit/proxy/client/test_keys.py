@@ -419,7 +419,7 @@ def test_info_server_error(client):
         client.info(key="test-key")
 
 
-LEAKY_KEY = "sk-1234567890abcdefghijklmnop"
+LEAKY_KEY = "sk-9876567890abcdefghijklmnop"
 
 
 def _render_full_traceback(exc: BaseException) -> str:

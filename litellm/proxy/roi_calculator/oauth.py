@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 import httpx
 from fastapi import HTTPException
 from oauthlib.oauth2 import WebApplicationClient
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter
+from pydantic import ConfigDict, Field, SecretStr, TypeAdapter
 
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
@@ -30,6 +30,7 @@ from litellm.proxy.roi_calculator.settings import (
 )
 from litellm.proxy.roi_calculator.sync_store import SyncStore
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.roi_calculator import ROISettings, ROISyncStatus
 
@@ -111,7 +112,7 @@ def oauth_config(provider: Provider) -> OAuthConfig | None:
     )
 
 
-class OAuthState(BaseModel):
+class OAuthState(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider: Provider
@@ -124,11 +125,11 @@ class OAuthState(BaseModel):
     flow: Literal["authorize", "install"] = "authorize"
 
 
-class _Envelope(BaseModel):
+class _Envelope(LiteLLMBaseModel):
     payload: str
 
 
-class _StateRow(BaseModel):
+class _StateRow(LiteLLMBaseModel):
     param_value: _Envelope
 
 
@@ -218,7 +219,7 @@ async def consume_state(
     return value
 
 
-class TokenGrant(BaseModel):
+class TokenGrant(LiteLLMBaseModel):
     access_token: SecretStr
     token_type: str = "bearer"
     refresh_token: SecretStr = SecretStr("")

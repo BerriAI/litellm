@@ -5,13 +5,15 @@ Helper util for handling anthropic-specific cost calculation
 
 from typing import TYPE_CHECKING, Final, Optional
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
     get_provider_specific_geo_multiplier,
+    get_provider_specific_speed_multiplier,
     get_web_search_requests_from_usage,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
@@ -49,14 +51,8 @@ def cost_per_token(
             if model_info is not None
             else litellm.get_model_info(model=model, custom_llm_provider="anthropic")
         )
-        provider_specific_entry: Final = effective_info.get("provider_specific_entry")
-
         geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=effective_info, usage=usage)
-        speed_multiplier: Final = (
-            provider_specific_entry.get("fast", 1.0)
-            if provider_specific_entry and getattr(usage, "speed", None) == "fast"
-            else 1.0
-        )
+        speed_multiplier: Final = get_provider_specific_speed_multiplier(model_info=effective_info, usage=usage)
 
         if speed_multiplier != 1.0:
             prompt_cost *= speed_multiplier
@@ -71,15 +67,15 @@ def cost_per_token(
     return prompt_cost, completion_cost
 
 
-class _AnthropicServerToolUseProbe(BaseModel):
+class _AnthropicServerToolUseProbe(LiteLLMBaseModel):
     web_search_requests: int | None = None
 
 
-class _AnthropicUsageProbe(BaseModel):
+class _AnthropicUsageProbe(LiteLLMBaseModel):
     server_tool_use: _AnthropicServerToolUseProbe | None = None
 
 
-class _AnthropicResponseProbe(BaseModel):
+class _AnthropicResponseProbe(LiteLLMBaseModel):
     usage: _AnthropicUsageProbe | None = None
 
 

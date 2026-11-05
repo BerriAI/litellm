@@ -1,6 +1,4 @@
 import json
-import os
-import signal
 import threading
 import time
 import uuid
@@ -8,10 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 
-import psutil
 import yaml
 from integration._support.client import Gateway
-from integration._support.process import group_members, owned_proxy_process
+from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 from test_grayswan_wire import _PROVIDER_KEY, _REQUEST_MESSAGES, _VENDOR_KEY, _monitor_bodies, _serving_model_probe
@@ -206,23 +203,13 @@ def test_worker_kill_mid_burst_survivor_keeps_serving(gateway: Gateway, tmp_path
                 model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=upstream.url, api_key=_PROVIDER_KEY)
                 warm: Final = _fire(candidate, model, "marker-warm", False)
                 assert warm == 200
-                members: Final = group_members(owned.process.pid)
-                candidate_port: Final = candidate.client.base_url.port
-                workers_listening: Final = tuple(
-                    member
-                    for member in members
-                    if member.pid != owned.process.pid
-                    and any(
-                        connection.laddr.port == candidate_port and connection.status == "LISTEN"
-                        for connection in member.net_connections(kind="inet")
+                workers: Final = owned.worker_pids()
+                assert len(workers) == 2, workers
+                with owned.replacing_worker(min(workers)) as kill:
+                    kill()
+                    statuses: Final = tuple(
+                        _fire(candidate, model, f"marker-kill-{index}", False) for index in range(6)
                     )
-                )
-                assert len(workers_listening) == 2, [member.pid for member in members]
-                victim: Final = workers_listening[0]
-                os.kill(victim.pid, signal.SIGKILL)
-                psutil.wait_procs((victim,), timeout=10)
-                assert not psutil.pid_exists(victim.pid), victim.pid
-                statuses: Final = tuple(_fire(candidate, model, f"marker-kill-{index}", False) for index in range(6))
                 assert all(status == 200 for status in statuses), statuses
                 bodies: Final = _monitor_bodies(vendor_wire, expected=7)
                 kill_bodies: Final = [

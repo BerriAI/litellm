@@ -2,6 +2,7 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, override
 
 from litellm._logging import verbose_logger
@@ -28,6 +29,8 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
     ToolCallAttributes,
 )
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
@@ -609,9 +612,7 @@ def _coerce_response_obj_for_attrs(response_obj):
     text: Final = getattr(response_obj, "text", None)
     if isinstance(text, str) and text:
         try:
-            parsed: Final = json.loads(text)
-            if isinstance(parsed, dict):
-                return parsed
+            return _JSON_OBJECT.validate_python(json.loads(text))
         except Exception:
             pass
     return response_obj
@@ -883,7 +884,7 @@ def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_pay
         safe_set_attribute(span, "litellm.key_alias", str(key_alias))
 
 
-def _set_response_cost_attr(span: "Span", standard_logging_payload) -> None:
+def _set_response_cost_attr(span: "Span", standard_logging_payload: Mapping[str, object] | None) -> None:
     """Emit cost attributes from the StandardLoggingPayload when present.
 
     Uses the OpenInference `llm.cost.total` key so Arize / Phoenix can
@@ -891,15 +892,22 @@ def _set_response_cost_attr(span: "Span", standard_logging_payload) -> None:
     single total in `StandardLoggingPayload.response_cost`, so we cannot
     split it into prompt/completion. We also keep the legacy
     `llm.response.cost` key for back-compat with any consumer querying it.
+    When the price lookup failed, the call's total is unknown, so no cost is
+    emitted and the backend does not record the call as free. A guardrail fee
+    in `response_cost` stays on the guardrail span, as in OTel v2.
     """
     if not isinstance(standard_logging_payload, dict):
         return
     cost: Final = standard_logging_payload.get("response_cost")
-    if cost is None:
+    cost_lookup_failed: Final = (
+        standard_logging_payload.get("response_cost_failure_debug_info") is not None
+        and standard_logging_payload.get("cache_hit") is not True
+    )
+    if not isinstance(cost, (int, float, str)) or cost_lookup_failed:
         return
     try:
         cost_value: Final = float(cost)
-    except (TypeError, ValueError):
+    except ValueError:
         return
     safe_set_attribute(span, "llm.cost.total", cost_value)
     safe_set_attribute(span, "llm.response.cost", cost_value)
@@ -1062,9 +1070,7 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
             inner = candidate.get("response")
             if isinstance(inner, str):
                 try:
-                    parsed = json.loads(inner)
-                    if isinstance(parsed, dict):
-                        return parsed
+                    return _JSON_OBJECT.validate_python(json.loads(inner))
                 except Exception:
                     continue
             if isinstance(inner, dict):
@@ -1078,9 +1084,7 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
         return original
     if isinstance(original, str):
         try:
-            parsed = json.loads(original)
-            if isinstance(parsed, dict):
-                return parsed
+            return _JSON_OBJECT.validate_python(json.loads(original))
         except Exception:
             return None
     return None

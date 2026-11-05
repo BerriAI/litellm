@@ -102,7 +102,7 @@ async def test_async_responses_api_routing_with_previous_response_id():
         mock_post.return_value = MockResponse(mock_response_data, 200)
 
         # Make the initial request
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         response = await router.aresponses(
             model=MODEL,
             input="Hello, how are you?",

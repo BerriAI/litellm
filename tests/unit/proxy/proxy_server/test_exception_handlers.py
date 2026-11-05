@@ -5,6 +5,7 @@ Pins covered:
 - ``_close_dangling_otel_server_span``
 - ``otel_request_validation_exception_handler``
 - ``otel_unhandled_exception_handler``
+- ``otlp_http_exception_handler``
 """
 
 from __future__ import annotations
@@ -16,8 +17,12 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.testclient import TestClient
+from starlette.testclient import WebSocketDenialResponse
+from starlette.types import Message
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm.proxy._types import ProxyException
 from litellm.proxy.proxy_server import (
@@ -25,14 +30,15 @@ from litellm.proxy.proxy_server import (
     openai_exception_handler,
     otel_request_validation_exception_handler,
     otel_unhandled_exception_handler,
+    otlp_http_exception_handler,
 )
 
 from .conftest import normalize
 
 
-def _make_request(parent_otel_span=None, path="/chat/completions"):
+def _make_request(parent_otel_span=None, path="/chat/completions", headers=()):
     return Request({
-        "type": "http", "method": "POST", "path": path, "headers": [],
+        "type": "http", "method": "POST", "path": path, "headers": list(headers),
         "state": {"parent_otel_span": parent_otel_span},
     })
 
@@ -160,6 +166,182 @@ async def test_openai_exception_handler_never_fabricates_a_call_id(monkeypatch):
 
     assert "x-litellm-call-id" not in response.headers
     assert "litellm_call_id" not in body["error"]
+
+
+def _model_access_denied_exception() -> ProxyException:
+    return ProxyException(
+        message="Team not allowed to access model. Tried to access gpt-5.6",
+        type="team_model_access_denied",
+        param="model",
+        code=403,
+    )
+
+
+_MESSAGES_ROUTES: Final = (
+    "/v1/messages",
+    "/v1/messages/count_tokens",
+    "/claude_code_gateway/v1/messages",
+    "/claude_code_gateway/v1/messages/count_tokens",
+)
+_ANTHROPIC_PASS_THROUGH_ROUTES: Final = (
+    "/anthropic/v1/messages",
+    "/anthropic/v1/messages/count_tokens",
+    "/anthropic/v1/models",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", (*_MESSAGES_ROUTES, *_ANTHROPIC_PASS_THROUGH_ROUTES))
+async def test_openai_exception_handler_answers_the_anthropic_envelope_on_the_messages_routes(path: str) -> None:
+    response: Final = await openai_exception_handler(
+        request=_make_request(path=path), exc=_model_access_denied_exception()
+    )
+    body: Final = json.loads(response.body)
+
+    assert response.status_code == 403
+    assert body == {
+        "type": "error",
+        "error": {
+            "type": "permission_error",
+            "message": "Team not allowed to access model. Tried to access gpt-5.6",
+            "litellm_error_type": "team_model_access_denied",
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status_code,anthropic_type",
+    [
+        (401, "authentication_error"),
+        (403, "permission_error"),
+        (404, "not_found_error"),
+        (429, "rate_limit_error"),
+        (402, "billing_error"),
+        (409, "conflict_error"),
+        (504, "timeout_error"),
+        (405, "invalid_request_error"),
+        (408, "api_error"),
+        (502, "api_error"),
+    ],
+)
+async def test_openai_exception_handler_maps_messages_failures_to_anthropic_error_types(
+    status_code: int, anthropic_type: str
+) -> None:
+    exc: Final = ProxyException(message="denied", type="key_model_access_denied", param="model", code=status_code)
+
+    response: Final = await openai_exception_handler(request=_make_request(path="/v1/messages"), exc=exc)
+
+    assert response.status_code == status_code
+    assert json.loads(response.body)["error"]["type"] == anthropic_type
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_keeps_the_status_of_a_budget_failure_on_messages() -> None:
+    exc: Final = ProxyException(message="Budget exceeded", type="budget_exceeded", param=None, code=422)
+
+    response: Final = await openai_exception_handler(
+        request=_make_request(path="/v1/messages/count_tokens"), exc=exc
+    )
+    body: Final = json.loads(response.body)
+
+    assert response.status_code == 422
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "invalid_request_error"
+    assert body["error"]["message"] == "Budget exceeded"
+    assert body["error"]["litellm_error_type"] == "budget_exceeded"
+    assert "param" not in body["error"] and "code" not in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_keeps_the_openai_envelope_off_the_messages_routes() -> None:
+    response: Final = await openai_exception_handler(
+        request=_make_request(path="/v1/chat/completions"), exc=_model_access_denied_exception()
+    )
+    body: Final = json.loads(response.body)
+
+    assert response.status_code == 403
+    assert body == {
+        "error": {
+            "message": "Team not allowed to access model. Tried to access gpt-5.6",
+            "type": "team_model_access_denied",
+            "param": "model",
+            "code": "403",
+        }
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/models", "/models", "/claude_code_gateway/v1/models"))
+async def test_a_model_list_request_answers_errors_in_the_shape_its_listing_takes(path: str) -> None:
+    anthropic: Final = await openai_exception_handler(
+        request=_make_request(path=path, headers=[(b"anthropic-version", b"2023-06-01")]),
+        exc=_model_access_denied_exception(),
+    )
+    openai: Final = await openai_exception_handler(
+        request=_make_request(path=path), exc=_model_access_denied_exception()
+    )
+
+    assert json.loads(anthropic.body)["error"]["type"] == "permission_error"
+    assert json.loads(anthropic.body)["type"] == "error"
+    assert json.loads(openai.body)["error"]["type"] == "team_model_access_denied"
+    assert "type" not in json.loads(openai.body)
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_keeps_the_openai_envelope_on_other_anthropic_routes() -> None:
+    response: Final = await openai_exception_handler(
+        request=_make_request(path="/v1/skills"), exc=_model_access_denied_exception()
+    )
+    body: Final = json.loads(response.body)
+
+    assert response.status_code == 403
+    assert "type" not in body
+    assert body["error"]["type"] == "team_model_access_denied"
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_messages_route_copies_the_call_id_when_opted_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"include_call_id_in_error_body": True})
+    exc: Final = ProxyException(
+        message="denied",
+        type="team_model_access_denied",
+        param="model",
+        code=403,
+        headers={"x-litellm-call-id": "call-8302"},
+        provider_specific_fields={"guardrail": "keyword-block"},
+    )
+
+    response: Final = await openai_exception_handler(request=_make_request(path="/v1/messages"), exc=exc)
+    body: Final = json.loads(response.body)
+
+    assert response.headers["x-litellm-call-id"] == "call-8302"
+    assert body["error"] == {
+        "type": "permission_error",
+        "message": "denied",
+        "provider_specific_fields": {"guardrail": "keyword-block"},
+        "litellm_error_type": "team_model_access_denied",
+        "litellm_call_id": "call-8302",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/messages", "/anthropic/v1/messages"))
+async def test_a_messages_request_with_no_key_answers_the_anthropic_authentication_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    response: Final = client.post(path, json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]})
+    body: Final = response.json()
+
+    assert response.status_code == 401
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "authentication_error"
+    assert "param" not in body["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +614,7 @@ _DB_OUTAGE_503_BODY: Final = {
     "error": {
         "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
         "type": "no_db_connection",
-        "param": "None",
+        "param": None,
         "code": "503",
     }
 }
@@ -462,6 +644,22 @@ async def test_otel_unhandled_exception_handler_answers_a_db_outage_with_503_no_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/messages", "/claude_code_gateway/v1/messages", "/anthropic/v1/messages"))
+async def test_otel_unhandled_exception_handler_answers_the_anthropic_api_error_on_the_messages_routes(
+    path: str,
+) -> None:
+    response: Final = await otel_unhandled_exception_handler(
+        request=_make_request(path=path), exc=RuntimeError("kaboom")
+    )
+
+    assert response.status_code == 500
+    assert json.loads(response.body) == {
+        "type": "error",
+        "error": {"type": "api_error", "message": "Internal server error"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_otel_unhandled_exception_handler_reraises_proxy_exception_error():
     """ProxyException / HTTPException / RequestValidationError are re-raised
     so the dedicated handler runs."""
@@ -482,22 +680,17 @@ async def test_otel_unhandled_exception_handler_reraises_http_exception_invalid(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("media_type", ["application/json", "application/x-protobuf"])
 @pytest.mark.parametrize("root_path", ["", "/tenant-a"])
-@pytest.mark.parametrize("native_available", [True, False])
 @pytest.mark.parametrize("error", [
     ProxyException("database credentials: secret", "auth_error", None, 401),
     HTTPException(403, "database credentials: secret"),
 ])
-async def test_otlp_auth_errors_hide_internal_details_and_survive_missing_native(
-    media_type: str, root_path: str, native_available: bool,
-    error: ProxyException | HTTPException, monkeypatch: pytest.MonkeyPatch,
+async def test_otlp_auth_errors_hide_internal_details(
+    media_type: str, root_path: str, error: ProxyException | HTTPException,
 ) -> None:
     from google.rpc.status_pb2 import Status
 
     from litellm.proxy.proxy_server import otlp_http_exception_handler
-    from litellm.rust_bridge import loader
 
-    if not native_available:
-        monkeypatch.setattr(loader, "_cached_bridge", None)
     request: Final = Request({
         "type": "http", "method": "POST", "path": root_path + "/v1/traces", "root_path": root_path,
         "headers": [(b"content-type", media_type.encode())],
@@ -507,6 +700,7 @@ async def test_otlp_auth_errors_hide_internal_details_and_survive_missing_native
         if isinstance(error, ProxyException)
         else await otlp_http_exception_handler(request, error)
     )
+    assert response is not None
     assert response.status_code == (401 if isinstance(error, ProxyException) else 403)
     assert response.headers["content-type"].startswith(media_type)
     message: Final = (
@@ -515,4 +709,126 @@ async def test_otlp_auth_errors_hide_internal_details_and_survive_missing_native
         else Status.FromString(response.body).message
     )
     expected: Final = "Unauthorized" if isinstance(error, ProxyException) else "Forbidden"
-    assert message == (expected if native_available or media_type == "application/json" else "")
+    assert message == expected
+
+
+def _websocket(sent: list[Message]) -> WebSocket:
+    async def receive() -> Message:
+        return {"type": "websocket.connect"}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    return WebSocket({"type": "websocket", "path": "/v1/responses", "headers": [], "query_string": b""}, receive, send)
+
+
+@pytest.mark.asyncio
+async def test_http_exception_on_a_plain_http_request_keeps_the_default_json_body() -> None:
+    request: Final = _make_request(path="/v1/models")
+
+    response: Final = await otlp_http_exception_handler(request, HTTPException(404, "not found"))
+
+    assert response is not None
+    assert response.status_code == 404
+    assert json.loads(bytes(response.body)) == {"detail": "not found"}
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_claude_code_gateway_answers_the_anthropic_not_found_error() -> None:
+    request: Final = _make_request(path="/claude_code_gateway/v1/messages")
+
+    response: Final = await otlp_http_exception_handler(
+        request, HTTPException(404, "Claude Code gateway is not enabled")
+    )
+
+    assert response is not None
+    assert response.status_code == 404
+    assert json.loads(bytes(response.body)) == {
+        "type": "error",
+        "error": {"type": "not_found_error", "message": "Claude Code gateway is not enabled"},
+    }
+
+
+def test_a_get_on_messages_answers_the_anthropic_envelope_and_keeps_the_allow_header(client: TestClient) -> None:
+    response: Final = client.get("/v1/messages")
+
+    assert response.status_code == 405
+    assert response.headers["allow"] == "POST"
+    assert response.json() == {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": "Method Not Allowed"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_http_exception_on_a_websocket_closed_before_accept_sends_nothing_more() -> None:
+    sent: Final[list[Message]] = []
+    websocket: Final = _websocket(sent)
+    await websocket.close(code=1008)
+
+    response: Final = await otlp_http_exception_handler(websocket, HTTPException(403, "No API key provided"))
+
+    assert response is None
+    assert sent == [{"type": "websocket.close", "code": 1008, "reason": ""}]
+
+
+@pytest.mark.asyncio
+async def test_http_exception_on_a_connecting_websocket_denies_the_upgrade_with_its_status() -> None:
+    websocket: Final = _websocket([])
+
+    response: Final = await otlp_http_exception_handler(websocket, HTTPException(403, "No API key provided"))
+
+    assert response is not None
+    assert response.status_code == 403
+    assert json.loads(bytes(response.body)) == {"detail": "No API key provided"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status_code", "close_code"), [(403, 1008), (429, 1008), (500, 1011), (503, 1011)])
+async def test_http_exception_on_an_accepted_websocket_closes_it_with_a_matching_code(
+    status_code: int, close_code: int
+) -> None:
+    sent: Final[list[Message]] = []
+    websocket: Final = _websocket(sent)
+    await websocket.accept()
+
+    response: Final = await otlp_http_exception_handler(websocket, HTTPException(status_code, "late failure"))
+
+    assert response is None
+    assert sent[-1] == {"type": "websocket.close", "code": close_code, "reason": ""}
+
+
+def test_websocket_auth_rejection_reaches_the_client_as_a_denial_instead_of_a_server_error() -> None:
+    async def reject_like_user_api_key_auth_websocket(websocket: WebSocket) -> None:
+        await websocket.close(code=1008)
+        raise HTTPException(status_code=403, detail="No API key provided")
+
+    async def responses(websocket: WebSocket, _: None = Depends(reject_like_user_api_key_auth_websocket)) -> None:
+        await websocket.accept()
+
+    app: Final = FastAPI()
+    app.exception_handler(HTTPException)(otlp_http_exception_handler)
+    app.add_api_websocket_route("/v1/responses", responses)
+
+    with pytest.raises(WebSocketDisconnect) as disconnect, TestClient(app).websocket_connect("/v1/responses"):
+        pass
+
+    assert disconnect.value.code == 1008
+
+
+def test_websocket_rejected_before_any_close_reaches_the_client_as_an_http_denial_with_the_status() -> None:
+    async def reject_without_closing(websocket: WebSocket) -> None:
+        raise HTTPException(status_code=403, detail="No API key provided")
+
+    async def responses(websocket: WebSocket, _: None = Depends(reject_without_closing)) -> None:
+        await websocket.accept()
+
+    app: Final = FastAPI()
+    app.exception_handler(HTTPException)(otlp_http_exception_handler)
+    app.add_api_websocket_route("/v1/responses", responses)
+
+    with pytest.raises(WebSocketDenialResponse) as denial, TestClient(app).websocket_connect("/v1/responses"):
+        pass
+
+    assert denial.value.status_code == 403
+    assert denial.value.json() == {"detail": "No API key provided"}

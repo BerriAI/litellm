@@ -22,6 +22,7 @@ from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, JwtKeyMappingRow, KeyGenerateBody, TeamNewBody, UserNewBody
 from other_client import OtherClient
 from owned_jwt_gateway import MODEL_NAME, OwnedJwtGateway, owned_jwt_gateway
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 
 pytestmark = pytest.mark.e2e
 
@@ -115,6 +116,14 @@ def minting_gateway(idp: Keycloak, tmp_path_factory: pytest.TempPathFactory) -> 
 @pytest.mark.owned_gateway
 class TestJwtAutoRegisterMapExistingKey:
     @pytest.mark.covers("other.auth.jwt.auto_register_maps_existing_key")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.GEMINI,),
+            models=(MODEL_NAME,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_first_jwt_call_maps_to_the_users_existing_key_and_mints_none(
         self, client: OtherClient, idp: Keycloak, resources: ResourceManager, mapping_gateway: OwnedJwtGateway
     ) -> None:
@@ -144,6 +153,14 @@ class TestJwtAutoRegisterMapExistingKey:
         )
 
     @pytest.mark.covers("other.auth.jwt.auto_register_mints_when_keyless")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.GEMINI,),
+            models=(MODEL_NAME,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_first_jwt_call_mints_a_key_when_the_user_has_none(
         self, client: OtherClient, idp: Keycloak, resources: ResourceManager, mapping_gateway: OwnedJwtGateway
     ) -> None:
@@ -160,6 +177,14 @@ class TestJwtAutoRegisterMapExistingKey:
         )
 
     @pytest.mark.covers("other.auth.jwt.auto_register_default_mints")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.GEMINI,),
+            models=(MODEL_NAME,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_default_behavior_still_mints_when_the_user_already_has_a_key(
         self, client: OtherClient, idp: Keycloak, resources: ResourceManager, minting_gateway: OwnedJwtGateway
     ) -> None:

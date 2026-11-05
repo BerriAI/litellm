@@ -145,6 +145,21 @@ class TestExtractRequestToolNames:
         data = {"tools": [{"type": "function", "function": {"name": "x"}}]}
         assert extract_request_tool_names("/v1/embeddings", data) == []
 
+    @pytest.mark.parametrize(
+        ("route", "data"),
+        [
+            ("/v1/chat/completions", {"tools": 5}),
+            ("/v1/chat/completions", {"functions": 5}),
+            ("/v1/responses", {"tools": 5}),
+            ("/v1/messages", {"tools": 5}),
+            ("/generate_content", {"tools": 5}),
+            ("/generate_content", {"tools": [{"functionDeclarations": 5}]}),
+        ],
+        ids=["chat_tools", "chat_functions", "responses", "messages", "generate_content", "function_declarations"],
+    )
+    def test_malformed_tool_lists_yield_no_names(self, route: str, data: dict[str, object]) -> None:
+        assert extract_request_tool_names(route, data) == []
+
 
 class TestCheckToolsAllowlist:
     """Test allowlist enforcement in auth (no DB in hot path)."""
@@ -226,6 +241,89 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "restricted_tool" in str(exc_info.value.message)
+
+    @pytest.mark.parametrize(
+        "loaded_tool",
+        [
+            {"type": "function", "name": "run_shell", "parameters": {"type": "object"}},
+            {
+                "type": "namespace",
+                "name": "ops",
+                "tools": [{"type": "function", "name": "run_shell", "parameters": {"type": "object"}}],
+            },
+        ],
+        ids=["function", "namespace_member"],
+    )
+    @pytest.mark.asyncio
+    async def test_disallowed_tool_loaded_by_a_replayed_tool_search_raises_on_chat_route(self, loaded_tool):
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        body = {
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}, {"type": "tool_search"}],
+            "messages": [
+                {"role": "user", "content": "clean up the disk"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "provider_specific_fields": {
+                        "tool_search_items": [
+                            {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
+                            {
+                                "type": "tool_search_output",
+                                "call_id": "ts_1",
+                                "tools": [{"type": "function", "name": "get_weather"}, loaded_tool],
+                            },
+                        ]
+                    },
+                },
+            ],
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/chat/completions",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "run_shell" in str(exc_info.value.message)
+        assert "get_weather" not in str(exc_info.value.message)
+
+    @pytest.mark.parametrize(
+        "search_tools",
+        [{"extra_body": {"tools": [{"type": "tool_search"}]}}, {}],
+        ids=["extra_body_tool_search", "deployment_adds_tool_search"],
+    )
+    @pytest.mark.asyncio
+    async def test_disallowed_tool_loaded_by_a_replayed_tool_search_raises_without_tool_search_in_tools(
+        self, search_tools
+    ):
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        body = {
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+            **search_tools,
+            "messages": [
+                {"role": "user", "content": "clean up the disk"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "provider_specific_fields": {
+                        "tool_search_items": [
+                            {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
+                            {"type": "tool_search_output", "call_id": "ts_1", "tools": [{"name": "run_shell"}]},
+                        ]
+                    },
+                },
+            ],
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/chat/completions",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "run_shell" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):

@@ -1,11 +1,14 @@
 import asyncio
+import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import islice
 from typing import Optional
 
+import httpx
 import pytest
 
+import litellm
 from litellm.interactions.background_cost_polling import (
     _create_context,
     _poll_intervals,
@@ -21,6 +24,7 @@ from litellm.interactions.background_cost_polling import (
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.interactions import InteractionsAPIResponse
 
 USAGE_BLOCK = {
@@ -74,6 +78,7 @@ def _context(
     logging_obj: LitellmLogging,
     timeout_seconds: float = 1.0,
     store: Optional[InMemoryBackgroundSettlementStore] = None,
+    resumed: bool = False,
 ) -> BackgroundInteractionPollContext:
     return BackgroundInteractionPollContext(
         interaction_id="interactions/bg-abc",
@@ -82,7 +87,9 @@ def _context(
         initial_interval_seconds=0.001,
         max_interval_seconds=0.002,
         timeout_seconds=timeout_seconds,
+        outcome_write_timeout_seconds=0.01,
         store=store if store is not None else InMemoryBackgroundSettlementStore(),
+        resumed=resumed,
     )
 
 
@@ -255,6 +262,180 @@ async def test_poller_retries_after_fetch_error_and_still_bills():
     assert logging_obj.model_call_details["response_cost"] > 0
 
 
+def _provider_error_response(status_code: int) -> httpx.Response:
+    return httpx.Response(status_code, request=httpx.Request("GET", "https://generativelanguage.googleapis.com"))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        litellm.BadRequestError(message="invalid interaction id", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.AuthenticationError(message="API key not valid", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.PermissionDeniedError(
+            message="permission denied",
+            model="gemini-2.5-flash",
+            llm_provider="gemini",
+            response=_provider_error_response(403),
+        ),
+        litellm.NotFoundError(message="interaction not found", model="gemini-2.5-flash", llm_provider="gemini"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_resumed_poll_stops_fetching_at_the_first_error_no_retry_changes_and_releases_the_reservation(error):
+    """
+    The regression: a resumed fetch the provider refuses for good, like an
+    unknown id or a key rotated away, was retried every interval until the
+    poll timed out.
+    """
+    reservation = _reservation()
+    logging_obj = _logging_obj_with_reservation(reservation)
+    fetch, calls = _fetch_sequence(error)
+
+    outcome = await poll_and_log_background_interaction_cost(
+        _context(logging_obj, timeout_seconds=0.05, resumed=True), fetch_interaction=fetch
+    )
+
+    assert outcome == "unsettled"
+    assert len(calls) == 1
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_poll_the_provider_refuses_leaves_the_bill_to_the_replica_still_polling_it():
+    """
+    The regression: a replica that booted with credentials unable to read the
+    interaction settled it as unsettled on its first 404, and the replica that
+    created it, still polling, then found it settled and never billed it.
+    """
+    store = InMemoryBackgroundSettlementStore()
+    creator_logging_obj = _logging_obj()
+    resumed_fetched = asyncio.Event()
+
+    async def creator_fetch(context):
+        if resumed_fetched.is_set():
+            return _response("completed", with_usage=True)
+        return _response("in_progress", with_usage=False)
+
+    async def resumed_fetch(context):
+        resumed_fetched.set()
+        raise litellm.NotFoundError(message="interaction not found", model="gemini-2.5-flash", llm_provider="gemini")
+
+    creator_outcome, resumed_outcome = await asyncio.gather(
+        poll_and_log_background_interaction_cost(
+            _context(creator_logging_obj, store=store), fetch_interaction=creator_fetch
+        ),
+        poll_and_log_background_interaction_cost(
+            _context(_logging_obj(), store=store, resumed=True), fetch_interaction=resumed_fetch
+        ),
+    )
+
+    assert (creator_outcome, resumed_outcome) == ("billed", None)
+    assert creator_logging_obj.model_call_details["response_cost"] > 0
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        litellm.RateLimitError(message="quota exceeded", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.ServiceUnavailableError(message="overloaded", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.InternalServerError(message="internal error", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.Timeout(message="timed out", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.BadRequestError(message="invalid interaction id", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.AuthenticationError(message="API key not valid", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.NotFoundError(message="interaction not found", model="gemini-2.5-flash", llm_provider="gemini"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_the_creating_poll_retries_through_any_provider_error(error):
+    logging_obj = _logging_obj()
+    fetch, calls = _fetch_sequence(error, _response("completed", with_usage=True))
+
+    outcome = await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
+
+    assert outcome == "billed"
+    assert len(calls) == 2
+
+
+class _OutcomeWritesFail:
+    def __init__(self):
+        self.store = InMemoryBackgroundSettlementStore()
+
+    async def register(self, pending):
+        await self.store.register(pending)
+
+    async def pending(self, interaction_id):
+        return await self.store.pending(interaction_id)
+
+    async def is_claimed(self, interaction_id):
+        return await self.store.is_claimed(interaction_id)
+
+    async def claim(self, interaction_id):
+        return await self.store.claim(interaction_id)
+
+    async def record_outcome(self, interaction_id, outcome):
+        raise RuntimeError("database unavailable")
+
+    async def unsettled(self):
+        return await self.store.unsettled()
+
+
+@pytest.mark.parametrize(
+    "last_status, timeout_seconds",
+    [("failed", 1.0), ("in_progress", 0.01)],
+)
+@pytest.mark.asyncio
+async def test_a_release_it_could_not_record_leaves_the_reservation_to_the_settler_that_takes_over(
+    last_status, timeout_seconds
+):
+    """
+    The regression: a settler released the reservation and then failed to
+    record it, so the replica that took over the lapsed claim released the
+    same reservation again and the key's budget lost that amount twice.
+    """
+    reservation = _reservation()
+    logging_obj = _logging_obj_with_reservation(reservation)
+    fetch, _ = _fetch_sequence(_response(last_status, with_usage=False))
+
+    await poll_and_log_background_interaction_cost(
+        _context(logging_obj, timeout_seconds=timeout_seconds, store=_OutcomeWritesFail()),
+        fetch_interaction=fetch,
+    )
+
+    assert reservation["finalized"] is False
+
+
+class _FirstOutcomeWriteFails(_OutcomeWritesFail):
+    def __init__(self):
+        super().__init__()
+        self.failed_once = False
+
+    async def record_outcome(self, interaction_id, outcome):
+        if not self.failed_once:
+            self.failed_once = True
+            raise RuntimeError("connection reset")
+        await self.store.record_outcome(interaction_id, outcome)
+
+
+@pytest.mark.asyncio
+async def test_a_release_whose_first_outcome_write_failed_still_frees_the_reservation():
+    """
+    The regression: one failed outcome write left the key's budget
+    reservation held until a later boot or delete took the row over, and an
+    active key's spend counter never expired it in the meantime.
+    """
+    reservation = _reservation()
+    store = _FirstOutcomeWriteFails()
+    fetch, _ = _fetch_sequence(_response("failed", with_usage=False))
+
+    outcome = await poll_and_log_background_interaction_cost(
+        _context(_logging_obj_with_reservation(reservation), store=store), fetch_interaction=fetch
+    )
+
+    assert outcome == "released"
+    assert reservation["finalized"] is True
+    assert await store.store.unsettled() == ()
+
+
 @pytest.mark.asyncio
 async def test_schedule_creates_poll_task_for_in_progress_create():
     logging_obj = _logging_obj()
@@ -300,6 +481,59 @@ async def test_schedule_registers_an_agent_only_create_that_names_no_model():
     assert pending is not None
     assert pending.create_context.model is None
     assert _rebuild_logging_obj(pending.create_context).model is None
+
+
+@pytest.mark.asyncio
+async def test_schedule_registers_a_create_whose_tags_are_a_string_and_keeps_them_as_sent():
+    """
+    The regression: storing the create's context read string tags as a list
+    and raised, so a create sent with a tags string answered with an error
+    after the provider had already started the interaction.
+    """
+    logging_obj = _logging_obj(litellm_params={"metadata": _create_metadata(tags="team-a,nightly-batch")})
+    store = InMemoryBackgroundSettlementStore()
+
+    task = await maybe_schedule_background_interaction_cost_polling(
+        response=_response("in_progress", with_usage=False),
+        create_kwargs={"litellm_logging_obj": logging_obj},
+        custom_llm_provider="gemini",
+        store=store,
+    )
+
+    assert isinstance(task, asyncio.Task)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    pending = await store.pending("interactions/bg-abc")
+    assert pending is not None
+    rebuilt = _rebuild_logging_obj(pending.create_context)
+    assert get_litellm_metadata_from_kwargs(kwargs=rebuilt.model_call_details)["tags"] == "team-a,nightly-batch"
+
+
+@pytest.mark.asyncio
+async def test_delete_fetches_with_the_vertex_project_location_and_credentials_the_request_used():
+    store = InMemoryBackgroundSettlementStore()
+    await _create_on_a_replica_that_then_dies(_logging_obj(litellm_params={"metadata": _create_metadata()}), store)
+    fetch, captured = _capturing_fetch(_response("completed", with_usage=True))
+
+    outcome = await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc",
+        delete_kwargs={
+            "vertex_project": "request-project",
+            "vertex_location": "europe-west4",
+            "vertex_credentials": {"type": "service_account", "project_id": "request-project"},
+        },
+        fetch_interaction=fetch,
+        store=store,
+    )
+
+    assert outcome == "billed"
+    credentials = captured[0].credentials
+    assert (credentials.vertex_project, credentials.vertex_location, credentials.vertex_credentials) == (
+        "request-project",
+        "europe-west4",
+        {"type": "service_account", "project_id": "request-project"},
+    )
 
 
 @pytest.mark.asyncio
@@ -781,6 +1015,105 @@ async def test_restart_resumes_only_the_rows_no_replica_claimed():
     assert await store.is_claimed("interactions/bg-orphaned")
 
 
+@pytest.mark.asyncio
+async def test_a_restart_long_after_the_create_still_retries_a_failed_fetch_before_giving_up():
+    """
+    The regression: a resumed poll kept only what was left of the original
+    window, so a row older than the window got a single fetch, and one
+    transient error right after the restart ended it unbilled.
+    """
+    store = InMemoryBackgroundSettlementStore()
+    await store.register(
+        PendingBackgroundInteraction(
+            interaction_id="interactions/bg-abc",
+            custom_llm_provider="gemini",
+            create_context=_create_context(_logging_obj(litellm_params={"metadata": _create_metadata()}), "gemini"),
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=FAST_SCHEDULE.timeout_seconds * 100),
+        )
+    )
+    fetch, calls = _fetch_sequence(
+        RuntimeError("transient network error"),
+        _response("completed", with_usage=True),
+    )
+
+    (resumed,) = await resume_unsettled_background_interactions(store, fetch, schedule=FAST_SCHEDULE)
+
+    assert await asyncio.wait_for(resumed, timeout=5) == "billed"
+    assert len(calls) == 2
+
+
+def _create_through_the_proxy_router(tags: list) -> LitellmLogging:
+    logging_obj = LitellmLogging(
+        model="gemini-2.5-flash",
+        messages=[],
+        stream=False,
+        call_type="acreate_interaction",
+        start_time=time.time(),
+        litellm_call_id="bg-interactions-call-id",
+        function_id="bg-interactions-fn-id",
+    )
+    logging_obj.update_from_kwargs(
+        kwargs={
+            "metadata": _create_metadata(
+                tags=tags, spend_logs_metadata={"job": "nightly"}, model_group="client-chosen-group"
+            ),
+            "litellm_metadata": {"model_info": {"id": "deployment-1"}, "model_group": "gemini-background"},
+        },
+        model="gemini-2.5-flash",
+        optional_params={},
+        litellm_params={"litellm_call_id": "bg-interactions-call-id"},
+        custom_llm_provider="gemini",
+    )
+    return logging_obj
+
+
+def _create_with_header_tags(tags: list) -> LitellmLogging:
+    return _logging_obj(
+        litellm_params={
+            "metadata": _create_metadata(tags=tags, spend_logs_metadata={"job": "nightly"}),
+            "proxy_server_request": {"headers": {"user-agent": "claude-cli/2.1.0"}},
+        }
+    )
+
+
+async def _billed_spend_row(logging_obj: LitellmLogging) -> dict:
+    response = _response("completed", with_usage=True)
+    fetch, _ = _fetch_sequence(response)
+    assert await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch) == "billed"
+    settled_at = datetime.now(timezone.utc)
+    row = get_logging_payload(
+        kwargs={**logging_obj.model_call_details, "completion_start_time": settled_at},
+        response_obj=response,
+        start_time=settled_at,
+        end_time=settled_at,
+    )
+    return {
+        "request_tags": json.loads(row["request_tags"]),
+        "model_id": row["model_id"],
+        "model_group": row["model_group"],
+        "spend_logs_metadata": json.loads(row["metadata"]).get("spend_logs_metadata"),
+    }
+
+
+@pytest.mark.parametrize("create", [_create_through_the_proxy_router, _create_with_header_tags])
+@pytest.mark.asyncio
+async def test_a_bill_settled_off_the_creating_worker_matches_the_creating_worker_spend_row(create):
+    """
+    The regressions: the stored create context kept only the router's metadata
+    on the proxy path, so a row billed after a restart or by another replica
+    lost the request tags that tag-based spend reports group by; then it let
+    the client's request metadata override the router's, so a client-sent
+    model group relabeled the bill another replica wrote.
+    """
+    creator_row = await _billed_spend_row(create(["team-a", "nightly-batch"]))
+    stored = _create_context(create(["team-a", "nightly-batch"]), "gemini")
+
+    rebuilt_row = await _billed_spend_row(_rebuild_logging_obj(stored))
+
+    assert "team-a" in creator_row["request_tags"]
+    assert rebuilt_row == creator_row
+
+
 class _ClaimAnswersOnlyAfterTheLastFetch:
     def __init__(self):
         self.store = InMemoryBackgroundSettlementStore()
@@ -809,8 +1142,8 @@ class _ClaimAnswersOnlyAfterTheLastFetch:
     async def record_outcome(self, interaction_id, outcome):
         return None
 
-    async def unclaimed(self):
-        return await self.store.unclaimed()
+    async def unsettled(self):
+        return await self.store.unsettled()
 
 
 @pytest.mark.asyncio
@@ -844,7 +1177,7 @@ class _DownStore:
     async def record_outcome(self, interaction_id, outcome):
         raise RuntimeError("database unavailable")
 
-    async def unclaimed(self):
+    async def unsettled(self):
         raise RuntimeError("database unavailable")
 
 
@@ -868,8 +1201,8 @@ class _RegistersThenRaises:
     async def record_outcome(self, interaction_id, outcome):
         return None
 
-    async def unclaimed(self):
-        return await self.store.unclaimed()
+    async def unsettled(self):
+        return await self.store.unsettled()
 
 
 @pytest.mark.asyncio
@@ -898,7 +1231,7 @@ async def test_create_whose_registration_raised_after_landing_still_claims_the_s
 
     assert outcome == "billed"
     assert await store.is_claimed("interactions/bg-abc")
-    assert await store.unclaimed() == ()
+    assert await store.unsettled() == ()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -907,7 +1240,7 @@ async def test_create_whose_registration_raised_after_landing_still_claims_the_s
 @pytest.mark.asyncio
 async def test_delete_on_a_worker_that_resumed_the_poll_fails_when_it_cannot_fetch():
     """
-    After a restart every worker resumes the unclaimed rows, so none of them
+    After a restart every worker resumes the unsettled rows, so none of them
     is the creator whose delete may release and delete on a failed fetch. A
     resumed worker's delete fails like any other replica's, and its own poll
     still bills the interaction once it completes.
@@ -965,9 +1298,9 @@ class _LandsThenGoesDown:
     async def record_outcome(self, interaction_id, outcome):
         return None
 
-    async def unclaimed(self):
+    async def unsettled(self):
         self._answer()
-        return await self.store.unclaimed()
+        return await self.store.unsettled()
 
     def _answer(self):
         if self.down:
@@ -992,7 +1325,7 @@ class _TableLessStore:
     async def record_outcome(self, interaction_id, outcome):
         raise RuntimeError("the settlement table does not exist")
 
-    async def unclaimed(self):
+    async def unsettled(self):
         raise RuntimeError("the settlement table does not exist")
 
 
@@ -1027,7 +1360,7 @@ async def test_create_whose_registration_and_read_back_both_failed_bills_once_th
     assert (while_down, recovered) == (None, "billed")
     assert len(calls) == 2
     assert await store.is_claimed("interactions/bg-abc")
-    assert await store.unclaimed() == ()
+    assert await store.unsettled() == ()
     assert await resume_unsettled_background_interactions(store, poll_fetch, schedule=FAST_SCHEDULE) == ()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):

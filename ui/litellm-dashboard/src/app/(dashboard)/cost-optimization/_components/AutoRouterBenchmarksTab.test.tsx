@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/http/client";
 
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({ useAutoRouters: vi.fn() }));
+vi.mock("./AutoRouterSummaryTable", () => ({ default: () => <div data-testid="router-summary" /> }));
 vi.mock("./ShadowEvalSection", () => ({ default: () => <div data-testid="shadow-eval-section" /> }));
 vi.mock("@/components/shared/advanced_date_picker", () => ({
   __esModule: true,

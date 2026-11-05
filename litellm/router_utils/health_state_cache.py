@@ -6,6 +6,7 @@ and exposes it for router candidate filtering.
 """
 
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
@@ -14,13 +15,12 @@ from litellm import verbose_logger
 from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
-
-HEALTH_CHECKS_TARGET: Final = "health_checks"
+from litellm.constants import HEALTH_CHECKS_TARGET
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -79,7 +79,7 @@ class DeploymentHealthCache:
             merged: Final = {
                 model_id: state
                 for model_id, state in {**existing, **states}.items()
-                if isinstance(state, dict) and (now - state.get("timestamp", 0)) < expiry_seconds
+                if isinstance(state, dict) and (now - _timestamp_of(state)) < expiry_seconds  # pyright: ignore[reportUnknownArgumentType]  # a cached record
             }
             self.cache.set_cache(
                 key=self.CACHE_KEY,
@@ -102,7 +102,7 @@ class DeploymentHealthCache:
             for model_id, state in raw.items()
             if isinstance(state, dict)
             and not state.get("is_healthy", True)
-            and (now - state.get("timestamp", 0)) < self.staleness_threshold
+            and (now - _timestamp_of(state)) < self.staleness_threshold  # pyright: ignore[reportUnknownArgumentType]  # a cached record
         }
 
     @with_service_target(HEALTH_CHECKS_TARGET)
@@ -130,3 +130,10 @@ class DeploymentHealthCache:
                 str(e),
             )
             return set()
+
+
+def _timestamp_of(state: Mapping[str, object]) -> float:
+    """A health record's timestamp; one that is no number reads as 0 (stale), so a bad record
+    drops out alone instead of turning health routing off for every deployment."""
+    timestamp: Final = state.get("timestamp", 0)
+    return float(timestamp) if isinstance(timestamp, int | float) and not isinstance(timestamp, bool) else 0.0

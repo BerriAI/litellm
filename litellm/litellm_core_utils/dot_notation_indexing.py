@@ -181,7 +181,7 @@ def _delete_nested_value_custom(
 
 
 def delete_nested_value(
-    data: dict[str, Any],
+    data: Mapping[str, object],
     path: str,
     depth: int = 0,
     max_depth: int = 20,
@@ -214,7 +214,7 @@ def delete_nested_value(
     """
     import copy
 
-    result: Final = copy.deepcopy(data)
+    result: Final = copy.deepcopy(data if isinstance(data, dict) else dict(data))
 
     try:
         # Parse path into segments

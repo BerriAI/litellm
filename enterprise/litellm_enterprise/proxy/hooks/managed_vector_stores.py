@@ -2,11 +2,11 @@
 ## This hook is used to manage vector stores with target_model_names support
 ## It allows creating vector stores across multiple models and managing them with unified IDs
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Dict, Final, List, Optional, Union, cast
 
 from fastapi import HTTPException
 
-import litellm
 from litellm import Router, verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.proxy.utils import PrismaClient as _PrismaClient
 
-    Span = Union[_Span, Any]
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
     PrismaClient = _PrismaClient
 else:
@@ -89,10 +89,10 @@ class _PROXY_LiteLLMManagedVectorStores(
         
         # Model ID is stored in hidden params if the response object supports it
         # For TypedDict responses, we need to check if _hidden_params was added
-        hidden_params: Dict[str, Any] = {}
+        hidden_params: Mapping[str, object] = {}
         if hasattr(resource_object, "_hidden_params"):
-            hidden_params = getattr(resource_object, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", "")
+            hidden_params = cast(Mapping[str, object], getattr(resource_object, "_hidden_params", {}) or {})
+        model_id: Final = cast(str, hidden_params.get("model_id", ""))
 
         return generate_unified_id_string(
             resource_type=self.resource_type,
@@ -106,8 +106,8 @@ class _PROXY_LiteLLMManagedVectorStores(
         self,
         llm_router: Router,
         model: str,
-        request_data: Dict[str, Any],
-        litellm_parent_otel_span: Span,
+        request_data: dict[str, object] | VectorStoreCreateOptionalRequestParams,
+        litellm_parent_otel_span: Span | None,
     ) -> VectorStoreCreateResponse:
         """
         Create a vector store for a specific model.
@@ -122,10 +122,8 @@ class _PROXY_LiteLLMManagedVectorStores(
             VectorStoreCreateResponse from the provider
         """
         # Use the router to create the vector store
-        response = await llm_router.avector_store_create(
-            model=model, **request_data
-        )
-        return response
+        response: Final = await llm_router.avector_store_create(model=model, **request_data)
+        return cast(VectorStoreCreateResponse, response)
 
     # ============================================================================
     #                     VECTOR STORE CRUD OPERATIONS
@@ -136,7 +134,7 @@ class _PROXY_LiteLLMManagedVectorStores(
         create_request: VectorStoreCreateOptionalRequestParams,
         llm_router: Router,
         target_model_names_list: List[str],
-        litellm_parent_otel_span: Span,
+        litellm_parent_otel_span: Span | None,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> VectorStoreCreateResponse:
         """
@@ -464,3 +462,4 @@ class _PROXY_LiteLLMManagedVectorStores(
             parent_otel_span=parent_otel_span,
             resource_id_key="vector_store_id",
         )
+PROXY_LiteLLMManagedVectorStores = _PROXY_LiteLLMManagedVectorStores

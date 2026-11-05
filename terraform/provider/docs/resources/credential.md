@@ -122,12 +122,31 @@ resource "litellm_credential" "azure_openai" {
 }
 ```
 
+### Keeping Secrets Out of State
+
+```terraform
+resource "litellm_credential" "openai_cred" {
+  credential_name = "openai-api-key"
+
+  credential_info = {
+    provider = "openai"
+  }
+
+  credential_values_wo = jsonencode({
+    api_key = var.openai_api_key
+  })
+  credential_values_wo_version = 1
+}
+```
+
 ## Argument Reference
 
 The following arguments are supported:
 
 * `credential_name` - (Required) Name of the credential. This will be used as the identifier for the credential.
-* `credential_values` - (Required, Sensitive) Map of sensitive credential values such as API keys, tokens, etc.
+* `credential_values` - (Optional, Sensitive) Map of sensitive credential values such as API keys, tokens, etc. Written to the state file in plaintext. Exactly one of `credential_values` and `credential_values_wo` must be set.
+* `credential_values_wo` - (Optional, Write-only, Sensitive) JSON object of string values, usually `jsonencode({ api_key = var.key })`. Every value must be a string (pass a service account file as `file(...)`, not `jsondecode(...)`) because the proxy only encrypts string values at rest; nested objects and numbers are rejected before any request. Sent to the proxy on every apply and never written to plan or state. Requires Terraform 1.11 or later and `credential_values_wo_version`.
+* `credential_values_wo_version` - (Optional) Integer that triggers an update when `credential_values_wo` changes. Write-only values produce no diff on their own, so bump this number whenever you rotate the secret.
 * `model_id` - (Optional) Model ID associated with this credential.
 * `credential_info` - (Optional) Map of additional non-sensitive information about the credential.
 * `adopt_existing` - (Optional, default `false`) Take over a credential of this name that already exists on the proxy instead of failing. Turning this on overwrites the existing credential's values with the ones in this configuration.
@@ -150,4 +169,11 @@ terraform import litellm_credential.example "credential-name"
 
 * The `credential_values` field is marked as sensitive and will not be displayed in Terraform output or logs.
 * Credential values are not read back from the API for security reasons, so they are preserved in the Terraform state.
-* Like every Terraform attribute marked `Sensitive`, `credential_values` is still written in plaintext to the state file. Anyone with read access to the state (or state artifacts such as plan files) can recover the configured secrets. Use an encrypted remote backend with tight access controls, and prefer feeding secrets in via variables sourced from a secret manager rather than hardcoding them in configuration.
+* Like every Terraform attribute marked `Sensitive`, `credential_values` is still written in plaintext to the state file. Anyone with read access to the state (or state artifacts such as plan files) can recover the configured secrets. Use `credential_values_wo` to keep them out of state entirely, or at least use an encrypted remote backend with tight access controls.
+
+## Migrating to Write-only Values
+
+1. Upgrade to Terraform 1.11 or later.
+2. Replace `credential_values = { ... }` with `credential_values_wo = jsonencode({ ... })` and add `credential_values_wo_version = 1`.
+3. Run `terraform apply`. The proxy receives the same values and the state file no longer carries them.
+4. To rotate a secret later, change the value and bump `credential_values_wo_version`.

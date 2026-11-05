@@ -7,15 +7,15 @@ Covers ``failed_tracking_alert``, ``budget_alerts``, ``alerting_handler``,
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 from prisma.errors import PrismaError
 
-import litellm
 from litellm._service_logger import ServiceTypes
+from litellm.litellm_core_utils import litellm_logging
 from litellm.proxy._types import AlertType, CallInfo
 
 
@@ -210,9 +210,43 @@ async def test_alerting_handler_sends_to_slack(proxy_logging):
 @pytest.mark.asyncio
 async def test_alerting_handler_sentry_without_sdk_error_raises(proxy_logging, monkeypatch):
     proxy_logging.alerting = ["sentry"]
-    monkeypatch.setattr(litellm.utils, "sentry_sdk_instance", None)
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
+    litellm_logging.start_sentry.cache_clear()
     with pytest.raises(Exception, match="SENTRY_DSN"):
         await proxy_logging.alerting_handler(message="x", level="Low", alert_type=AlertType.db_exceptions)
+
+
+@pytest.mark.asyncio
+async def test_alerting_handler_sentry_sends_through_the_initialized_sdk(proxy_logging, monkeypatch):
+    proxy_logging.alerting = ["sentry"]
+    sentry = MagicMock()
+    monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", sentry)
+    await proxy_logging.alerting_handler(message="db down", level="High", alert_type=AlertType.db_exceptions)
+    sentry.capture_message.assert_called_once()
+    assert "db down" in sentry.capture_message.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_alerting_handler_starts_sentry_when_the_alert_was_not_configured_at_boot(proxy_logging, monkeypatch):
+    import sentry_sdk
+
+    monkeypatch.setattr(proxy_logging, "alerting", ["sentry"])
+    init: Final = MagicMock()
+    capture_message: Final = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", init)
+    monkeypatch.setattr(sentry_sdk, "capture_message", capture_message)
+    monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
+    monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
+    litellm_logging.start_sentry.cache_clear()
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
+
+    await proxy_logging.alerting_handler(message="db down", level="High", alert_type=AlertType.db_exceptions)
+
+    assert init.call_args.kwargs["dsn"] == "https://key@sentry.example/1"
+    capture_message.assert_called_once()
+    assert "db down" in capture_message.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +269,7 @@ async def test_failure_handler_logs_db_error_and_calls_service_logging(proxy_log
     proxy_logging.alert_types = [AlertType.db_exceptions]
     proxy_logging.alerting_handler = AsyncMock()
     proxy_logging.service_logging_obj = MagicMock(async_service_failure_hook=AsyncMock())
-    monkeypatch.setattr(litellm.utils, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
     await proxy_logging.failure_handler(
         original_exception=HTTPException(status_code=500, detail="boom"),
         duration=1.5,
@@ -262,7 +296,7 @@ async def test_failure_handler_alerts_but_leaves_prisma_error_event_to_log_db_me
     proxy_logging.alert_types = [AlertType.db_exceptions]
     proxy_logging.alerting_handler = AsyncMock()
     proxy_logging.service_logging_obj = MagicMock(async_service_failure_hook=AsyncMock())
-    monkeypatch.setattr(litellm.utils, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
     await proxy_logging.failure_handler(
         original_exception=PrismaError("connection reset"), duration=1.0, call_type=call_type
     )
@@ -278,7 +312,7 @@ async def test_failure_handler_still_emits_db_event_for_wrapped_insert_error(pro
     proxy_logging.alert_types = [AlertType.db_exceptions]
     proxy_logging.alerting_handler = AsyncMock()
     proxy_logging.service_logging_obj = MagicMock(async_service_failure_hook=AsyncMock())
-    monkeypatch.setattr(litellm.utils, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
     await proxy_logging.failure_handler(
         original_exception=HTTPException(status_code=400, detail={"error": "Foreign Key Constraint failed"}),
         duration=1.0,
@@ -298,7 +332,7 @@ async def test_failure_handler_with_capture_exception_invoked(proxy_logging, mon
     def fake_capture(error):
         captured["error"] = error
 
-    monkeypatch.setattr(litellm.utils, "capture_exception", fake_capture)
+    monkeypatch.setattr(litellm_logging, "capture_exception", fake_capture)
     err = RuntimeError("real")
     await proxy_logging.failure_handler(original_exception=err, duration=1.0, call_type="db_read")
     snapshot = {
@@ -320,7 +354,7 @@ async def test_failure_handler_propagates_service_logging_error_raises(proxy_log
     proxy_logging.service_logging_obj = MagicMock(
         async_service_failure_hook=AsyncMock(side_effect=RuntimeError("svc"))
     )
-    monkeypatch.setattr(litellm.utils, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
     with pytest.raises(RuntimeError):
         await proxy_logging.failure_handler(
             original_exception=Exception("x"), duration=0.0, call_type="db_read"

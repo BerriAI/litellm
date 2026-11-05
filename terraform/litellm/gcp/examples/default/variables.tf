@@ -85,7 +85,7 @@ variable "image_registry" {
 variable "image_tag" {
   description = "Tag applied to all four litellm-* images. Bump in lockstep."
   type        = string
-  default     = "v1.86.0-dev"
+  default     = ""
 }
 
 # TLS — provide DNS names for a managed cert, or opt into HTTP-only for dev.

@@ -5,6 +5,7 @@ import RealtimePlayground from "./RealtimePlayground";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "https://proxy.example.com",
+  getGatewayBaseUrl: () => "https://gateway.example.com",
 }));
 
 class FakeSocket {
@@ -112,7 +113,7 @@ describe("RealtimePlayground", () => {
 
     await user.click(screen.getByRole("button", { name: /Connect/i }));
 
-    expect(latestSocket().url).toBe("wss://proxy.example.com/v1/realtime?model=gpt-realtime");
+    expect(latestSocket().url).toBe("wss://gateway.example.com/v1/realtime?model=gpt-realtime");
     expect(latestSocket().protocols).toEqual(["realtime", "openai-insecure-api-key.sk-realtime"]);
   });
 
@@ -170,6 +171,24 @@ describe("RealtimePlayground", () => {
     expect(update.type).toBe("session.update");
     expect(update.session.voice).toBe("alloy");
     expect(update.session.type).toBe("realtime");
+  });
+
+  it("starts recording on the configuration the session was created with", async () => {
+    const user = userEvent.setup();
+    render(<RealtimePlayground {...props} />);
+
+    await connect(user);
+    await act(async () => {
+      latestSocket().emit({ type: "session.created" });
+    });
+    await user.click(screen.getByTitle("Start recording"));
+
+    const updates = latestSocket()
+      .sent.map((raw) => JSON.parse(raw))
+      .filter((payload) => payload.type === "session.update");
+    expect(updates).toHaveLength(2);
+    expect(updates[1]).toEqual(updates[0]);
+    expect(updates[0].session.turn_detection).toEqual({ type: "server_vad" });
   });
 
   it("sends what was typed and then asks for a response", async () => {

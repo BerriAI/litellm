@@ -58,7 +58,7 @@ class TestCostTrackingSettings:
             # Make request
             response = client.get(
                 "/config/cost_discount_config",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response
@@ -97,7 +97,7 @@ class TestCostTrackingSettings:
             # Make request
             response = client.get(
                 "/config/cost_discount_config",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response
@@ -146,7 +146,7 @@ class TestCostTrackingSettings:
             response = client.patch(
                 "/config/cost_discount_config",
                 json=test_discount_config,
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response
@@ -165,6 +165,80 @@ class TestCostTrackingSettings:
 
             # Verify litellm.cost_discount_config was updated
             assert litellm.cost_discount_config == test_discount_config
+
+    @pytest.mark.asyncio
+    async def test_update_cost_discount_config_model_pattern_key(self):
+        """
+        Test PATCH /config/cost_discount_config accepts <provider>/<model-pattern> keys.
+        """
+        mock_proxy_config = AsyncMock()
+        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
+        mock_proxy_config.save_config = AsyncMock()
+
+        mock_prisma_client = MagicMock()
+
+        test_discount_config = {"vertex_ai/claude-*": 0.2}
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch.object(litellm, "cost_discount_config", {}),
+        ):
+            response = client.patch(
+                "/config/cost_discount_config",
+                json=test_discount_config,
+                headers={"Authorization": "Bearer sk-9876"},
+            )
+
+            assert response.status_code == 200
+            assert response.json()["values"]["vertex_ai/claude-*"] == 0.2
+            mock_proxy_config.save_config.assert_called_once()
+            assert litellm.cost_discount_config == test_discount_config
+
+    @pytest.mark.asyncio
+    async def test_update_cost_discount_config_invalid_provider_with_pattern(self):
+        """
+        Test PATCH /config/cost_discount_config rejects invalid providers in pattern keys.
+        """
+        mock_proxy_config = AsyncMock()
+        mock_prisma_client = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            response = client.patch(
+                "/config/cost_discount_config",
+                json={"notaprovider/claude-*": 0.2},
+                headers={"Authorization": "Bearer sk-9876"},
+            )
+
+            assert response.status_code == 400
+            assert "notaprovider" in response.json()["detail"]["error"]
+
+    @pytest.mark.asyncio
+    async def test_update_cost_discount_config_empty_model_pattern(self):
+        """
+        Test PATCH /config/cost_discount_config rejects a key ending in a bare slash.
+        """
+        mock_proxy_config = AsyncMock()
+        mock_prisma_client = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            response = client.patch(
+                "/config/cost_discount_config",
+                json={"vertex_ai/": 0.2},
+                headers={"Authorization": "Bearer sk-9876"},
+            )
+
+            assert response.status_code == 400
+            assert "cannot be empty" in response.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_update_cost_discount_config_invalid_provider(self):
@@ -199,7 +273,7 @@ class TestCostTrackingSettings:
             response = client.patch(
                 "/config/cost_discount_config",
                 json=test_discount_config,
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response - should fail with 400
@@ -240,7 +314,7 @@ class TestCostTrackingSettings:
             response = client.patch(
                 "/config/cost_discount_config",
                 json=test_discount_config,
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response - should fail with 400
@@ -280,7 +354,7 @@ class TestCostTrackingSettings:
             response = client.patch(
                 "/config/cost_discount_config",
                 json=test_discount_config,
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response - should fail with 500
@@ -304,7 +378,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "gpt-5.3-codex",
                 "litellm_params": {
@@ -326,7 +400,7 @@ class TestResolveModelForCostLookup:
             resolved = _resolve_model_for_cost_lookup("gpt-5.3-codex")
 
         assert resolved.model == "azure/gpt-4o"
-        mock_router.get_model_list.assert_called_once_with(model_name="gpt-5.3-codex")
+        mock_router.registry.return_value.deployments.assert_called_once_with("gpt-5.3-codex")
 
     def test_falls_back_to_litellm_params_model_when_no_base_model(self):
         """
@@ -337,7 +411,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "gpt-4",
                 "litellm_params": {
@@ -367,7 +441,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "my-azure-model",
                 "litellm_params": {
@@ -413,7 +487,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "my-azure-model",
                 "litellm_params": {
@@ -439,7 +513,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "gpt-4",
                 "litellm_params": {
@@ -465,7 +539,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "my-azure-model",
                 "model_info": {"base_model": "azure/gpt-4o"},
@@ -487,7 +561,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "gpt-4",
                 "litellm_params": {"model": "openai/gpt-4"},
@@ -525,7 +599,7 @@ class TestEstimateCostOnPremProvider:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "nvidia/zai-org/glm-5.2",
                 "litellm_params": {
@@ -578,7 +652,7 @@ class TestEstimateCostOnPremProvider:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "nvidia/zai-org/glm-5.2",
                 "litellm_params": {
@@ -622,7 +696,7 @@ class TestEstimateCostOnPremProvider:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "nvidia/zai-org/glm-5.2",
                 "litellm_params": {
@@ -662,7 +736,7 @@ class TestEstimateCostOnPremProvider:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "nvidia/zai-org/glm-5.2",
                 "litellm_params": {
@@ -696,7 +770,7 @@ class TestBlockRequestsForModelsWithoutPricing:
         with patch.object(litellm, "block_requests_for_models_without_pricing", True):
             response = client.get(
                 "/config/block_requests_for_models_without_pricing",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
         assert response.status_code == 200
@@ -716,7 +790,7 @@ class TestBlockRequestsForModelsWithoutPricing:
         ):
             response = client.patch(
                 "/config/block_requests_for_models_without_pricing",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
                 json={"enabled": True},
             )
 
@@ -778,7 +852,7 @@ class TestBlockRequestsForModelsWithoutPricing:
         ):
             response = client.patch(
                 "/config/block_requests_for_models_without_pricing",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
                 json={"enabled": True},
             )
 
@@ -795,7 +869,7 @@ OUTPUT_TOKENS = 500
 
 def _router_pricing(model: str = AN_UNDERLYING_MODEL, **pricing: float) -> MagicMock:
     mock_router = MagicMock()
-    mock_router.get_model_list.return_value = [
+    mock_router.registry.return_value.deployments.return_value = [
         {
             "model_name": AN_ALIAS,
             "litellm_params": {
@@ -1202,7 +1276,7 @@ class TestCostEstimateRequestTokenSubsets:
     def test_the_endpoint_answers_422_when_cache_tokens_exceed_input_tokens(self):
         response = client.post(
             "/cost/estimate",
-            headers={"Authorization": "Bearer sk-1234"},
+            headers={"Authorization": "Bearer sk-9876"},
             json={"model": AN_ALIAS, "input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 8000},
         )
 

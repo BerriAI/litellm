@@ -10,6 +10,8 @@ import time
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,6 +22,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.http_handler import header_value
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import get_base64_str
@@ -31,6 +34,15 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PegasusResponse(TypedDict):
+    message: ReadOnly[NotRequired[str | None]]
+    finishReason: ReadOnly[NotRequired[str | None]]
+
+
+_PEGASUS_RESPONSE: Final = TypeAdapter(_PegasusResponse)
 
 
 class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
@@ -206,7 +218,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         ModelResponse with choices[0].message.content and finish_reason
         """
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _PEGASUS_RESPONSE.validate_python(raw_response.json())
         except Exception as e:
             raise BedrockError(
                 message=f"Error parsing response: {raw_response.text}, error: {e}",
@@ -223,7 +235,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         message_content: Final = completion_response.get("message", "")
 
         # Extract finish reason and map to LiteLLM format
-        finish_reason_raw: Final = completion_response.get("finishReason", "stop")
+        finish_reason_raw: Final = completion_response.get("finishReason") or "stop"
         finish_reason: Final = map_finish_reason(finish_reason_raw)
 
         # Set the response content
@@ -245,8 +257,8 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             )
 
         # Calculate usage from headers
-        bedrock_input_tokens: Final = raw_response.headers.get("x-amzn-bedrock-input-token-count", None)
-        bedrock_output_tokens: Final = raw_response.headers.get("x-amzn-bedrock-output-token-count", None)
+        bedrock_input_tokens: Final = header_value(raw_response.headers, "x-amzn-bedrock-input-token-count")
+        bedrock_output_tokens: Final = header_value(raw_response.headers, "x-amzn-bedrock-output-token-count")
 
         prompt_tokens: Final = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
 

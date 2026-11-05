@@ -3,22 +3,36 @@ import json
 import os
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from itertools import chain
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, TypeVar
 
 import anthropic
 import httpx
 import openai
+import pytest
+import yaml
 from pydantic import JsonValue
 
 from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
-from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
+from tests.integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from tests.integration._support.database import read_rows
+from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 T = TypeVar("T")
 
@@ -34,6 +48,25 @@ BASE_INSTRUCTIONS_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "c
 FRESH_CONNECTION: Final = {"Connection": "close"}
 ANTHROPIC_HEADERS: Final = {"anthropic-version": "2023-06-01"}
 USAGE: Final = {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15}
+
+
+def _config_without_model_list(directory: Path) -> Path:
+    shared_config: Final = object_value(yaml.safe_load((ROOT / "tests/integration/proxy_config.yaml").read_text()))
+    config_without_models: Final[Mapping[str, JsonValue]] = MappingProxyType(
+        {name: value for name, value in shared_config.items() if name != "model_list"}
+    )
+    path: Final = directory / "proxy_config_without_model_list.yaml"
+    path.write_text(yaml.safe_dump({**config_without_models}))
+    return path
+
+
+@pytest.fixture(scope="module")
+def gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with gateway_from_environment() as parent_gateway:
+        directory: Final = tmp_path_factory.mktemp("codex_model_catalog")
+        config: Final = _config_without_model_list(directory)
+        with owned_proxy(parent_gateway, directory, {}, config=config, workers=PROXY_WORKERS) as isolated_gateway:
+            yield isolated_gateway
 
 
 def _generic_tier(identity: str) -> dict[str, JsonValue]:
@@ -316,6 +349,41 @@ def test_stock_model_keeps_codex_entry(gateway: Gateway) -> None:
             "upgrade": None,
         }
         assert catalog[name] == expected, catalog[name]
+
+
+def test_stock_model_alias_takes_configured_max_input_tokens(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        stock: Final = _bundled_stock()["gpt-6-sol"]
+        stock_window: Final = stock["context_window"]
+        ceiling: Final = stock["max_context_window"]
+        assert isinstance(stock_window, int) and isinstance(ceiling, int) and stock_window < ceiling, stock
+        raised: Final = _model_name("codex-raised-window")
+        lowered: Final = _model_name("codex-lowered-window")
+        half_set: Final = _model_name("codex-half-set-window")
+        half_lowered: Final = _model_name("codex-half-lowered-window")
+        unset: Final = _model_name("codex-unset-window")
+        names: Final = (raised, lowered, half_set, half_lowered, unset)
+        _new_model(scenario, raised, model="openai/gpt-6-sol", model_info={"max_input_tokens": ceiling + 50000})
+        _new_model(scenario, lowered, model="openai/gpt-6-sol", model_info={"max_input_tokens": stock_window // 2})
+        _new_model(scenario, half_set, model="openai/gpt-6-sol", model_info={"max_input_tokens": ceiling})
+        _new_model(scenario, half_set, model="openai/gpt-6-sol")
+        _new_model(scenario, half_lowered, model="openai/gpt-6-sol", model_info={"max_input_tokens": stock_window // 3})
+        _new_model(scenario, half_lowered, model="openai/gpt-6-sol")
+        _new_model(scenario, unset, model="openai/gpt-6-sol")
+        expected: Final = {
+            raised: ceiling,
+            lowered: stock_window // 2,
+            half_set: stock_window,
+            half_lowered: stock_window // 3,
+            unset: stock_window,
+        }
+        windows: Final = _settled(
+            lambda: {
+                slug: entry["context_window"] for slug, entry in _by_slug(_catalog(gateway)).items() if slug in names
+            },
+            lambda value: value == expected,
+        )
+        assert windows == expected, windows
 
 
 def test_stock_model_configured_tiers_override(gateway: Gateway) -> None:

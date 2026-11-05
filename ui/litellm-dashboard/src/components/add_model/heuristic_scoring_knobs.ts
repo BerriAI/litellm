@@ -1,10 +1,42 @@
-import type { CustomDimensionRow } from "./custom_dimensions";
+import i18n from "@/i18n/i18n";
+import { serializeCustomDimensions, type CustomDimensionRow } from "./custom_dimensions";
+import { heuristicScoringRoleFor, type ClassifierFallback } from "./ComplexityRouterConfig";
+import { isHeuristicChain, type ClassifierType, type LocalHeuristic } from "./classifier_types";
 
 export type TierBoundaries = Record<string, number>;
 
 export type TokenThresholds = Record<string, number>;
 
 export type DimensionWeights = Record<string, number>;
+
+interface ScorerKnobInputs {
+  classifierType: ClassifierType;
+  localHeuristic: LocalHeuristic | undefined;
+  classifierFallback: ClassifierFallback | undefined;
+  tierBoundaries: TierBoundaries | undefined;
+  tokenThresholds: TokenThresholds | undefined;
+  dimensionWeights: DimensionWeights | undefined;
+  customDimensions: CustomDimensionRow[] | undefined;
+  reasoningOverrideMinScore: number | undefined;
+}
+
+export const scorerKnobPayload = (knobs: ScorerKnobInputs) => {
+  const role = heuristicScoringRoleFor(knobs.classifierType, knobs.classifierFallback, knobs.localHeuristic);
+  return role === "never" && !isHeuristicChain(knobs.classifierType)
+    ? {}
+    : {
+        ...(knobs.tierBoundaries && { tier_boundaries: knobs.tierBoundaries }),
+        ...(knobs.tokenThresholds && { token_thresholds: knobs.tokenThresholds }),
+        ...(knobs.dimensionWeights && { dimension_weights: knobs.dimensionWeights }),
+        ...(role === "decides" &&
+          knobs.customDimensions !== undefined && {
+            custom_dimensions: serializeCustomDimensions(knobs.customDimensions),
+          }),
+        ...(knobs.reasoningOverrideMinScore !== undefined && {
+          reasoning_override_min_score: knobs.reasoningOverrideMinScore,
+        }),
+      };
+};
 
 /**
  * Display names for the scorer's dimensions. Only the wording lives here; the dimension set and its
@@ -84,7 +116,7 @@ export const rebalanceDimensionWeights = (
   edit: WeightEdit,
 ): WeightResult => {
   if (!defaults || !Object.keys(defaults).length)
-    return { ok: false, error: "Load the shipped defaults before changing weights" };
+    return { ok: false, error: i18n.t("addModel.heuristicScoringKnobs.loadDefaultsFirst") };
   const builtin = effectiveDimensionWeights(defaults, stored);
   const rows =
     edit.type === "add"
@@ -97,24 +129,25 @@ export const rebalanceDimensionWeights = (
   if (!vector.every(weightValid))
     return {
       ok: false,
-      error: "Existing weights must be finite and nonnegative; custom weights must be greater than 0 and at most 1",
+      error: i18n.t("addModel.heuristicScoringKnobs.invalidExistingWeights"),
     };
   const target = edit.type === "set" ? edit.target : undefined;
   const pinned = (entry: WeightTarget) =>
     edit.type === "add"
       ? entry.kind === "custom" && entry.id === edit.row.id
       : entry.kind === target?.kind && entry.id === target.id;
-  if (edit.type === "set" && !vector.some(pinned)) return { ok: false, error: "The dimension is no longer available" };
+  if (edit.type === "set" && !vector.some(pinned))
+    return { ok: false, error: i18n.t("addModel.heuristicScoringKnobs.dimensionUnavailable") };
   const requestedWeight = (): number => {
     if (edit.type === "set") return edit.weight;
     return edit.type === "add" ? edit.row.weight : 0;
   };
   const weight = requestedWeight();
   if (!weightValid({ kind: target?.kind ?? "builtin", weight }))
-    return { ok: false, error: "Use a weight from 0 to 1; custom dimensions must stay greater than 0" };
+    return { ok: false, error: i18n.t("addModel.heuristicScoringKnobs.weightRange") };
   const others = vector.filter((entry) => !pinned(entry));
   const total = others.reduce((sum, entry) => sum + entry.weight, 0);
-  if (!Number.isFinite(total)) return { ok: false, error: "Existing weights are too large to rebalance" };
+  if (!Number.isFinite(total)) return { ok: false, error: i18n.t("addModel.heuristicScoringKnobs.weightsTooLarge") };
   const remainder = 1 - weight;
   const builtinCount = others.filter((entry) => entry.kind === "builtin").length;
   const redistributed = (entry: WeightTarget & { weight: number }): number => {
@@ -132,7 +165,7 @@ export const rebalanceDimensionWeights = (
   );
   const offBudget = Math.abs(corrected.reduce((sum, entry) => sum + entry.weight, 0) - 1) > 1e-12;
   if (!corrected.every(weightValid) || offBudget)
-    return { ok: false, error: "Leave a positive share for every custom dimension, or remove it first" };
+    return { ok: false, error: i18n.t("addModel.heuristicScoringKnobs.starvedCustomDimension") };
   const weights = Object.fromEntries(
     corrected.filter((entry) => entry.kind === "builtin").map(({ id, weight }) => [id, weight]),
   );

@@ -11,7 +11,16 @@ from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failur
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
 
-_MANAGED_REALTIME_ROUTES: Final = frozenset(("/realtime", "/v1/realtime", "/openai/v1/realtime"))
+_MANAGED_REALTIME_ROUTES: Final = frozenset(
+    (
+        "/realtime",
+        "/v1/realtime",
+        "/openai/v1/realtime",
+        "/realtime/translations",
+        "/v1/realtime/translations",
+    )
+)
+_MANAGED_LIVE_ROUTES: Final = frozenset(("/live/sessions", "/v1/live/sessions", "/openai/v1/live/sessions"))
 _MANAGED_MODEL_ROUTES: Final = frozenset(
     f"{prefix}/{operation}"
     for prefix, operation in product(
@@ -30,6 +39,8 @@ _MANAGED_MODEL_ROUTES: Final = frozenset(
             "moderations",
             "rerank",
             "decisions",
+            "systemone",
+            "extraction",
             "ocr",
         ),
     )
@@ -74,6 +85,8 @@ _MODEL_ROUTE_KINDS: Final[
         "/audio/speech": "speech",
         "/rerank": "body",
         "/decisions": "body",
+        "/systemone": "body",
+        "/extraction": "body",
         "/messages/count_tokens": "body",
         ":countTokens": "path",
     }
@@ -85,7 +98,7 @@ def managed_agent_route_allowed(route: str, method: str | None) -> bool:
 
     if route in ("/agents", "/v1/agents"):
         return method in (None, "GET", "HEAD")
-    if route in _MANAGED_REALTIME_ROUTES:
+    if route in _MANAGED_REALTIME_ROUTES or route in _MANAGED_LIVE_ROUTES:
         return method in (None, "GET")
     if route in _MANAGED_MODEL_ROUTES or RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
         return method in (None, "POST")
@@ -104,8 +117,14 @@ def managed_inference_request(
 ) -> dict[str, object]:
     from litellm.proxy.auth.route_checks import RouteChecks
 
+    if route in _MANAGED_LIVE_ROUTES:
+        return dict(body)
     if route in _MANAGED_REALTIME_ROUTES:
-        model: Final = query_model or body.get("model")
+        from litellm.proxy.common_utils.http_parsing_utils import resolve_realtime_route_model
+
+        model: Final = resolve_realtime_route_model(
+            query_model if isinstance(query_model, str) else None, None, route.endswith("/realtime/translations")
+        )
         if not isinstance(model, str) or not model:
             raise_identity_failure(
                 AgentIdentityFailure(message="Managed inference requires an explicit or configured model")

@@ -130,6 +130,31 @@ def test_create_request(client, base_url, api_key):
     }
 
 
+def test_create_request_includes_the_display_name_only_when_given(client):
+    labeled = client.create("azure1", {}, {"api_key": "sk-123"}, return_request=True, display_name="Azure EU")
+    unlabeled = client.create("azure1", {}, {"api_key": "sk-123"}, return_request=True)
+
+    assert labeled.json["display_name"] == "Azure EU"
+    assert "display_name" not in unlabeled.json
+
+
+@pytest.mark.parametrize("display_name", ["Azure EU", None])
+def test_update_display_name_request(client, base_url, api_key, display_name):
+    request = client.update_display_name("azure1", display_name, return_request=True)
+
+    assert request.method == "PATCH"
+    assert request.url == f"{base_url}/credentials/azure1"
+    assert request.headers["Authorization"] == f"Bearer {api_key}"
+    assert request.json == {"display_name": display_name, "credential_info": {}}
+
+
+@pytest.mark.parametrize(("credential_name", "path"), [("team?prod", "team%3Fprod"), ("a/b#c", "a%2Fb%23c")])
+def test_update_display_name_targets_the_whole_credential_name(client, base_url, credential_name, path):
+    request = client.update_display_name(credential_name, "Label", return_request=True)
+
+    assert request.prepare().url == f"{base_url}/credentials/{path}"
+
+
 @responses.activate
 def test_create_mock_response(client):
     """Test create with a mocked successful response"""

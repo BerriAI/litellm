@@ -9,7 +9,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.skills.transformation import (
     BaseSkillsAPIConfig,
     LiteLLMLoggingObj,
@@ -75,13 +75,11 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         """Get complete URL for Anthropic Skills API"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        if api_base is None:
-            api_base = AnthropicModelInfo.get_api_base()
-
+        resolved_api_base: Final = AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com"
         if skill_id:
             encoded_skill_id: Final = encode_url_path_segment(skill_id, field_name="skill_id")
-            return f"{api_base}/v1/skills/{encoded_skill_id}"
-        return f"{api_base}/v1/{endpoint}"
+            return join_api_base(resolved_api_base, f"v1/skills/{encoded_skill_id}")
+        return join_api_base(resolved_api_base, f"v1/{endpoint}")
 
     def transform_create_skill_request(
         self,

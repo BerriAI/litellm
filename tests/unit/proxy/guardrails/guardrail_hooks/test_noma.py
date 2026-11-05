@@ -1,4 +1,5 @@
 import copy
+from itertools import chain
 import os
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,7 +19,7 @@ import litellm.proxy.guardrails.guardrail_hooks.noma.noma as noma_legacy_module
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message
+from litellm.types.utils import Choices, Delta, Message, ModelResponseStream, StreamingChoices
 
 
 @pytest.fixture
@@ -1848,10 +1849,205 @@ class TestNomaAnonymizationLogic:
         )
 
         anonymize_guardrail._replace_llm_response_content(
-            response, "Your email is *******"
+            response, "Your email is *******", 0
         )
 
         assert response.choices[0].message.content == "Your email is *******"
+
+
+def _noma_reply_per_text(verdict_for_text):
+    def reply(*args, **kwargs):
+        response = MagicMock()
+        response.json.return_value = verdict_for_text(kwargs["json"]["input"][0]["content"][0]["text"])
+        response.raise_for_status = MagicMock()
+        return response
+
+    return reply
+
+
+class TestNomaMultiChoiceResponses:
+    @pytest.mark.asyncio
+    async def test_streamed_two_choice_reply_is_blocked_when_only_the_second_choice_is_flagged(self):
+        guardrail = NomaGuardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            monitor_mode=False,
+            block_failures=True,
+            guardrail_name="noma-post-call",
+            event_hook="post_call",
+            default_on=True,
+        )
+        scanned_texts = []
+
+        def verdict_for_text(text):
+            scanned_texts.append(text)
+            return {"aggregatedScanResult": "launch code" in text, "scanResult": []}
+
+        async def upstream():
+            for index, part in ((0, "Kiwis are fuzzy."), (1, "The launch code is 0000.")):
+                yield ModelResponseStream(
+                    id="resp_1",
+                    choices=[StreamingChoices(delta=Delta(content=part), finish_reason="stop", index=index)],
+                    created=1234567890,
+                    model="gpt-4.1-mini",
+                    object="chat.completion.chunk",
+                )
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_noma_reply_per_text(verdict_for_text)):
+            with pytest.raises(NomaBlockedMessage):
+                async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                    response=upstream(),
+                    request_data={"litellm_call_id": "call-1", "metadata": {}},
+                ):
+                    pass
+
+        assert scanned_texts == ["Kiwis are fuzzy.", "The launch code is 0000."]
+
+    @pytest.mark.asyncio
+    async def test_each_choice_gets_its_own_anonymized_text(self):
+        guardrail = NomaGuardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            anonymize_input=True,
+            monitor_mode=False,
+            block_failures=True,
+            guardrail_name="noma-post-call",
+            event_hook="post_call",
+            default_on=True,
+        )
+
+        def verdict_for_text(text):
+            return {
+                "aggregatedScanResult": False,
+                "scanResult": [
+                    {
+                        "role": "assistant",
+                        "type": "message",
+                        "results": {
+                            "anonymizedContent": {"anonymized": text.replace("test@example.com", "*******")},
+                            "sensitiveData": {"PII": {"result": False, "status": "SUCCESS"}},
+                        },
+                    }
+                ],
+            }
+
+        response = ModelResponse(
+            id="resp_1",
+            choices=[
+                Choices(index=0, finish_reason="stop", message=Message(role="assistant", content="Mail test@example.com")),
+                Choices(
+                    index=1, finish_reason="stop", message=Message(role="assistant", content="Write test@example.com")
+                ),
+            ],
+            model="gpt-4.1-mini",
+        )
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_noma_reply_per_text(verdict_for_text)):
+            await guardrail.async_post_call_success_hook(
+                data={"litellm_call_id": "call-1", "metadata": {}},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                response=response,
+            )
+
+        assert [choice.message.content for choice in response.choices] == ["Mail *******", "Write *******"]
+
+    @pytest.mark.asyncio
+    async def test_fail_open_stream_keeps_redactions_made_before_a_later_choice_fails(self):
+        guardrail = NomaGuardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            anonymize_input=True,
+            monitor_mode=False,
+            block_failures=False,
+            guardrail_name="noma-post-call",
+            event_hook="post_call",
+            default_on=True,
+        )
+
+        def verdict_for_text(text):
+            if text.startswith("Write"):
+                raise httpx.ConnectError("Noma is unreachable")
+            return {
+                "aggregatedScanResult": False,
+                "scanResult": [
+                    {
+                        "role": "assistant",
+                        "type": "message",
+                        "results": {
+                            "anonymizedContent": {"anonymized": text.replace("test@example.com", "*******")},
+                            "sensitiveData": {"PII": {"result": False, "status": "SUCCESS"}},
+                        },
+                    }
+                ],
+            }
+
+        async def upstream():
+            for index, part in ((0, "Mail test@example.com"), (1, "Write back soon")):
+                yield ModelResponseStream(
+                    id="resp_1",
+                    choices=[StreamingChoices(delta=Delta(content=part), finish_reason="stop", index=index)],
+                    created=1234567890,
+                    model="gpt-4.1-mini",
+                    object="chat.completion.chunk",
+                )
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_noma_reply_per_text(verdict_for_text)):
+            streamed = [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                    response=upstream(),
+                    request_data={"litellm_call_id": "call-1", "metadata": {}},
+                )
+            ]
+
+        streamed_choices = tuple(chain.from_iterable(part.choices for part in streamed))
+        text_by_choice = {
+            index: "".join(choice.delta.content or "" for choice in streamed_choices if choice.index == index)
+            for index in (0, 1)
+        }
+        assert text_by_choice == {0: "Mail *******", 1: "Write back soon"}
+
+    @pytest.mark.asyncio
+    async def test_fail_open_stream_replays_the_original_chunks_when_nothing_was_redacted(self):
+        guardrail = NomaGuardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            anonymize_input=True,
+            monitor_mode=False,
+            block_failures=False,
+            guardrail_name="noma-post-call",
+            event_hook="post_call",
+            default_on=True,
+        )
+        originals = [
+            ModelResponseStream(
+                id="resp_1",
+                choices=[StreamingChoices(delta=Delta(content=part), index=0)],
+                created=1234567890,
+                model="gpt-4.1-mini",
+                object="chat.completion.chunk",
+            )
+            for part in ("Kiwis", " are", " fuzzy.")
+        ]
+
+        async def upstream():
+            for chunk in originals:
+                yield chunk
+
+        with patch.object(guardrail.async_handler, "post", side_effect=httpx.ConnectError("Noma is unreachable")):
+            streamed = [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                    response=upstream(),
+                    request_data={"litellm_call_id": "call-1", "metadata": {}},
+                )
+            ]
+
+        assert len(streamed) == len(originals)
+        assert all(sent is original for sent, original in zip(streamed, originals))
 
 
 class TestNomaAnonymizationFlow:

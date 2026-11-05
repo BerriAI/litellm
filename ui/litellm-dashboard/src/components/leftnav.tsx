@@ -1,19 +1,16 @@
+import { SidebarBrand } from "@/components/shared/SidebarBrand";
+import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
-import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
-import { getProxyBaseUrl } from "@/components/networking";
-import { useTheme } from "@/contexts/ThemeContext";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sidebar,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -25,7 +22,6 @@ import {
   Activity,
   Aperture,
   BarChart3,
-  Calculator,
   Bell,
   Blocks,
   Bot,
@@ -40,12 +36,11 @@ import {
   FlaskConical,
   Folder,
   HeartPulse,
+  House,
   KeyRound,
   LayoutGrid,
   Network,
   Palette,
-  PanelLeftClose,
-  PanelLeftOpen,
   PiggyBank,
   PlayCircle,
   Route,
@@ -65,17 +60,21 @@ import {
   Workflow,
 } from "lucide-react";
 import Link from "next/link";
+import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
+import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
+  formatUserRole,
   internalUserRoles,
   isAdminRole,
   isUserTeamAdminForAnyTeam,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
+  proxyAdminTierRoles,
 } from "../utils/roles";
 import BetaBadge from "./BetaBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
@@ -83,14 +82,6 @@ import SidebarUsageCard from "./SidebarUsageCard";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 
 const ICON = { strokeWidth: 1.75 } as const;
-
-const LOGO_CLASS_NAME =
-  "h-5 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:h-7 group-data-[collapsed=true]/sidebar:w-7";
-
-function bundledLogoSrc(baseUrl: string, { dark, monogram }: { dark: boolean; monogram: boolean }): string {
-  const query = [dark && "theme=dark", monogram && "variant=monogram"].filter(Boolean).join("&");
-  return `${baseUrl}/get_image${query ? `?${query}` : ""}`;
-}
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -103,7 +94,7 @@ interface SidebarProps {
   allowVectorStoresForTeamAdmins?: boolean;
 }
 
-interface MenuItem {
+export interface MenuItem {
   key: string;
   page: string;
   route?: string;
@@ -114,11 +105,91 @@ interface MenuItem {
   external_url?: string;
 }
 
-interface MenuGroup {
+export interface MenuGroup {
   groupLabel: string;
   items: MenuItem[];
   roles?: string[];
 }
+
+export interface MenuVisibilityContext {
+  userRole: string;
+  isViewOnly: boolean;
+  isOrgAdmin: boolean;
+  isTeamAdmin: boolean;
+  enabledPagesInternalUsers?: string[] | null;
+  enableProjectsUI?: boolean;
+  disableAgentsForInternalUsers?: boolean;
+  allowAgentsForTeamAdmins?: boolean;
+  disableVectorStoresForInternalUsers?: boolean;
+  allowVectorStoresForTeamAdmins?: boolean;
+}
+
+const adminPageVisibility = (item: MenuItem, context: MenuVisibilityContext, isAdmin: boolean): boolean | null => {
+  if (item.key !== "organizations" && item.key !== "users") return null;
+  const hasRoleAccess = !item.roles || item.roles.includes(context.userRole) || context.isOrgAdmin;
+  if (!hasRoleAccess) return false;
+  if (!isAdmin && context.enabledPagesInternalUsers != null) {
+    return context.enabledPagesInternalUsers.includes(item.page);
+  }
+  return true;
+};
+
+const projectPageIsVisible = (item: MenuItem, context: MenuVisibilityContext): boolean => {
+  if (item.key !== "projects") return true;
+  if (!context.enableProjectsUI) return false;
+  return canViewProjectsPage({
+    userRole: context.userRole,
+    isOrgAdmin: context.isOrgAdmin,
+    isTeamAdmin: context.isTeamAdmin,
+  });
+};
+
+const pageIsDisabledForInternalUsers = (
+  item: MenuItem,
+  pageKey: "agents" | "vector-stores",
+  isAdmin: boolean,
+  context: MenuVisibilityContext,
+): boolean => {
+  const isDisabled =
+    pageKey === "agents" ? context.disableAgentsForInternalUsers : context.disableVectorStoresForInternalUsers;
+  const allowedForTeamAdmins =
+    pageKey === "agents" ? context.allowAgentsForTeamAdmins : context.allowVectorStoresForTeamAdmins;
+  if (item.key !== pageKey || isAdmin || !isDisabled) return false;
+  return !(allowedForTeamAdmins && context.isTeamAdmin);
+};
+
+const pageIsEnabledForInternalUser = (item: MenuItem, context: MenuVisibilityContext): boolean => {
+  const enabledPages = context.enabledPagesInternalUsers;
+  if (enabledPages == null) return true;
+  if (item.children?.some((child) => enabledPages.includes(child.page))) return true;
+  return enabledPages.includes(item.page);
+};
+
+const menuItemIsVisible = (item: MenuItem, context: MenuVisibilityContext, isAdmin: boolean): boolean => {
+  if (item.children && item.children.length === 0) return false;
+  if (item.key === "llm-playground" && context.isViewOnly) return false;
+  const adminVisibility = adminPageVisibility(item, context, isAdmin);
+  if (adminVisibility !== null) return adminVisibility;
+  if (!projectPageIsVisible(item, context)) return false;
+  if (pageIsDisabledForInternalUsers(item, "agents", isAdmin, context)) return false;
+  if (pageIsDisabledForInternalUsers(item, "vector-stores", isAdmin, context)) return false;
+  if (item.roles && !item.roles.includes(context.userRole)) return false;
+  if (!isAdmin && context.enabledPagesInternalUsers != null) return pageIsEnabledForInternalUser(item, context);
+  return true;
+};
+
+export const visibleMenuGroups = (groups: readonly MenuGroup[], context: MenuVisibilityContext): MenuGroup[] => {
+  const isAdmin = isAdminRole(context.userRole);
+  const filterItems = (items: MenuItem[]): MenuItem[] =>
+    items
+      .map((item) => ({ ...item, children: item.children ? filterItems(item.children) : undefined }))
+      .filter((item) => menuItemIsVisible(item, context, isAdmin));
+
+  return groups
+    .filter((group) => !group.roles || group.roles.includes(context.userRole))
+    .map((group) => ({ groupLabel: group.groupLabel, items: filterItems(group.items) }))
+    .filter((group) => group.items.length > 0);
+};
 
 // Menu groups organized by category - defined outside component for export.
 // Shape (key/page/label/roles/children) is consumed by page_utils.ts; only the
@@ -127,6 +198,7 @@ const menuGroups: MenuGroup[] = [
   {
     groupLabel: "AI GATEWAY",
     items: [
+      { key: "home", page: "home", label: "Home", icon: <House {...ICON} /> },
       { key: "api-keys", page: "api-keys", label: "Virtual Keys", icon: <KeyRound {...ICON} /> },
       {
         key: "llm-playground",
@@ -174,7 +246,13 @@ const menuGroups: MenuGroup[] = [
         ],
       },
       { key: "mcp-servers", page: "mcp-servers", label: "MCP Servers", icon: <Server {...ICON} /> },
-      { key: "skills", page: "skills", label: "Skills", icon: <Blocks {...ICON} />, roles: all_admin_roles },
+      {
+        key: "skills",
+        page: "skills",
+        label: "Skills",
+        icon: <Blocks {...ICON} />,
+        roles: [...all_admin_roles, ...internalUserRoles, formatUserRole("org_admin")],
+      },
       { key: "guardrails", page: "guardrails", label: "Guardrails", icon: <Shield {...ICON} /> },
       {
         key: "policies",
@@ -214,6 +292,13 @@ const menuGroups: MenuGroup[] = [
         label: "Usage",
       },
       {
+        key: "alerts",
+        page: "alerts",
+        label: "Alerts",
+        icon: <Bell {...ICON} />,
+        roles: rolesWithCapability("viewGlobalSpend"),
+      },
+      {
         key: "model-insights",
         page: "model-insights",
         icon: <Trophy {...ICON} />,
@@ -221,17 +306,6 @@ const menuGroups: MenuGroup[] = [
         label: (
           <span className="flex items-center gap-2">
             Model Leaderboard <BetaBadge />
-          </span>
-        ),
-      },
-      {
-        key: "roi-calculator",
-        page: "roi-calculator",
-        icon: <Calculator {...ICON} />,
-        roles: all_admin_roles,
-        label: (
-          <span className="flex items-center gap-2">
-            ROI Calculator <BetaBadge />
           </span>
         ),
       },
@@ -275,7 +349,7 @@ const menuGroups: MenuGroup[] = [
           </span>
         ),
         icon: <Folder {...ICON} />,
-        roles: all_admin_roles,
+        roles: [...projectReaderRoles],
       },
       { key: "users", page: "users", label: "Internal Users", icon: <User {...ICON} />, roles: all_admin_roles },
       {
@@ -341,14 +415,6 @@ const menuGroups: MenuGroup[] = [
             icon: <Tags {...ICON} />,
             roles: all_admin_roles,
           },
-          {
-            key: "4",
-            page: "usage",
-            route: "old-usage",
-            label: "Old Usage",
-            icon: <BarChart3 {...ICON} />,
-            roles: rolesWithCapability("viewGlobalSpend"),
-          },
         ],
       },
     ],
@@ -393,15 +459,22 @@ const menuGroups: MenuGroup[] = [
             roles: all_admin_roles,
           },
           { key: "ui-theme", page: "ui-theme", label: "UI Theme", icon: <Palette {...ICON} />, roles: all_admin_roles },
+          {
+            key: "telemetry",
+            page: "telemetry",
+            label: "Telemetry",
+            icon: <Activity {...ICON} />,
+            roles: proxyAdminTierRoles,
+          },
         ],
       },
     ],
   },
 ];
 
-const HOME_ROUTE = "api-keys";
+const HOME_ROUTE = "home";
 
-const routeOf = (item: MenuItem): string => item.route ?? item.page;
+export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
 const routeForPathname = (pathname: string): string => routeSegmentForPathname(pathname) || HOME_ROUTE;
 
@@ -433,20 +506,23 @@ const SECTION_DISPLAY: Record<string, string> = {
   SETTINGS: "Settings",
 };
 
+export const sectionText = (groupLabel: string): string => SECTION_DISPLAY[groupLabel] ?? groupLabel;
+
 const prettify = (key: string): string =>
   key
     .split(/[-_]/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 
-const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
+export const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
 
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
   const route = routeForPathname(pathname);
+  if (route === "aria") return { section: null, title: "Aria Agent" };
   for (const group of menuGroups) {
     for (const item of group.items) {
-      const section = SECTION_DISPLAY[group.groupLabel] ?? group.groupLabel;
+      const section = sectionText(group.groupLabel);
       if (routeOf(item) === route) return { section, title: labelText(item) };
       const child = item.children?.find((c) => routeOf(c) === route);
       if (child) return { section, title: labelText(child) };
@@ -466,17 +542,14 @@ const Sidebar_: React.FC<SidebarProps> = ({
   allowVectorStoresForTeamAdmins,
 }) => {
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
+  const term = useTerminology();
+  const labelOf = (item: MenuItem) => (typeof item.label === "string" ? term(item.label) : item.label);
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
-  const { logoUrl, logoUrlDark } = useTheme();
-  const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
-  const { data: healthData } = useHealthReadinessDetails(accessToken);
   const logout = useLogout(accessToken);
 
-  const baseUrl = getProxyBaseUrl();
-  const version = healthData?.litellm_version;
   const currentRoute = routeForPathname(usePathname());
-  const selectedKey = findMenuItemKey(currentRoute);
+  const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
     const parent = findParentKey(currentRoute);
@@ -497,52 +570,32 @@ const Sidebar_: React.FC<SidebarProps> = ({
 
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
-  const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
-    const isAdmin = isAdminRole(userRole);
-    return items
-      .map((item) => ({ ...item, children: item.children ? filterItemsByRole(item.children) : undefined }))
-      .filter((item) => {
-        // A parent whose children were all filtered out renders as a leaf link
-        // to its own page id, which is not a real route. Drop it instead.
-        if (item.children && item.children.length === 0) return false;
-        if (item.key === "llm-playground" && isViewOnly) return false;
-        if (item.key === "organizations" || item.key === "users") {
-          const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
-          if (!hasRoleAccess) return false;
-          if (!isAdmin && enabledPagesInternalUsers != null) return enabledPagesInternalUsers.includes(item.page);
-          return true;
-        }
-        if (item.key === "projects" && !enableProjectsUI) return false;
-        if (
-          !isAdmin &&
-          item.key === "agents" &&
-          disableAgentsForInternalUsers &&
-          !(allowAgentsForTeamAdmins && isTeamAdmin)
-        )
-          return false;
-        if (
-          !isAdmin &&
-          item.key === "vector-stores" &&
-          disableVectorStoresForInternalUsers &&
-          !(allowVectorStoresForTeamAdmins && isTeamAdmin)
-        )
-          return false;
-        if (item.roles && !item.roles.includes(userRole)) return false;
-        if (!isAdmin && enabledPagesInternalUsers != null) {
-          if (item.children && item.children.length > 0) {
-            const hasVisibleChildren = item.children.some((child) => enabledPagesInternalUsers.includes(child.page));
-            if (hasVisibleChildren) return true;
-          }
-          return enabledPagesInternalUsers.includes(item.page);
-        }
-        return true;
-      });
-  };
-
-  const visibleGroups = menuGroups
-    .filter((group) => !group.roles || group.roles.includes(userRole))
-    .map((group) => ({ groupLabel: group.groupLabel, items: filterItemsByRole(group.items) }))
-    .filter((group) => group.items.length > 0);
+  const visibleGroups = useMemo(() => {
+    const context: MenuVisibilityContext = {
+      userRole,
+      isViewOnly,
+      isOrgAdmin,
+      isTeamAdmin,
+      enabledPagesInternalUsers,
+      enableProjectsUI,
+      disableAgentsForInternalUsers,
+      allowAgentsForTeamAdmins,
+      disableVectorStoresForInternalUsers,
+      allowVectorStoresForTeamAdmins,
+    };
+    return visibleMenuGroups(menuGroups, context);
+  }, [
+    allowAgentsForTeamAdmins,
+    allowVectorStoresForTeamAdmins,
+    disableAgentsForInternalUsers,
+    disableVectorStoresForInternalUsers,
+    enableProjectsUI,
+    enabledPagesInternalUsers,
+    isOrgAdmin,
+    isTeamAdmin,
+    isViewOnly,
+    userRole,
+  ]);
 
   const toggleGroup = (key: string) => {
     if (collapsed) {
@@ -561,7 +614,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const renderLeaf = (item: MenuItem, isChild: boolean) => {
     const active = selectedKey === item.key;
     const size = isChild ? "sub" : "default";
-    const label = <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{item.label}</span>;
+    const label = <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{labelOf(item)}</span>;
 
     if (item.external_url) {
       return (
@@ -570,7 +623,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           href={item.external_url}
           target="_blank"
           rel="noopener noreferrer"
-          title={collapsed ? labelText(item) : undefined}
+          title={collapsed ? term(labelText(item)) : undefined}
           data-active={active || undefined}
           className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
         >
@@ -585,7 +638,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       <Link
         key={item.key}
         href={uiHref(routeOf(item))}
-        title={collapsed ? labelText(item) : undefined}
+        title={collapsed ? term(labelText(item)) : undefined}
         data-active={active || undefined}
         className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
       >
@@ -609,10 +662,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
           isActive={active}
           aria-expanded={open}
           onClick={() => toggleGroup(item.key)}
-          title={collapsed ? labelText(item) : undefined}
+          title={collapsed ? term(labelText(item)) : undefined}
         >
           {item.icon}
-          <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{item.label}</span>
+          <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{labelOf(item)}</span>
           <ChevronRight
             className={cn(
               "size-4 shrink-0 transition-transform group-data-[collapsed=true]/sidebar:hidden",
@@ -631,55 +684,20 @@ const Sidebar_: React.FC<SidebarProps> = ({
     );
   };
 
-  const logoSrc = logoUrl || bundledLogoSrc(baseUrl, { dark: false, monogram: collapsed });
-  const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
-  const darkLogoSrc = reachableDarkLogo || logoUrl || bundledLogoSrc(baseUrl, { dark: true, monogram: collapsed });
-
   return (
     <Sidebar collapsed={collapsed}>
-      <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
-        <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
-          <div className="flex min-w-0 items-center gap-2">
-            <Link href={uiHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
-              <img src={logoSrc} alt="LiteLLM" className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
-              <img
-                src={darkLogoSrc}
-                alt=""
-                aria-hidden
-                onError={() => setErroredDarkLogo(logoUrlDark)}
-                className={cn(LOGO_CLASS_NAME, "hidden dark:block")}
-              />
-            </Link>
-            {version && (
-              <Badge
-                variant="outline"
-                render={<a href="https://docs.litellm.ai/release_notes" target="_blank" rel="noopener noreferrer" />}
-                className="px-1.5 py-0 font-mono text-[10px] font-medium text-muted-foreground group-data-[collapsed=true]/sidebar:hidden"
-              >
-                v{version}
-              </Badge>
-            )}
-          </div>
-          {onToggleCollapsed && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={onToggleCollapsed}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              className="flex-none text-muted-foreground"
-            >
-              {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-            </Button>
-          )}
-        </div>
-      </SidebarHeader>
+      <SidebarBrand accessToken={accessToken} collapsed={collapsed} onToggleCollapsed={onToggleCollapsed} />
 
+      <div className="space-y-1 px-3 pt-3 pb-1">
+        <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden" />
+        <AriaSidebarLink active={currentRoute === "aria"} />
+      </div>
       <ScrollArea className="min-h-0 flex-1">
         <nav className="flex flex-col gap-0.5 px-3 pb-3">
           {visibleGroups.map((group, gi) => (
             <SidebarGroup key={group.groupLabel}>
               {gi > 0 && <SidebarSeparator className="hidden group-data-[collapsed=true]/sidebar:block" />}
-              <SidebarGroupLabel>{group.groupLabel}</SidebarGroupLabel>
+              <SidebarGroupLabel>{term(group.groupLabel)}</SidebarGroupLabel>
               <SidebarMenu>{group.items.map((item) => renderItem(item))}</SidebarMenu>
             </SidebarGroup>
           ))}
