@@ -9,13 +9,22 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from litellm.integrations import model_deprecation_email as module
-from litellm.integrations.email_templates.model_deprecation_email import render_model_deprecation_email
+from litellm.integrations.email_templates.model_deprecation_email import (
+    render_model_deprecation_email,
+)
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.repositories.config_repository import ConfigParam
-from litellm.types.integrations.model_deprecation_email import DeprecationEmailMilestone, ModelDeprecationEmail
-from litellm.types.proxy.model_deprecation import ModelDeprecationInfo, ModelDeprecationResponse, SuccessorModelSource
+from litellm.types.integrations.model_deprecation_email import (
+    DeprecationEmailMilestone,
+    ModelDeprecationEmail,
+)
+from litellm.types.proxy.model_deprecation import (
+    ModelDeprecationInfo,
+    ModelDeprecationResponse,
+    SuccessorModelSource,
+)
 
 NOW = datetime(2026, 11, 1, tzinfo=timezone.utc)
 
@@ -106,7 +115,10 @@ async def test_should_not_send_on_other_days(sender, monkeypatch, days):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("settings", [{}, {"email_settings": {}}, {"email_settings": {"Model Deprecations": False}}])
+@pytest.mark.parametrize(
+    "settings",
+    [{}, {"email_settings": {}}, {"email_settings": {"Model Deprecations": False}}],
+)
 async def test_should_require_explicit_opt_in(sender, settings):
     instance, send = sender
     instance.config.rows["general_settings"] = settings
@@ -152,16 +164,25 @@ async def test_should_dedupe_model_aliases_and_skip_models_with_no_observed_owne
 
 
 @pytest.mark.asyncio
-async def test_should_scope_usage_to_current_key_owners_and_team_admins_across_pages(monkeypatch):
+async def test_should_scope_usage_to_current_key_owners_and_team_admins_across_pages(
+    monkeypatch,
+):
     instance = module.ModelDeprecationEmailSender(MagicMock())
     monkeypatch.setattr(module, "_PAGE_SIZE", 2)
     grouped = AsyncMock(
         side_effect=[
-            [{"api_key": "one", "_sum": {"api_requests": 10}}, {"api_key": "two", "_sum": {"api_requests": 20}}],
+            [
+                {"api_key": "one", "_sum": {"api_requests": 10}},
+                {"api_key": "two", "_sum": {"api_requests": 20}},
+            ],
             [{"api_key": "three", "_sum": {"api_requests": 30}}],
         ]
     )
-    monkeypatch.setattr(module.DailyUserSpendRepository, "table", property(lambda _: MagicMock(group_by=grouped)))
+    monkeypatch.setattr(
+        module.DailyUserSpendRepository,
+        "table",
+        property(lambda _: MagicMock(group_by=grouped)),
+    )
     keys = [
         LiteLLM_VerificationToken(token="one", user_id="alice", team_id="research"),
         LiteLLM_VerificationToken(token="two", user_id="alice"),
@@ -208,7 +229,10 @@ async def test_should_scope_usage_to_current_key_owners_and_team_admins_across_p
 
 def test_should_render_the_current_ui_logo_safe_model_text_and_actionable_links():
     model = info().model_copy(
-        update={"successor_model": '<script>alert("x")</script>', "deprecation_source": "javascript:alert(1)"}
+        update={
+            "successor_model": '<script>alert("x")</script>',
+            "deprecation_source": "javascript:alert(1)",
+        }
     )
     email = ModelDeprecationEmail(
         model=model,
@@ -230,9 +254,14 @@ def test_should_render_the_current_ui_logo_safe_model_text_and_actionable_links(
     assert "/ui/usage?tab=models&amp;from=2026-10-03&amp;to=2026-11-01" in rendered.html
     assert "Source: LiteLLM model cost map" in rendered.text
     tomorrow = render_model_deprecation_email(
-        replace(email, milestone=DeprecationEmailMilestone.ONE_DAY), base_url="https://gateway.example"
+        replace(email, milestone=DeprecationEmailMilestone.ONE_DAY),
+        base_url="https://gateway.example",
     )
-    assert "01 DAY TO RETIREMENT" in tomorrow.html
+    assert "01 DAY UNTIL DEPRECATION" in tomorrow.html
+    assert "Model being deprecated" in rendered.html
+    assert "Model being deprecated" in rendered.subject
+    assert "Model being deprecated" in tomorrow.html
+    assert "Model being deprecated" in tomorrow.subject
     assert "FINAL REMINDER" in tomorrow.html
     assert "tomorrow" in tomorrow.subject
 

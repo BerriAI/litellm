@@ -16,20 +16,27 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import AliasPath, BaseModel, ConfigDict, Field, TypeAdapter
 
-from litellm.integrations.email_templates.model_deprecation_email import render_model_deprecation_email
+from litellm.integrations.email_templates.model_deprecation_email import (
+    render_model_deprecation_email,
+)
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import DailyUserSpendRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.integrations.model_deprecation_email import (
     MODEL_DEPRECATION_EMAIL_EVENT,
     DeprecationEmailMilestone,
     ModelDeprecationEmail,
 )
-from litellm.types.proxy.model_deprecation import DEPRECATION_IDLE_POLL_SECONDS, ModelDeprecationInfo
+from litellm.types.proxy.model_deprecation import (
+    DEPRECATION_IDLE_POLL_SECONDS,
+    ModelDeprecationInfo,
+)
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -42,7 +49,9 @@ _PAGE_SIZE: Final = 100
 class _OptIn(BaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
     enabled: bool = Field(
-        False, strict=True, validation_alias=AliasPath("email_settings", MODEL_DEPRECATION_EMAIL_EVENT)
+        False,
+        strict=True,
+        validation_alias=AliasPath("email_settings", MODEL_DEPRECATION_EMAIL_EVENT),
     )
 
 
@@ -90,7 +99,7 @@ def _admin_ids(team: LiteLLM_TeamTable | None) -> frozenset[str]:
 def _recipient_emails(
     user_id: str | None, team: LiteLLM_TeamTable | None, addresses: Mapping[str, str]
 ) -> frozenset[str]:
-    owner_ids: Final = frozenset((user_id,)) if user_id else frozenset()
+    owner_ids: Final[frozenset[str]] = frozenset((user_id,)) if user_id else frozenset()
     resolved: Final = frozenset(addresses[owner] for owner in owner_ids | _admin_ids(team) if owner in addresses)
     if team is None:
         return resolved
@@ -133,7 +142,7 @@ class ModelDeprecationEmailSender:
         impacts: Final[dict[str, _Impact]] = {}  # mutable-ok: combines per-recipient counts across bounded usage pages
         offset: int = 0  # rebind-ok: each page advances the stable key grouping cursor
         while True:
-            raw: Final = await DailyUserSpendRepository(self.prisma).table.group_by(
+            raw = await DailyUserSpendRepository(self.prisma).table.group_by(
                 by=["api_key"],
                 where={
                     "model": model,
@@ -145,32 +154,30 @@ class ModelDeprecationEmailSender:
                 skip=offset,
                 take=_PAGE_SIZE,
             )
-            usage: Final = _USED_KEYS.validate_python(raw)
+            usage = _USED_KEYS.validate_python(raw)
             if not usage:
                 return MappingProxyType(impacts)
-            keys: Final = await VerificationTokenRepository(self.prisma).find_many_in(
-                "token", (row.api_key for row in usage)
-            )
-            teams: Final = await TeamRepository(self.prisma).find_many_in(
+            keys = await VerificationTokenRepository(self.prisma).find_many_in("token", (row.api_key for row in usage))
+            teams = await TeamRepository(self.prisma).find_many_in(
                 "team_id", frozenset(key.team_id for key in keys if key.team_id)
             )
-            team_by_id: Final = {team.team_id: team for team in teams}
-            ids: Final = frozenset(key.user_id for key in keys if key.user_id) | frozenset(
+            team_by_id = {team.team_id: team for team in teams}
+            ids = frozenset(key.user_id for key in keys if key.user_id) | frozenset(
                 chain.from_iterable(_admin_ids(team) for team in teams)
             )
-            users: Final = await UserRepository(self.prisma).find_many_in("user_id", ids)
-            addresses: Final = {
+            users = await UserRepository(self.prisma).find_many_in("user_id", ids)
+            addresses = {
                 user.user_id: user.user_email.strip() for user in users if user.user_email and user.user_email.strip()
             }
-            counts: Final = {row.api_key: row.metrics.api_requests for row in usage}
+            counts = {row.api_key: row.metrics.api_requests for row in usage}
             for key in keys:
-                team: Final = team_by_id.get(key.team_id) if key.team_id else None
+                team = team_by_id.get(key.team_id) if key.team_id else None
                 if key.token is None:
                     continue
-                recipients: Final = _recipient_emails(key.user_id, team, addresses)
+                recipients = _recipient_emails(key.user_id, team, addresses)
                 for address in recipients:
-                    previous: Final = impacts.get(address, _Impact())
-                    names: Final = frozenset((team.team_alias or team.team_id,)) if team else frozenset()
+                    previous = impacts.get(address, _Impact())
+                    names: frozenset[str] = frozenset((team.team_alias or team.team_id,)) if team else frozenset()
                     impacts[address] = _Impact(
                         key_count=previous.key_count + 1,
                         requests=previous.requests + counts[key.token],
@@ -222,14 +229,14 @@ class ModelDeprecationEmailSender:
         for model in snapshot.imminent:
             if model.days_until_deprecation not in tuple(DeprecationEmailMilestone):
                 continue
-            name: Final = _usage_model(model)
-            identity: Final = (name, model.deprecation_date)
+            name = _usage_model(model)
+            identity = (name, model.deprecation_date)
             if identity in seen:
                 continue
             seen.add(identity)
-            impacts: Final = await self._impacts(name, start, current.date())
+            impacts = await self._impacts(name, start, current.date())
             for address, impact in sorted(impacts.items()):
-                email: Final = ModelDeprecationEmail(
+                email = ModelDeprecationEmail(
                     model=model,
                     usage_model=name,
                     recipient_email=address,

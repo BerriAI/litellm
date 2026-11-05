@@ -1,9 +1,8 @@
-import { Switch } from "@/components/ui/switch";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/lib/toast";
@@ -40,7 +39,7 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
     }
   };
 
-  const handleCheckboxChange = (event: EmailEvent, checked: boolean) => {
+  const handleEnabledChange = (event: EmailEvent, checked: boolean) => {
     const updatedSettings = eventSettings.map((setting) =>
       setting.event === event ? { ...setting, enabled: checked } : setting,
     );
@@ -76,7 +75,7 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
   // Helper function to get a description for each event type
   const getEventDescription = (event: EmailEvent): string => {
     if (event === "Model Deprecations") {
-      return "Email affected key owners and team admins 30 days and 1 day before model retirement. Uses requests from the last 30 days. Off by default.";
+      return "Email affected key owners and team admins 30 days and 1 day before model deprecation. Uses requests from the last 30 days. Off by default.";
     }
     // Convert event name to a sentence with more context
     if (event.includes("Virtual Key Created")) {
@@ -112,20 +111,12 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
           <div className="space-y-4">
             {eventSettings.map((setting) => (
               <div key={setting.event} className="flex items-start">
-                {setting.event === "Model Deprecations" ? (
-                  <Switch
-                    checked={setting.enabled}
-                    onCheckedChange={(checked) => handleCheckboxChange(setting.event, checked)}
-                    aria-label="Model deprecation email reminders"
-                    className="mt-1"
-                  />
-                ) : (
-                  <Checkbox
-                    checked={setting.enabled}
-                    onCheckedChange={(checked) => handleCheckboxChange(setting.event, checked === true)}
-                    className="mt-1"
-                  />
-                )}
+                <Switch
+                  checked={setting.enabled}
+                  onCheckedChange={(checked) => handleEnabledChange(setting.event, checked)}
+                  aria-label={setting.event}
+                  className="mt-1"
+                />
                 <div className="ml-3">
                   <p className="text-sm">{setting.event}</p>
                   <div className="block text-sm text-muted-foreground">{getEventDescription(setting.event)}</div>
