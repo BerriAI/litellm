@@ -32,19 +32,24 @@ class UsageAlertHealthRepository:
     def __init__(self, database: MetricsDatabase) -> None:
         self._database = database
 
+    @classmethod
+    def from_prisma(cls, prisma: "PrismaClient") -> "UsageAlertHealthRepository":
+        database: Final = cast(MetricsDatabase, prisma.writer_db)  # cast-ok: generated Prisma delegate
+        return cls(database)
+
     async def record(self, source: FlushSource, now: datetime) -> bool:
         hour: Final = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
         rows: Final = await self._database.query_raw(
             """INSERT INTO "LiteLLM_UsageAlertFlush" (source,hour,observed_at)
-            SELECT $1,$2,$3 WHERE NOT EXISTS (
-                SELECT 1 FROM "LiteLLM_SpendLogDelivery" WHERE state='pending' AND created_at<$2 LIMIT 1
+            SELECT $1,$2::timestamp,$3::timestamp WHERE NOT EXISTS (
+                SELECT 1 FROM "LiteLLM_SpendLogDelivery" WHERE state='pending' AND created_at<$2::timestamp LIMIT 1
             ) ON CONFLICT (source,hour) DO UPDATE SET observed_at=EXCLUDED.observed_at RETURNING source""",
             source,
             hour,
             now.astimezone(timezone.utc).replace(tzinfo=None),
         )
         await self._database.query_raw(
-            'DELETE FROM "LiteLLM_UsageAlertFlush" WHERE hour<$1 RETURNING source', hour - timedelta(days=35)
+            'DELETE FROM "LiteLLM_UsageAlertFlush" WHERE hour<$1::timestamp RETURNING source', hour - timedelta(days=35)
         )
         return bool(rows)
 
@@ -53,9 +58,9 @@ class UsageAlertHealthRepository:
         end: Final = utc_start + timedelta(days=1)
         rows: Final = _COVERAGE.validate_python(
             await self._database.query_raw(
-                """SELECT COUNT(*) FILTER(WHERE hour >= $2 AND hour < $3)::integer AS hours,
-                COALESCE(BOOL_OR(observed_at >= $3 + INTERVAL '1 hour'),FALSE) AS after_grace
-                FROM "LiteLLM_UsageAlertFlush" WHERE source=$1 AND hour >= $2""",
+                """SELECT COUNT(*) FILTER(WHERE hour >= $2::timestamp AND hour < $3::timestamp)::integer AS hours,
+                COALESCE(BOOL_OR(observed_at >= $3::timestamp + INTERVAL '1 hour'),FALSE) AS after_grace
+                FROM "LiteLLM_UsageAlertFlush" WHERE source=$1 AND hour >= $2::timestamp""",
                 source,
                 utc_start,
                 end,
