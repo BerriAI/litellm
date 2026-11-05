@@ -1696,6 +1696,30 @@ async def _auto_execute(
     return response
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_mcp_tools_keep_the_400_for_a_choice_the_chat_bridge_would_drop(
+    respx_mock: respx.MockRouter, stream: bool
+) -> None:
+    async def call_with_the_choice() -> None:
+        response: Final = await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "echo"}]},
+            drop_params=True,
+            stream=stream,
+            api_key="sk-ant-fake",
+        )
+        if stream:
+            [event async for event in response]
+
+    with _echo_tool_served("PING"), pytest.raises(litellm.BadRequestError, match="drop_params does not drop it"):
+        await call_with_the_choice()
+
+    assert not respx_mock.calls
+
+
 async def _auto_execute_echo(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
 ) -> ResponsesAPIResponse:

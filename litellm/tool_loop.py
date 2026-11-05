@@ -6,6 +6,10 @@ from typing import Final, TypeAlias, cast
 from typing_extensions import TypedDict, Unpack
 
 from litellm.constants import DEFAULT_TOOL_LOOP_MAX_ROUNDS
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    is_allowed_tools_tool_choice,
+    refuse_unenforced_allowed_tools_tool_choice,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -32,11 +36,32 @@ class ToolLoopMaxRoundsExceeded(RuntimeError):
         super().__init__(f"model still requested tool calls on round {max_rounds} of {max_rounds}")
 
 
-def _validate_tool_loop_args(max_rounds: int, completion_kwargs: _ToolLoopCompletionKwargs) -> None:
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _refuse_unenforced_tool_choice(model: str, completion_kwargs: _ToolLoopCompletionKwargs) -> None:
+    import litellm
+
+    tool_choice: Final = completion_kwargs.get("tool_choice")
+    if is_allowed_tools_tool_choice(tool_choice):
+        refuse_unenforced_allowed_tools_tool_choice(
+            tool_choice,
+            litellm.get_llm_provider(
+                model=model,
+                custom_llm_provider=_text(completion_kwargs.get("custom_llm_provider")),
+                api_base=_text(completion_kwargs.get("api_base")),
+            )[1],
+            model,
+        )
+
+
+def _validate_tool_loop_args(model: str, max_rounds: int, completion_kwargs: _ToolLoopCompletionKwargs) -> None:
     if max_rounds < 1:
         raise ValueError(f"max_rounds must be >= 1, got {max_rounds}")
     if completion_kwargs.get("stream"):
         raise ValueError("run_tool_loop requires whole responses; stream=True is not supported")
+    _refuse_unenforced_tool_choice(model, completion_kwargs)
 
 
 def _expect_model_response(response: object) -> ModelResponse:
@@ -148,7 +173,7 @@ def run_tool_loop(
     """
     import litellm
 
-    _validate_tool_loop_args(max_rounds, completion_kwargs)
+    _validate_tool_loop_args(model, max_rounds, completion_kwargs)
     history: tuple[AllMessageValues, ...] = tuple(messages)  # rebind-ok: rounds append new turns
     for round_number in range(1, max_rounds + 1):
         message = (
@@ -199,7 +224,7 @@ async def arun_tool_loop(
     """
     import litellm
 
-    _validate_tool_loop_args(max_rounds, completion_kwargs)
+    _validate_tool_loop_args(model, max_rounds, completion_kwargs)
     history: tuple[AllMessageValues, ...] = tuple(messages)  # rebind-ok: rounds append new turns
     for round_number in range(1, max_rounds + 1):
         message = (

@@ -2744,3 +2744,41 @@ def test_stream_auto_execute_read_synchronously_and_dropped_after_its_loop_close
 
     assert [raised for raised in unraisable.raised if _names_chat_stream_billing(raised)] == []
     assert [str(warning.message) for warning in caught if _names_chat_stream_billing(str(warning.message))] == []
+
+
+_MCP_ECHO_TOOL: Final = MCPTool.model_validate(
+    {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+    by_name=False,
+)
+_FLAT_ALLOWED_ECHO: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "echo"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("require_approval", ["never", "always"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_mcp_tools_keep_the_400_for_an_allowed_tools_choice_the_provider_cannot_enforce(
+    respx_mock: respx.MockRouter, require_approval: str, stream: bool
+):
+    execute: Final = AsyncMock(return_value=[])
+
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            AsyncMock(return_value=([_MCP_ECHO_TOOL], {"echo": "demo"})),
+        ),
+        patch.object(LiteLLM_Proxy_MCP_Handler, "execute_tool_calls", execute),
+        pytest.raises(litellm.BadRequestError, match="drop_params does not drop it"),
+    ):
+        await litellm.acompletion(
+            model="anthropic/claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Call echo"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": require_approval}],
+            tool_choice=_FLAT_ALLOWED_ECHO,
+            drop_params=True,
+            stream=stream,
+            api_key="sk-ant-fake",
+        )
+
+    execute.assert_not_awaited()
+    assert not respx_mock.calls

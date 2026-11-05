@@ -29,6 +29,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     configured_injection_points,
     routed_model_info,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import refuse_unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
@@ -672,6 +673,13 @@ def _bridge_kwargs(
         return _UntranslatableResponsesFields(untranslatable)
     dropped_keys: Final = _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED.union(untranslatable)
     return MappingProxyType({key: value for key, value in kwargs.items() if key not in dropped_keys})
+
+
+def _refuse_a_choice_the_mcp_tool_run_would_ignore(
+    skip_mcp_handler: bool, tool_choice: object, custom_llm_provider: str | None, model: str
+) -> None:
+    if skip_mcp_handler:
+        refuse_unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider, model)
 
 
 def _raise_untranslatable_responses_fields(
@@ -1762,6 +1770,12 @@ def responses(
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
                 _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
+            _refuse_a_choice_the_mcp_tool_run_would_ignore(
+                skip_mcp_handler,  # pyright: ignore[reportUnknownArgumentType]  # popped from untyped kwargs
+                tool_choice,
+                custom_llm_provider,
+                model,
+            )
             return litellm_completion_transformation_handler.response_api_handler(
                 previous_response_client_ids(previous_response_id, kwargs),
                 model=model,

@@ -647,6 +647,23 @@ def test_completion_drop_params_drops_an_allowed_tools_tool_choice_it_cannot_sen
     assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_time", "get_weather"]
 
 
+@pytest.mark.asyncio
+async def test_a_malformed_allowed_tools_tool_choice_stays_a_400_on_mcp_gateway_tools(respx_mock: respx.MockRouter):
+    with pytest.raises(litellm.BadRequestError, match="Invalid tool choice") as exc:
+        await litellm.acompletion(
+            model="openai/gpt-5.5",
+            messages=[{"role": "user", "content": "What time is it?"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+            tool_choice={"type": "allowed_tools", "mode": "required", "tools": []},
+            drop_params=True,
+            api_base="http://localhost:12346/v1",
+            api_key="fake_api_key",
+        )
+
+    assert exc.value.status_code == 400
+    assert not respx_mock.calls
+
+
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
     "id": "srvtoolu_01search",
     "type": "function",

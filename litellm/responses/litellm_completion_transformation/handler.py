@@ -10,6 +10,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
@@ -72,6 +73,17 @@ def _bridged_request(
     )
 
 
+def _with_the_tool_choice_sent(
+    responses_api_request: ResponsesAPIOptionalRequestParams, custom_llm_provider: str | None
+) -> ResponsesAPIOptionalRequestParams:
+    tool_choice: Final[object] = responses_api_request.get(  # pyright: ignore[reportUnknownMemberType]  # ToolChoice has an untyped member
+        "tool_choice"
+    )
+    if not unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider):
+        return responses_api_request
+    return {**responses_api_request, "tool_choice": None}
+
+
 class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
@@ -127,13 +139,14 @@ class LiteLLMCompletionTransformationHandler:
             ),
             **_chat_verbosity(bridged_request),
         }
+        echoed_request: Final = _with_the_tool_choice_sent(bridged_request, custom_llm_provider)
 
         if _is_async:
             return self.async_response_api_handler(
                 previous_response_client_ids,
                 litellm_completion_request=litellm_completion_request,
                 request_input=bridged_input,
-                responses_api_request=bridged_request,
+                responses_api_request=echoed_request,
                 **kwargs,
             )
 
@@ -146,7 +159,7 @@ class LiteLLMCompletionTransformationHandler:
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
                     chat_completion_response=litellm_completion_response,
                     request_input=bridged_input,
-                    responses_api_request=bridged_request,
+                    responses_api_request=echoed_request,
                 )
             )
 
@@ -157,7 +170,7 @@ class LiteLLMCompletionTransformationHandler:
                 model=model,
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=bridged_input,
-                responses_api_request=bridged_request,
+                responses_api_request=echoed_request,
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
@@ -209,7 +222,7 @@ class LiteLLMCompletionTransformationHandler:
                 **_chat_verbosity(bridged.responses_api_request),
             },
             request_input=bridged.input,
-            responses_api_request=bridged.responses_api_request,
+            responses_api_request=_with_the_tool_choice_sent(bridged.responses_api_request, custom_llm_provider),
             **request_kwargs,
         )
 

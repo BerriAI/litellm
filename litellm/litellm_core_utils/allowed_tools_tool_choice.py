@@ -124,6 +124,28 @@ def parse_allowed_tools_tool_choice(tool_choice: object) -> ChatAllowedToolsTool
             return _chat_layout(parsed)
 
 
+def unenforced_allowed_tools_tool_choice(tool_choice: object, custom_llm_provider: str | None) -> bool:
+    return is_allowed_tools_tool_choice(tool_choice) and (
+        custom_llm_provider not in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS
+        or parse_allowed_tools_tool_choice(tool_choice) is None
+    )
+
+
+def refuse_unenforced_allowed_tools_tool_choice(
+    tool_choice: object, custom_llm_provider: str | None, model: str
+) -> None:
+    if unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider):
+        raise BadRequestError(
+            message=(
+                f"This allowed_tools tool_choice can't be enforced on custom_llm_provider={custom_llm_provider}, and "
+                "LiteLLM runs the tool calls on this request, so drop_params does not drop it. Send only the allowed "
+                "tools in `tools` with tool_choice='auto' or 'required'."
+            ),
+            model=model,
+            llm_provider=custom_llm_provider or "",
+        )
+
+
 def chat_allowed_tools_tool_choice(choice: ChatAllowedToolsToolChoice) -> ChatCompletionAllowedToolChoiceParam:
     return ChatCompletionAllowedToolChoiceParam(
         type="allowed_tools",
