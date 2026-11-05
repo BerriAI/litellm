@@ -2,6 +2,8 @@ import asyncio
 import base64
 import importlib
 import os
+import shutil
+import tempfile
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,20 +44,33 @@ os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
-import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
+from litellm.anthropic_beta_headers_manager import (
+    reload_beta_headers_config,  # noqa: E402  # same import-time dependency
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER  # noqa: E402  # same import-time dependency
-from litellm.anthropic_beta_headers_manager import reload_beta_headers_config  # noqa: E402  # same import-time dependency
-from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory_module  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.prompt_templates import (
+    factory as prompt_factory_module,  # noqa: E402  # same import-time dependency
+)
 from litellm.litellm_core_utils.prompt_templates import (  # noqa: E402  # same import-time dependency
     image_handling as image_handling_module,
 )
-from litellm.llms.gemini.chat import transformation as gemini_chat_transformation_module  # noqa: E402  # same import-time dependency
 from litellm.llms.custom_httpx.async_client_cleanup import (  # noqa: E402  # same import-time dependency
     close_litellm_async_clients,
 )
-from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module  # noqa: E402  # same import-time dependency
+from litellm.llms.gemini.chat import (
+    transformation as gemini_chat_transformation_module,  # noqa: E402  # same import-time dependency
+)
+from litellm.proxy.db import (
+    tool_registry_writer as tool_registry_writer_module,  # noqa: E402  # same import-time dependency
+)
+from litellm.router_rust.surface.replay import (  # noqa: E402  # same import-time dependency
+    _live_registries as live_router_registries,  # pyright: ignore[reportPrivateUsage]  # the routers the model-cost replay reaches
+)
+from litellm.router_utils.global_callback_holders import (  # noqa: E402  # same import-time dependency
+    routers_holding_global_callbacks,
+)
 
 LOOPBACK_HOSTS: Final = ["127.0.0.1", "::1", "localhost"]
 AMBIENT_AZURE_CREDENTIAL_ENV_VARS: Final = (
@@ -214,7 +229,40 @@ def _reset_aws_auth_caches() -> None:
 def _flush_client_caches() -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
+    image_handling_module.pdf_probe_verdicts.flush_cache()
     _reset_aws_auth_caches()
+
+
+_MACOS_LONGEST_SOCKET_PATH: Final = 103
+_LONGEST_SOCKET_SUFFIX: Final = len("/sock12345678/d/litellm-pgbouncer-12345678/.s.PGSQL.65535")
+
+
+def _socket_root() -> str:
+    default: Final = tempfile.gettempdir()
+    fits: Final = len(os.fsencode(default)) + _LONGEST_SOCKET_SUFFIX <= _MACOS_LONGEST_SOCKET_PATH
+    return default if fits else "/tmp"
+
+
+@pytest.fixture
+def socket_dir(tmp_path: Path) -> Iterator[Path]:
+    """``tmp_path`` behind a short link, so unix socket paths fit the sun_path limit that it exceeds on macOS."""
+    link_dir: Final = Path(tempfile.mkdtemp(prefix="sock", dir=_socket_root()))
+    link: Final = link_dir / "d"
+    link.symlink_to(tmp_path, target_is_directory=True)
+    yield link
+    shutil.rmtree(link_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def socket_path(socket_dir: Path) -> Path:
+    return socket_dir / "spend.sock"
+
+
+@pytest.fixture
+def socket_tempdir(socket_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point ``tempfile``'s default directory at ``socket_dir``, for code that picks its own socket directory."""
+    monkeypatch.setattr(tempfile, "tempdir", str(socket_dir))
+    return socket_dir
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -252,10 +300,12 @@ def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> It
 @pytest.fixture(autouse=True)
 def isolate_litellm_globals() -> Iterator[None]:
     original_callbacks: Final = {name: list(getattr(litellm, name) or []) for name in CALLBACK_LISTS}
-    original_callback_holders: Final = frozenset(litellm_router_module._routers_holding_global_callbacks)
+    original_callback_holders: Final = frozenset(routers_holding_global_callbacks)
     original_reset: Final = {name: getattr(litellm, name) for name in RESET_TO_NONE_GLOBALS}
     original_restored: Final = {name: getattr(litellm, name) for name in RESTORED_GLOBALS if hasattr(litellm, name)}
-    original_clients: Final = {name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__}
+    original_clients: Final = {
+        name: litellm.__dict__[name] for name in MODULE_LEVEL_CLIENTS if name in litellm.__dict__
+    }
     original_loggers: Final = {
         logger: (logger.level, logger.disabled, logger.propagate, list(logger.handlers), list(logger.filters))
         for logger in ALL_LOGGERS
@@ -264,7 +314,7 @@ def isolate_litellm_globals() -> Iterator[None]:
     _flush_client_caches()
     for name in CALLBACK_LISTS:
         setattr(litellm, name, [])
-    litellm_router_module._routers_holding_global_callbacks.clear()
+    routers_holding_global_callbacks.clear()
     for name in RESET_TO_NONE_GLOBALS:
         setattr(litellm, name, None)
     for name in MODULE_LEVEL_CLIENTS:
@@ -279,8 +329,8 @@ def isolate_litellm_globals() -> Iterator[None]:
     litellm.__dict__.update(original_clients)
     for name, value in (original_callbacks | original_reset | original_restored).items():
         setattr(litellm, name, value)
-    litellm_router_module._routers_holding_global_callbacks.clear()
-    litellm_router_module._routers_holding_global_callbacks.update(original_callback_holders)
+    routers_holding_global_callbacks.clear()
+    routers_holding_global_callbacks.update(original_callback_holders)
     for logger, (level, disabled, propagate, handlers, filters) in original_loggers.items():
         logger.setLevel(level)
         logger.disabled = disabled
@@ -292,19 +342,17 @@ def isolate_litellm_globals() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def isolate_router_model_cost_state() -> Iterator[None]:
-    original_live_routers: Final = frozenset(litellm_router_module._live_routers)
+    original_live_registries: Final = frozenset(live_router_registries)
     original_runtime_registered_model_cost: Final = {
         model_key: dict(model_value)
         for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
     }
     litellm_utils_module._invalidate_model_cost_lowercase_map()
-    litellm_router_module._live_routers.clear()
+    live_router_registries.clear()
     litellm_utils_module._runtime_registered_model_cost.clear()
     yield
-    for router in tuple(litellm_router_module._live_routers):
-        litellm_router_module._live_routers.discard(router)
-    for router in original_live_routers:
-        litellm_router_module._live_routers.add(router)
+    live_router_registries.clear()
+    live_router_registries.update(original_live_registries)
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
     litellm_utils_module._invalidate_model_cost_lowercase_map()
@@ -342,6 +390,20 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def declare_mid_conversation_system(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, bool], None]:
+    def declare(model_cost_key: str, supported: bool) -> None:
+        entry: Final = {
+            "litellm_provider": model_cost_key.split("/", 1)[0],
+            "mode": "chat",
+            "supports_mid_conversation_system": supported,
+        }
+        monkeypatch.setitem(litellm.model_cost, model_cost_key, entry)
+        litellm.get_model_info.cache_clear()
+
+    return declare
 
 
 NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None

@@ -4,6 +4,7 @@ import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,10 +14,10 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
-from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
 )
-from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+from litellm.llms.anthropic.messages.native.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
 )
 from litellm.proxy._types import (
@@ -65,7 +66,7 @@ def spend_counter_state():
     original_prisma_client = ps.prisma_client
 
     counter_cache = DualCache()
-    key_cache = DualCache()
+    key_cache = UserApiKeyCache()
     ps.spend_counter_cache = counter_cache
     ps.user_api_key_cache = key_cache
     ps.prisma_client = None
@@ -3056,6 +3057,7 @@ async def test_streaming_cancel_after_only_keepalive_pings_reconciles_to_input_c
 @pytest.mark.asyncio
 async def test_streaming_cancel_while_holding_back_provider_output_keeps_reservation(
     spend_counter_state,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
@@ -3085,9 +3087,17 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
             }
         ]
     )
-    response = await router._aanthropic_messages_streaming_iterator(
-        response=AnthropicMessagesStreamingResponse(completion_stream=held_back, hidden_params={"additional_headers": {}}),
-        initial_kwargs={"model": "claude-haiku-4-5"},
+    provider_response = AnthropicMessagesStreamingResponse(
+        completion_stream=held_back, hidden_params={"additional_headers": {}}
+    )
+    monkeypatch.setattr(  # test-quality-ok: the provider call the router streams from
+        litellm, "anthropic_messages", AsyncMock(return_value=provider_response)
+    )
+    response = await router.aanthropic_messages(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=16,
+        stream=True,
     )
 
     async def ping_then_cancel(user_api_key_dict, response, request_data):
@@ -3233,7 +3243,7 @@ async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_stat
     async def one_chunk(user_api_key_dict, response, request_data):
         yield {"content": "hi"}
 
-    streaming_logging_obj = MagicMock()
+    streaming_logging_obj: Final = MagicMock(spec=ProxyLogging)
     streaming_logging_obj.async_post_call_streaming_iterator_hook = one_chunk
     streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(
         side_effect=lambda **kwargs: kwargs["response"]

@@ -177,9 +177,9 @@ def test_settings_read_the_documented_env(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_events_reach_the_sidecar_once_and_in_order(tmp_path: Path):
+async def test_events_reach_the_sidecar_once_and_in_order(socket_path: Path):
     fallback: Final = _Fallback()
-    async with _Sidecar(tmp_path / "spend.sock") as sidecar:
+    async with _Sidecar(socket_path) as sidecar:
         producer: Final = _producer(sidecar.path, fallback)
         outcomes: Final = [await producer.publish(f"event-{i}\n".encode()) for i in range(20)]
         await producer.close(drain_timeout=5.0)
@@ -193,9 +193,9 @@ async def test_events_reach_the_sidecar_once_and_in_order(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_unreachable_sidecar_falls_back_in_process_and_backs_off(tmp_path: Path):
+async def test_unreachable_sidecar_falls_back_in_process_and_backs_off(socket_path: Path):
     fallback: Final = _Fallback()
-    producer: Final = _producer(tmp_path / "missing.sock", fallback)
+    producer: Final = _producer(socket_path.with_name("missing.sock"), fallback)
     first: Final = await producer.publish(b"event-1\n")
     await asyncio.sleep(0.05)
     second: Final = await producer.publish(b"event-2\n")
@@ -210,11 +210,11 @@ async def test_unreachable_sidecar_falls_back_in_process_and_backs_off(tmp_path:
 
 @pytest.mark.parametrize("loop_factory", [asyncio.new_event_loop, uvloop.new_event_loop], ids=["asyncio", "uvloop"])
 def test_sidecar_hang_up_falls_back_instead_of_losing_events(
-    tmp_path: Path, loop_factory: Callable[[], asyncio.AbstractEventLoop]
+    socket_path: Path, loop_factory: Callable[[], asyncio.AbstractEventLoop]
 ):
     async def scenario() -> tuple[list[bytes], list[bytes], tuple[int, int, int]]:
         fallback: Final = _Fallback()
-        sidecar: Final = _Sidecar(tmp_path / "spend.sock")
+        sidecar: Final = _Sidecar(socket_path)
         async with sidecar:
             producer: Final = _producer(sidecar.path, fallback)
             await producer.publish(b"event-1\n")
@@ -236,7 +236,7 @@ def test_sidecar_hang_up_falls_back_instead_of_losing_events(
 
 @pytest.mark.parametrize("loop_factory", [asyncio.new_event_loop, uvloop.new_event_loop], ids=["asyncio", "uvloop"])
 def test_mid_stream_crash_never_bills_an_event_on_both_sides(
-    tmp_path: Path, loop_factory: Callable[[], asyncio.AbstractEventLoop]
+    socket_path: Path, loop_factory: Callable[[], asyncio.AbstractEventLoop]
 ):
     """Events large enough to straddle the kernel buffer, a sidecar that reads some and then drops the socket: a
     failed write may only fall back when the sidecar cannot have read the whole line."""
@@ -244,7 +244,7 @@ def test_mid_stream_crash_never_bills_an_event_on_both_sides(
 
     async def scenario() -> tuple[list[bytes], list[bytes], tuple[int, int, int]]:
         fallback: Final = _Fallback()
-        sidecar: Final = _CrashingSidecar(tmp_path / "spend.sock", lines_before_crash=3)
+        sidecar: Final = _CrashingSidecar(socket_path, lines_before_crash=3)
         async with sidecar:
             producer: Final = _producer(sidecar.path, fallback)
             for event in events:
@@ -266,11 +266,11 @@ def test_mid_stream_crash_never_bills_an_event_on_both_sides(
 
 
 @pytest.mark.asyncio
-async def test_drain_timeout_hands_the_in_flight_event_to_fallback(tmp_path: Path):
+async def test_drain_timeout_hands_the_in_flight_event_to_fallback(socket_path: Path):
     """A sidecar that stops reading leaves one event half-written; cancelling the writer must not lose it."""
     fallback: Final = _Fallback()
     stuck: Final = b"x" * (4 * 1024 * 1024) + b"\n"
-    async with _Sidecar(tmp_path / "spend.sock", reads=False) as sidecar:
+    async with _Sidecar(socket_path, reads=False) as sidecar:
         producer: Final = _producer(sidecar.path, fallback)
         assert await producer.publish(stuck) == "queued"
         await asyncio.sleep(0.1)
@@ -282,10 +282,10 @@ async def test_drain_timeout_hands_the_in_flight_event_to_fallback(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_shutdown_lets_the_writer_finish_a_fallback_already_in_progress(tmp_path: Path):
+async def test_shutdown_lets_the_writer_finish_a_fallback_already_in_progress(socket_path: Path):
     """Cancelling the writer while it runs the pipeline in-process must neither lose nor repeat that event."""
     fallback: Final = _GatedFallback()
-    producer: Final = _producer(tmp_path / "missing.sock", fallback)
+    producer: Final = _producer(socket_path.with_name("missing.sock"), fallback)
     assert await producer.publish(b"event-1\n") == "queued"
     await asyncio.wait_for(fallback.started.wait(), 5.0)
     closing: Final = asyncio.ensure_future(producer.close(drain_timeout=0.05))
@@ -299,10 +299,10 @@ async def test_shutdown_lets_the_writer_finish_a_fallback_already_in_progress(tm
 
 
 @pytest.mark.asyncio
-async def test_shutdown_does_not_replay_an_event_the_kernel_already_took(tmp_path: Path):
+async def test_shutdown_does_not_replay_an_event_the_kernel_already_took(socket_path: Path):
     """Cancelling a drain whose bytes already left the process must not run the event a second time in-process."""
     fallback: Final = _Fallback()
-    async with _Sidecar(tmp_path / "spend.sock") as sidecar:
+    async with _Sidecar(socket_path) as sidecar:
         producer: Final = _producer(sidecar.path, fallback, open_connection=_open_with_stalled_drain)
         assert await producer.publish(b"event-1\n") == "queued"
         await asyncio.sleep(0.1)
@@ -316,9 +316,9 @@ async def test_shutdown_does_not_replay_an_event_the_kernel_already_took(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_drop_policy_counts_instead_of_running_in_process(tmp_path: Path):
+async def test_drop_policy_counts_instead_of_running_in_process(socket_path: Path):
     fallback: Final = _Fallback()
-    producer: Final = _producer(tmp_path / "missing.sock", fallback, on_unavailable="drop")
+    producer: Final = _producer(socket_path.with_name("missing.sock"), fallback, on_unavailable="drop")
     await producer.publish(b"event-1\n")
     await producer.close(drain_timeout=5.0)
     assert await producer.publish(b"event-2\n") == "dropped"
@@ -328,9 +328,9 @@ async def test_drop_policy_counts_instead_of_running_in_process(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_full_buffer_applies_the_unavailable_policy_immediately(tmp_path: Path):
+async def test_full_buffer_applies_the_unavailable_policy_immediately(socket_path: Path):
     fallback: Final = _Fallback()
-    async with _Sidecar(tmp_path / "spend.sock") as sidecar:
+    async with _Sidecar(socket_path) as sidecar:
         producer: Final = _producer(sidecar.path, fallback, buffer_size=2)
         outcomes: Final = [await producer.publish(f"event-{i}\n".encode()) for i in range(3)]
         await producer.close(drain_timeout=5.0)
@@ -342,9 +342,9 @@ async def test_full_buffer_applies_the_unavailable_policy_immediately(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_close_flushes_buffered_events_then_refuses_new_ones(tmp_path: Path):
+async def test_close_flushes_buffered_events_then_refuses_new_ones(socket_path: Path):
     fallback: Final = _Fallback()
-    async with _Sidecar(tmp_path / "spend.sock") as sidecar:
+    async with _Sidecar(socket_path) as sidecar:
         producer: Final = _producer(sidecar.path, fallback)
         for i in range(50):
             await producer.publish(f"event-{i}\n".encode())
