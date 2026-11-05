@@ -1,6 +1,7 @@
 "use client";
 
 import { CirclePlus, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -37,6 +38,7 @@ export function FilterChip({
   value: string[];
   onChange: (value: string[]) => void;
 }) {
+  const { t } = useTranslation();
   const byValue = new Map(options.map((option) => [option.value, option]));
   const selected = value.map((v) => byValue.get(v)?.label ?? v);
   const active = value.length > 0;
@@ -64,8 +66,8 @@ export function FilterChip({
           {active && <span className="font-normal text-muted-foreground">{firstPlus(selected)}</span>}
         </ComboboxTrigger>
         <ComboboxContent className="w-auto min-w-60">
-          <ComboboxInput showTrigger={false} placeholder={`Search ${noun}`} />
-          <ComboboxEmpty>No {noun} found</ComboboxEmpty>
+          <ComboboxInput showTrigger={false} placeholder={t("publicModelHub.filterChip.search", { noun })} />
+          <ComboboxEmpty>{t("publicModelHub.filterChip.empty", { noun })}</ComboboxEmpty>
           <ComboboxList>
             {(option: FilterOption) => (
               <ComboboxItem key={option.value} value={option}>
@@ -80,7 +82,7 @@ export function FilterChip({
         <Button
           variant="outline"
           size="icon-sm"
-          aria-label={`Clear ${label.toLowerCase()} filter`}
+          aria-label={t("publicModelHub.filterChip.clear", { label: label.toLowerCase() })}
           onClick={() => onChange([])}
         >
           <X />

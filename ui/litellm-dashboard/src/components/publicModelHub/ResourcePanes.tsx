@@ -2,6 +2,7 @@
 
 import { Bot, Puzzle, Server } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import type { Plugin } from "@/components/claude_code_plugins/types";
 import type { AgentCard, MCPServerData } from "@/components/PublicModelHubTableColumns";
@@ -52,6 +53,7 @@ function ResourcePane<T>({
   description,
   meta,
 }: ResourcePaneProps<T>) {
+  const { t } = useTranslation();
   const [query, setQuery] = React.useState("");
   const [chosen, setChosen] = React.useState<string[]>([]);
   const options = [...new Set(rows.flatMap(filter.values))].sort();
@@ -83,7 +85,11 @@ function ResourcePane<T>({
       }
       toolbar={
         <div className="flex items-center gap-2">
-          <SearchInput value={query} onChange={setQuery} placeholder={`Search ${noun}`} />
+          <SearchInput
+            value={query}
+            onChange={setQuery}
+            placeholder={t("publicModelHub.resourcePane.search", { noun })}
+          />
           {options.length > 0 && (
             <FilterChip
               label={filter.label}
@@ -122,16 +128,17 @@ interface PaneProps<T> {
 }
 
 export function AgentsPane({ rows, ...props }: PaneProps<AgentCard>) {
+  const { t } = useTranslation();
   return (
     <ResourcePane<AgentCard>
       {...props}
       rows={rows ?? []}
-      noun="agents"
+      noun={t("publicModelHub.agentsPane.noun")}
       icon={<Bot />}
       search={(agent) => [agent.name, agent.description]}
       filter={{
-        label: "Skill tag",
-        noun: "skill tags",
+        label: t("publicModelHub.agentsPane.filterLabel"),
+        noun: t("publicModelHub.agentsPane.filterNoun"),
         values: (agent) => (agent.skills ?? []).flatMap((s) => s.tags ?? []),
       }}
       getKey={(agent) => agent.name}
@@ -144,16 +151,17 @@ export function AgentsPane({ rows, ...props }: PaneProps<AgentCard>) {
 }
 
 export function McpPane({ rows, ...props }: PaneProps<MCPServerData>) {
+  const { t } = useTranslation();
   return (
     <ResourcePane<MCPServerData>
       {...props}
       rows={rows ?? []}
-      noun="MCP servers"
+      noun={t("publicModelHub.mcpPane.noun")}
       icon={<Server />}
       search={(server) => [server.name, server.mcp_info?.description]}
       filter={{
-        label: "Transport",
-        noun: "transports",
+        label: t("publicModelHub.mcpPane.filterLabel"),
+        noun: t("publicModelHub.mcpPane.filterNoun"),
         values: (server) => (server.transport ? [server.transport] : []),
       }}
       getKey={(server) => server.name}
@@ -166,14 +174,19 @@ export function McpPane({ rows, ...props }: PaneProps<MCPServerData>) {
 }
 
 export function SkillsPane({ rows, ...props }: PaneProps<Plugin>) {
+  const { t } = useTranslation();
   return (
     <ResourcePane<Plugin>
       {...props}
       rows={rows ?? []}
-      noun="skills"
+      noun={t("publicModelHub.skillsPane.noun")}
       icon={<Puzzle />}
       search={(skill) => [skill.name, skill.description, skill.namespace, skill.domain, ...(skill.keywords ?? [])]}
-      filter={{ label: "Domain", noun: "domains", values: (skill) => (skill.domain ? [skill.domain] : []) }}
+      filter={{
+        label: t("publicModelHub.skillsPane.filterLabel"),
+        noun: t("publicModelHub.skillsPane.filterNoun"),
+        values: (skill) => (skill.domain ? [skill.domain] : []),
+      }}
       getKey={(skill) => skill.name}
       title={(skill) => skill.name}
       description={(skill) => skill.description}
