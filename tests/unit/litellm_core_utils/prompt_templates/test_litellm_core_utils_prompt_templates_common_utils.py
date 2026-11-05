@@ -297,6 +297,20 @@ def test_parse_tool_call_arguments_rejects_concatenated_json() -> None:
         parse_tool_call_arguments('{"a":1}{"b":2}')
 
 
+def test_parse_tool_call_arguments_repair_warning_omits_argument_content() -> None:
+    from unittest.mock import patch
+
+    secret: Final = "patient-record-4471"
+    with patch("litellm.litellm_core_utils.prompt_templates.common_utils.verbose_logger") as logger:
+        result: Final = parse_tool_call_arguments('{"note": "' + secret + '"', tool_name="save_note", context="test")
+
+    assert result == {"note": secret}
+    logger.warning.assert_called_once()
+    logged: Final = " ".join(str(arg) for arg in logger.warning.call_args.args)
+    assert "save_note" in logged
+    assert secret not in logged
+
+
 def _distinct_json_objects(count: int) -> str:
     return "".join(json.dumps({"n": index}, separators=(",", ":")) for index in range(count))
 
