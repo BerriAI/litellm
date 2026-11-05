@@ -1209,9 +1209,7 @@ async def test_acreate_qca_runs_managed_session_flow(respx_mock: MockRouter) -> 
     assert response.status == "completed"
     assert response.steps == [
         {
-            "type": "message",
-            "id": "evt_answer",
-            "role": "assistant",
+            "type": "model_output",
             "content": [{"type": "text", "text": "ready"}],
         }
     ]

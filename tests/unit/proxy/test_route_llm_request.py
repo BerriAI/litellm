@@ -23,12 +23,13 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import get_team_provider_deployment
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyModelNotFoundError,
     UserConfigRouters,
+    _raise_if_qca_deployment_selectors_are_overridden,
     endpoint_unsupported_by_model,
     route_request,
     user_config_routers,
@@ -41,6 +42,32 @@ from litellm.router_strategy.adaptive_router.config import (
 )
 from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
+
+@pytest.mark.parametrize("selector", ("agent", "environment"))
+def test_qca_alias_rejects_request_selector_overrides(selector: str) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qoder-agent",
+                "litellm_params": {
+                    "model": "qca/agent_configured",
+                    "environment": "env_configured",
+                    "api_key": "unit-provider-key",
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyException) as error:
+        _raise_if_qca_deployment_selectors_are_overridden(
+            router,
+            "qoder-agent",
+            {"model": "qoder-agent", selector: f"{selector}_attacker"},
+        )
+
+    assert error.value.code == "403"
+
 
 
 @pytest.mark.parametrize(
