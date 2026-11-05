@@ -171,6 +171,42 @@ def test_aistupidlevel_chat_completion_request():
     assert response.choices[0].message.content == "Hello from the router"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_aistupidlevel_missing_key_never_sends_openai_credentials(
+    monkeypatch: pytest.MonkeyPatch, use_async: bool
+):
+    monkeypatch.delenv("AISTUPIDLEVEL_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret")
+    monkeypatch.setattr(litellm, "openai_key", "sk-openai-secret")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{_BASE}/chat/completions").respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="AISTUPIDLEVEL_API_KEY"):
+            kwargs: Final = {
+                "model": "aistupidlevel/auto-coding",
+                "messages": [{"role": "user", "content": "Say hello"}],
+            }
+            if use_async:
+                await litellm.acompletion(**kwargs)
+            else:
+                litellm.completion(**kwargs)
+
+    assert route.call_count == 0
+
+
+def test_aistupidlevel_env_key_is_sent_instead_of_openai_credentials(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AISTUPIDLEVEL_API_KEY", "aism-env-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret")
+    monkeypatch.setattr(litellm, "openai_key", "sk-openai-secret")
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{_BASE}/chat/completions").respond(200, json=_CHAT_COMPLETION)
+        litellm.completion(model="aistupidlevel/auto-coding", messages=[{"role": "user", "content": "Say hello"}])
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer aism-env-key"
+
+
 def test_aistupidlevel_tools_are_forwarded():
     tools: Final = [
         {
