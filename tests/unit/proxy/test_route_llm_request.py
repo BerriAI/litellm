@@ -69,6 +69,31 @@ def test_qca_alias_rejects_request_selector_overrides(selector: str) -> None:
     assert error.value.code == "403"
 
 
+@pytest.mark.parametrize("selector", ("agent", "environment"))
+def test_qca_model_group_alias_rejects_request_selector_overrides(selector: str) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qoder-agent",
+                "litellm_params": {
+                    "model": "qca/agent_configured",
+                    "environment": "env_configured",
+                    "api_key": "unit-provider-key",
+                },
+            }
+        ],
+        model_group_alias={"public-agent": "qoder-agent"},
+    )
+
+    with pytest.raises(ProxyException) as error:
+        _raise_if_qca_deployment_selectors_are_overridden(
+            router,
+            "public-agent",
+            {"model": "public-agent", selector: f"{selector}_attacker"},
+        )
+
+    assert error.value.code == "403"
+
 
 @pytest.mark.parametrize(
     "route_type, required_body_params",

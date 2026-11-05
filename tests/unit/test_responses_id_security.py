@@ -867,6 +867,81 @@ async def test_streamed_interaction_ids_are_bound_to_the_caller(salt_key_env: st
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ("aget_interaction", "adelete_interaction", "acancel_interaction"))
+async def test_interaction_lifecycle_ids_are_authorized_before_provider_calls(
+    salt_key_env: str, call_type: CallTypesLiteral
+) -> None:
+    hook: Final = _hook(signing_key=salt_key_env)
+    owner: Final = _auth()
+    issued_response: Final = hook._encrypt_response_id(  # pyright: ignore[reportPrivateUsage]  # mints ids the way create does
+        InteractionsAPIResponse(id="interaction-provider-id", status="completed"),
+        owner,
+    )
+    issued: Final = InteractionsAPIResponse.model_validate(issued_response).id
+    assert issued is not None
+    authorized: Final = TypeAdapter(dict[str, object]).validate_python(
+        await hook.async_pre_call_hook(
+            user_api_key_dict=owner,
+            cache=DualCache(),
+            data={"interaction_id": issued},
+            call_type=call_type,
+        )
+    )
+
+    assert authorized["interaction_id"] == "interaction-provider-id"
+
+    with pytest.raises(HTTPException) as refusal:
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_auth(user_id="other-user"),
+            cache=DualCache(),
+            data={"interaction_id": issued},
+            call_type=call_type,
+        )
+    assert refusal.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("id_location", ("interaction_id", "interaction"))
+async def test_streamed_interaction_schema_ids_are_bound_to_the_caller(salt_key_env: str, id_location: str) -> None:
+    hook: Final = _hook(signing_key=salt_key_env)
+    caller: Final = _auth().model_copy(update={"request_route": "/interactions"})
+    provider_id: Final = "qca1.sess_owner.evt_input"
+
+    async def chunks():
+        yield InteractionsAPIStreamingResponse(
+            event_type="interaction.created",
+            **(
+                {"interaction_id": provider_id}
+                if id_location == "interaction_id"
+                else {"interaction": {"id": provider_id}}
+            ),
+        )
+
+    protected: Final = tuple(
+        [
+            chunk
+            async for chunk in hook.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=caller,
+                response=chunks(),
+                request_data={},
+            )
+        ]
+    )
+    protected_id: Final = (
+        protected[0].interaction_id
+        if id_location == "interaction_id"
+        else TypeAdapter(dict[str, str]).validate_python(protected[0].interaction)["id"]
+    )
+
+    assert protected_id != provider_id
+    assert hook._decrypt_response_id(protected_id) == (  # pyright: ignore[reportPrivateUsage]  # verifies ownership payload
+        provider_id,
+        "owner-user",
+        "owner-team",
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("nested", (False, True))
 @pytest.mark.parametrize("stranger", ("user", "team"))
 @pytest.mark.parametrize("allow_unmanaged", (False, True))
