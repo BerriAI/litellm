@@ -4973,7 +4973,7 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
-    def _model_call_details_with_request_messages(self) -> dict:
+    def _model_call_details_with_request_messages(self) -> dict[str, object]:  # mutable-ok: loggers take a dict
         """The success-event payload with the request messages put back where `turn_off_message_logging`
         redacted them in place, for a callback that routes on the request and never logs it."""
         standard_logging_object: Final = self.model_call_details.get("standard_logging_object")
