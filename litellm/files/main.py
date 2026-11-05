@@ -35,7 +35,6 @@ FileDeleteProvider = Literal[
 ]
 FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthropic", "mistral", "xai"]
 import litellm
-from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.files.types import FileContentProvider, FileContentStreamingResult, FileRetrieveProvider
 from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
@@ -48,7 +47,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
-from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
 from litellm.llms.xai.batches.handler import XAIBatchesHandler
 from litellm.llms.xai.batches.transformation import is_xai_batch_results_id
 from litellm.types.llms.openai import (
@@ -103,7 +101,6 @@ def _file_content_logging_obj(kwargs: dict[str, object], _is_async: bool) -> Lit
 
 openai_files_instance: Final = OpenAIFilesAPI()
 azure_files_instance: Final = AzureOpenAIFilesAPI()
-vertex_ai_files_instance: Final = VertexAIFilesHandler()
 bedrock_files_instance: Final = BedrockFilesHandler()
 xai_batch_results_instance: Final = XAIBatchesHandler()
 #################################################
@@ -1001,27 +998,6 @@ def file_content(
                 max_retries=optional_params.max_retries,
                 file_content_request=_file_content_request,
                 client=client,
-                litellm_params=litellm_params_dict,
-            )
-        elif custom_llm_provider == "vertex_ai":
-            api_base: Final = optional_params.api_base or ""
-            vertex_ai_project: Final = (
-                optional_params.vertex_project or litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_ai_location: Final = (
-                optional_params.vertex_location or litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
-            )
-            vertex_credentials: Final = optional_params.vertex_credentials or get_secret_str("VERTEXAI_CREDENTIALS")
-
-            response = vertex_ai_files_instance.file_content(
-                _is_async=_is_async,
-                file_content_request=_file_content_request,
-                api_base=api_base,
-                vertex_credentials=vertex_credentials,
-                vertex_project=vertex_ai_project,
-                vertex_location=vertex_ai_location,
-                timeout=timeout,
-                max_retries=optional_params.max_retries,
                 litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "bedrock":
