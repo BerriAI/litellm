@@ -13,7 +13,7 @@ use pyo3::{
 
 use super::{
     errors::route_failure,
-    project::{OcrHostHandles, SETTINGS_ERROR_MARKER, project_request},
+    project::{OcrHostHandles, ROUTE_HOST_MODULE, SETTINGS_ERROR_MARKER, project_request},
 };
 use crate::{marshal::public_response, routes::RequestView};
 
@@ -77,7 +77,7 @@ impl OcrPythonHost {
             _ => "",
         };
         let mapped = py
-            .import("litellm.rust_bridge.host.routes.ocr")
+            .import(ROUTE_HOST_MODULE)
             .and_then(|module| module.getattr("map_failure"))
             .and_then(|map| map.call1((error.value(py), self.view.request(py)?, provider)))
             .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
@@ -115,7 +115,7 @@ impl PythonBinding for OcrPythonHost {
         py: Python<'_>,
         response: LiteLLMOcrResponse,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, "litellm.rust_bridge.host.routes.ocr", &response)
+        public_response(py, ROUTE_HOST_MODULE, &response)
     }
 
     fn encode_stream_head(

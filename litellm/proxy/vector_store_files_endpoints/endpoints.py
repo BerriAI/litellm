@@ -209,7 +209,7 @@ async def _update_request_data_with_managed_file_id(
 
                 # Get credentials for the model
                 if llm_router:
-                    credentials = llm_router.get_deployment_credentials_with_provider(model_id=routing_model)
+                    credentials = llm_router.registry().credentials(routing_model, form="with_provider")
                     if credentials:
                         prepare_data_with_credentials(
                             data=data,
@@ -333,9 +333,7 @@ async def _update_request_data_with_model_routing_hint(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
-            credentials = llm_router.get_deployment_credentials_with_provider(
-                model_id=model_hint, team_id=caller_team_id
-            )
+            credentials = llm_router.registry().credentials(model_hint, form="with_provider", team_id=caller_team_id)
             should_route = credentials is not None
     elif isinstance(model_hint, str):
         if should_authorize_model_hint:
@@ -373,7 +371,7 @@ async def _update_request_data_with_model_routing_hint(
 
     openai_credentials = None
     for model_name in model_names_to_check:
-        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_name, team_id=caller_team_id)
+        credentials = llm_router.registry().credentials(model_name, form="with_provider", team_id=caller_team_id)
         if credentials is None:
             continue
 

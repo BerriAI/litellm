@@ -1,6 +1,8 @@
 ---
 name: rust-error
 description: Define, wrap, convert, classify, report or test Rust error types in litellm-rust with thiserror. Use when adding an error type or variant, mapping one crate's error into another, turning an error into a gateway response or Python exception, deciding retry or fault from an error, or replacing call sites that build errors from strings
+metadata:
+  internal: true
 ---
 
 # Rust errors

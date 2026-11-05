@@ -540,7 +540,7 @@ def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
     oidc_api_key_credential, deployment_params: dict, override: str
 ):
     from litellm.exceptions import BadRequestError
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     with pytest.raises(BadRequestError, match="api_key is an oidc/ secret reference"):
         get_dynamic_litellm_params(
@@ -550,7 +550,7 @@ def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
 
 @pytest.mark.parametrize("deployment_params", _OIDC_DEPLOYMENT_PARAMS)
 def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_credential, deployment_params: dict):
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     out: Final = get_dynamic_litellm_params(
         litellm_params=dict(deployment_params),
@@ -875,7 +875,7 @@ class TestGetKeyModelTpmLimit:
         """Deployments with non-integer-parseable limit values are skipped without raising."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "model1",
                 "litellm_params": {"default_api_key_tpm_limit": "not-a-number"},
@@ -1028,6 +1028,40 @@ def test_oss_native_model_cannot_implicitly_select_an_unauthorized_checkpoint(pr
     assert denied.value.status_code == 400
 
 
+# eu-jev.com/docs (read 2026-10-21): an omitted model means eu-jeff-latest, and the legacy names
+# jeff-latest and jeff-1.0.0 answer with the current release.
+@pytest.mark.parametrize(
+    ("request_data", "permission_model"),
+    [
+        ({}, "eu_jev/eu-jeff-latest"),
+        ({"model": None}, "eu_jev/eu-jeff-latest"),
+        ({"model": "eu-jeff-latest"}, "eu_jev/eu-jeff-latest"),
+        ({"model": "jeff-latest"}, "eu_jev/eu-jeff-latest"),
+        ({"model": "jeff-1.0.0"}, "eu_jev/eu-jeff-latest"),
+        ({"model": "eu-jeff-1.0.0"}, "eu_jev/eu-jeff-1.0.0"),
+        ({"model": "eu_jev/eu-jeff-1.0.0"}, "eu_jev/eu-jeff-1.0.0"),
+        ({"model": "eu_jev/jeff-latest"}, "eu_jev/eu-jeff-latest"),
+    ],
+)
+@pytest.mark.parametrize("suffix", ["", "/"])
+def test_eu_jev_decision_is_checked_against_the_model_eu_jev_runs(
+    request_data: dict[str, object], permission_model: str, suffix: str
+) -> None:
+    assert get_model_from_request(request_data=request_data, route=f"/eu_jev/v1/systemone{suffix}") == permission_model
+
+
+@pytest.mark.parametrize("model", [["eu-jeff-latest"], 7, {"name": "eu-jeff-latest"}])
+def test_eu_jev_decision_rejects_a_model_that_is_not_a_string(model: object) -> None:
+    with pytest.raises(HTTPException) as denied:
+        get_model_from_request(request_data={"model": model}, route="/eu_jev/v1/systemone")
+    assert denied.value.status_code == 400
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route")
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_keeps_the_requested_model() -> None:
+    assert get_model_from_request(request_data={"model": "jeff-latest"}, route="/eu_jev/v1/systemone") == "jeff-latest"
+
+
 def test_laya_model_normalization_does_not_change_other_provider_routes() -> None:
     assert get_model_from_request(request_data={"model": "jev-latest"}, route="/typesafe/v1/systemone") == "jev-latest"
     assert get_model_from_request(request_data={}, route="/laya/health") is None
@@ -1122,7 +1156,7 @@ def _cache_prediction_auth_app(
             request_data=request_data,
             route=request.url.path,
             request=request,
-            llm_model_list=router.get_model_list(),
+            llm_model_list=router.registry().deployments(),
             llm_router=router,
         )
         return token
@@ -1138,7 +1172,7 @@ def _cache_prediction_auth_app(
     monkeypatch.setattr(proxy_server, "user_custom_auth", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.registry().deployments())
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     logging = ProxyLogging(user_api_key_cache=DualCache())
@@ -2062,7 +2096,7 @@ def test_get_model_from_request_resolves_character_id_model_with_router():
         model_id="veo-3.1-generate-001",
     )
     llm_router = MagicMock()
-    llm_router.resolve_model_name_from_model_id.return_value = "gcp/google/veo-3.1-generate-001"
+    llm_router.registry.return_value.resolve.return_value = "gcp/google/veo-3.1-generate-001"
 
     assert (
         get_model_from_request(
@@ -2072,7 +2106,7 @@ def test_get_model_from_request_resolves_character_id_model_with_router():
         )
         == "gcp/google/veo-3.1-generate-001"
     )
-    llm_router.resolve_model_name_from_model_id.assert_called_once_with("veo-3.1-generate-001")
+    llm_router.registry.return_value.resolve.assert_called_once_with("veo-3.1-generate-001", kind="from_id")
 
 
 def test_get_model_from_request_only_runs_media_decoders_for_matching_fields():
@@ -2624,7 +2658,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
 
 
 def _make_deployment_dict(model_name: str, tpm: Optional[int] = None, rpm: Optional[int] = None) -> dict:
-    """Helper to build a minimal deployment dict as returned by router.get_model_list."""
+    """Helper to build a minimal deployment dict as returned by router.registry().deployments()."""
     litellm_params: dict = {"model": model_name}
     if tpm is not None:
         litellm_params["default_api_key_tpm_limit"] = tpm
@@ -2643,7 +2677,7 @@ class TestDeploymentDefaultRpmLimit:
         """Case 2 from spec: key has no model-specific limits, falls back to deployment default."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 200}
@@ -2655,7 +2689,7 @@ class TestDeploymentDefaultRpmLimit:
             metadata={"model_rpm_limit": {"model1": 10}},
         )
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 10}
@@ -2664,7 +2698,7 @@ class TestDeploymentDefaultRpmLimit:
         """Returns None when neither the key nor the deployment has any rpm limit."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1")  # no rpm default
         ]
         with patch(_ROUTER_PATCH, mock_router):
@@ -2675,7 +2709,7 @@ class TestDeploymentDefaultRpmLimit:
         """No model_name means deployment fallback is skipped."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict)
         assert result is None
@@ -2691,7 +2725,7 @@ class TestDeploymentDefaultRpmLimit:
         """When multiple deployments share a model name, the minimum rpm limit is used."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1", rpm=200),
             _make_deployment_dict("model1", rpm=50),
             _make_deployment_dict("model1", rpm=150),
@@ -2704,7 +2738,7 @@ class TestDeploymentDefaultRpmLimit:
         """Deployments missing the field are skipped; min is taken over those that have it."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1"),  # no rpm default
             _make_deployment_dict("model1", rpm=75),
         ]
@@ -2716,7 +2750,7 @@ class TestDeploymentDefaultRpmLimit:
         """Deployments with non-integer-parseable limit values are skipped without raising."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "model1",
                 "litellm_params": {"default_api_key_rpm_limit": "not-a-number"},
@@ -2736,7 +2770,7 @@ class TestDeploymentDefaultTpmLimit:
         """Case 2 from spec: key has no model-specific limits, falls back to deployment default."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 100}
@@ -2748,7 +2782,7 @@ class TestDeploymentDefaultTpmLimit:
             metadata={"model_tpm_limit": {"model1": 20}},
         )
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 20}
@@ -2757,7 +2791,7 @@ class TestDeploymentDefaultTpmLimit:
         """Returns None when neither the key nor the deployment has any tpm limit."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1")  # no tpm default
         ]
         with patch(_ROUTER_PATCH, mock_router):
@@ -2768,7 +2802,7 @@ class TestDeploymentDefaultTpmLimit:
         """No model_name means deployment fallback is skipped."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict)
         assert result is None
@@ -2784,7 +2818,7 @@ class TestDeploymentDefaultTpmLimit:
         """When multiple deployments share a model name, the minimum tpm limit is used."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1", tpm=1000),
             _make_deployment_dict("model1", tpm=300),
             _make_deployment_dict("model1", tpm=700),
@@ -2797,7 +2831,7 @@ class TestDeploymentDefaultTpmLimit:
         """Deployments missing the field are skipped; min is taken over those that have it."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1"),  # no tpm default
             _make_deployment_dict("model1", tpm=400),
         ]
@@ -2975,7 +3009,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
     """
 
     def test_clears_admin_organization_and_extra_body_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3001,7 +3035,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "api_version" not in out
 
     def test_clears_aws_and_vertex_secrets_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3024,7 +3058,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "vertex_project" not in out
 
     def test_clears_nvcf_function_id_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3042,7 +3076,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "nvcf_function_id" not in out
 
     def test_clears_use_ssl_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3060,7 +3094,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "use_ssl" not in out
 
     def test_clears_oauth_token_exchange_fields_for_other_provider_base_overrides(self):
-        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+        from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
         oauth_values: Final = {
             "token_exchange_audience": "https://graph.microsoft.com",
@@ -3082,7 +3116,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert all(field not in out for field in oauth_values)
 
     def test_clears_oauth_token_exchange_fields_for_microsoft_365_copilot_base_overrides(self):
-        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+        from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
         oauth_values: Final = {
             "token_exchange_audience": "https://graph.microsoft.com",
@@ -3112,7 +3146,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # the field name with any value (or empty string) to keep the
         # admin's value forwarded, which is the exfiltration vector this
         # test guards against.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3138,7 +3172,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # deployment, which would flip the call to shared mode and send the
         # admin's Copilot token to the attacker's host. Keeping them is safe
         # because per-user mode ignores the caller api_base anyway.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
         from litellm.types.utils import CredentialItem
@@ -3167,7 +3201,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["api_base"] == "https://attacker.example"
 
     def test_shared_oauth_credential_name_is_cleared_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
         from litellm.types.utils import CredentialItem
@@ -3197,7 +3231,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # Regression: a caller that echoes an admin-config field name with
         # an *empty* value (or any value) must not be able to keep the
         # admin's value in ``litellm_params``.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3219,7 +3253,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "org-admin-secret" not in str(out)
 
     def test_no_clearing_when_only_api_key_overridden(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3238,7 +3272,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["api_base"] == "https://admin.upstream/v1"
 
     def test_client_api_key_used_when_supplied_with_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3937,7 +3971,7 @@ def test_admin_opt_in_proxy_wide_allows_riva_offline() -> None:
 
 
 def test_api_base_override_keeps_the_deployments_riva_offline_mode() -> None:
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     out: Final = get_dynamic_litellm_params(
         litellm_params={"model": "nvidia_riva/nvidia/parakeet-0.6b-tdt", "riva_offline": True},

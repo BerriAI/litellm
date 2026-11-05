@@ -1,4 +1,5 @@
 import itertools
+import re
 import uuid
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -37,6 +38,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 _ECHO: Final = "catalog-echo:"
 _PROBE: Final = "catalog-probe"
 _DESCRIPTION: Final = "Look up one record"
+_FETCHED: Final = re.compile(rf"{_DESCRIPTION} [0-9a-f]{{32}}")
 _GUARDRAIL_CODE: Final = (
     "def apply_guardrail(inputs, request_data, input_type):\n"
     '    texts = list(inputs.get("texts") or [])\n'
@@ -67,6 +69,20 @@ class _Result(BaseModel):
 class _RpcReply(BaseModel):
     id: int
     result: _Result
+
+
+class _ListedTool(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class _ListedTools(BaseModel):
+    tools: tuple[_ListedTool, ...]
+
+
+class _ListReply(BaseModel):
+    id: int
+    result: _ListedTools
 
 
 class _SessionsReport(BaseModel):
@@ -207,9 +223,13 @@ def test_peer_restart_on_the_same_url_is_picked_up_without_gateway_restart(gatew
             assert len(tool_calls(replacement.drain())) >= 1
 
 
-def _rpc_reply(raw: str) -> _RpcReply:
+def _rpc_payload(raw: str) -> str:
     data: Final = tuple(line[5:].strip() for line in raw.splitlines() if line.startswith("data:"))
-    return _RpcReply.model_validate_json(data[-1] if data else raw)
+    return data[-1] if data else raw
+
+
+def _rpc_reply(raw: str) -> _RpcReply:
+    return _RpcReply.model_validate_json(_rpc_payload(raw))
 
 
 def _call_params(call: Mapping[str, object]) -> Mapping[str, object]:
@@ -220,9 +240,18 @@ def _call_nonce(call: Mapping[str, object]) -> str:
     return _STRINGS.validate_python(_call_params(call)["arguments"])["nonce"]
 
 
-def _listed(caller: McpCaller, name: str) -> None:
+def _listed(caller: McpCaller, name: str) -> Outcome:
     listing: Final = eventually(caller.list_tools, lambda outcome: name in outcome.tools, seconds=45)
     assert listing.error is None, (caller.gateway.client.base_url, listing.raw)
+    return listing
+
+
+def _listed_description(caller: McpCaller, name: str) -> str:
+    listing: Final = _listed(caller, name)
+    tools: Final = _ListReply.model_validate_json(_rpc_payload(listing.raw)).result.tools
+    described: Final = next(tool.description for tool in tools if tool.name == name)
+    assert described is not None and _FETCHED.fullmatch(described), listing.raw
+    return described
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,15 +280,18 @@ def _probed_description(worker: _Worker, name: str) -> str | None:
     return _ECHOED.validate_json(carrier.split(_ECHO, 1)[1])["description"]
 
 
-def _catalog_is_cold(worker: _Worker, name: str) -> bool:
-    return not _probed_description(worker, name)
+def _catalog_is_cold(worker: _Worker, name: str, listings: tuple[str, ...]) -> bool:
+    probed: Final = _probed_description(worker, name)
+    return probed is not None and _FETCHED.fullmatch(probed) is not None and probed not in listings
 
 
 @pytest.mark.timeout(600)
 def test_worker_restart_cools_its_listed_catalog_while_the_sibling_worker_keeps_serving(
     gateway: Gateway, echo_config: Path, tmp_path: Path
 ) -> None:
-    tool: Final = ScriptedTool("lookup", lambda _: text_result("found"), description=_DESCRIPTION)
+    tool: Final = ScriptedTool(
+        "lookup", lambda _: text_result("found"), description=lambda _: f"{_DESCRIPTION} {uuid.uuid4().hex}"
+    )
     with scripted_peer(tool) as peer, gateway.scenario() as scenario:
         alias: Final = "cold" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, peer, alias)
@@ -272,21 +304,23 @@ def test_worker_restart_cools_its_listed_catalog_while_the_sibling_worker_keeps_
                 assert first.pid != sibling.pid
                 _served(first, name, "first-unlisted")
                 _served(sibling, name, "sibling-unlisted")
-                assert _catalog_is_cold(first, name) and _catalog_is_cold(sibling, name)
-                _listed(first.caller, name)
-                assert _probed_description(first, name) == _DESCRIPTION
-                assert _catalog_is_cold(sibling, name), "a listing on one worker warmed its sibling"
-                _listed(sibling.caller, name)
-                assert _probed_description(sibling, name) == _DESCRIPTION
+                assert _catalog_is_cold(first, name, ()) and _catalog_is_cold(sibling, name, ())
+                first_listing: Final = _listed_description(first.caller, name)
+                assert _probed_description(first, name) == first_listing
+                assert _catalog_is_cold(sibling, name, (first_listing,)), "a listing on one worker warmed its sibling"
+                sibling_listing: Final = _listed_description(sibling.caller, name)
+                assert _probed_description(sibling, name) == sibling_listing
             _served(sibling, name, "sibling-alone")
             with owned_proxy_process(gateway, tmp_path / "restarted", {}, config=echo_config) as restarted_proxy:
                 restarted: Final = _worker(restarted_proxy.gateway, key, alias)
                 assert restarted.pid not in (first.pid, sibling.pid)
-                assert _catalog_is_cold(restarted, name), "a restarted worker kept the old process's catalog"
-                assert _probed_description(sibling, name) == _DESCRIPTION
+                assert _catalog_is_cold(restarted, name, (first_listing, sibling_listing)), (
+                    "a restarted worker kept the old process's catalog"
+                )
+                assert _probed_description(sibling, name) == sibling_listing
                 _served(restarted, name, "restarted-unlisted")
-                _listed(restarted.caller, name)
-                assert _probed_description(restarted, name) == _DESCRIPTION
+                restarted_listing: Final = _listed_description(restarted.caller, name)
+                assert _probed_description(restarted, name) == restarted_listing
         calls: Final = tool_calls(peer.drain())
         assert [_call_nonce(call) for call in calls] == [
             "first-unlisted",

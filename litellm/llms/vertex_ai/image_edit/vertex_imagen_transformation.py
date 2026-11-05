@@ -15,7 +15,7 @@ import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -70,13 +70,11 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         if "n" in filtered_params:
             mapped_params["sampleCount"] = filtered_params["n"]
 
-        if "size" in filtered_params:
-            mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(filtered_params["size"])
-
         if "mask" in filtered_params:
             mapped_params["mask"] = filtered_params["mask"]
 
-        return mapped_params
+        size_params: Final = map_vertex_image_size(filtered_params.get("size"), model, imagen=True) or {}
+        return {**mapped_params, **size_params}
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -189,6 +187,11 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             "sampleCount": sample_count,
             "editMode": edit_mode,
             "editConfig": {"baseSteps": base_steps},
+            **(
+                {"aspectRatio": image_edit_optional_request_params["aspectRatio"]}
+                if "aspectRatio" in image_edit_optional_request_params
+                else {}
+            ),
         }
 
         # Set default values for Vertex AI-specific parameters (not configurable by users via OpenAI API)
@@ -238,17 +241,6 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         model_response.data = cast(list[OpenAIImage], data_list)
         return model_response
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """Map OpenAI size format to Imagen aspect ratio format"""
-        aspect_ratio_map: Final = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
 
     def _prepare_reference_images(
         self,
