@@ -1087,13 +1087,27 @@ def test_postgres_lifecycle_errors_mean_the_database_is_unavailable(error: Excep
         *((error, False) for error in _SERVER_TERMINATED),
         (DataError(data={"user_facing_error": {"message": "Can't reach database server at `db`:`5432`"}}), True),
         (DataError(data={"user_facing_error": {"error_code": "P1001", "message": "unreachable"}}), True),
-        (_capacity_error("sorry, too many clients already"), False),
+        (_capacity_error("sorry, too many clients already"), True),
+        (_localized_error("53300"), True),
+        (
+            DataError(
+                data={
+                    "user_facing_error": {
+                        "error_code": "P2024",
+                        "message": "Timed out fetching a new connection from the connection pool",
+                    }
+                }
+            ),
+            True,
+        ),
         (httpx.ReadTimeout("read timed out"), False),
+        (_localized_error("57014"), False),
     ],
 )
 def test_db_write_never_sent_only_for_failures_before_any_statement_ran(error: Exception, never_sent: bool) -> None:
-    """A refused or unreachable server provably applied nothing, while a terminated session may
-    have committed before it was cut, so only the former lets a non-idempotent write be replayed."""
+    """A refused, unreachable or full server provably applied nothing, while a terminated session
+    or a timeout may have committed before the failure, so only the former lets a non-idempotent
+    write be replayed."""
     assert db_write_never_sent(error) is never_sent
 
 
