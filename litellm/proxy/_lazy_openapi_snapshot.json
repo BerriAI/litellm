@@ -37348,6 +37348,20 @@
               ],
               "title": "Dcr Server Url"
             },
+            "headers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Headers"
+            },
             "id_jag_resource": {
               "anyOf": [
                 {
@@ -40175,6 +40189,20 @@
                 }
               ],
               "title": "Dcr Server Url"
+            },
+            "headers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Headers"
             },
             "id_jag_resource": {
               "anyOf": [
@@ -43591,6 +43619,20 @@
                 }
               ],
               "title": "Dcr Server Url"
+            },
+            "headers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Headers"
             },
             "id_jag_resource": {
               "anyOf": [
@@ -47682,6 +47724,20 @@
                 }
               ],
               "title": "Dcr Server Url"
+            },
+            "headers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Headers"
             },
             "id_jag_resource": {
               "anyOf": [
