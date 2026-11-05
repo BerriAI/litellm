@@ -48,7 +48,8 @@ function IssueStatusActions({ issue }: { issue: Issue }) {
         client.invalidateQueries({ queryKey: ["deprecationAlerts"] }),
       ]),
   });
-  if (isViewOnly) return null;
+  const inactiveRetirement = issue.kind === "model_deprecation" && issue.active === false;
+  if (isViewOnly || (inactiveRetirement && issue.status !== "open")) return null;
   const actions: IssueStatus[] = issue.status === "open" ? ["resolved", "dismissed"] : ["open"];
   const labels = { resolved: "Mark resolved", dismissed: "Dismiss", open: "Reopen" };
   const stale = mutation.error instanceof ApiError && mutation.error.status === 409;

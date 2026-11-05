@@ -322,6 +322,19 @@ describe("unified issue investigations", () => {
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
   });
 
+  it.each(["resolved", "dismissed"] as const)("only reopens active %s retirement issues", async (status) => {
+    detail = { ...RETIREMENT_ISSUE, status, active: false };
+    const view = renderWithProviders(<IssueDetail id={detail.id} />);
+    await screen.findByText("Total Requests");
+    expect(screen.queryByRole("button", { name: "Reopen" })).not.toBeInTheDocument();
+    view.unmount();
+    testQueryClient.clear();
+    detail = { ...RETIREMENT_ISSUE, status, active: true };
+    renderWithProviders(<IssueDetail id={detail.id} />);
+    expect(await screen.findByRole("button", { name: "Reopen" })).toBeInTheDocument();
+    expect(calls.some((call) => call.method === "PATCH")).toBe(false);
+  });
+
   it("uses four family controls and sends only changed policy fields atomically", async () => {
     const user = userEvent.setup();
     renderWithProviders(<IssuesInbox />);
