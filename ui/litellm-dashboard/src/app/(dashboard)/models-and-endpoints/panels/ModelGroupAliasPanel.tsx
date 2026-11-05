@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import ModelGroupAliasSettings from "@/components/model_group_alias_settings";
-import { getCallbacksCall, getRouterSettingsCall } from "@/components/networking";
+import { getCallbacksCall, getProxyBaseUrl, getRouterSettingsCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function ModelGroupAliasPanel() {
@@ -22,6 +22,7 @@ export default function ModelGroupAliasPanel() {
       : null;
   const managedByConfig = currentAliasOwnership?.managedByConfig ?? false;
   const ownershipLoading = Boolean(accessToken && !currentAliasOwnership);
+  const preferenceScope = userID ? JSON.stringify([getProxyBaseUrl(), userID]) : null;
 
   useEffect(() => {
     if (!accessToken) {
@@ -62,6 +63,8 @@ export default function ModelGroupAliasPanel() {
 
   return (
     <ModelGroupAliasSettings
+      key={preferenceScope}
+      preferenceScope={preferenceScope}
       accessToken={accessToken}
       initialModelGroupAlias={modelGroupAlias}
       onAliasUpdate={setModelGroupAlias}

@@ -11,6 +11,8 @@ from typing import Final, Literal
 
 from pydantic import JsonValue
 
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import tools_without_custom_field
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
@@ -52,12 +54,15 @@ def _sanitized_bedrock_tool_name(raw_name: JsonValue) -> str:
 
 def _to_bedrock_tool_spec(tool: JsonValue) -> dict[str, JsonValue]:
     fields: Final = _json_dict(tool)
-    name: Final = _sanitized_bedrock_tool_name(fields.get("name", ""))
+    chat_function: Final = _json_dict(fields.get("function"))
+    spec: Final = chat_function or fields
+    name: Final = _sanitized_bedrock_tool_name(spec.get("name", ""))
+    schema_field: Final = "parameters" if chat_function else "input_schema"
     return {
         "toolSpec": {
             "name": name,
-            "description": fields.get("description") or name,
-            "inputSchema": {"json": fields.get("input_schema", {"type": "object", "properties": {}})},
+            "description": spec.get("description") or name,
+            "inputSchema": {"json": spec.get(schema_field, {"type": "object", "properties": {}})},
         }
     }
 
@@ -190,7 +195,15 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         # For InvokeModel, we need to provide the raw body that would be sent to the model
         # Remove the 'model' field from the body as it's not part of the model input
-        body_data: Final = {k: v for k, v in request_data.items() if k != "model"}
+        tools: Final = request_data.get("tools")
+        body_data: Final = {
+            **{k: v for k, v in request_data.items() if k != "model"},
+            **(
+                {"tools": tools_without_custom_field(tools, hoist_defer_loading=True, drop_custom=True)}
+                if isinstance(tools, list)
+                else {}
+            ),
+        }
 
         if "messages" in body_data:
             # Bedrock validates the body against the model's InvokeModel schema;
@@ -201,6 +214,10 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         # The CountTokens API expects invokeModel.body as a base64-encoded blob
         encoded_body: Final = base64.b64encode(json.dumps(body_data).encode()).decode()
         return {"input": {"invokeModel": {"body": encoded_body}}}
+
+    @staticmethod
+    def count_tokens_model_id(model: str) -> str:
+        return get_bedrock_base_model(model).removeprefix("bedrock/")
 
     def get_bedrock_count_tokens_endpoint(
         self,
@@ -221,21 +238,14 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         Returns:
             Complete endpoint URL for CountTokens API
         """
-        # Use existing LiteLLM function to get the base model ID (removes region prefix)
-        model_id = get_bedrock_base_model(model)
-
-        # Remove bedrock/ prefix if present
-        model_id = model_id.removeprefix("bedrock/")  # Remove "bedrock/" prefix
-        encoded_model_id: Final = self.encode_model_id(model_id=model_id)
+        encoded_model_id: Final = self.encode_model_id(model_id=self.count_tokens_model_id(model))
 
         base_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        endpoint: Final = f"{base_url}/model/{encoded_model_id}/count-tokens"
-
-        return endpoint
+        return join_api_base(base_url, f"model/{encoded_model_id}/count-tokens")
 
     def transform_bedrock_response_to_anthropic(
         self, bedrock_response: Mapping[str, JsonValue]

@@ -33,8 +33,17 @@ async def worker_deployment_ids(model_name: str) -> JSONResponse:
     return JSONResponse(content={"model_ids": model_ids}, headers={"x-integration-worker-pid": str(os.getpid())})
 
 
+async def worker_general_setting(name: str) -> JSONResponse:
+    from litellm.proxy.proxy_server import proxy_config
+
+    return JSONResponse(
+        content={"value": proxy_config.settings.get(name)}, headers={"x-integration-worker-pid": str(os.getpid())}
+    )
+
+
 def configure_readiness() -> None:
     from litellm.proxy.proxy_server import app
 
     app.add_api_route("/health/integration-readiness", worker_readiness, include_in_schema=False)
     app.add_api_route("/health/integration-deployment-ids", worker_deployment_ids, include_in_schema=False)
+    app.add_api_route("/health/integration-general-setting", worker_general_setting, include_in_schema=False)

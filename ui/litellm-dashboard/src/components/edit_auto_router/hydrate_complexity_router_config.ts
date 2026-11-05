@@ -184,7 +184,8 @@ export const hydrateComplexityRouterConfig = (
       ? parsedConfig.reminder_markers.filter(isReminderMarkerPair)
       : undefined,
     max_tokens_from_tier_model:
-      typeof parsedConfig.max_tokens_from_tier_model === "boolean"
+      typeof parsedConfig.max_tokens_from_tier_model === "boolean" ||
+      parsedConfig.max_tokens_from_tier_model === "clamp"
         ? parsedConfig.max_tokens_from_tier_model
         : undefined,
     classifier_plugin_timeout_ms:

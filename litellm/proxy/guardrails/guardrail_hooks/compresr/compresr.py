@@ -22,12 +22,13 @@ import json
 import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeGuard
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, TypeGuard
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
 from httpx import Response as HttpxResponse
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -72,6 +73,7 @@ if TYPE_CHECKING:
     )
 
 BYPASS_HEADER: Final = "x-compresr-bypass"
+_AGENTIC_LOOP_MODEL: Final = TypeAdapter(object)
 COMPRESR_RETRIEVE_TOOL_NAME: Final = "compresr_retrieve"
 DEFAULT_API_BASE: Final = "https://api.compresr.ai"
 DEFAULT_COMPRESSION_MODEL: Final = "latte_v2"
@@ -505,6 +507,8 @@ class _CompressionResult:
 
 
 class CompresrGuardrail(CustomGuardrail):
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({COMPRESR_RETRIEVE_TOOL_NAME})
+
     def __init__(
         self,
         api_base: str | None = None,
@@ -1118,7 +1122,7 @@ class CompresrGuardrail(CustomGuardrail):
         full_model_name = model
         if logging_obj is not None:
             agentic_params: Final = getattr(logging_obj, "model_call_details", {}).get("agentic_loop_params", {})
-            candidate: Final = agentic_params.get("model", model)
+            candidate: Final = _AGENTIC_LOOP_MODEL.validate_python(agentic_params.get("model", model))
             if isinstance(candidate, str) and candidate:
                 full_model_name = candidate
 

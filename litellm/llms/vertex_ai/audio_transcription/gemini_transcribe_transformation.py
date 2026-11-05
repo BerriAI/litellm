@@ -3,6 +3,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -10,6 +11,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     normalize_transcription_language_to_bcp47,
     process_audio_file,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -44,6 +46,7 @@ from litellm.types.utils import (
 
 DEFAULT_GEMINI_TRANSCRIBE_LOCATION: Final = "global"
 AUDIO_MODALITY: Final = "AUDIO"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase):
@@ -129,10 +132,10 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
         project_id: Final = validate_vertex_transcription_project_id(
             self.safe_get_vertex_ai_project(vertex_params) or self._resolve_project_id_from_credentials(vertex_params)
         )
-        base_url: Final = (api_base or get_vertex_base_url(location)).rstrip("/")
+        base_url: Final = api_base or get_vertex_base_url(location)
         bare_model: Final = model.removeprefix("vertex_ai/")
         model_path: Final = f"projects/{project_id}/locations/{location}/publishers/google/models/{bare_model}"
-        return f"{base_url}/v1/{model_path}:generateContent"
+        return join_api_base(base_url, f"v1/{model_path}:generateContent")
 
     def _resolve_project_id_from_credentials(self, litellm_params: Mapping[str, object]) -> str:
         vertex_params: Final = dict(litellm_params)
@@ -176,7 +179,7 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
         raw_response: Response,
     ) -> TranscriptionResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except ValueError:
             raise VertexAIError(
                 status_code=raw_response.status_code,

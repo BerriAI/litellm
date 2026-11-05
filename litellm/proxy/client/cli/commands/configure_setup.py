@@ -14,12 +14,8 @@ from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.proxy.common_utils.model_listing_utils import (
-    CLAUDE_CODE_CLIENT,
-    CLAUDE_CODE_PICKER_PATTERN,
-    GATEWAY_CLIENT_HEADER,
-)
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.constants import CLAUDE_CODE_CLIENT, CLAUDE_CODE_PICKER_PATTERN, GATEWAY_CLIENT_HEADER
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .agents import codex_config_path
 from .claude_settings import (

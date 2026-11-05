@@ -109,6 +109,11 @@ class Microsoft365CopilotChatConfig(BaseConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseConfig requires a list return
         return ["stream", "max_tokens", "max_completion_tokens"]
 
+    def should_fake_stream(
+        self, model: str | None, stream: bool | None, custom_llm_provider: str | None = None
+    ) -> bool:
+        return True
+
     def transform_request(
         self,
         model: str,

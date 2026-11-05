@@ -34,6 +34,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _MODEL_ID: Final = "anthropic.claude-3-haiku-20240307-v1:0"
 _CONVERSE_MODEL: Final = f"bedrock/converse/{_MODEL_ID}"
 _INVOKE_MODEL: Final = f"bedrock/invoke/{_MODEL_ID}"
@@ -545,7 +547,7 @@ def test_r21_responses_stream_input_item_without_content_after_an_assistant_item
         assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_ANSWERED], received
         (row,) = _success_rows(marker, 1)
         assert row["call_type"] == "aresponses" and row["end_user"] == marker, row
-        assert row["request_id"] == _inner_response_id(str(completed["response"]["id"])), (row, completed)
+        assert row["request_id"] == str(completed["response"]["id"]), (row, completed)
 
 
 def test_r22_passthrough_converse_forwards_a_message_without_content_verbatim(gateway: Gateway) -> None:

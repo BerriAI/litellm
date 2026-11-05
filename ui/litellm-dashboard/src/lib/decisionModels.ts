@@ -38,7 +38,7 @@ export const displayMode = (mode: string | null | undefined): string | undefined
 export const expandModeFilterValues = (modes: readonly string[]): readonly string[] =>
   modes.flatMap((mode) => (mode === DECISIONS_MODE ? DECISION_MODE_VALUES : [mode]));
 
-const isDecisionEntry = (entry: CostMapEntry): boolean =>
+export const isDecisionEntry = (entry: Pick<CostMapEntry, "mode" | "supported_endpoints">): boolean =>
   isDecisionMode(entry.mode) || (entry.supported_endpoints ?? []).some((endpoint) => DECISION_ENDPOINTS.has(endpoint));
 
 const parsedEntries = (costMap: unknown): ReadonlyArray<readonly [string, CostMapEntry]> => {

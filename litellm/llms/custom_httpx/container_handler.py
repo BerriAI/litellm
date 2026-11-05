@@ -5,6 +5,7 @@ This module provides a single generic handler that can process any container fil
 endpoint defined in endpoints.json, eliminating the need for individual handler methods.
 """
 
+import asyncio
 import json
 from collections.abc import Coroutine, Mapping, Sequence
 from pathlib import Path
@@ -236,6 +237,7 @@ def _request_headers(
     return container_provider_config.validate_environment(
         headers=extra_headers or {},
         api_key=litellm_params.get("api_key", None),
+        litellm_params=litellm_params,
     )
 
 
@@ -435,7 +437,7 @@ class GenericContainerHandler:
         http_client: Final = _async_http_client(client, litellm_params)
 
         # Build request
-        headers = _request_headers(container_provider_config, extra_headers, litellm_params)
+        headers = await asyncio.to_thread(_request_headers, container_provider_config, extra_headers, litellm_params)
         if extra_headers:
             headers.update(extra_headers)
 

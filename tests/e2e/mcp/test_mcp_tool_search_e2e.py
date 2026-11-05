@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Final
 
 import pytest
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from datadog_mcp import SEARCH_LOGS_TOOL, register_datadog_mcp
 from e2e_config import provider_edge_base, unique_marker
 from e2e_http import unwrap
@@ -15,6 +16,19 @@ pytestmark = pytest.mark.e2e
 
 MCP_TOOL_SEARCH_TOOL_NAME: Final = "mcp_tool_search"
 OVERSIZED_DESCRIPTION: Final = f"OVERSIZED {'weather ' * 12_000}"
+
+
+class _SearchHit(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+
+
+_SEARCH_HITS: Final = TypeAdapter(tuple[_SearchHit, ...])
+
+
+def _hits_tool(hits: tuple[_SearchHit, ...], tool_name: str) -> bool:
+    return any(hit.name.endswith(f"-{tool_name}") for hit in hits)
 
 
 class TestMcpToolSearch:
@@ -82,5 +96,6 @@ class TestMcpToolSearch:
         )
 
         assert result.is_error is not True, result.all_text
-        assert normal_tool_name in result.all_text
-        assert oversized_tool_name not in result.all_text
+        hits: Final = _SEARCH_HITS.validate_json(result.all_text)
+        assert _hits_tool(hits, normal_tool_name), hits
+        assert not _hits_tool(hits, oversized_tool_name), hits

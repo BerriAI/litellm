@@ -730,9 +730,9 @@ describe("Teams - Reset Budget in team create", () => {
 
   it("should send an explicit null budget_duration when Never resets is selected", async () => {
     await openCreateModal();
+    await screen.findByText("Default: monthly (30d)");
 
-    await userEvent.click(resetBudgetSelect());
-    await userEvent.click(await screen.findByText("Never resets"));
+    await chooseSelectOption(userEvent, resetBudgetSelect(), "Never resets");
 
     const payload = await submitCreateModal();
 
@@ -752,8 +752,7 @@ describe("Teams - Reset Budget in team create", () => {
   it("should send the picked duration when one is selected", async () => {
     await openCreateModal();
 
-    await userEvent.click(resetBudgetSelect());
-    await userEvent.click(await screen.findByText("weekly"));
+    await chooseSelectOption(userEvent, resetBudgetSelect(), "weekly");
 
     const payload = await submitCreateModal();
 
@@ -768,14 +767,18 @@ describe("Teams - Reset Budget in team create", () => {
     });
   });
 
-  it("should fall back to the n/a placeholder when the default settings fetch fails", async () => {
+  it("should offer a single Never resets option when no server default is configured", async () => {
     vi.mocked(getDefaultTeamSettings).mockRejectedValue(new Error("Unauthorized"));
 
     await openCreateModal();
-
     await waitFor(() => {
-      expect(screen.getByText("n/a")).toBeInTheDocument();
+      expect(getDefaultTeamSettings).toHaveBeenCalled();
     });
+
+    await userEvent.click(resetBudgetSelect());
+
+    expect(await screen.findAllByRole("option", { name: "Never resets" })).toHaveLength(1);
+    expect(screen.queryByText("Not set")).not.toBeInTheDocument();
   });
 });
 

@@ -12,6 +12,8 @@ from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 BEDROCK_MODEL: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
 INPUT_TOKENS: Final = 30
 CACHE_READ_TOKENS: Final = 900
