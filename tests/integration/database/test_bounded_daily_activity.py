@@ -59,6 +59,15 @@ async def test_bounded_activity_routes_keep_exact_totals_and_scoped_permissions(
             member_reporting_key,
         )
         query: Final = {"start_date": day.isoformat(), "end_date": (day + timedelta(days=2)).isoformat()}
+        await repository.database.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,model,api_requests,successful_requests,updated_at)
+                VALUES($1,$2,$3,$4,'today-model',11,11,CURRENT_TIMESTAMP)""",
+            identity + "-today",
+            owner,
+            date.today().isoformat(),
+            reporting_key,
+        )
         try:
             path: Final = "/user/daily/activity/aggregated"
             legacy: Final = gateway.request("GET", path, params={**query, "api_key": reporting_key})
@@ -116,6 +125,23 @@ async def test_bounded_activity_routes_keep_exact_totals_and_scoped_permissions(
             assert team_admin.json()["metadata"]["total_api_requests"] == 4117
             assert team_member.json()["metadata"]["total_api_requests"] == 7
             assert team_admin.json()["model_breakdown"] is None
+            for include_today in ("true", "false"):
+                today: Final = {
+                    "start_date": date.today().isoformat(),
+                    "end_date": date.today().isoformat(),
+                    "api_key": reporting_key,
+                    "timezone": "0",
+                    "include_current_utc_day": include_today,
+                }
+                legacy_today: Final = gateway.request("GET", path, params=today)
+                bounded_today: Final = gateway.request("GET", path, params={**today, "bounded": "true"})
+                assert legacy_today.status_code == bounded_today.status_code == 200
+                assert (
+                    legacy_today.json()["metadata"]["total_api_requests"]
+                    == bounded_today.json()["metadata"]["total_api_requests"]
+                )
+                if include_today == "true":
+                    assert bounded_today.json()["metadata"]["total_api_requests"] == 11
             schemas: Final = TypeAdapter(tuple[Mapping[str, str], ...]).validate_python(
                 await repository.database.query_raw("SELECT current_schema() AS name")
             )
