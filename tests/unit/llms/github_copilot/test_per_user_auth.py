@@ -827,6 +827,25 @@ def test_e2e_embedding_per_user_caller_authorization_cannot_override_session(per
     _assert_session_token_on_the_wire(requests)
 
 
+def test_e2e_custom_client_id_sends_the_github_token_to_the_accounts_copilot_host(per_user_credential, monkeypatch):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Ov23liCustomOrgApp")
+    lookups: Final[list[httpx.Request]] = []
+    with (
+        github_http(
+            _copilot_surface_responder(_embedding_response_payload()), answer_plan(PLAN_COPILOT_HOST), lookups
+        ) as requests,
+        _no_authenticator(),
+    ):
+        litellm.embedding(
+            model="github_copilot/text-embedding-3-small",
+            input=["hi"],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_secret_fields("user-a", "gho_org_app"),
+        )
+    assert [request.headers["authorization"] for request in lookups] == ["token gho_org_app"]
+    _assert_direct_model_call(requests, "gho_org_app", PLAN_COPILOT_HOST)
+
+
 def test_e2e_responses_per_user_caller_authorization_cannot_override_session(per_user_credential):
     with (
         github_http(_copilot_surface_responder(_responses_payload())) as requests,

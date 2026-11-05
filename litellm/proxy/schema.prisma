@@ -1615,8 +1615,17 @@ model LiteLLM_ClaudeCodePluginTable {
   updated_at    DateTime? @default(now()) @updatedAt
   created_by    String?
 
+  uploaded_archive LiteLLM_ClaudeCodePluginUpload?
+
   @@map("LiteLLM_ClaudeCodePluginTable")
 }
+
+model LiteLLM_ClaudeCodePluginUpload {
+  plugin_name String @id
+  content     Bytes
+  plugin      LiteLLM_ClaudeCodePluginTable @relation(fields: [plugin_name], references: [name], onDelete: Cascade, onUpdate: Cascade)
+}
+
 
 // User/team-scoped memory store with a GLOBAL unique key.
 // `value` is a string (typically markdown/text meant for LLM context);

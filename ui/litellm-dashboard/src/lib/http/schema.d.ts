@@ -2528,6 +2528,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/claude-code/plugins/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Plugin
+         * @description Create a skill and its uploaded ZIP atomically. Duplicate names return 409.
+         */
+        post: operations["upload_plugin_claude_code_plugins_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claude-code/plugins/{plugin_name}": {
         parameters: {
             query?: never;
@@ -2599,6 +2619,26 @@ export interface paths {
          *         - plugin_name: The name of the plugin to delete
          */
         delete: operations["delete_plugin_claude_code_plugins__plugin_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/plugins/{plugin_name}/archive/{digest}.zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Plugin Archive
+         * @description Download an uploaded ZIP under the same visibility policy as its skill.
+         */
+        get: operations["download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -10066,8 +10106,9 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy. An entry also names its `successor_model`
-         *     when the deployment sets `model_info.successor_model`.
+         *     models configured on this proxy. An entry also names its `successor_model`:
+         *     `model_info.successor_model` when the deployment sets one, else the
+         *     replacement the cost map records from the provider's deprecation notice.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -21599,8 +21640,9 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy. An entry also names its `successor_model`
-         *     when the deployment sets `model_info.successor_model`.
+         *     models configured on this proxy. An entry also names its `successor_model`:
+         *     `model_info.successor_model` when the deployment sets one, else the
+         *     replacement the cost map records from the provider's deprecation notice.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -28080,6 +28122,19 @@ export interface components {
             /** File */
             file: string;
         };
+        /** Body_upload_plugin_claude_code_plugins_upload_post */
+        Body_upload_plugin_claude_code_plugins_upload_post: {
+            /**
+             * File
+             * @description Skill ZIP containing SKILL.md and supporting files, up to 10 MiB
+             */
+            file: string;
+            /**
+             * Metadata
+             * @description JSON skill metadata without a source URL
+             */
+            metadata: string;
+        };
         /** Body_video_create_character_v1_videos_characters_post */
         Body_video_create_character_v1_videos_characters_post: {
             /** Name */
@@ -30206,27 +30261,6 @@ export interface components {
          * @description Documents all the fields supported by `general_settings` in config.yaml
          */
         ConfigGeneralSettings: {
-            /** @description Opt-in durable usage capture. Legacy spend updates remain active. Requires local Prisma writes. */
-            accounting_capture?: components["schemas"]["UsageCaptureSettings"] | null;
-            /**
-             * Accounting Sync Ack
-             * @description Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. Other requests remain supported with asynchronous usage capture.
-             * @default false
-             */
-            accounting_sync_ack: boolean;
-            /**
-             * Accounting Sync Ack Failure Policy
-             * @description Return 503 or log the persistence failure after the response wait expires
-             * @default fail_closed
-             * @enum {string}
-             */
-            accounting_sync_ack_failure_policy: "fail_closed" | "log";
-            /**
-             * Accounting Sync Ack Timeout Seconds
-             * @description Maximum response wait for usage commit, including the batch flush interval
-             * @default 20
-             */
-            accounting_sync_ack_timeout_seconds: number;
             /**
              * Admission Queue Timeout Seconds
              * @description maximum time a request waits for a worker slot
@@ -35918,6 +35952,8 @@ export interface components {
             drop_params?: boolean | string | null;
             /** Explicit Cache Read Input Token Cost */
             explicit_cache_read_input_token_cost?: number | null;
+            /** Fedramp Uplift Multiplier */
+            fedramp_uplift_multiplier?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -35933,6 +35969,14 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens */
+            input_cost_per_audio_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Batches */
+            input_cost_per_audio_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Flex */
+            input_cost_per_audio_token_above_200k_tokens_flex?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Priority */
+            input_cost_per_audio_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Audio Token Batches */
             input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Audio Token Flex */
@@ -35971,6 +36015,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Batches */
             input_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Flex */
+            input_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -36078,6 +36124,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Priority */
+            output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -36112,6 +36160,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Batches */
             output_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Flex */
+            output_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -38990,7 +39040,7 @@ export interface components {
             status: "upcoming" | "imminent" | "deprecated";
             /**
              * Successor Model
-             * @description The model to migrate to, as set in model_info.successor_model on the deployment.
+             * @description The model to migrate to: model_info.successor_model on the deployment when set, else the successor_model the cost map names for the deprecated model.
              */
             successor_model?: string | null;
         };
@@ -48100,7 +48150,7 @@ export interface components {
             id: string;
             /**
              * Tool Name
-             * @description Regex pattern applied to the tool's function name
+             * @description Regex pattern applied to the tool's name, or to its type when the tool has no name
              */
             tool_name?: string | null;
             /**
@@ -49861,28 +49911,56 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
-        /** UsageCaptureSettings */
-        UsageCaptureSettings: {
+        /** UploadPluginRequest */
+        UploadPluginRequest: {
+            /** @description Plugin author */
+            author?: components["schemas"]["PluginAuthor"] | null;
             /**
-             * Batch Size
-             * @default 1000
+             * Category
+             * @description Plugin category
              */
-            batch_size: number;
+            category?: string | null;
             /**
-             * Flush Interval Seconds
-             * @default 5
+             * Description
+             * @description Plugin description
              */
-            flush_interval_seconds: number;
+            description?: string | null;
             /**
-             * Max Pending Bytes
-             * @default 16777216
+             * Domain
+             * @description Skill domain (e.g., 'Productivity')
              */
-            max_pending_bytes: number;
+            domain?: string | null;
             /**
-             * Max Pending Records
-             * @default 10000
+             * Homepage
+             * @description Plugin homepage URL
              */
-            max_pending_records: number;
+            homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
+            /**
+             * Keywords
+             * @description Search keywords
+             */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Skill name (kebab-case)
+             */
+            name: string;
+            /**
+             * Namespace
+             * @description Skill namespace within domain (e.g., 'workflows')
+             */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Semantic version
+             * @default 1.0.0
+             */
+            version: string | null;
         };
         /** UsageChartPoint */
         UsageChartPoint: {
@@ -51557,6 +51635,8 @@ export interface components {
             drop_params?: boolean | string | null;
             /** Explicit Cache Read Input Token Cost */
             explicit_cache_read_input_token_cost?: number | null;
+            /** Fedramp Uplift Multiplier */
+            fedramp_uplift_multiplier?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -51572,6 +51652,14 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens */
+            input_cost_per_audio_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Batches */
+            input_cost_per_audio_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Flex */
+            input_cost_per_audio_token_above_200k_tokens_flex?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Priority */
+            input_cost_per_audio_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Audio Token Batches */
             input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Audio Token Flex */
@@ -51610,6 +51698,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Batches */
             input_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Flex */
+            input_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -51717,6 +51807,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Priority */
+            output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -51751,6 +51843,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Batches */
             output_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Flex */
+            output_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -55790,6 +55884,39 @@ export interface operations {
             };
         };
     };
+    upload_plugin_claude_code_plugins_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_plugin_claude_code_plugins_upload_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterPluginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_plugin_claude_code_plugins__plugin_name__get: {
         parameters: {
             query?: never;
@@ -55874,6 +56001,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                digest: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */

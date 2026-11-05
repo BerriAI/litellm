@@ -1402,6 +1402,9 @@ class RoutingContext:
     def deployment_params(self, request: Mapping[str, object], deployment: "Deployment | None") -> Mapping[str, object]:
         return self._router._params_sent_to_deployment(request, deployment)
 
+    def default_litellm_params(self) -> Mapping[str, object]:
+        return self._router._active_default_litellm_params()
+
     def settings(self) -> RouterSettings:
         return self._router.settings()
 
