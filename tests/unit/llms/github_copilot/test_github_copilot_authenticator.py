@@ -75,7 +75,29 @@ class TestGitHubCopilotAuthenticator:
             patch("os.makedirs") as mock_makedirs,
         ):
             auth = Authenticator()
-            mock_makedirs.assert_called_once_with(auth.token_dir, exist_ok=True)
+            # credentials dir must not be group/world-accessible
+            mock_makedirs.assert_called_once_with(auth.token_dir, mode=0o700, exist_ok=True)
+
+    def test_token_dir_and_credential_files_created_with_restrictive_modes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Token directory is created 0o700 and both credential files are created 0o600 under umask 022."""
+        token_dir = tmp_path / "copilot_tokens"
+        monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+        old_umask = os.umask(0o022)
+        try:
+            auth = Authenticator()
+            assert (os.stat(token_dir).st_mode & 0o777) == 0o700
+
+            with patch.object(auth, "_login", return_value="gho_test_token"):
+                assert auth.get_access_token() == "gho_test_token"
+            assert (os.stat(auth.access_token_file).st_mode & 0o777) == 0o600
+
+            with patch.object(auth, "_refresh_api_key", return_value=dict(REFRESHED_KEY)):
+                assert auth.get_api_key() == "new-api-key"
+            assert (os.stat(auth.api_key_file).st_mode & 0o777) == 0o600
+        finally:
+            os.umask(old_umask)
 
     def test_get_github_headers(self, authenticator):
         """Test that GitHub headers are correctly generated."""
