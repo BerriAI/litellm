@@ -11681,11 +11681,12 @@ class ProxyStartupEvent:
         from litellm.proxy.spend_tracking.usage_alert_job import USAGE_ALERT_JOB_ID, UsageAlertJob
 
         usage_alert_job: Final = UsageAlertJob.from_prisma(prisma_client, proxy_logging_obj.slack_alerting_instance)
-        scheduler.add_job(
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
             usage_alert_job.run,
             "interval",
             seconds=3600,
-            next_run_time=datetime.now() + timedelta(seconds=batch_writing_interval + 10 + random.randint(0, 20)),
+            next_run_time=datetime.now(timezone.utc)
+            + timedelta(seconds=batch_writing_interval + 10 + random.randint(0, 20)),
             id=USAGE_ALERT_JOB_ID,
             replace_existing=True,
             max_instances=1,
