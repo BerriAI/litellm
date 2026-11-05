@@ -34,7 +34,7 @@ from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import is_https_url_with_host
-from litellm.models.plugin_upload import PluginUpload
+from litellm.models.plugin_upload import PluginUpload, has_agent_skill_metadata
 from litellm.proxy._types import CommonProxyErrors, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import (
     SkillVisibility,
@@ -125,7 +125,23 @@ async def get_prisma_client() -> object:
 _get_prisma_client: Final = get_prisma_client
 
 
-async def _header_key_caller(request: Request) -> UserAPIKeyAuth:
+def plugin_archive_url(request: Request, name: str, digest: str) -> str:
+    from litellm.proxy.utils import get_custom_url
+
+    return get_custom_url(
+        request_base_url=str(request.base_url), route=f"claude-code/plugins/{name}/archive/{digest}.zip"
+    )
+
+
+def plugin_archive_source_matches(
+    request: Request, name: str, source: Mapping[str, str], digest: str, *, has_agent_skill_metadata: bool
+) -> bool:
+    if has_agent_skill_metadata:
+        return source.get("source") == "archive" and source.get("sha256") == digest
+    return source == {"source": "archive", "url": plugin_archive_url(request, name, digest), "sha256": digest}
+
+
+async def header_key_caller(request: Request) -> UserAPIKeyAuth:
     try:
         caller: Final = await user_api_key_auth(
             request=request,
@@ -154,7 +170,7 @@ async def _header_key_caller(request: Request) -> UserAPIKeyAuth:
 
 async def _marketplace_caller(request: Request, key: str | None) -> UserAPIKeyAuth | None:
     if marketplace_auth_required():
-        return await _header_key_caller(request)
+        return await header_key_caller(request)
     if key:
         return await user_api_key_auth(request=request, api_key=f"Bearer {key}")
     return None
@@ -173,8 +189,6 @@ async def upload_plugin(
     metadata: Annotated[Json[UploadPluginRequest], Form(description="JSON skill metadata without a source URL")],
 ) -> RegisterPluginResponse:
     """Create a skill and its uploaded ZIP atomically. Duplicate names return 409."""
-    from litellm.proxy.utils import get_custom_url
-
     _require_proxy_admin(user_api_key_dict)
     if uploads is None:
         raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
@@ -189,10 +203,7 @@ async def upload_plugin(
     digest: Final = hashlib.sha256(archive).hexdigest()
     source: Final = {
         "source": "archive",
-        "url": get_custom_url(
-            request_base_url=str(request.base_url),
-            route=f"claude-code/plugins/{metadata.name}/archive/{digest}.zip",
-        ),
+        "url": plugin_archive_url(request, metadata.name, digest),
         "sha256": digest,
     }
     spec: Final = RegisterPluginRequest.model_validate({**metadata.model_dump(), "source": source})
@@ -237,10 +248,8 @@ async def download_plugin_archive(
     uploads: PluginUploadRepositoryDep,
 ) -> Response:
     """Download an uploaded ZIP under the same visibility policy as its skill."""
-    from litellm.proxy.utils import get_custom_url
-
     caller: Final = (
-        await _header_key_caller(request)
+        await header_key_caller(request)
         if marketplace_key_header_present(request)
         else await _marketplace_caller(request, None)
     )
@@ -248,13 +257,12 @@ async def download_plugin_archive(
     if uploads is None:
         raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
     archive: Final = await uploads.get_metadata(plugin_name)
-    expected_url: Final = get_custom_url(
-        request_base_url=str(request.base_url), route=f"claude-code/plugins/{plugin_name}/archive/{digest}.zip"
-    )
     if (
         archive is None
         or not visibility.allows(archive)
-        or archive.source != {"source": "archive", "url": expected_url, "sha256": digest}
+        or not plugin_archive_source_matches(
+            request, plugin_name, archive.source, digest, has_agent_skill_metadata=archive.has_agent_skill_metadata
+        )
     ):
         raise _error_response(404, "Skill archive not found")
     content: Final = await uploads.get_content(archive)
@@ -608,7 +616,7 @@ async def register_plugin(
 async def list_plugins(
     enabled_only: bool = False,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> ListPluginsResponse:
     """
     List all plugins in the marketplace.
 
@@ -640,6 +648,7 @@ async def list_plugins(
                     version=p.version,
                     description=p.description,
                     source=manifest.get("source", {}),
+                    has_agent_skill_metadata=has_agent_skill_metadata(MANIFEST_FIELDS.validate_python(manifest)),
                     author=manifest.get("author"),
                     homepage=manifest.get("homepage"),
                     keywords=manifest.get("keywords"),
@@ -805,7 +814,14 @@ async def update_plugin(
             _validate_plugin_source(request.source)
         _validate_installation_preference(request)
 
-        manifest: Final[Mapping[str, object]] = _build_plugin_manifest(plugin_name, request)
+        manifest: Final[Mapping[str, object]] = {
+            **_build_plugin_manifest(plugin_name, request),
+            **(
+                {"agent_skill": current_manifest["agent_skill"]}
+                if "agent_skill" in current_manifest and request.source == current_manifest.get("source")
+                else {}
+            ),
+        }
 
         plugin: Final[_PluginRecord | None] = await repository.table.update(
             where={"name": plugin_name},
