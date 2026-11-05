@@ -43,12 +43,13 @@ describe("model migration impact", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const request = input instanceof Request ? input : new Request(input);
       const url = new URL(request.url);
-      calls.push({
+      const call: (typeof calls)[number] = {
         path: url.pathname,
         query: url.searchParams,
         method: request.method,
         body: request.method === "PUT" ? await request.clone().json() : null,
-      });
+      };
+      calls.push(call);
       if (url.pathname.endsWith("/alerts/tags")) return apiResponse([]);
       if (request.method === "PUT") return apiResponse({ status: "resolved" });
       if (url.pathname.endsWith("/aggregated/keys")) {
@@ -58,7 +59,8 @@ describe("model migration impact", () => {
           metadata: { key_alias: `support-key-${offset + i}`, team_id: "support", user_email: "owner@example.com" },
           metrics: { api_requests: 100, spend: 1 },
         }));
-        return apiResponse({ api_keys: rows, total_api_keys: 120, offset, limit: 50 });
+        const page = { api_keys: rows, total_api_keys: 120, offset, limit: 50 };
+        return apiResponse(page);
       }
       if (url.pathname.endsWith("/team/daily/activity/aggregated"))
         return apiResponse({ results: [], metadata: { entity_total_api_keys: {} } });
@@ -99,15 +101,15 @@ describe("model migration impact", () => {
     });
     expect(await screen.findByRole("link", { name: "support-key-0" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Mark resolved", exact: true }));
-    await waitFor(() =>
-      expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
-        model: "openai/gpt-4-turbo",
-        deprecation_date: "2026-10-23",
-        status: "resolved",
-        last_seen_date: "2026-11-04",
-        last_seen_requests: 20,
-      }),
-    );
+    const expectedAcknowledgement = {
+      model: "openai/gpt-4-turbo",
+      deprecation_date: "2026-10-23",
+      status: "resolved",
+      last_seen_date: "2026-11-04",
+      last_seen_requests: 20,
+    };
+    await waitFor(() => expect(calls.find((call) => call.method === "PUT")?.body).toEqual(expectedAcknowledgement));
+
     expect(
       calls.some(
         (call) => call.path === "/team/daily/activity/aggregated/keys" && call.query.get("team_ids") === "support",
