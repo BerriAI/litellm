@@ -839,6 +839,10 @@ def _every_deployment_refused(
     return all(_configured_model_info(deployment).get("id") in refused_deployment_ids for deployment in deployments)
 
 
+def _refused_by_no_new_deployment(already_skipped: tuple[str, ...], skipped_now: tuple[str, ...]) -> bool:
+    return frozenset(skipped_now) <= frozenset(already_skipped)
+
+
 def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
     if silent_model is None or in_mirrored_call():
         return ()
@@ -9813,11 +9817,21 @@ class PythonCore(DeprecatedRouterMembers):
 
             ## LOGGING
             if num_retries > 0:
-                kwargs = self._core_log_retry(kwargs=kwargs, e=original_exception)
+                first_already_skipped_ids: Final = as_retry_skipped_deployment_ids(
+                    kwargs.get("_retry_skipped_deployment_ids")
+                )
                 first_skipped_ids: Final = self._deployment_ids_to_skip_on_retry(
                     exception=original_exception,
-                    already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
+                    already_skipped=first_already_skipped_ids,
                 )
+                if isinstance(original_exception, litellm_exceptions.ContextWindowExceededError) and (
+                    _refused_by_no_new_deployment(first_already_skipped_ids, first_skipped_ids)
+                    or _every_deployment_refused(
+                        _DEPLOYMENTS_ADAPTER.validate_python(_healthy_deployments), first_skipped_ids
+                    )
+                ):
+                    raise
+                kwargs = self._core_log_retry(kwargs=kwargs, e=original_exception)
                 if first_skipped_ids:
                     kwargs["_retry_skipped_deployment_ids"] = first_skipped_ids  # rebind-ok: the next attempt reads it
                 if isinstance(
@@ -9902,10 +9916,18 @@ class PythonCore(DeprecatedRouterMembers):
                         except Exception:
                             raise e
 
+                    already_skipped_ids = as_retry_skipped_deployment_ids(kwargs.get("_retry_skipped_deployment_ids"))
                     skipped_ids = self._deployment_ids_to_skip_on_retry(
                         exception=e,
-                        already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
+                        already_skipped=already_skipped_ids,
                     )
+                    if isinstance(e, litellm_exceptions.ContextWindowExceededError) and (
+                        _refused_by_no_new_deployment(already_skipped_ids, skipped_ids)
+                        or _every_deployment_refused(
+                            _DEPLOYMENTS_ADAPTER.validate_python(_healthy_deployments), skipped_ids
+                        )
+                    ):
+                        break
                     if skipped_ids:
                         kwargs["_retry_skipped_deployment_ids"] = skipped_ids  # rebind-ok: the next attempt reads it
                     if isinstance(e, litellm_exceptions.UnsupportedEndpointError) and _every_deployment_refused(
@@ -10026,7 +10048,9 @@ class PythonCore(DeprecatedRouterMembers):
         status_code: Final = getattr(error, "status_code", None)
         if status_code is not None and not self._host.invoke("should_retry")(status_code):
             # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
-            if status_code not in (401, 403) and not isinstance(error, litellm_exceptions.UnsupportedEndpointError):
+            if status_code not in (401, 403) and not isinstance(
+                error, (litellm_exceptions.UnsupportedEndpointError, litellm_exceptions.ContextWindowExceededError)
+            ):
                 raise error
 
         if isinstance(error, litellm_exceptions.NotFoundError):
