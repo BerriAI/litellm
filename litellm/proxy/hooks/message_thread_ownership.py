@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache
 
 _PASS_THROUGH_CALL_TYPE: Final = "pass_through_endpoint"
-_MESSAGES_CALL_TYPE: Final = "anthropic_messages"
 _ANTHROPIC_BETA_HEADER: Final = "anthropic-beta"
 _OWNER_KEY_PREFIX: Final = "anthropic_message_thread_owner:"
 _OWNER_TTL_SECONDS: Final = 3600
@@ -217,7 +216,7 @@ class MessageThreadOwnership(CustomLogger):
         if previous_message_id is None:
             return None
         binding: Final = await self._binding(previous_message_id, user_api_key_dict)
-        if binding is None and call_type != _MESSAGES_CALL_TYPE:
+        if binding is None and call_type == _PASS_THROUGH_CALL_TYPE:
             return None
         if binding is None or binding.owner != _owner(user_api_key_dict):
             raise HTTPException(status_code=404, detail=message_thread_not_found_body(_UNOWNED_THREAD_MESSAGE))

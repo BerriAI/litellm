@@ -131,15 +131,19 @@ async def test_without_a_key_only_the_signed_in_identity_that_created_a_thread_c
     assert not await allows(ownership, bob, "msg_signed_in")
 
 
+@pytest.mark.parametrize("call_type", ("anthropic_messages", "acompletion", "aresponses"))
 @pytest.mark.asyncio
-async def test_a_continue_naming_a_message_this_proxy_never_served_in_a_thread_is_thread_not_found() -> None:
+async def test_a_continue_naming_a_message_this_proxy_never_served_in_a_thread_is_thread_not_found(
+    call_type: CallTypesLiteral,
+) -> None:
     ownership: Final = hook()
     await ownership.async_post_call_success_hook(
         data={}, user_api_key_dict=OWNER, response=anthropic_message("msg_unthreaded")
     )
 
-    assert not await allows(ownership, OWNER, "msg_unthreaded")
-    assert not await allows(ownership, OWNER, "msg_unknown")
+    assert not await allows(ownership, OWNER, "msg_unthreaded", call_type)
+    assert not await allows(ownership, OWNER, "msg_unknown", call_type)
+    assert not await allows(ownership, INTRUDER, "msg_unknown", call_type)
 
 
 @pytest.mark.asyncio
@@ -182,13 +186,10 @@ async def test_a_thread_continue_on_another_route_stays_with_the_key_that_create
     assert not await allows(ownership, INTRUDER, "msg_cross_route", call_type)
 
 
-@pytest.mark.parametrize("call_type", ("pass_through_endpoint", "acompletion", "aresponses"))
 @pytest.mark.asyncio
-async def test_a_continue_outside_the_messages_route_of_a_message_the_proxy_never_bound_is_left_to_the_upstream(
-    call_type: CallTypesLiteral,
-) -> None:
-    assert await allows(hook(), OWNER, "msg_unknown", call_type)
-    assert await allows(hook(), INTRUDER, "msg_unknown", call_type)
+async def test_a_pass_through_continue_of_a_message_the_proxy_never_bound_is_left_to_the_upstream() -> None:
+    assert await allows(hook(), OWNER, "msg_unknown", "pass_through_endpoint")
+    assert await allows(hook(), INTRUDER, "msg_unknown", "pass_through_endpoint")
 
 
 @pytest.mark.asyncio
