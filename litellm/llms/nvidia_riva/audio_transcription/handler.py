@@ -174,8 +174,6 @@ class NvidiaRivaAudioTranscription:
         api_base: str | None,
         provider_config: NvidiaRivaAudioTranscriptionConfig | None = None,
     ) -> TranscriptionResponse:
-        # The gRPC calls block, so offload them to a worker thread to keep
-        # the event loop free.
         return await asyncio.to_thread(
             self._run_sync,
             model=model,

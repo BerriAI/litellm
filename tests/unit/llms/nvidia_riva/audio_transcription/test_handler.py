@@ -1,5 +1,6 @@
 import asyncio
 import io
+import ipaddress
 import threading
 import uuid
 import wave
@@ -8,13 +9,17 @@ from collections.abc import Iterable, Iterator
 from concurrent import futures
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from queue import SimpleQueue
 from typing import Final
 
 import grpc
 import httpx
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 from riva.client.proto import riva_asr_pb2, riva_asr_pb2_grpc, riva_audio_pb2
 
 import litellm
@@ -104,13 +109,49 @@ class _Asr(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):
         yield from self._script.streaming
 
 
+@dataclass(frozen=True, slots=True)
+class _Tls:
+    key_pem: bytes
+    cert_pem: bytes
+
+
+def _self_signed_loopback_tls() -> _Tls:
+    key: Final = ec.generate_private_key(ec.SECP256R1())
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    cert: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime(2000, 1, 1, tzinfo=timezone.utc))
+        .not_valid_after(datetime(2099, 1, 1, tzinfo=timezone.utc))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    return _Tls(
+        key_pem=key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        ),
+        cert_pem=cert.public_bytes(serialization.Encoding.PEM),
+    )
+
+
 @contextmanager
-def _riva_server(script: _Script, max_receive_bytes: int | None = None) -> Iterator[_Riva]:
+def _riva_server(script: _Script, max_receive_bytes: int | None = None, tls: _Tls | None = None) -> Iterator[_Riva]:
     calls: Final[SimpleQueue[_Call]] = SimpleQueue()
     options: Final = () if max_receive_bytes is None else (("grpc.max_receive_message_length", max_receive_bytes),)
     server: Final = grpc.server(futures.ThreadPoolExecutor(max_workers=4), options=options)
     riva_asr_pb2_grpc.add_RivaSpeechRecognitionServicer_to_server(_Asr(script, calls), server)
-    port: Final = server.add_insecure_port("127.0.0.1:0")
+    port: Final = (
+        server.add_insecure_port("127.0.0.1:0")
+        if tls is None
+        else server.add_secure_port("127.0.0.1:0", grpc.ssl_server_credentials(((tls.key_pem, tls.cert_pem),)))
+    )
     server.start()
     try:
         yield _Riva(f"127.0.0.1:{port}", calls)
@@ -505,6 +546,30 @@ def test_no_api_key_sends_no_authorization(riva_offline: bool) -> None:
 
     assert call.header("authorization") == ()
     assert call.header("function-id") == ()
+
+
+@pytest.mark.parametrize("riva_offline", [False, True])
+@pytest.mark.parametrize(
+    ("optional_params", "function_ids"),
+    [({"use_ssl": True}, ()), ({"nvcf_function_id": "abc-123"}, ("abc-123",))],
+    ids=["use_ssl", "nvcf_default_tls"],
+)
+def test_tls_api_key_is_sent_as_one_bearer_token(
+    monkeypatch: pytest.MonkeyPatch,
+    optional_params: dict[str, object],
+    function_ids: tuple[str, ...],
+    riva_offline: bool,
+) -> None:
+    tls: Final = _self_signed_loopback_tls()
+    system_roots: Final = grpc.ssl_channel_credentials
+    monkeypatch.setattr(grpc, "ssl_channel_credentials", lambda: system_roots(root_certificates=tls.cert_pem))
+    with _riva_server(_answers("ok"), tls=tls) as riva:
+        response: Final = _transcribe(riva, {**optional_params, "riva_offline": riva_offline}, api_key=_API_KEY)
+        call: Final = riva.only_call()
+
+    assert response.text == "ok"
+    assert call.header("authorization") == (f"Bearer {_API_KEY}",)
+    assert call.header("function-id") == function_ids
 
 
 @pytest.mark.parametrize("optional_params", [{"use_ssl": True}, {"nvcf_function_id": "abc-123"}])
