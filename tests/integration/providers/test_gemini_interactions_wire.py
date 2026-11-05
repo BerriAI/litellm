@@ -358,6 +358,7 @@ def _hop_frames(hop: dict, text: str) -> tuple[bytes, ...]:
         _sse_event("interaction.created", {"event_type": "interaction.created", "interaction": created}),
         _sse_event("step.delta", {"event_type": "step.delta", "delta": {"type": "text", "text": text}}),
         _sse_event("interaction.completed", {"event_type": "interaction.completed", "interaction": completed}),
+        _KNOWN_DONE_TERMINATOR,
     )
 
 
