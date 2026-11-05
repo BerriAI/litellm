@@ -7,6 +7,7 @@ creates, alerting, optional pre-call check registration, ``observe``, ``register
 Each test asserts what the Python core does today; oddities are named in the test's docstring.
 """
 
+import inspect
 import logging
 from collections.abc import Callable, Generator, Mapping
 from typing import Final
@@ -17,9 +18,9 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCache
+from litellm.router import Router
 from litellm.router_api import ChangeSet, router_init_args
 from litellm.router_core import RouterCore
-from litellm.router_python_core import PythonCore
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
 from litellm.types.router import (
@@ -34,7 +35,7 @@ from tests.unit.test_router.core.construction_precall_helpers import (
     collect_other_routers,
     host_callback_names,
 )
-from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, records_outcomes_through_callbacks
+from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rust_core
 
 MakeCore = Callable[..., RouterCore]
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
@@ -694,24 +695,6 @@ def test_alerting_config_registers_slack_alerting_and_its_slow_response_callback
     )
 
 
-def test_the_python_core_registers_its_sync_outcome_callback_before_the_slow_response_callback(
-    host: ScriptedHost,
-) -> None:
-    """Python core only: it learns sync outcomes from a success callback on its host. The Rust core
-    records outcomes from the attempt itself and registers no outcome callbacks."""
-    from tests.unit.test_router.core.scripted_host import python_core
-
-    python_core(
-        host,
-        model_list=[deployment("g", "a")],
-        alerting_config=AlertingConfig(webhook_url="https://example.invalid/hook", alerting_threshold=10),
-    )
-    assert host_callback_names(host)["success_callback"] == [
-        "sync_deployment_callback_on_success",
-        "response_taking_too_long_callback",
-    ]
-
-
 def test_observe_reports_no_slack_alerting_without_an_alerting_config(make_core: MakeCore) -> None:
     assert _one(make_core).observe().slack_alerting_logger is None
 
@@ -884,11 +867,7 @@ def test_runtime_removal_keeps_the_host_callback_while_another_live_router_uses_
     host) still has one of that type."""
     collect_other_routers()
     other_host: Final = CallbackHost()
-    from tests.unit.test_router.core.scripted_host import python_core
-
-    other: Final = python_core(
-        other_host, model_list=[deployment("g", "o")], optional_pre_call_checks=["prompt_caching"]
-    )
+    other: Final = rust_core(other_host, model_list=[deployment("g", "o")], optional_pre_call_checks=["prompt_caching"])
     core: Final = _one(make_core, optional_pre_call_checks=["prompt_caching"])
     core.apply(ChangeSet(settings={"optional_pre_call_checks": []}))
     assert core.optional_callbacks == []  # pyright: ignore[reportAttributeAccessIssue]
@@ -948,30 +927,13 @@ def test_retiring_one_router_keeps_the_callbacks_of_another_on_the_same_host(
     assert host.lists["input_callback"] == [second.leastbusy_logger]  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_retiring_one_python_core_keeps_the_outcome_callback_of_another_on_the_same_host(
-    host: ScriptedHost,
-) -> None:
-    """Python core only: each one registers an async outcome callback bound to itself; the Rust core
-    records outcomes from the attempt itself and registers none."""
-    from tests.unit.test_router.core.scripted_host import python_core
-
-    collect_other_routers()
-    first: Final = python_core(host, model_list=[deployment("g", "a")], routing_strategy="least-busy")
-    second: Final = python_core(host, model_list=[deployment("g", "a")], routing_strategy="least-busy")
-    first.retire()
-    assert host_callback_names(host)["_async_success_callback"] == ["deployment_callback_on_success"]
-    assert all(callback.__self__ is second for callback in host.lists["_async_success_callback"])  # pyright: ignore[reportAttributeAccessIssue]
-
-
 def test_retire_hands_a_vacated_check_to_another_live_router_on_a_different_host(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     """Oddity: retire re-registers the same-keyed check of any other live router in the process into
     this host's list, even one built on a different host."""
     collect_other_routers()
-    from tests.unit.test_router.core.scripted_host import python_core
-
-    other: Final = python_core(
+    other: Final = rust_core(
         CallbackHost(), model_list=[deployment("g", "o")], optional_pre_call_checks=["prompt_caching"]
     )
     core: Final = _one(make_core, optional_pre_call_checks=["prompt_caching"])
@@ -997,14 +959,6 @@ class RecordingLogging:
         self.calls.append(("add", type(callback).__name__))
 
 
-def _bound_outcome_callbacks(core: RouterCore) -> list[tuple[str, object]]:  # mutable-ok: a fresh list
-    return (
-        [("functions", ["async_failure", "async_success", "failure"])]
-        if records_outcomes_through_callbacks(core)
-        else []
-    )
-
-
 def test_observe_request_scoped_removes_every_callback_the_router_registered_globally(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
@@ -1018,13 +972,12 @@ def test_observe_request_scoped_removes_every_callback_the_router_registered_glo
 def test_observe_with_a_logging_object_binds_the_router_outcome_callbacks(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    """The Python core binds its three outcome callbacks; the Rust core records every attempt's
-    outcome itself and binds none, as it registers none on the host."""
+    """The core records every attempt's outcome itself and binds none, as it registers none on the host."""
     core: Final = _one(make_core)
     before: Final = host_callback_names(host)
     logging_obj: Final = RecordingLogging()
     core.observe(logging_obj)  # pyright: ignore[reportArgumentType]
-    assert logging_obj.calls == _bound_outcome_callbacks(core)
+    assert logging_obj.calls == []
     assert host_callback_names(host) == before
 
 
@@ -1035,7 +988,6 @@ def test_observe_request_scoped_then_binding_hands_selectors_and_policies_to_the
     logging_obj: Final = RecordingLogging()
     core.observe(logging_obj)  # pyright: ignore[reportArgumentType]
     assert logging_obj.calls == [
-        *_bound_outcome_callbacks(core),
         ("replace", "LeastBusyLoggingHandler"),
         ("add", "PromptCachingDeploymentCheck"),
     ]
@@ -1048,7 +1000,7 @@ def test_binding_without_request_scoping_hands_the_request_no_selector_or_policy
     core: Final = _one(make_core, routing_strategy="least-busy", optional_pre_call_checks=["prompt_caching"])
     logging_obj: Final = RecordingLogging()
     core.observe(logging_obj)  # pyright: ignore[reportCallIssue]  # observe takes a logging object on every core
-    assert logging_obj.calls == _bound_outcome_callbacks(core)
+    assert logging_obj.calls == []
 
 
 def test_binding_skips_a_policy_the_host_already_runs(make_core: MakeCore, host: ScriptedHost) -> None:
@@ -1060,7 +1012,7 @@ def test_binding_skips_a_policy_the_host_already_runs(make_core: MakeCore, host:
     host.lists["callbacks"].append(PromptCachingDeploymentCheck(cache=DualCache()))
     logging_obj: Final = RecordingLogging()
     core.observe(logging_obj)  # pyright: ignore[reportCallIssue]  # observe takes a logging object on every core
-    assert logging_obj.calls == [*_bound_outcome_callbacks(core), ("replace", "LeastBusyLoggingHandler")]
+    assert logging_obj.calls == [("replace", "LeastBusyLoggingHandler")]
 
 
 # --- register_plugin ---------------------------------------------------------------------
@@ -1224,7 +1176,7 @@ def test_registry_settings_and_health_views_are_built_once(make_core: MakeCore) 
 
 
 def test_get_valid_args_lists_every_constructor_argument_but_self_and_the_host() -> None:
-    names: Final = PythonCore.get_valid_args()
+    names: Final = router_init_args()
     assert names[0] == "model_list"
     assert "self" not in names
     assert "_host" not in names
@@ -1232,12 +1184,12 @@ def test_get_valid_args_lists_every_constructor_argument_but_self_and_the_host()
     assert len(names) == len(set(names))
 
 
-def test_get_valid_args_matches_the_router_init_args() -> None:
-    assert tuple(PythonCore.get_valid_args()) == tuple(router_init_args())
+def test_get_valid_args_matches_the_router_signature() -> None:
+    assert tuple(inspect.signature(Router).parameters) == tuple(router_init_args())
 
 
 def test_get_valid_args_on_a_built_router(make_core: MakeCore) -> None:
-    assert _one(make_core).get_valid_args() == PythonCore.get_valid_args()  # pyright: ignore[reportAttributeAccessIssue]
+    assert _one(make_core).get_valid_args() == list(router_init_args())  # pyright: ignore[reportAttributeAccessIssue]
 
 
 # --- print_deployment ----------------------------------------------------------------------

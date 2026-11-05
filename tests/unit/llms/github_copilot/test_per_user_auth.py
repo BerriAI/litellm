@@ -1302,24 +1302,30 @@ def _per_user_router():
     )
 
 
+def _route_with_credential_name(router: litellm.Router, credential_name: str) -> ModelResponse:
+    return router.completion(
+        model="copilot",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_credential_name=credential_name,
+        mock_response="ok",
+    )
+
+
 def test_per_user_deployment_rejects_a_caller_credential_override(per_user_credential):
     """Caller kwargs win the litellm_params merge downstream, so the deployment
     layer is the last place that still sees both names: a different name on a
     per-user deployment must be refused there even if discovery missed the hop."""
     router: Final = _per_user_router()
-    deployment: Final = router.get_model_list()[0]
-    kwargs: Final = {"litellm_credential_name": "shared-cred", "metadata": {}}
-    with pytest.raises(litellm.BadRequestError):
-        router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+    with pytest.raises(BadRequestError, match="litellm_credential_name cannot be overridden"):
+        _route_with_credential_name(router, "shared-cred")
 
 
 def test_per_user_deployment_allows_the_configured_credential_name(per_user_credential):
+    """The configured name passes the deployment layer and reaches the per-user login, which asks the
+    caller to connect GitHub Copilot since no user token is stored."""
     router: Final = _per_user_router()
-    deployment: Final = router.get_model_list()[0]
-    kwargs: Final = {"litellm_credential_name": "copilot-cred", "metadata": {}}
-    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-    assert kwargs["litellm_credential_name"] == "copilot-cred"
-    assert "model_info" in kwargs
+    with pytest.raises(CallerCredentialAuthenticationError, match="copilot-cred"):
+        _route_with_credential_name(router, "copilot-cred")
 
 
 def test_shared_deployment_keeps_caller_credential_override():
@@ -1330,8 +1336,5 @@ def test_shared_deployment_keeps_caller_credential_override():
         patch.object(Authenticator, "get_api_key", return_value="shared-token"),
     ):
         router: Final = _per_user_router()
-        deployment: Final = router.get_model_list()[0]
-        kwargs: Final = {"litellm_credential_name": "other-cred", "metadata": {}}
-        router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-        assert kwargs["litellm_credential_name"] == "other-cred"
-        assert "model_info" in kwargs
+        response: Final = _route_with_credential_name(router, "other-cred")
+        assert response.choices[0].message.content == "ok"
