@@ -3319,3 +3319,35 @@ async def test_mcp_routing_truncated_json_body_is_not_stashed_for_auth():
 
     assert await scope[MCP_PEEKED_BODY_SCOPE_KEY]() == b"{}"
     assert await _read_request_body(_admission_request(scope)) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/mcp", "/atlassian/mcp"])
+async def test_bare_options_skips_litellm_auth(path: str):
+    """A bare OPTIONS probe must not run LiteLLM auth, so it never triggers the 401 OAuth challenge."""
+    from litellm.proxy.mcp_server import server as mcp_server
+
+    scope: Scope = {
+        "type": "http",
+        "method": "OPTIONS",
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+        "server": ("localhost", 8000),
+        "scheme": "http",
+    }
+    receive = AsyncMock(return_value={"type": "http.request", "body": b"", "more_body": False})
+    sent: list[dict] = []
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    auth = AsyncMock(side_effect=AssertionError("LiteLLM auth ran on OPTIONS"))
+    with patch.object(mcp_server, "extract_mcp_auth_context", auth):
+        await mcp_server.handle_streamable_http_mcp(scope, receive, send)
+
+    auth.assert_not_awaited()
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 204
+    headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}
+    assert headers["allow"] == "GET, POST, DELETE, OPTIONS"

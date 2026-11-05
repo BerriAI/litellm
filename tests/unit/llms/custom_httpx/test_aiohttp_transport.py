@@ -145,6 +145,49 @@ async def test_client_payload_error_mid_stream_raises_read_error():
 
 
 @pytest.mark.asyncio
+async def test_bytes_buffered_before_a_dropped_connection_are_yielded_before_the_read_error():
+    loop: Final = asyncio.get_running_loop()
+    content: Final = aiohttp.StreamReader(aiohttp.base_protocol.BaseProtocol(loop), 2**16, loop=loop)
+    content.feed_data(b"event: message_start\n\n")
+    content.set_exception(aiohttp.ClientPayloadError("Response payload is not completed"))
+    mock_response: Final = MockAiohttpResponse()
+    mock_response.content = content
+    received: Final[list[bytes]] = []
+
+    async def _drain() -> None:
+        async for chunk in AiohttpResponseStream(mock_response):  # pyright: ignore[reportArgumentType]  # mock response
+            received.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
+
+    assert received == [b"event: message_start\n\n"]
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_bytes_already_read_before_a_dropped_connection_are_not_yielded_again():
+    loop: Final = asyncio.get_running_loop()
+    content: Final = aiohttp.StreamReader(aiohttp.base_protocol.BaseProtocol(loop), 2**16, loop=loop)
+    content.feed_data(b"event: message_start\n\n")
+    content.feed_data(b"event: ping\n\n")
+    assert await content.read(7) == b"event: "
+    content.set_exception(aiohttp.ClientPayloadError("Response payload is not completed"))
+    mock_response: Final = MockAiohttpResponse()
+    mock_response.content = content
+    received: Final[list[bytes]] = []
+
+    async def _drain() -> None:
+        async for chunk in AiohttpResponseStream(mock_response):  # pyright: ignore[reportArgumentType]  # mock response
+            received.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
+
+    assert received == [b"message_start\n\nevent: ping\n\n"]
+
+
+@pytest.mark.asyncio
 async def test_client_payload_error_before_first_chunk_raises_read_error():
     """A connection reset before any body byte must surface, not yield an empty 200 body"""
     client_error = aiohttp.client_exceptions.ClientPayloadError(

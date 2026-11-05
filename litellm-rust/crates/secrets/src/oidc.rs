@@ -9,7 +9,8 @@ use litellm_http::Client;
 use moka::future::Cache;
 use serde::Deserialize;
 
-use crate::{Error, SecretValue};
+use crate::Error;
+use litellm_secret_value::SecretValue;
 
 const GOOGLE_TOKEN_MAX_TTL: Duration = Duration::from_secs(3540);
 const GITHUB_TOKEN_TTL: Duration = Duration::from_secs(295);

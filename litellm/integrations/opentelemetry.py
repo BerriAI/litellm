@@ -72,7 +72,7 @@ if TYPE_CHECKING:
     )
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
-    Span = _Span | Any
+    Span = _Span
     Tracer = _Tracer
     Context = _Context
     SpanExporter = _SpanExporter
@@ -1440,7 +1440,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             span = None
             # Only set attributes if the span is still recording (not closed)
             # Note: parent_span is guaranteed to be not None here
-            if hasattr(parent_span, "set_status"):
+            if parent_span is not None and hasattr(parent_span, "set_status"):
                 parent_span.set_status(Status(StatusCode.OK))
                 self.set_attributes(parent_span, kwargs, response_obj)
             # Raw-request as direct child of parent_span
@@ -2233,7 +2233,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # record error on parent span (keeps hierarchy shallow)
             # Only set attributes if the span is still recording (not closed)
             # Note: parent_otel_span is guaranteed to be not None here
-            if parent_otel_span.is_recording():
+            if parent_otel_span is not None and parent_otel_span.is_recording():
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
                 parent_error_message: Final = self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
                 parent_otel_span.set_status(Status(StatusCode.ERROR, parent_error_message))

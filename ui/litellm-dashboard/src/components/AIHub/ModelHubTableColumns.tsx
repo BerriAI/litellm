@@ -2,6 +2,7 @@
 
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, Info, MoreHorizontal } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { IdentityCell, StatusBadge } from "@/components/shared/table_cells";
@@ -14,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import i18n from "@/i18n/i18n";
 import { displayMode } from "@/lib/decisionModels";
 import { copyToClipboard } from "@/utils/dataUtils";
 
@@ -68,10 +70,11 @@ interface ModelHubRowActionsProps {
 }
 
 function ModelHubRowActions({ model, onModelClick }: ModelHubRowActionsProps) {
+  const { t } = useTranslation();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open model actions"
+        aria-label={t("aiHub.modelHubColumns.rowActions.openActions")}
         data-testid={`model-hub-actions-${model.model_group}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -80,14 +83,14 @@ function ModelHubRowActions({ model, onModelClick }: ModelHubRowActionsProps) {
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem data-testid="model-hub-action-details" onClick={() => onModelClick(model)}>
           <Info />
-          View details
+          {t("aiHub.modelHubColumns.rowActions.viewDetails")}
         </DropdownMenuItem>
         <DropdownMenuItem
           data-testid="model-hub-action-copy"
-          onClick={() => void copyToClipboard(model.model_group, "Model name copied")}
+          onClick={() => void copyToClipboard(model.model_group, t("aiHub.modelHubColumns.rowActions.nameCopied"))}
         >
           <Copy />
-          Copy model name
+          {t("aiHub.modelHubColumns.rowActions.copyName")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -107,9 +110,20 @@ export const getModelHubTableColumns = ({
     {
       id: "model_group",
       accessorKey: "model_group",
-      meta: { title: showProviderLogos ? "Model" : "Public Model Name" },
+      meta: {
+        title: showProviderLogos
+          ? i18n.t("aiHub.modelHubColumns.modelChat")
+          : i18n.t("aiHub.modelHubColumns.publicModelName"),
+      },
       header: ({ column }) => (
-        <DataTableSortHeader column={column} title={showProviderLogos ? "Model" : "Public Model Name"} />
+        <DataTableSortHeader
+          column={column}
+          title={
+            showProviderLogos
+              ? i18n.t("aiHub.modelHubColumns.modelChat")
+              : i18n.t("aiHub.modelHubColumns.publicModelName")
+          }
+        />
       ),
       size: 220,
       enableSorting: true,
@@ -141,8 +155,8 @@ export const getModelHubTableColumns = ({
     {
       id: "providers",
       accessorKey: "providers",
-      meta: { title: "Provider", skeleton: "chips", className: "hidden md:table-cell" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Provider" />,
+      meta: { title: i18n.t("aiHub.modelHubColumns.provider"), skeleton: "chips", className: "hidden md:table-cell" },
+      header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("aiHub.modelHubColumns.provider")} />,
       size: 150,
       enableSorting: true,
       sortingFn: (rowA, rowB) => rowA.original.providers.join(", ").localeCompare(rowB.original.providers.join(", ")),
@@ -163,8 +177,8 @@ export const getModelHubTableColumns = ({
     {
       id: "mode",
       accessorFn: (row) => (row.mode ? displayMode(row.mode) : ""),
-      meta: { title: "Mode", className: "hidden lg:table-cell" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Mode" />,
+      meta: { title: i18n.t("aiHub.modelHubColumns.mode"), className: "hidden lg:table-cell" },
+      header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("aiHub.modelHubColumns.mode")} />,
       size: 110,
       enableSorting: true,
       sortingFn: "alphanumeric",
@@ -180,8 +194,8 @@ export const getModelHubTableColumns = ({
     {
       id: "max_input_tokens",
       accessorKey: "max_input_tokens",
-      meta: { title: "Tokens", className: "hidden lg:table-cell", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Tokens" />,
+      meta: { title: i18n.t("aiHub.modelHubColumns.tokens"), className: "hidden lg:table-cell", numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("aiHub.modelHubColumns.tokens")} />,
       size: 110,
       enableSorting: true,
       sortingFn: (rowA, rowB) => {
@@ -202,8 +216,8 @@ export const getModelHubTableColumns = ({
     {
       id: "input_cost_per_token",
       accessorKey: "input_cost_per_token",
-      meta: { title: "Cost/1M", skeleton: "twoLine", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Cost/1M" />,
+      meta: { title: i18n.t("aiHub.modelHubColumns.cost"), skeleton: "twoLine", numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("aiHub.modelHubColumns.cost")} />,
       size: 110,
       enableSorting: true,
       sortingFn: (rowA, rowB) => {
@@ -225,8 +239,12 @@ export const getModelHubTableColumns = ({
     },
     {
       id: "capabilities",
-      meta: { title: "Features", skeleton: "chips", className: showProviderLogos ? "hidden md:table-cell" : undefined },
-      header: "Features",
+      meta: {
+        title: i18n.t("aiHub.modelHubColumns.features"),
+        skeleton: "chips",
+        className: showProviderLogos ? "hidden md:table-cell" : undefined,
+      },
+      header: i18n.t("aiHub.modelHubColumns.features"),
       size: 220,
       enableSorting: false,
       cell: ({ row }) => {
@@ -247,8 +265,8 @@ export const getModelHubTableColumns = ({
     },
     {
       id: "custom_tags",
-      meta: { title: "Tags", skeleton: "chips" },
-      header: "Tags",
+      meta: { title: i18n.t("aiHub.modelHubColumns.tags"), skeleton: "chips" },
+      header: i18n.t("aiHub.modelHubColumns.tags"),
       size: 160,
       enableSorting: false,
       cell: ({ row }) => {
@@ -262,8 +280,8 @@ export const getModelHubTableColumns = ({
     {
       id: "is_public_model_group",
       accessorKey: "is_public_model_group",
-      meta: { title: "Public", skeleton: "badge", className: "hidden md:table-cell" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Public" />,
+      meta: { title: i18n.t("aiHub.modelHubColumns.public"), skeleton: "badge", className: "hidden md:table-cell" },
+      header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("aiHub.modelHubColumns.public")} />,
       size: 100,
       enableSorting: true,
       sortingFn: (rowA, rowB) => {
@@ -273,15 +291,15 @@ export const getModelHubTableColumns = ({
       },
       cell: ({ row }) =>
         row.original.is_public_model_group === true ? (
-          <StatusBadge tone="success" label="Yes" />
+          <StatusBadge tone="success" label={i18n.t("aiHub.modelHubColumns.yes")} />
         ) : (
-          <StatusBadge tone="neutral" label="No" />
+          <StatusBadge tone="neutral" label={i18n.t("aiHub.modelHubColumns.no")} />
         ),
     },
     {
       id: "actions",
       meta: { className: "text-right", headerClassName: "text-right" },
-      header: () => <span className="sr-only">Actions</span>,
+      header: () => <span className="sr-only">{i18n.t("aiHub.modelHubColumns.actions")}</span>,
       size: 64,
       enableSorting: false,
       enableHiding: false,

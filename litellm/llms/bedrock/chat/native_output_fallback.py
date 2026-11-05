@@ -2,11 +2,11 @@ from collections.abc import Callable, Coroutine
 from functools import partial
 from typing import Final, TypeAlias
 
+from litellm.llms.anthropic.common_utils import is_claude_strict_tools_rejection
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import (
     NativeOutputFallback,
     is_bedrock_native_output_rejection,
-    is_bedrock_strict_tools_rejection,
     warn_bedrock_native_output_rejected,
     warn_bedrock_strict_tools_dropped,
 )
@@ -34,7 +34,7 @@ def _native_output_retry(
 def _strict_tools_retry(
     error: BaseLLMException, fallback: NativeOutputFallbackFactory | None, model: str
 ) -> NativeOutputFallback | None:
-    if fallback is None or not is_bedrock_strict_tools_rejection(error.status_code, error.message):
+    if fallback is None or not is_claude_strict_tools_rejection(error.status_code, error.message):
         return None
     retry: Final = fallback()
     if retry is not None:
