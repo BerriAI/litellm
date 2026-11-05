@@ -259,8 +259,8 @@ def postgres_connection_budget_message(writer_limit: str, reader_limit: str | No
 
     Prisma's ``connection_limit`` is per query engine, and every uvicorn worker
     owns one engine per configured database (writer, plus the reader when
-    ``DATABASE_URL_READ_REPLICA`` is set) and a native writer pool sized from the
-    writer URL. The limits are read off the final URLs,
+    ``DATABASE_URL_READ_REPLICA`` is set) and a native pool beside each, sized from
+    the same URL. The limits are read off the final URLs,
     so a reader that pins its own ``connection_limit`` or an operator override in
     ``database_extra_connection_params`` is counted at its real value. The
     server-side cap is shared by every pod, so the number an operator has to keep
@@ -274,13 +274,17 @@ def postgres_connection_budget_message(writer_limit: str, reader_limit: str | No
     except ValueError:
         return (
             "LiteLLM Proxy: Postgres connection budget per pod = workers x (writer connection_limit + native "
-            "writer pool + reader connection_limit) "
+            "writer pool + reader connection_limit + native reader pool) "
             f"(workers={num_workers!r}, writer={writer_limit!r}, reader={reader_limit!r}); "
             "keep pods x that figure under max_connections minus superuser_reserved_connections"
         )
-    pools: Final = f"writer connection_limit {writer} + native writer pool {writer}"
-    engines: Final = f"({pools} + reader connection_limit {reader})" if reader_limit is not None else f"({pools})"
-    per_pod: Final = workers * (2 * writer + reader)
+    writer_pools: Final = f"writer connection_limit {writer} + native writer pool {writer}"
+    engines: Final = (
+        f"({writer_pools} + reader connection_limit {reader} + native reader pool {reader})"
+        if reader_limit is not None
+        else f"({writer_pools})"
+    )
+    per_pod: Final = workers * 2 * (writer + reader)
     return (
         f"LiteLLM Proxy: Postgres connection budget per pod = {workers} worker(s) x {engines} = up to {per_pod} "
         "connections; keep pods x that figure under max_connections minus superuser_reserved_connections"

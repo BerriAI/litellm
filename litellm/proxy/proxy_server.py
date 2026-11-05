@@ -1558,7 +1558,9 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
-    database: Final = await database_runtime.Database.open(client, os.environ["DATABASE_URL"])
+    database: Final = await database_runtime.Database.open(
+        client, os.environ["DATABASE_URL"], os.environ.get("DATABASE_URL_READ_REPLICA") or None
+    )
     resources.push_async_callback(database.aclose)
     return database
 

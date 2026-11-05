@@ -109,14 +109,14 @@ fn seconds(value: Option<f64>) -> Result<Option<Duration>, Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error as StdError, str::FromStr, time::Duration};
+    use std::{error::Error as StdError, time::Duration};
 
     use litellm_secret_value::SecretValue;
     use rstest::rstest;
-    use sqlx::postgres::{PgConnectOptions, PgSslMode};
+    use sqlx::postgres::PgSslMode;
 
     use super::{Endpoint, PoolLimits, SslMode};
-    use crate::Error;
+    use crate::{Error, test_support::database_endpoint};
 
     fn endpoint() -> Endpoint {
         Endpoint {
@@ -131,25 +131,6 @@ mod tests {
             statement_cache: true,
             pool: PoolLimits::default(),
         }
-    }
-
-    fn database_endpoint() -> Result<Endpoint, Box<dyn StdError>> {
-        let url = PgConnectOptions::from_str(&std::env::var("DATABASE_URL")?)?;
-        let password = url::Url::parse(&std::env::var("DATABASE_URL")?)?
-            .password()
-            .map(SecretValue::new);
-        Ok(Endpoint {
-            host: url.get_host().to_owned(),
-            port: url.get_port(),
-            username: url.get_username().to_owned(),
-            password,
-            database: url.get_database().unwrap_or("postgres").to_owned(),
-            ssl_mode: SslMode::Prefer,
-            ssl_root_cert: None,
-            options: Vec::new(),
-            statement_cache: true,
-            pool: PoolLimits::default(),
-        })
     }
 
     #[test]

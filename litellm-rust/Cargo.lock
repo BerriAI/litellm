@@ -3711,6 +3711,7 @@ name = "litellm-db"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "litellm-circuit-breaker",
  "litellm-secret-value",
  "macro_rules_attribute",
  "rstest",

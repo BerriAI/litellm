@@ -36,10 +36,10 @@ Python and SQLx run side by side until every repository operation is native, so 
 | `options` (`statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`) | `proxy_cli.py` | `Endpoint::options`, sent as startup `-c` settings |
 | `schema` | URL param | `search_path` startup setting when not `public`; a custom schema behind PgBouncer is rejected by PgBouncer |
 | `pgbouncer=true`, `DATABASE_DISABLE_PREPARED_STATEMENTS` | `db_url_settings.py` | `statement_cache: false` |
-| Rotating RDS IAM / Entra token | `token_auth.py`, `PrismaWrapper` | Python mints, `NativeDatabase.set_writer_password` swaps connect options |
+| Rotating RDS IAM / Entra token | `token_auth.py`, `PrismaWrapper` | Python mints per side, `NativeDatabase.set_writer_password` / `set_reader_password` swap connect options |
 | In-container PgBouncer | `pgbouncer.py` | Inherited: the pooled URL carries PgBouncer's credential |
-| Startup connection budget | `postgres_connection_budget_message` | Counts the native writer pool |
-| Read replica routing | `routing_prisma_wrapper.py` | Planned: optional reader pool with explicit routing |
+| Startup connection budget | `postgres_connection_budget_message` | Counts the native writer and reader pools |
+| Read replica routing | `routing_prisma_wrapper.py`, `DATABASE_URL_READ_REPLICA` | `Pools`: callers pick `writer()` or `read()`; a failed reader acquire falls back to the writer and skips the reader for 30s |
 | Error classification, `lock_timeout` on rollups | `exception_handler.py`, `rollup_lock_timeout.py` | Planned |
 | `ServiceTypes.DB` events per round trip | `db_span.py`, `log_db_metrics.py` | Planned |
 | Auth lookup gate, fail open on DB outage, reader choice per query | `db_lookup_gate.py`, `allow_requests_on_db_unavailable` | With each ported auth read |
