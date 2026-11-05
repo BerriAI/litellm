@@ -139,14 +139,19 @@ class TestOutputConfigStructuredOutput:
     }
 
     def test_output_config_format_json_schema_converted(self):
-        """output_config.format.json_schema is converted to OpenAI text.format, defaulting strict to False."""
+        """output_config.format.json_schema is converted to OpenAI text.format, defaulting strict to True.
+
+        The default matches the Messages->Chat adapter, which sets strict=True for
+        json_schema output, so switching to the Responses path keeps the
+        structured-output contract intact (#50023).
+        """
         req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         fmt = kwargs["text"]["format"]
         assert fmt["type"] == "json_schema"
         assert fmt["schema"] == self._SCHEMA
-        assert fmt["strict"] is False
+        assert fmt["strict"] is True
         assert fmt["name"] == "structured_output"
 
     def test_output_config_format_explicit_strict_true_is_preserved(self):
@@ -162,12 +167,12 @@ class TestOutputConfigStructuredOutput:
         assert "text" not in kwargs
 
     def test_output_format_still_works(self):
-        """The original output_format field still takes precedence when present, defaulting strict to False."""
+        """The original output_format field still takes precedence when present, defaulting strict to True (#50023)."""
         req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         assert kwargs["text"]["format"]["type"] == "json_schema"
-        assert kwargs["text"]["format"]["strict"] is False
+        assert kwargs["text"]["format"]["strict"] is True
 
     def test_output_format_explicit_strict_false_is_preserved(self):
         """output_format with an explicit strict=False is preserved as False."""
@@ -178,6 +183,41 @@ class TestOutputConfigStructuredOutput:
     def test_output_format_explicit_strict_true_is_preserved(self):
         """output_format with an explicit strict=True is preserved as True."""
         req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA, "strict": True})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["strict"] is True
+
+    def test_default_strict_matches_messages_to_chat_adapter(self):
+        """Regression for #50023.
+
+        The Messages->Responses bridge must default json_schema strictness to the
+        same value the Messages->Chat bridge uses. The Chat adapter hardcodes
+        strict=True, so a request routed through the Responses path (e.g. for an
+        OpenAI Responses-API model) must keep strict=True rather than silently
+        downgrading the structured-output contract to strict=False.
+        """
+        from litellm.llms.anthropic.messages.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        output_format = {"type": "json_schema", "schema": self._SCHEMA}
+
+        # Messages -> Chat default
+        chat = LiteLLMAnthropicMessagesAdapter().translate_anthropic_output_format_to_openai(
+            dict(output_format)
+        )
+        chat_strict = chat["json_schema"]["strict"]
+
+        # Messages -> Responses default
+        req = _make_request(output_config={"format": dict(output_format)})
+        responses_strict = _ADAPTER.translate_request(req)["text"]["format"]["strict"]
+
+        assert chat_strict is True
+        assert responses_strict is True
+        assert responses_strict == chat_strict
+
+    def test_output_format_explicit_strict_none_defaults_to_true(self):
+        """An explicit null strict is treated as omitted and defaults to True (#50023)."""
+        req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA, "strict": None})
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["text"]["format"]["strict"] is True
 

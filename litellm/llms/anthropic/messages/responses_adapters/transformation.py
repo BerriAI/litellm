@@ -684,12 +684,20 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
             schema: Final = output_format.get("schema")
             if schema:
+                # Default to strict mode when `strict` is omitted (or null),
+                # matching the Messages->Chat adapter (which sets strict=True for
+                # json_schema output), so switching to the Responses path
+                # preserves the structured-output contract (#50023). An explicit
+                # strict=True/False is still honored.
+                strict = output_format.get("strict")
+                if strict is None:
+                    strict = True
                 responses_kwargs["text"] = {
                     "format": {
                         "type": "json_schema",
                         "name": "structured_output",
                         "schema": schema,
-                        "strict": output_format.get("strict", False),
+                        "strict": strict,
                     }
                 }
 
