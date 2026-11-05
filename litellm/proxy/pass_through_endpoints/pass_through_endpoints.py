@@ -215,6 +215,13 @@ _FIELDS_GUARDRAILS_READ_BY_SHAPE: Final = (
     ("guardrail_config", (dict,)),
     ("proxy_server_request", (dict,)),
 )
+_PROXY_FILLED_FIELD_SHAPES: Final = (
+    ("litellm_call_id", (str,)),
+    ("litellm_trace_id", (str,)),
+    ("custom_llm_provider", (str,)),
+    ("api_base", (str,)),
+    ("api_key", (str,)),
+)
 _POST_CALL_SELECTION_FIELDS: Final = (
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
@@ -394,6 +401,19 @@ def _guardrail_response_headers(
             "Leaving out guardrail response headers: a recorded value can't be encoded (%s)", type(error).__name__
         )
         return MappingProxyType({})
+
+
+def _holds_string_headers(value: object) -> bool:
+    headers: Final = as_str_mapping(value)
+    return headers is not None and all(isinstance(header, str) for header in headers.values())
+
+
+def _is_guardrail_readable_client_metadata(key: str, value: object) -> bool:
+    if key == "headers":
+        return _holds_string_headers(value)
+    if key == "requester_metadata":
+        return isinstance(value, Mapping)
+    return _is_mergeable_client_metadata(key, value)
 
 
 class _RegisteredPassThroughRoute(TypedDict):
@@ -1107,24 +1127,43 @@ async def _inherit_auth_guardrails(
     client_sent_metadata: Final = "metadata" in parsed_body
     if not isinstance(parsed_body.get("metadata"), dict):
         parsed_body["metadata"] = {}  # rebind-ok: the merge below writes into the live request body's metadata
-    client_named: Final = (as_str_mapping(parsed_body["metadata"]) or {}).get("guardrails")
+    client_metadata: Final = as_str_mapping(parsed_body["metadata"]) or {}
+    client_body_guardrails: Final = {"guardrails": parsed_body["guardrails"]} if "guardrails" in parsed_body else {}
+    client_metadata_guardrails: Final = (
+        {"guardrails": client_metadata["guardrails"]} if "guardrails" in client_metadata else {}
+    )
+    client_named: Final = client_metadata.get("guardrails")
     await move_guardrails_to_metadata(
         data=parsed_body,
         _metadata_variable_name="metadata",
         user_api_key_dict=user_api_key_dict,
     )
     metadata: Final = parsed_body["metadata"]
+    merged: Final = (as_str_mapping(metadata) or {}).get("guardrails")
+    entries: Final = (
+        merged_guardrail_entries(
+            _GUARDRAIL_ENTRIES.validate_python(merged), _client_named_guardrail_entries(client_named)
+        )
+        if isinstance(merged, list)
+        else ()
+    )
+    runs_guardrails: Final = bool(entries) or bool((as_str_mapping(metadata) or {}).get("_guardrail_pipelines"))
+    if entries and isinstance(metadata, dict):
+        metadata["guardrails"] = entries
+    elif isinstance(merged, list) and isinstance(metadata, dict):
+        _restore_unmerged_guardrail_fields(
+            parsed_body,
+            cast("dict[str, object]", metadata),  # cast-ok: the request body's JSON metadata object
+            client_body_guardrails,
+            client_metadata_guardrails,
+        )
+    if runs_guardrails:
+        _drop_client_values_guardrails_cannot_read(parsed_body)
     if not metadata and not client_sent_metadata:
         parsed_body.pop("metadata")
         return None
-    merged: Final = (as_str_mapping(metadata) or {}).get("guardrails")
-    if not isinstance(merged, list):
+    if not entries:
         return None
-    entries: Final = merged_guardrail_entries(
-        _GUARDRAIL_ENTRIES.validate_python(merged), _client_named_guardrail_entries(client_named)
-    )
-    if entries and isinstance(metadata, dict):
-        metadata["guardrails"] = entries
     admin_metadata: Final = _admin_guardrail_metadata(user_api_key_dict)
     admin_scoped_body: Final = {
         **parsed_body,
@@ -1133,11 +1172,54 @@ async def _inherit_auth_guardrails(
     return entries if entries and _named_guardrail_runs_post_call(admin_scoped_body, entries) else None
 
 
+def _drop_client_values_guardrails_cannot_read(
+    parsed_body: dict[str, object],  # mutable-ok: strips the request body in place before its guardrails run
+) -> None:
+    """Drop what a client sent in a field the proxy fills on the native routes when the guardrails can't read it there:
+    a ``litellm_call_id``, ``litellm_trace_id``, ``custom_llm_provider``, ``api_base`` or ``api_key`` that isn't a
+    string, a ``proxy_server_request`` or ``metadata.headers`` whose headers aren't strings, a ``requester_metadata``
+    that isn't an object, and any ``user_api_key_*`` metadata field, which only the proxy sets. The provider receives
+    none of these fields."""
+    for field, shape in _PROXY_FILLED_FIELD_SHAPES:
+        if field in parsed_body and not isinstance(parsed_body[field], shape):
+            parsed_body.pop(field)
+    server_request: Final = as_str_mapping(parsed_body.get("proxy_server_request")) or {}
+    if "headers" in server_request and not _holds_string_headers(server_request["headers"]):
+        parsed_body.pop("proxy_server_request")
+    for bucket in (parsed_body.get(key) for key in sorted(_METADATA_KEYS)):
+        if isinstance(bucket, dict):
+            _drop_metadata_guardrails_cannot_read(cast("dict[str, object]", bucket))  # cast-ok: a JSON object
+
+
+def _drop_metadata_guardrails_cannot_read(
+    metadata: dict[str, object],  # mutable-ok: strips the request body's metadata in place
+) -> None:
+    unreadable: Final = tuple(
+        field for field, value in metadata.items() if not _is_guardrail_readable_client_metadata(field, value)
+    )
+    for field in unreadable:
+        metadata.pop(field)
+
+
+def _restore_unmerged_guardrail_fields(
+    parsed_body: dict[str, object],  # mutable-ok: puts the client's own fields back on the live request body
+    metadata: dict[str, object],  # mutable-ok: the live request body's metadata
+    client_body_guardrails: Mapping[str, object],
+    client_metadata_guardrails: Mapping[str, object],
+) -> None:
+    """Put back the client's ``guardrails`` and ``metadata.guardrails`` when the merge found no guardrail to run, so
+    the body keeps main's shape"""
+    metadata.pop("guardrails", None)
+    metadata.update(client_metadata_guardrails)
+    parsed_body.update(client_body_guardrails)
+
+
 def _client_named_guardrail_entries(client_named: object) -> Sequence[object]:
-    """The guardrails ``metadata.guardrails`` names: its entries, or the keys of the dict form the guardrails read"""
+    """The guardrails ``metadata.guardrails`` names: its entries, or the keys of the dict form the guardrails read that
+    it doesn't turn off with ``false``"""
     if isinstance(client_named, list):
         return _GUARDRAIL_ENTRIES.validate_python(client_named)
-    return tuple(as_str_mapping(client_named) or ())
+    return tuple(name for name, run in (as_str_mapping(client_named) or {}).items() if run is not False)
 
 
 def _admin_guardrail_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
