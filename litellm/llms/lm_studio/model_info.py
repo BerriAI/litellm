@@ -3,7 +3,7 @@ import json
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Annotated, Final, Protocol, TypeAlias, TypeVar
+from typing import Annotated, Final, Literal, Protocol, TypeAlias, TypeVar
 
 import httpx
 from pydantic import BeforeValidator, ConfigDict, Field, ValidationError
@@ -46,7 +46,7 @@ class _ModelV1(LiteLLMBaseModel):
 
     key: str
     kind: str | None = Field(default=None, alias="type")
-    loaded_instances: tuple[_Instance, ...] = ()
+    loaded_instances: tuple[_Instance, ...]
 
 
 class _ModelsV1(LiteLLMBaseModel):
@@ -54,7 +54,7 @@ class _ModelsV1(LiteLLMBaseModel):
 
     models: tuple[_ModelV1, ...]
 
-    def context_length(self, model: str) -> int | None:
+    def token_limits(self, model: str) -> Mapping[str, int] | None:
         chat_cards: Final = tuple(card for card in self.models if card.kind != "embedding")
         instances: Final = tuple(chain.from_iterable(card.loaded_instances for card in chat_cards))
         named: Final = next((instance for instance in instances if instance.id == model), None)
@@ -62,7 +62,9 @@ class _ModelsV1(LiteLLMBaseModel):
             (card.loaded_instances[0] for card in chat_cards if card.key == model and card.loaded_instances), None
         )
         serving: Final = named if named is not None else first_loaded
-        return serving.config.context_length if serving is not None else None
+        if serving is None:
+            return MappingProxyType({})
+        return _token_limits(serving.config.context_length)
 
 
 class _ModelV0(LiteLLMBaseModel):
@@ -70,7 +72,7 @@ class _ModelV0(LiteLLMBaseModel):
 
     id: str
     kind: str | None = Field(default=None, alias="type")
-    state: str
+    state: Literal["loaded", "not-loaded"]
     loaded_context_length: _TokenLimit = None
 
 
@@ -79,11 +81,11 @@ class _ModelsV0(LiteLLMBaseModel):
 
     data: tuple[_ModelV0, ...]
 
-    def context_length(self, model: str) -> int | None:
+    def token_limits(self, model: str) -> Mapping[str, int] | None:
         card: Final = next((card for card in self.data if card.id == model), None)
         if card is None or card.state != "loaded" or card.kind == "embeddings":
-            return None
-        return card.loaded_context_length
+            return MappingProxyType({})
+        return _token_limits(card.loaded_context_length)
 
 
 class _Unavailable(LiteLLMBaseModel):
@@ -107,10 +109,11 @@ async def get_lm_studio_model_info(
         return None
     if base.scheme not in ("http", "https") or not base.host or base.username or base.password:
         return None
-    path: Final = base.path.rstrip("/")
-    suffix: Final = next((suffix for suffix in ("/api/v1", "/api/v0", "/v1") if path.endswith(suffix)), "")
+    raw_path, separator, query = base.raw_path.partition(b"?")
+    path: Final = raw_path.rstrip(b"/")
+    suffix: Final = next((suffix for suffix in (b"/api/v1", b"/api/v0", b"/v1") if path.endswith(suffix)), b"")
     prefix: Final = path[: -len(suffix)] if suffix else path
-    current_url: Final = base.copy_with(path=prefix + "/api/v1/models", fragment=None)
+    current_url: Final = base.copy_with(raw_path=prefix + b"/api/v1/models" + separator + query, fragment=None)
     cache_key: Final = (
         "lm_studio_model_info:"
         + hashlib.sha256(json.dumps((str(current_url), sorted(headers.items()))).encode()).hexdigest()
@@ -119,11 +122,11 @@ async def get_lm_studio_model_info(
     if isinstance(cached, _Unavailable):
         return None
     if isinstance(cached, (_ModelsV1, _ModelsV0)):
-        return _token_limits(cached.context_length(model))
+        return cached.token_limits(model)
     models: Final = await _fetch_models(
         client=client,
         current_url=current_url,
-        legacy_url=base.copy_with(path=prefix + "/api/v0/models", fragment=None),
+        legacy_url=base.copy_with(raw_path=prefix + b"/api/v0/models" + separator + query, fragment=None),
         headers=headers,
     )
     if models is None:
@@ -131,7 +134,7 @@ async def get_lm_studio_model_info(
         cache.set_cache(cache_key, _Unavailable(), ttl=RESPONSE_REUSE_SECONDS)
         return None
     cache.set_cache(cache_key, models, ttl=RESPONSE_REUSE_SECONDS)
-    return _token_limits(models.context_length(model))
+    return models.token_limits(model)
 
 
 async def _fetch_models(
@@ -166,9 +169,9 @@ def _parse(response: httpx.Response, shape: type[_Models]) -> _Models | None:
         return None
 
 
-def _token_limits(context: int | None) -> Mapping[str, int]:
+def _token_limits(context: int | None) -> Mapping[str, int] | None:
     return (
         MappingProxyType({"max_tokens": context, "max_input_tokens": context, "max_output_tokens": context})
         if context is not None
-        else MappingProxyType({})
+        else None
     )

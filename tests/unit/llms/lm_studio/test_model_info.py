@@ -66,6 +66,9 @@ async def test_matches_loaded_instances_without_using_theoretical_limits(model: 
         result: Final = await get_lm_studio_model_info(
             model=model, api_base="https://backend.test/v1", headers={}, client=handler, cache=InMemoryCache()
         )
+    if model == "incomplete":
+        assert result is None
+        return
     assert result == (
         {}
         if expected is None
@@ -74,6 +77,7 @@ async def test_matches_loaded_instances_without_using_theoretical_limits(model: 
 
 
 @pytest.mark.parametrize("base_path", ("", "/v1/", "/api/v1", "/api/v0"))
+@pytest.mark.parametrize("prefix", ("/tenant", "/tenant%2Fid"))
 @pytest.mark.parametrize(
     "current_api_response",
     (
@@ -83,14 +87,16 @@ async def test_matches_loaded_instances_without_using_theoretical_limits(model: 
     ),
 )
 async def test_legacy_fallback_preserves_origin_and_proxy_prefix(
-    base_path: str, current_api_response: httpx.Response
+    base_path: str, prefix: str, current_api_response: httpx.Response
 ) -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "backend.test"
         assert request.headers["authorization"] == "Bearer local-key"
-        if request.url.path == "/tenant/api/v1/models":
+        assert request.url.query == b"tenant=one%2Ftwo"
+        assert request.url.fragment == ""
+        if request.url.raw_path == f"{prefix}/api/v1/models?tenant=one%2Ftwo".encode():
             return current_api_response
-        assert request.url.path == "/tenant/api/v0/models"
+        assert request.url.raw_path == f"{prefix}/api/v0/models?tenant=one%2Ftwo".encode()
         return httpx.Response(
             200,
             json={
@@ -108,7 +114,7 @@ async def test_legacy_fallback_preserves_origin_and_proxy_prefix(
         cache: Final = InMemoryCache()
         result: Final = await get_lm_studio_model_info(
             model="org/model",
-            api_base=f"https://backend.test/tenant{base_path}",
+            api_base=f"https://backend.test{prefix}{base_path}?tenant=one%2Ftwo#ignored",
             headers={"authorization": "Bearer local-key"},
             client=handler,
             cache=cache,
@@ -117,7 +123,7 @@ async def test_legacy_fallback_preserves_origin_and_proxy_prefix(
         assert (
             await get_lm_studio_model_info(
                 model="unloaded",
-                api_base=f"https://backend.test/tenant{base_path}",
+                api_base=f"https://backend.test{prefix}{base_path}?tenant=one%2Ftwo#ignored",
                 headers={"authorization": "Bearer local-key"},
                 client=handler,
                 cache=cache,
@@ -210,7 +216,7 @@ async def test_invalid_context_is_not_advertised(context: object) -> None:
             await get_lm_studio_model_info(
                 model="model", api_base="https://backend.test", headers={}, client=handler, cache=InMemoryCache()
             )
-            == {}
+            is None
         )
 
 

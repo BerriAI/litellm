@@ -4750,6 +4750,58 @@ async def test_lm_studio_refresh_clears_active_limits_but_preserves_explicit_ove
         assert router.registry().group("alias", field="token_limits") == (input_limit, 123)
 
 
+@pytest.mark.parametrize(
+    ("version", "malformed_card"),
+    (
+        ("v1", {"key": "org/model"}),
+        ("v1", {"key": "org/model", "loaded_instances": [{"id": "org/model", "config": {}}]}),
+        (
+            "v1",
+            {
+                "key": "org/model",
+                "loaded_instances": [{"id": "org/model", "config": {"context_length": "4096"}}],
+            },
+        ),
+        ("v0", {"id": "org/model", "state": "loaded"}),
+        ("v0", {"id": "org/model", "state": "loaded", "loaded_context_length": False}),
+        ("v0", {"id": "org/model", "state": "loading"}),
+    ),
+)
+async def test_lm_studio_malformed_metadata_preserves_limits_until_recovery(
+    version: str, malformed_card: dict[str, object], local_model_cost_map: None
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "alias",
+                "litellm_params": {"model": "lm_studio/org/model", "api_base": "https://backend.test/v1"},
+                "model_info": {"id": "lm-deployment", "max_output_tokens": 123},
+            }
+        ]
+    )
+
+    def loaded(context: int) -> dict[str, object]:
+        if version == "v0":
+            return {"id": "org/model", "state": "loaded", "loaded_context_length": context}
+        return {"key": "org/model", "loaded_instances": [{"id": "org/model", "config": {"context_length": context}}]}
+
+    cards: Final = iter(([loaded(4096)], [malformed_card], [loaded(2048)], []))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path != f"/api/{version}/models":
+            return httpx.Response(404)
+        return httpx.Response(200, json={"models" if version == "v1" else "data": next(cards)})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        for expected in (4096, 4096, 2048, None):
+            router.health().store.in_memory_cache.flush_cache()
+            await router.aapply(ChangeSet(refresh_model_info=True, refresh_client=handler))
+            assert router.registry().group("alias", field="token_limits") == (expected, 123)
+
+
 async def test_lm_studio_refresh_without_server_does_not_send_api_key(
     monkeypatch: pytest.MonkeyPatch,
     local_model_cost_map: None,
