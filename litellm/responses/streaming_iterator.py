@@ -53,7 +53,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     requests_background,
     without_budget_reservation,
 )
-from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, BilledRoundsSpend, UncachedPrice
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -662,7 +662,21 @@ class BaseResponsesAPIStreamingIterator:
             if deferred_dispatch_armed:
                 # End-of-stream guardrail scans write guardrail_information after
                 # the terminal event; dispatching now would snapshot metadata early.
-                self.logging_obj._deferred_stream_complete_args = (logging_coroutine,)
+                response: Final[object] = getattr(logging_response, "response", None)
+                if isinstance(response, ResponsesAPIResponse):
+                    price: Final = (
+                        UncachedPrice(0.0, None)
+                        if self._completed_response_cache_hit
+                        else self.logging_obj.uncached_price(response)
+                    )
+                    spend: Final = BilledRoundsSpend(
+                        ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage),
+                        price.cost or 0.0,
+                        price.cost_breakdown,
+                    )
+                    self.logging_obj._deferred_stream_complete_args = (BilledRoundsDispatch(logging_coroutine, spend),)
+                else:
+                    self.logging_obj._deferred_stream_complete_args = (logging_coroutine,)
             else:
                 spawn_logging_task(
                     asyncio.get_running_loop(), logging_coroutine, task_name="Responses stream success logging"
