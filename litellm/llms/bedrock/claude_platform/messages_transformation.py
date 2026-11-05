@@ -21,6 +21,9 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
 
+    def supports_message_threads(self) -> bool:
+        return True
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict[str, str],  # mutable-ok: overrides the base signature

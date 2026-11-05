@@ -10,7 +10,8 @@ from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks import PROXY_HOOKS
 from litellm.proxy.hooks.message_thread_ownership import MessageThreadOwnership
-from litellm.proxy.utils import InternalUsageCache
+from litellm.types.utils import CallTypesLiteral
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 
 OWNER: Final = UserAPIKeyAuth(token="hashed-owner-key")
 INTRUDER: Final = UserAPIKeyAuth(token="hashed-intruder-key")
@@ -35,7 +36,7 @@ def message_start(message_id: str) -> dict[str, object]:
 
 
 def hook() -> MessageThreadOwnership:
-    return MessageThreadOwnership(internal_usage_cache=InternalUsageCache(DualCache()))
+    return MessageThreadOwnership(message_thread_owner_cache=InternalUsageCache(DualCache()))
 
 
 async def chunks(items: Sequence[object]) -> AsyncIterator[object]:
@@ -54,18 +55,25 @@ async def served(
     ]
 
 
-async def rejection(ownership: MessageThreadOwnership, key: UserAPIKeyAuth, message_id: str) -> HTTPException | None:
+async def rejection(
+    ownership: MessageThreadOwnership, key: UserAPIKeyAuth, message_id: str, call_type: CallTypesLiteral
+) -> HTTPException | None:
     try:
         await ownership.async_pre_call_hook(
-            user_api_key_dict=key, cache=DualCache(), data=continue_from(message_id), call_type="anthropic_messages"
+            user_api_key_dict=key, cache=DualCache(), data=continue_from(message_id), call_type=call_type
         )
     except HTTPException as rejected:
         return rejected
     return None
 
 
-async def allows(ownership: MessageThreadOwnership, key: UserAPIKeyAuth, message_id: str) -> bool:
-    rejected: Final = await rejection(ownership, key, message_id)
+async def allows(
+    ownership: MessageThreadOwnership,
+    key: UserAPIKeyAuth,
+    message_id: str,
+    call_type: CallTypesLiteral = "anthropic_messages",
+) -> bool:
+    rejected: Final = await rejection(ownership, key, message_id, call_type)
     if rejected is None:
         return True
     assert rejected.status_code == 404
@@ -141,16 +149,39 @@ async def test_a_reply_served_again_to_another_key_stays_with_the_key_that_got_i
     assert not await allows(ownership, INTRUDER, "msg_cached")
 
 
+@pytest.mark.parametrize("call_type", ("acompletion", "aresponses"))
 @pytest.mark.asyncio
-async def test_other_call_types_pass_untouched() -> None:
-    data: Final = continue_from("msg_unknown")
-
-    assert (
-        await hook().async_pre_call_hook(
-            user_api_key_dict=INTRUDER, cache=DualCache(), data=data, call_type="acompletion"
-        )
-        is None
+async def test_a_thread_continue_on_another_route_stays_with_the_key_that_created_the_thread(
+    call_type: CallTypesLiteral,
+) -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data={"thread": CREATE}, user_api_key_dict=OWNER, response=anthropic_message("msg_cross_route")
     )
+
+    assert await allows(ownership, OWNER, "msg_cross_route", call_type)
+    assert not await allows(ownership, INTRUDER, "msg_cross_route", call_type)
+
+
+@pytest.mark.asyncio
+async def test_a_pass_through_request_is_left_to_the_upstream_credential() -> None:
+    assert await allows(hook(), INTRUDER, "msg_unknown", "pass_through_endpoint")
+
+
+@pytest.mark.asyncio
+async def test_thread_bindings_never_push_the_proxys_rate_limit_counters_out_of_memory() -> None:
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    ownership: Final = MessageThreadOwnership(message_thread_owner_cache=proxy_logging.message_thread_owner_cache)
+    await proxy_logging.internal_usage_cache.async_set_cache(
+        key="rpm-counter", value=1, litellm_parent_otel_span=None, ttl=60
+    )
+    for turn in range(250):
+        await ownership.async_post_call_success_hook(
+            data={"thread": CREATE}, user_api_key_dict=OWNER, response=anthropic_message(f"msg_{turn}")
+        )
+
+    assert await proxy_logging.internal_usage_cache.async_get_cache(key="rpm-counter", litellm_parent_otel_span=None) == 1
+    assert await allows(ownership, OWNER, "msg_0")
 
 
 @pytest.mark.parametrize(

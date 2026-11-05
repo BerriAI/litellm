@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import InternalUsageCache
 
-_MESSAGES_CALL_TYPES: Final = frozenset({"anthropic_messages", "aanthropic_messages"})
+_PASS_THROUGH_CALL_TYPE: Final = "pass_through_endpoint"
 _OWNER_KEY_PREFIX: Final = "anthropic_message_thread_owner:"
 _OWNER_TTL_SECONDS: Final = 3600
 _SSE_DATA_FIELD: Final = "data:"
@@ -117,8 +117,8 @@ class _StreamedMessageIdScanner:
 
 
 class MessageThreadOwnership(CustomLogger):
-    def __init__(self, internal_usage_cache: "InternalUsageCache") -> None:
-        self._owners: Final = internal_usage_cache
+    def __init__(self, message_thread_owner_cache: "InternalUsageCache") -> None:
+        self._owners: Final = message_thread_owner_cache
 
     async def async_pre_call_hook(
         self,
@@ -127,7 +127,7 @@ class MessageThreadOwnership(CustomLogger):
         data: Mapping[str, object],
         call_type: CallTypesLiteral,
     ) -> None:
-        if call_type not in _MESSAGES_CALL_TYPES:
+        if call_type == _PASS_THROUGH_CALL_TYPE:
             return
         previous_message_id: Final = continued_message_id(data.get("thread"))
         if previous_message_id is None:

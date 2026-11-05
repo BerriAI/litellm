@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Final, cast, get_type_hints
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 
-from litellm.anthropic_beta_headers_manager import is_beta_header_supported_by_bundled_config
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.common_utils import (
@@ -15,8 +14,8 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
-    ANTHROPIC_BETA_HEADER_VALUES,
     MESSAGE_THREAD_NOT_FOUND_ERROR_CODE,
+    MESSAGE_THREAD_UNSUPPORTED_ERROR_CODE,
     AnthropicMessagesRequestOptionalParams,
     AnthropicMessageThread,
     AnthropicStopDetails,
@@ -303,32 +302,18 @@ def continued_message_id(thread: object) -> str | None:
     return validated.get("previous_message_id") if validated["type"] == "continue" else None
 
 
-def message_thread_not_found_body(message: str) -> str:
+def _message_thread_error_body(error_type: str, error_code: str, message: str) -> str:
     return json.dumps(
-        {
-            "type": "error",
-            "error": {
-                "type": "not_found_error",
-                "message": message,
-                "details": {"error_code": MESSAGE_THREAD_NOT_FOUND_ERROR_CODE},
-            },
-        }
+        {"type": "error", "error": {"type": error_type, "message": message, "details": {"error_code": error_code}}}
     )
 
 
-def supports_message_threads(custom_llm_provider: str | None, *, has_native_config: bool) -> bool:
-    """
-    Whether a ``thread`` body field can reach the upstream platform. Only a native Anthropic Messages
-    leg whose beta header column maps the message-threads beta can, since a translated leg has no
-    server-side conversation to continue and a platform whose column lacks the beta rejects the field.
-    """
-    return (
-        has_native_config
-        and custom_llm_provider is not None
-        and is_beta_header_supported_by_bundled_config(
-            ANTHROPIC_BETA_HEADER_VALUES.MESSAGE_THREADS_2026_08_12.value, custom_llm_provider
-        )
-    )
+def message_thread_not_found_body(message: str) -> str:
+    return _message_thread_error_body("not_found_error", MESSAGE_THREAD_NOT_FOUND_ERROR_CODE, message)
+
+
+def message_thread_unsupported_body(message: str) -> str:
+    return _message_thread_error_body("invalid_request_error", MESSAGE_THREAD_UNSUPPORTED_ERROR_CODE, message)
 
 
 @lru_cache(maxsize=1)

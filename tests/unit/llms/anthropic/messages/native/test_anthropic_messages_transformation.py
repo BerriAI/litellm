@@ -17,6 +17,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
+from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
@@ -729,15 +730,44 @@ def test_messages_headers_add_no_message_threads_beta_without_a_thread() -> None
     assert MESSAGE_THREADS_BETA not in headers.get("anthropic-beta", "")  # pyright: ignore[reportUnknownMemberType]  # bare-dict result
 
 
-def test_the_thread_beta_is_the_same_on_the_create_and_the_continue_turn() -> None:
+TOOL_SEARCH_TOOLS: Final = (
+    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+    {"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-4-8"},
+)
+TURN_WITH_OUTPUT_CONFIG: Final = (
+    {"role": "user", "content": "be brief", "output_config": {"effort": "low"}},
+    {
+        "role": "system",
+        "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "lookup_record"}}],
+    },
+)
+
+
+def test_the_thread_betas_are_the_same_on_the_create_and_the_continue_turn() -> None:
     config: Final = AnthropicMessagesConfig()
     create: Final = config._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
-        headers={}, optional_params={"thread": {"type": "create"}, "system": "be terse"}, messages=[]
+        headers={"anthropic-beta": "context-1m-2025-08-07"},
+        optional_params={"thread": {"type": "create"}, "system": "be terse", "tools": list(TOOL_SEARCH_TOOLS)},
+        messages=list(TURN_WITH_OUTPUT_CONFIG),
     )
     cont: Final = config._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
-        headers={}, optional_params={"thread": {"type": "continue", "previous_message_id": "msg_01p"}}, messages=[]
+        headers={"anthropic-beta": "context-1m-2025-08-07"},
+        optional_params={"thread": {"type": "continue", "previous_message_id": "msg_01p"}},
+        messages=[{"role": "user", "content": "and now?"}],
     )
-    assert create["anthropic-beta"] == cont["anthropic-beta"] == MESSAGE_THREADS_BETA
+    assert create["anthropic-beta"] == cont["anthropic-beta"] == f"context-1m-2025-08-07,{MESSAGE_THREADS_BETA}"
+
+
+def test_a_request_without_a_thread_still_takes_betas_from_its_tools_and_messages() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        headers={}, optional_params={"tools": list(TOOL_SEARCH_TOOLS)}, messages=list(TURN_WITH_OUTPUT_CONFIG)
+    )
+    assert set(headers["anthropic-beta"].split(",")) >= {  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # bare-dict result
+        get_tool_search_beta_header("anthropic"),
+        "advisor-tool-2026-03-01",
+        "per-turn-control-2026-07-01",
+        "mid-conversation-tool-changes-2026-07-01",
+    }
 
 
 def _advisor_turn() -> list[dict[str, object]]:

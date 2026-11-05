@@ -16,6 +16,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 
 ANTHROPIC_MODEL: Final = "threads-anthropic"
 BRIDGED_MODEL: Final = "threads-bridged"
+BRIDGED_DROP_PARAMS_MODEL: Final = "threads-bridged-drop-params"
 MESSAGE_THREADS_BETA: Final = "message-threads-2026-08-12"
 EXPIRED_THREAD_MARKER: Final = "thread-expired"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -148,6 +149,15 @@ def write_config(directory: Path, wire_url: str) -> Path:
                             "api_key": "synthetic-openai-key",
                         },
                     },
+                    {
+                        "model_name": BRIDGED_DROP_PARAMS_MODEL,
+                        "litellm_params": {
+                            "model": "openai/gpt-5.5",
+                            "api_base": f"{wire_url}/openai",
+                            "api_key": "synthetic-openai-key",
+                            "drop_params": True,
+                        },
+                    },
                 ],
                 "general_settings": {
                     "master_key": "os.environ/LITELLM_MASTER_KEY",
@@ -256,9 +266,20 @@ def assert_thread_not_found(status: int, raw: bytes) -> None:
     assert detail["details"] == {"error_code": "thread_not_found"}
 
 
-def test_a_create_turn_on_a_translated_leg_is_served_without_the_thread(rig: Rig) -> None:
+def test_a_create_turn_on_a_translated_leg_is_thread_unsupported_and_never_reaches_the_provider(rig: Rig) -> None:
     request_nonce: Final = nonce()
     status, raw = rig.send(BRIDGED_MODEL, request_nonce, {"type": "create"})
+    assert status == 400, raw[:500]
+    detail: Final = _JSON_OBJECT.validate_json(raw)["error"]
+    assert isinstance(detail, dict), raw[:500]
+    assert detail["type"] == "invalid_request_error"
+    assert detail["details"] == {"error_code": "thread_unsupported_request"}
+    assert rig.received(request_nonce) == ()
+
+
+def test_a_create_turn_on_a_translated_leg_is_served_without_the_thread_under_drop_params(rig: Rig) -> None:
+    request_nonce: Final = nonce()
+    status, raw = rig.send(BRIDGED_DROP_PARAMS_MODEL, request_nonce, {"type": "create"})
     assert status == 200, raw[:500]
     (upstream,) = rig.received(request_nonce)
     assert upstream.target.startswith("/openai"), upstream.target
@@ -284,6 +305,27 @@ def test_another_key_cannot_continue_a_thread_and_never_reaches_anthropic(rig: R
         status, raw = rig.send(ANTHROPIC_MODEL, owner_nonce, thread, key=owner)
         assert status == 200, raw[:500]
         assert len(rig.received(owner_nonce)) == 1
+
+
+def test_another_key_cannot_continue_a_thread_through_chat_completions(rig: Rig) -> None:
+    with rig.gateway.scenario() as scenario:
+        owner: Final = scenario.key()
+        intruder: Final = scenario.key()
+        thread: Final = {"type": "continue", "previous_message_id": rig.create(key=owner)}
+        intruder_nonce: Final = nonce()
+        response: Final = rig.gateway.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": f"hi {intruder_nonce}"}],
+                "thread": thread,
+            },
+            headers={"Authorization": f"Bearer {intruder}"},
+            timeout=120,
+        )
+        assert response.status_code == 404, response.content[:500]
+        assert rig.received(intruder_nonce) == ()
 
 
 def test_a_streamed_create_turn_can_be_continued_by_its_key(rig: Rig) -> None:

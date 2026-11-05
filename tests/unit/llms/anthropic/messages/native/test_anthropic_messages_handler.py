@@ -2744,8 +2744,34 @@ def test_a_thread_continue_on_a_leg_without_message_threads_is_thread_not_found_
     assert error["details"] == {"error_code": "thread_not_found"}
 
 
+@pytest.mark.parametrize(
+    "model",
+    ("openai/gpt-5.5", "vertex_ai/claude-opus-4-8", "bedrock/anthropic.claude-opus-4-8-v1:0"),
+    ids=("chat_bridge", "vertex_native", "bedrock_native"),
+)
+def test_a_thread_create_on_a_leg_without_message_threads_is_thread_unsupported_before_any_upstream_call(
+    model: str,
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.messages.native.handler import anthropic_messages_handler
+
+    with pytest.raises(AnthropicError) as raised:
+        anthropic_messages_handler(
+            max_tokens=64,
+            messages=[{"role": "user", "content": "hi"}],
+            model=model,
+            api_key="synthetic-key",
+            thread={"type": "create"},
+        )
+    assert raised.value.status_code == 400
+    error: Final = _JSON_BODY.validate_json(raised.value.message)["error"]
+    assert isinstance(error, dict)
+    assert error["type"] == "invalid_request_error"
+    assert error["details"] == {"error_code": "thread_unsupported_request"}
+
+
 @pytest.mark.asyncio
-async def test_a_thread_create_on_a_native_leg_without_message_threads_is_served_without_the_thread(
+async def test_a_thread_create_on_a_native_leg_without_message_threads_is_served_without_the_thread_under_drop_params(
     local_beta_headers_config: None,
 ) -> None:
     from litellm.llms.anthropic.messages.native import handler
@@ -2761,6 +2787,7 @@ async def test_a_thread_create_on_a_native_leg_without_message_threads_is_served
         aws_region_name="us-east-1",
         client=_upstream_answering_with([], captured),
         thread={"type": "create"},
+        drop_params=True,
     )
 
     body: Final = captured["body"]
