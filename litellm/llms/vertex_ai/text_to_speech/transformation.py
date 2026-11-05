@@ -723,6 +723,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Get the complete URL for Vertex AI TTS request
 
         Google Cloud TTS endpoint: https://texttospeech.googleapis.com/v1/text:synthesize
+
+        An explicit api_base wins. Otherwise a us or eu vertex_location selects the matching regional endpoint
+        (for example eu-texttospeech.googleapis.com), and any other or missing location keeps the global one.
         """
         if self._is_gemini_tts_model(model):
             return self._get_gemini_tts_url(
@@ -732,7 +735,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if api_base:
             return api_base
 
-        return self.TTS_API_URL
+        location: Final = litellm_params.get("vertex_location")
+        cloud_tts_location: Final = _GEMINI_CLOUD_TTS_LOCATIONS.get(location) if isinstance(location, str) else None
+        if cloud_tts_location is None:
+            return self.TTS_API_URL
+        return f"https://{cloud_tts_location}-texttospeech.googleapis.com/v1/text:synthesize"
 
     def _get_gemini_tts_url(self, model: str, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         if api_base:

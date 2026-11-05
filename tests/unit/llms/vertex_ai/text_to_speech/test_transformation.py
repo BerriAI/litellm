@@ -102,6 +102,54 @@ class TestVertexAITextToSpeechConfig:
 
         assert url == custom_url
 
+    @pytest.mark.parametrize(
+        ("vertex_location", "expected_host"),
+        [
+            ("eu", "eu-texttospeech.googleapis.com"),
+            ("europe-west4", "eu-texttospeech.googleapis.com"),
+            ("europe-west1", "eu-texttospeech.googleapis.com"),
+            ("us", "us-texttospeech.googleapis.com"),
+            ("us-central1", "us-texttospeech.googleapis.com"),
+        ],
+    )
+    def test_get_complete_url_uses_regional_endpoint_for_vertex_location(self, vertex_location, expected_host):
+        """A us or eu vertex_location selects the matching regional Cloud TTS endpoint"""
+        config = VertexAITextToSpeechConfig()
+
+        url = config.get_complete_url(
+            model="vertex_ai/chirp",
+            api_base=None,
+            litellm_params={"vertex_location": vertex_location},
+        )
+
+        assert url == f"https://{expected_host}/v1/text:synthesize"
+
+    @pytest.mark.parametrize("vertex_location", ["global", "europe-west2", "asia-northeast1", None])
+    def test_get_complete_url_keeps_global_endpoint_without_a_regional_match(self, vertex_location):
+        """A global, unknown or missing location keeps the previous global endpoint"""
+        config = VertexAITextToSpeechConfig()
+
+        url = config.get_complete_url(
+            model="vertex_ai/chirp",
+            api_base=None,
+            litellm_params={"vertex_location": vertex_location},
+        )
+
+        assert url == "https://texttospeech.googleapis.com/v1/text:synthesize"
+
+    def test_get_complete_url_api_base_wins_over_vertex_location(self):
+        """An explicit api_base takes precedence over the regional endpoint"""
+        config = VertexAITextToSpeechConfig()
+
+        custom_url = "https://custom-tts-endpoint.example.com/v1/synthesize"
+        url = config.get_complete_url(
+            model="vertex_ai/chirp",
+            api_base=custom_url,
+            litellm_params={"vertex_location": "eu"},
+        )
+
+        assert url == custom_url
+
     @patch.object(  # test-quality-ok: isolates provider credentials while testing request serialization
         VertexAITextToSpeechConfig, "_ensure_access_token"
     )
