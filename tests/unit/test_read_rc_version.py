@@ -45,5 +45,7 @@ def test_the_repo_pyproject_is_read_when_no_path_is_given(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(_REPO_ROOT)
+    if read_rc_version.RELEASE_VERSION.fullmatch(read_rc_version.read_version(_REPO_ROOT / "pyproject.toml")) is None:
+        pytest.skip("release line pyproject carries a patch version, the rc workflow only runs on X.Y.0")
     assert read_rc_version.main(["read_rc_version.py"]) == 0
     assert capsys.readouterr().out == f"version={read_rc_version.read_version(_REPO_ROOT / 'pyproject.toml')}\n"
