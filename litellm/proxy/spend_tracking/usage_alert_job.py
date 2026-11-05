@@ -223,10 +223,10 @@ class UsageAlertJob:
         )
         if self._performance_projection is None:
             await self._notify(deadline)
-        elif work := await self._store.pending_projection_work():
-            # Source eligibility is per completed rule/day, never a global all-rules gate.
-            if await self._performance_projection.run_pending(now, work, self._store, deadline):
-                await self._store.finish_projection_work(work)
+        elif (
+            work := await self._store.pending_projection_work()
+        ) is not None and await self._performance_projection.run_pending(now, work, self._store, deadline):
+            await self._store.finish_projection_work(work)
         await self._store.prune()
 
     @staticmethod
