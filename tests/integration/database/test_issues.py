@@ -969,3 +969,83 @@ async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
             await _remove_issues(db, (issue.id,))
             await _query(db, 'DELETE FROM "LiteLLM_DailyUserSpend" WHERE id=$1', identity)
             await _query(db, 'DELETE FROM "LiteLLM_DeletedVerificationToken" WHERE token=$1', reporting_key)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_disabled_later_breach_requires_new_healthy_primary_evidence(db: ManagementDatabase) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    alerts: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    issue: Final = _issue(IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
+    definition: Final = UsageAlertRuleInput(
+        name="Primary traffic",
+        scope_type="user",
+        scope_id=issue.cohort.scope_id,
+        metric="requests",
+        direction="increase",
+    )
+    first: Final = await alerts.save_rule(definition, "qa-admin")
+    second: Final = await alerts.save_rule(definition.model_copy(update={"name": "Another traffic policy"}), "qa-admin")
+    assert first is not None and second is not None
+    breach: Final = UsageAlertObservation(
+        entity_id=issue.cohort.scope_id,
+        day=issue.observed_on,
+        observed=420,
+        baseline=120,
+        threshold=360,
+        breached=True,
+    )
+    try:
+        sources: Final = tuple([(await alerts.record_observations(rule, (breach,)))[0] for rule in (first, second)])
+        await store.upsert_issue(issue)
+        await store.add_signals(
+            issue.id,
+            tuple(
+                IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source) for source in sources
+            ),
+        )
+        await alerts.record_observations(
+            first,
+            (
+                breach.model_copy(
+                    update={
+                        "day": issue.observed_on + timedelta(days=1),
+                        "observed": 120,
+                        "breached": False,
+                    }
+                ),
+            ),
+        )
+        await alerts.record_observations(
+            second,
+            (
+                breach.model_copy(
+                    update={
+                        "day": issue.observed_on + timedelta(days=2),
+                    }
+                ),
+            ),
+        )
+        assert await alerts.save_rule(definition.model_copy(update={"enabled": False}), "qa-admin", second)
+        await store.recover_issues(issue.observed_on + timedelta(days=3))
+        unresolved: Final = await store.get_issue(issue.id)
+        assert unresolved is not None and unresolved.active
+        await alerts.record_observations(
+            first,
+            (
+                breach.model_copy(
+                    update={
+                        "day": issue.observed_on + timedelta(days=3),
+                        "observed": 120,
+                        "breached": False,
+                    }
+                ),
+            ),
+        )
+        await store.recover_issues(issue.observed_on + timedelta(days=3))
+        recovered: Final = await store.get_issue(issue.id)
+        assert recovered is not None and not recovered.active
+    finally:
+        await _remove_issues(db, (issue.id,))
+        for rule in (first, second):
+            await alerts.delete_rule(rule.id)
+            await _query(db, 'DELETE FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 RETURNING id', rule.id)
