@@ -50,6 +50,23 @@ fn store(client: Option<RedisClient>) -> Arc<SpendCounters> {
 /// Mirrored by `tests/unit/redis/stores/test_spend_counters.py`, which checks the same keys and
 /// bytes against Python's own key builders and `RedisCache` codec.
 #[rstest]
+#[case::redis(Reading::Redis(Some(Number::Int(3))), "redis", Some(Number::Int(3)))]
+#[case::redis_miss(Reading::Redis(None), "redis", None)]
+#[case::memory(
+    Reading::Memory(Some(Number::Float(2.5))),
+    "memory",
+    Some(Number::Float(2.5))
+)]
+fn a_reading_names_where_it_was_answered(
+    #[case] reading: Reading,
+    #[case] source: &str,
+    #[case] value: Option<Number>,
+) {
+    assert_eq!(<&str>::from(reading), source);
+    assert_eq!(reading.value(), value);
+}
+
+#[rstest]
 #[case(
     SpendCounter::Key {
         token: "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b".to_owned(),

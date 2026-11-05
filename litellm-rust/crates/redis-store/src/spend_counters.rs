@@ -9,7 +9,7 @@ use litellm_python_compat::{json, repr::to_str};
 use litellm_redis_client::{Declared, Expiry, RedisBatch, RedisClient};
 
 use crate::tier::{Clock, system_clock};
-use crate::{DecodeError, Number, RequestRedis, codec::python_value};
+use crate::{DecodeError, ErrorKind, Number, RequestRedis, codec::python_value};
 
 /// `InMemoryCache`'s defaults, which `spend_counter_cache` runs its memory tier with.
 const MEMORY_ENTRIES: usize = 200;
@@ -128,12 +128,33 @@ pub enum Error {
     Decode(#[from] DecodeError),
 }
 
-/// Where a read was answered. Redis is cross-pod truth, including a clean miss; memory only holds
-/// this pod's writes and answers only when there is no Redis or it failed.
-#[derive(Clone, Copy, Debug, PartialEq)]
+impl Error {
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Redis(error) => error.into(),
+            Self::Decode(_) => ErrorKind::Decode,
+            Self::Memory(_) => ErrorKind::Memory,
+        }
+    }
+}
+
+/// Where a read was answered, named the way the Python store reports it. Redis is cross-pod truth,
+/// including a clean miss; memory only holds this pod's writes and answers only when there is no
+/// Redis or it failed.
+#[derive(Clone, Copy, Debug, PartialEq, strum::IntoStaticStr)]
 pub enum Reading {
+    #[strum(serialize = "redis")]
     Redis(Option<Number>),
+    #[strum(serialize = "memory")]
     Memory(Option<Number>),
+}
+
+impl Reading {
+    pub fn value(self) -> Option<Number> {
+        match self {
+            Self::Redis(value) | Self::Memory(value) => value,
+        }
+    }
 }
 
 /// Who wins when a seed's `SET NX` lost and the winner's value is gone by the time it is read.

@@ -1,21 +1,15 @@
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
-use litellm_redis_store::spend_counters::{Error, LostSeed, Reading, SpendCounter, SpendCounters};
+use litellm_redis_store::spend_counters::{Error, LostSeed, SpendCounter, SpendCounters};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
 use super::{
-    NativePending, NativeRedisStoreError, PyNumber, redis_async, redis_error_kind,
-    request::NativeRequestRedis, store_error, ttl,
+    NativePending, PyNumber, kind_error, redis_async, request::NativeRequestRedis, store_error, ttl,
 };
 use crate::redis::client::NativeRedisClient;
 
 fn spend_error(error: Error) -> PyErr {
-    let kind = match &error {
-        Error::Redis(error) => redis_error_kind(error),
-        Error::Decode(_) => "decode",
-        Error::Memory(_) => "memory",
-    };
-    NativeRedisStoreError::new_err((kind, litellm_error::Report::new(&error).to_string()))
+    kind_error(error.kind(), &error)
 }
 
 fn infallible(error: Infallible) -> PyErr {
@@ -75,10 +69,9 @@ impl NativeSpendCounters {
     fn read<'py>(&self, py: Python<'py>, counter: PySpendCounter) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         redis_async(py, "async_get_cache", store_error, async move {
-            Ok(match store.read(&counter.0).await? {
-                Reading::Redis(value) => ("redis", value.map(PyNumber)),
-                Reading::Memory(value) => ("memory", value.map(PyNumber)),
-            })
+            let reading = store.read(&counter.0).await?;
+            let source: &'static str = reading.into();
+            Ok((source, reading.value().map(PyNumber)))
         })
     }
 

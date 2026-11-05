@@ -12,7 +12,7 @@ use std::{
 };
 
 use litellm_host_python::PythonContext;
-use litellm_redis_store::Number;
+use litellm_redis_store::{ErrorKind, Number};
 use pyo3::{
     IntoPyObjectExt,
     exceptions::{PyRuntimeError, PyTypeError},
@@ -118,19 +118,12 @@ pyo3::create_exception!(
     _native,
     NativeRedisStoreError,
     pyo3::exceptions::PyException,
-    "A native Redis store operation failed. Args are (kind, message), kind one of \"breaker_open\", \"timeout\", \"transport\", \"rejected\", \"decode\", \"encode\" or \"memory\"."
+    "A native Redis store operation failed. Args are (kind, message), kind spelled as litellm-redis-store's ErrorKind."
 );
 
-/// The failure class a caller branches on, `timeout` and `breaker_open` being the ones it may drop.
-fn redis_error_kind(error: &litellm_redis_client::Error) -> &'static str {
-    use litellm_redis_client::Error;
-    match error {
-        Error::BreakerOpen => "breaker_open",
-        Error::Transport(error) if error.is_timeout() => "timeout",
-        Error::Transport(_) => "transport",
-        Error::Server(_) => "rejected",
-        Error::Decode(_) => "decode",
-    }
+fn kind_error(kind: ErrorKind, error: &(dyn std::error::Error + 'static)) -> PyErr {
+    let kind: &'static str = kind.into();
+    NativeRedisStoreError::new_err((kind, litellm_error::Report::new(error).to_string()))
 }
 
 fn store_error(error: litellm_cache::Error) -> PyErr {
