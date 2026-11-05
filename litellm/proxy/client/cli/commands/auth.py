@@ -1017,7 +1017,21 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
         return
 
 
-def _revoke_before_logout(token_data: Mapping[str, object] | None, http: Http) -> None:
+def _revoke_before_logout(left: Mapping[str, object] | None, current: Mapping[str, object] | None, http: Http) -> None:
+    """Revoke every login this logout ends, holding the logout back only for the one it signs out.
+
+    An earlier login left in the keychain is the previous login once another one is current, so a
+    proxy that cannot revoke it only earns the warning `lite login` gives, never a logout that the
+    current proxy is ready to finish.
+    """
+    if left is None or current is None or _same_refresh_token(left, current):
+        _revoke_the_login_or_keep_it(current if left is None else left, http)
+        return
+    _revoke_the_replaced_login(left, http, click.echo)
+    _revoke_the_login_or_keep_it(current, http)
+
+
+def _revoke_the_login_or_keep_it(token_data: Mapping[str, object] | None, http: Http) -> None:
     revocation: Final = None if token_data is None else revoke_stored_credential(token_data, http)
     match revocation:
         case RevocationUnavailable(reason=reason):
@@ -1040,9 +1054,8 @@ def logout(ctx: click.Context):
     vault: Final = context_secret_vault(ctx)
     http: Final = requests.Session()
     left: Final = _login_left_in_keychain(vault)
-    _revoke_before_logout(left, http)
     current: Final = load_token(vault=vault)
-    _revoke_before_logout(None if _same_refresh_token(left, current) else current, http)
+    _revoke_before_logout(left, current, http)
 
     path: Final = get_cli_token_file_path()
     match clear_cli_token(vault=vault):
