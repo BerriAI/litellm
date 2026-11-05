@@ -5225,23 +5225,75 @@ def test_a_model_that_cannot_force_the_json_tool_gets_native_output_without_thin
     ("model", "thinking_params", "native"),
     [
         ("us.anthropic.claude-opus-5-5", None, True),
-        ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "adaptive"}}, False),
+        ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "adaptive"}}, True),
         ("global.anthropic.claude-fable-5-1", None, True),
-        ("global.anthropic.claude-fable-5-1", {"reasoning_effort": "low"}, False),
-        ("us-gov.anthropic.claude-opus-5-5", None, False),
-        ("us-gov.anthropic.claude-fable-5-1", None, False),
-        ("us-gov-west-1/anthropic.claude-opus-5-5", None, False),
-        ("converse/us-gov-east-1/anthropic.claude-fable-5-1", None, False),
+        ("global.anthropic.claude-fable-5-1", {"reasoning_effort": "low"}, True),
+        ("us-gov.anthropic.claude-opus-5-5", None, True),
+        ("us-gov.anthropic.claude-fable-5-1", None, True),
+        ("us-gov-west-1/anthropic.claude-opus-5-5", None, True),
+        ("converse/us-gov-east-1/anthropic.claude-fable-5-1", None, True),
         ("us-east-1/anthropic.claude-opus-5-5", None, True),
     ],
 )
-def test_models_whose_thinking_stops_under_native_output_keep_the_json_tool_only_when_thinking(
+def test_native_output_follows_model_cost_map_for_bedrock_profiles(
     model: str, thinking_params: Mapping[str, object] | None, native: bool
 ) -> None:
     _, request = _converse_request_for_json_schema(model, False, thinking_params)
 
     assert ("outputConfig" in request) is native
     assert ("toolConfig" in request) is not native
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "thinking_params", "native"),
+    [
+        ("us.anthropic.claude-opus-5-5", None, True),
+        ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "disabled"}}, True),
+        ("global.anthropic.claude-fable-5-1", None, True),
+        ("global.anthropic.claude-fable-5-1", {"thinking": {"type": "adaptive"}}, True),
+        ("global.anthropic.claude-fable-5-1", {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-sonnet-5", None, True),
+        ("us.anthropic.claude-sonnet-5", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-sonnet-5", {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-haiku-5-5", None, True),
+        ("us.anthropic.claude-haiku-5-5", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-haiku-5-5", {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-opus-5", None, False),
+        ("us.anthropic.claude-opus-5", {"thinking": {"type": "adaptive"}}, False),
+        ("us.anthropic.claude-opus-5", {"thinking": {"type": "disabled"}}, False),
+    ],
+    ids=[
+        "opus-5-5-unset",
+        "opus-5-5-adaptive",
+        "opus-5-5-disabled",
+        "fable-5-1-unset",
+        "fable-5-1-adaptive",
+        "fable-5-1-disabled",
+        "sonnet-5-unset",
+        "sonnet-5-adaptive",
+        "sonnet-5-disabled",
+        "haiku-5-5-unset",
+        "haiku-5-5-adaptive",
+        "haiku-5-5-disabled",
+        "opus-5-unset",
+        "opus-5-adaptive",
+        "opus-5-disabled",
+    ],
+)
+def test_model_cost_native_output_defaults_hold_across_thinking_modes(
+    model: str, thinking_params: Mapping[str, object] | None, native: bool
+) -> None:
+    _, request = _converse_request_for_json_schema(model, False, thinking_params)
+
+    if native:
+        assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+        assert "toolConfig" not in request
+        return
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
 
 
 def _converse_capital_answer(request: httpx.Request) -> httpx.Response:
@@ -5258,7 +5310,7 @@ def _converse_capital_answer(request: httpx.Request) -> httpx.Response:
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    "model", ["us.anthropic.claude-opus-5-5", "global.anthropic.claude-sonnet-5-5", "global.anthropic.claude-fable-5-1"]
+    "model", ["global.anthropic.claude-sonnet-5-5"]
 )
 def test_streamed_json_schema_on_a_model_that_cannot_force_a_tool_still_calls_converse_without_streaming(
     model: str,
@@ -11599,7 +11651,10 @@ _OUTPUT_CONFIG_FORMAT: Final = {
     ids=["adaptive", "reasoning_effort", "budget", "output_config_format"],
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
-def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(local_model_cost_map, model, request_params):
+def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
+    local_model_cost_map, monkeypatch, model, request_params
+):
+    monkeypatch.setitem(litellm.model_cost[model], "supports_native_structured_output", False)
     optional_params: Final = _converse_params(model, None, request_params)
 
     assert AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": {"id": "d1"}})
