@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from litellm.exceptions import APIError, AuthenticationError, BadRequestError, RateLimitError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
-from litellm.types.interactions import InteractionsAPIResponse, InteractionsAPIStreamingResponse
+from litellm.types.interactions import Error, InteractionsAPIResponse, InteractionsAPIStreamingResponse
 
 QCA_DEFAULT_API_BASE: Final = "https://api.qoder.com/api/v1/cloud"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
@@ -233,6 +233,16 @@ async def _normalized_stream(
                     delta=dict(_text_delta(step)),
                 )
             if status is not None:
+                if status == "failed":
+                    yield InteractionsAPIStreamingResponse(
+                        event_type="error",
+                        interaction_id=interaction_id,
+                        error=Error(
+                            code="qca_session_failed",
+                            message=f"Qoder Cloud Agents session ended with {event.type}",
+                        ),
+                    )
+                    return
                 yield InteractionsAPIStreamingResponse(
                     event_type=f"interaction.{status}",
                     interaction_id=interaction_id,
@@ -306,12 +316,13 @@ async def _observed_stream(
     async for chunk in stream:
         if chunk.event_type == "step.delta" and chunk.delta is not None:
             steps = (*steps, _step_from_delta(chunk.delta))
-        if chunk.event_type in {"interaction.completed", "interaction.requires_action", "interaction.failed"}:
-            await logging_obj.async_success_handler(
+        if chunk.event_type in {"interaction.completed", "interaction.requires_action"}:
+            await logging_obj.dispatch_success_handlers(  # pyright: ignore[reportUnknownMemberType]  # legacy callback API is untyped
                 result=_terminal_for_logging(chunk, interaction_id, agent, steps),
                 start_time=start_time,
                 end_time=datetime.now(timezone.utc),
                 cache_hit=None,
+                prefer_async_handlers=True,
             )
         yield chunk
 
@@ -324,7 +335,18 @@ async def _collect_response(
     async for chunk in stream:
         if chunk.event_type == "step.delta" and chunk.delta is not None:
             steps = (*steps, _step_from_delta(chunk.delta))
-        if chunk.event_type in {"interaction.completed", "interaction.requires_action", "interaction.failed"}:
+        if chunk.event_type == "error":
+            raise APIError(
+                status_code=502,
+                message=(
+                    chunk.error.message
+                    if chunk.error is not None and chunk.error.message is not None
+                    else "Qoder Cloud Agents session failed"
+                ),
+                llm_provider="qca",
+                model=agent,
+            )
+        if chunk.event_type in {"interaction.completed", "interaction.requires_action"}:
             terminal = chunk
     if terminal is None:
         raise httpx.RemoteProtocolError("QCA event stream did not produce a terminal interaction")

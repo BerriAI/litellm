@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime
 from typing import Final
@@ -8,9 +9,10 @@ import pytest
 
 from litellm.exceptions import BadRequestError, RateLimitError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.qca.interactions.handler import create_qca_interaction
-from litellm.types.interactions import InteractionsAPIResponse
+from litellm.types.interactions import InteractionsAPIResponse, InteractionSseEvent
 
 
 def _sse_event(payload: dict[str, object]) -> bytes:
@@ -27,7 +29,7 @@ class _SuccessRecorder(CustomLogger):
         self.responses.append(response_obj)
 
 
-def _stream_logging(recorder: _SuccessRecorder) -> LiteLLMLoggingObj:
+def _stream_logging(recorder: _SuccessRecorder, include_sync_callback: bool = False) -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="qca/agent_test",
         messages=[],
@@ -41,6 +43,8 @@ def _stream_logging(recorder: _SuccessRecorder) -> LiteLLMLoggingObj:
     logging_obj.update_environment_variables(
         model="qca/agent_test", user="", optional_params={}, litellm_params={"api_base": "https://qca.test"}
     )
+    if include_sync_callback:
+        logging_obj.dynamic_success_callbacks = ["s3"]
     return logging_obj
 
 
@@ -116,8 +120,12 @@ async def test_create_qca_interaction_maps_session_events_to_completed_response(
 
 
 @pytest.mark.asyncio
-async def test_create_qca_interaction_continues_session_and_streams_normalized_events() -> None:
+async def test_create_qca_interaction_continues_session_and_streams_normalized_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     requests: list[httpx.Request] = []
+    sync_logger: Final = MagicMock()
+    monkeypatch.setattr(litellm_logging, "s3Logger", sync_logger)
 
     def route(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -150,7 +158,7 @@ async def test_create_qca_interaction_continues_session_and_streams_normalized_e
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
         recorder: Final = _SuccessRecorder()
-        logging_obj: Final = _stream_logging(recorder)
+        logging_obj: Final = _stream_logging(recorder, include_sync_callback=True)
         result: Final = await create_qca_interaction(
             agent="agent_test",
             input="continue",
@@ -178,7 +186,47 @@ async def test_create_qca_interaction_continues_session_and_streams_normalized_e
     logged: Final = recorder.responses[0]
     assert isinstance(logged, InteractionsAPIResponse)
     assert logged.steps == [{"type": "model_output", "content": [{"type": "text", "text": "continued"}]}]
+    for _ in range(200):
+        if sync_logger.log_event.call_count == 1:
+            break
+        await asyncio.sleep(0.01)
+    sync_logger.log_event.assert_called_once()
     assert all(not request.url.path.endswith("/sessions") for request in requests)
+
+
+@pytest.mark.asyncio
+async def test_create_qca_interaction_stream_emits_schema_valid_error_event() -> None:
+    def route(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/sessions"):
+            return httpx.Response(200, json={"id": "sess_test"})
+        if request.url.path.endswith("/events"):
+            return httpx.Response(202, json={"data": [{"id": "evt_input", "type": "user.message"}]})
+        return httpx.Response(
+            200,
+            content=_sse_event({"id": "evt_error", "type": "session.error"}),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(route)) as client:
+        result: Final = await create_qca_interaction(
+            agent="agent_test",
+            input="fail",
+            environment="env_test",
+            previous_interaction_id=None,
+            stream=True,
+            api_key="secret",
+            api_base="https://qca.test/api/v1/cloud",
+            timeout=30,
+            unsupported_params={},
+            logging_obj=_stream_logging(_SuccessRecorder()),
+            client=client,
+        )
+        assert not isinstance(result, InteractionsAPIResponse)
+        chunks: Final = [chunk async for chunk in result]
+
+    assert chunks[-1].event_type == "error"
+    validated: Final = InteractionSseEvent.model_validate(chunks[-1].model_dump(exclude_none=True))
+    assert validated.root.event_type == "error"
 
 
 @pytest.mark.asyncio
