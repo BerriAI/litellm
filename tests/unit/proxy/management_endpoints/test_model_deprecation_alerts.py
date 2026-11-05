@@ -5,8 +5,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.alerting_endpoints.model_deprecation_alerts import alert_state_repository, router
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.model_deprecation_alerts import alert_state_repository, router
 from litellm.repositories.config_repository import ConfigParam, ConfigRepository
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 
@@ -101,7 +101,7 @@ def test_tags_are_scoped_to_model_dates_and_the_visible_keys(client: tuple[TestC
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from litellm.proxy.management_endpoints.model_deprecation_alerts import alert_tag_repository
+    from litellm.proxy.alerting_endpoints.model_deprecation_alerts import alert_tag_repository
 
     http, _ = client
     grouped = AsyncMock(return_value=[{"api_key": "reporting-one", "tag": "support"}])
@@ -137,7 +137,7 @@ def test_tag_access_matches_alert_visibility(
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from litellm.proxy.management_endpoints.model_deprecation_alerts import alert_tag_repository
+    from litellm.proxy.alerting_endpoints.model_deprecation_alerts import alert_tag_repository
 
     http, user = client
     user.user_role = role
@@ -152,3 +152,29 @@ def test_tag_access_matches_alert_visibility(
     assert response.status_code == expected
     if expected == 403:
         grouped.assert_not_called()
+
+
+def test_tag_query_rejects_more_than_100_keys_before_database_access(client: tuple[TestClient, UserAPIKeyAuth]) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.alerting_endpoints.model_deprecation_alerts import (
+        alert_tag_repository,
+    )
+
+    http, _ = client
+    grouped = AsyncMock(return_value=[])
+    http.app.dependency_overrides[alert_tag_repository] = lambda: SimpleNamespace(
+        table=SimpleNamespace(group_by=grouped)
+    )
+    response = http.get(
+        "/model/deprecations/alerts/tags",
+        params={
+            "model": "test-model",
+            "api_keys": [f"reporting-{index}" for index in range(101)],
+            "start_date": "2026-10-07",
+            "end_date": "2026-11-05",
+        },
+    )
+    assert response.status_code == 422
+    grouped.assert_not_called()
