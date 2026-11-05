@@ -14,7 +14,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings, get_provider_specific_params
 from litellm.proxy.guardrails.guardrail_hooks.collieai import CollieAiGuardrail, initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.collieai.collieai import (
     MISSING_PACKAGE_MESSAGE,
@@ -34,7 +34,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.collieai import (
 
 PACKAGE_INSTALLED: Final = importlib.util.find_spec("collieai_guardrail") is not None
 API_KEY: Final = "clai_" + "0" * 40
-CHAT_REQUEST: Final = {"model": "gpt-5-mini", "messages": [{"role": "user", "content": "hello"}]}
+CHAT_REQUEST: Final = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hello"}]}
 
 
 class _RecordingGuardrail(CustomGuardrail):
@@ -124,6 +124,31 @@ def test_points_at_app_collieai_io_unless_told_otherwise() -> None:
     assert set(callback.given) == {"api_base", "api_key", "guardrail_name", "event_hook", "default_on"}
 
 
+def test_hands_each_entry_its_own_name_phase_and_default_on() -> None:
+    litellm_params: Final = LitellmParams(guardrail="collieai", mode="pre_call", default_on=False, api_key=API_KEY)
+    callback: Final = initialize_guardrail(
+        litellm_params,
+        Guardrail(guardrail_name="collieai-prompts", litellm_params=litellm_params),
+        guardrail_cls=_RecordingGuardrail,
+    )
+
+    assert isinstance(callback, _RecordingGuardrail)
+    assert (callback.given["guardrail_name"], callback.given["event_hook"], callback.given["default_on"]) == (
+        "collieai-prompts",
+        "pre_call",
+        False,
+    )
+
+
+def test_takes_the_key_from_collieai_api_key_only_when_the_entry_has_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    from_environment: Final = "clai_" + "1" * 40
+    monkeypatch.setenv("COLLIEAI_API_KEY", from_environment)
+    without_key: Final = LitellmParams(guardrail="collieai", mode=["pre_call", "post_call"], default_on=True)
+
+    assert _init(without_key).given["api_key"] == from_environment
+    assert _init(_params()).given["api_key"] == API_KEY
+
+
 def test_ui_form_defaults_are_what_the_package_gets() -> None:
     optional: Final = CollieAiGuardrailConfigModelOptionalParams()
     model: Final = CollieAiGuardrailConfigModel(api_key=API_KEY)
@@ -146,6 +171,13 @@ async def test_ui_offers_collieai_fields_without_the_package() -> None:
     assert fields["api_key"]["required"] is True
     assert fields["api_base"]["default_value"] == DEFAULT_API_BASE
     assert set(fields["optional_params"]["fields"]) == {"deadline_ms", "forward_conversation_id"}
+
+
+@pytest.mark.asyncio
+async def test_ui_offers_only_the_two_phases_collieai_checks() -> None:
+    settings: Final = await get_guardrail_ui_settings()
+
+    assert settings.supported_modes_by_provider["collieai"] == ["pre_call", "post_call"]
 
 
 def test_a_package_without_the_readiness_guard_is_too_old() -> None:

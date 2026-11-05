@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Final
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.collieai import CollieAiGuardrailConfigModel
 
 PACKAGE_MODULE: Final = "collieai_guardrail.guardrail"
@@ -54,6 +55,10 @@ class CollieAiGuardrail(_Base):
     @staticmethod
     def get_config_model() -> type[CollieAiGuardrailConfigModel]:
         return CollieAiGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail's signature
+        return [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
 
 
 __all__ = (

@@ -37,11 +37,12 @@ def initialize_guardrail(
     guardrail_cls: Callable[..., CustomGuardrail] = CollieAiGuardrail,
 ) -> CustomGuardrail:
     import litellm
+    from litellm.secret_managers.main import get_secret_str
 
     extras: Final = litellm_params.model_extra or _NO_EXTRAS
     _callback: Final = guardrail_cls(
         api_base=litellm_params.api_base or DEFAULT_API_BASE,
-        api_key=litellm_params.api_key,
+        api_key=litellm_params.api_key or get_secret_str("COLLIEAI_API_KEY"),
         guardrail_name=guardrail["guardrail_name"],
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
