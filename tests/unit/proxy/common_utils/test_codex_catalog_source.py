@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections import ChainMap
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 
 import httpx
@@ -205,7 +205,14 @@ def test_a_release_whose_pair_does_not_parse_serves_the_vendored_pair(replies: M
     assert FRESH_SLUG not in stock.models
 
 
-def test_a_transport_error_serves_the_vendored_pair() -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        lambda url: httpx.ConnectError("offline", request=httpx.Request("GET", url)),
+        lambda url: httpx.InvalidURL(f"Invalid non-printable ASCII character in URL {url!r}"),
+    ],
+)
+def test_a_transport_error_or_an_unusable_url_serves_the_vendored_pair(error: Callable[[str], Exception]) -> None:
     class _Down:
         async def get(
             self,
@@ -215,13 +222,13 @@ def test_a_transport_error_serves_the_vendored_pair() -> None:
             timeout: float | None = None,
             max_response_bytes: int | None = None,
         ) -> httpx.Response:
-            raise httpx.ConnectError("offline", request=httpx.Request("GET", url))
+            raise error(url)
 
     stock: Final = asyncio.run(CodexCatalogSource(client=_Down(), clock=_Clock()).stock(RELEASE))
     assert stock.source == vendored_codex_stock().source
 
 
-@pytest.mark.parametrize("client_version", [None, "", "codex", "1.0", "0.166", "0.166.0 ", "v0.166.0"])
+@pytest.mark.parametrize("client_version", [None, "", "codex", "1.0", "0.166", "0.166.0 ", "0.166.0\n", "v0.166.0"])
 def test_a_value_that_is_no_release_version_serves_the_vendored_pair_without_a_fetch(
     client_version: str | None,
 ) -> None:
@@ -425,6 +432,22 @@ def test_catalogs_fetched_with_different_openai_keys_are_cached_apart() -> None:
     ], tree.headers
 
 
+@pytest.mark.parametrize(
+    ("openai_api_key", "source"), [(None, f"github rust-v{RELEASE}"), (OPENAI_KEY, f"openai {RELEASE}")]
+)
+def test_a_fetched_catalog_wins_for_the_models_it_lists_and_the_vendored_entry_stays_for_the_rest(
+    openai_api_key: str | None, source: str
+) -> None:
+    vendored: Final = vendored_codex_stock().models
+    listed, missing = tuple(vendored)[:2]
+    catalog: Final = json.dumps({"models": [{**FRESH_ENTRY, "slug": listed, "display_name": "Release"}]}).encode()
+    tree: Final = _RawTree({**_tree(RELEASE, catalog=catalog), _openai_url(RELEASE): (200, catalog)})
+    stock: Final = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=openai_api_key))
+    assert stock.source == source
+    assert stock.models[listed].display_name == "Release" != vendored[listed].display_name
+    assert stock.models[missing] == vendored[missing]
+
+
 def _settled() -> Awaitable[list[object]]:
     return asyncio.gather(*(asyncio.all_tasks() - {asyncio.current_task()}))
 
@@ -433,16 +456,16 @@ def _openai_catalog(display_name: str) -> bytes:
     return json.dumps({"models": [{**OPENAI_ENTRY, "display_name": display_name}]}).encode()
 
 
-def test_openai_catalog_is_fetched_again_after_the_refresh_window_and_a_failed_refresh_keeps_the_last_one() -> None:
+def test_openai_catalog_is_refetched_after_the_refresh_window_and_a_failed_refresh_keeps_it_over_the_release_tag() -> (
+    None
+):
     tree: Final = _RawTree({_openai_url(RELEASE): (200, _openai_catalog("First"))})
     clock: Final = _Clock()
     source: Final = _source(tree, clock, retry_seconds=300, refresh_seconds=3600)
 
     async def names() -> list[str]:
         await _settled()
-        return [
-            model.display_name for model in (await source.stock(RELEASE, openai_api_key=OPENAI_KEY)).models.values()
-        ]
+        return [(await source.stock(RELEASE, openai_api_key=OPENAI_KEY)).models[FRESH_SLUG].display_name]
 
     async def scenario() -> tuple[list[str], ...]:
         first: Final = await names()
@@ -453,18 +476,22 @@ def test_openai_catalog_is_fetched_again_after_the_refresh_window_and_a_failed_r
         await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
         refreshed: Final = await names()
         clock.now += 3601
-        tree.replies = {}
+        tree.replies = _tree(RELEASE)
         await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
         refresh_failed: Final = await names()
+        clock.now += 301
+        await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
+        retry_failed: Final = await names()
         clock.now += 301
         tree.replies = {_openai_url(RELEASE): (200, _openai_catalog("Third"))}
         await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
         retried: Final = await names()
-        return first, inside_window, refreshed, refresh_failed, retried
+        return first, inside_window, refreshed, refresh_failed, retry_failed, retried
 
     assert asyncio.run(asyncio.wait_for(scenario(), timeout=30)) == (
         ["First"],
         ["First"],
+        ["Second"],
         ["Second"],
         ["Second"],
         ["Third"],

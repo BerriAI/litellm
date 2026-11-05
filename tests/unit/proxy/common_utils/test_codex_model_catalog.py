@@ -977,7 +977,7 @@ def _router_with(*litellm_params: Mapping[str, str]) -> litellm.Router:
     )
 
 
-def test_the_catalog_key_is_the_listed_openai_deployments_key_before_the_environments(
+def test_the_catalog_key_is_the_listed_openai_deployments_own_and_the_environments_only_for_a_keyless_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
@@ -986,10 +986,12 @@ def test_the_catalog_key_is_the_listed_openai_deployments_key_before_the_environ
         {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-not-openai"},
         {"model": "openai/gpt-5.5", "api_key": "os.environ/CATALOG_OPENAI_KEY"},
         {"model": "openai/gpt-5.5", "api_key": "sk-second-openai"},
+        {"model": "openai/gpt-5.5"},
     )
-    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(3)]
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(4)]
     assert codex_catalog_openai_key(router, entries) == "sk-from-secret-ref"
-    assert codex_catalog_openai_key(router, entries[:1]) == "sk-from-env"
+    assert codex_catalog_openai_key(router, entries[:1]) is None
+    assert codex_catalog_openai_key(router, entries[3:]) == "sk-from-env"
 
 
 def test_a_bare_openai_model_name_supplies_its_key_and_a_bare_alias_of_another_provider_does_not(

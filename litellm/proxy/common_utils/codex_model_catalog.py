@@ -13,9 +13,9 @@ A fallback entry offers the model group's ``supported_reasoning_efforts`` as its
 trimmed to the ones the requesting Codex release can parse.
 
 The stock entries come from the requesting Codex release's own catalog, fetched by
-``codex_catalog_source.CodexCatalogSource`` and passed in as a ``CodexStock``. When none is passed, or
-that release's cannot be fetched, they are Codex ``CODEX_BUNDLED_VERSION``'s bundled catalog, vendored
-unchanged from https://github.com/openai/codex/blob/rust-v<version>/codex-rs/models-manager/models.json
+``codex_catalog_source.CodexCatalogSource`` and passed in as a ``CodexStock``, laid over the bundled entries
+below. When none is passed, or that release's cannot be fetched, they are Codex ``CODEX_BUNDLED_VERSION``'s
+bundled catalog, vendored unchanged from https://github.com/openai/codex/blob/rust-v<version>/codex-rs/models-manager/models.json
 (Apache-2.0) as ``codex_bundled_models_<version>.json``, with ``codex_base_instructions.md`` being
 ``codex-rs/models-manager/prompt.md`` at the same tag. Refresh both by downloading those two paths at a
 newer tag and renaming the json after it.
@@ -637,7 +637,8 @@ def _deployment_provider(params: Mapping[str, object]) -> str:
 
 def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
     """The key a deployment sends OpenAI, its named credential's values overriding its own the way the call
-    path merges them, when every base either one sets is OpenAI's."""
+    path merges them and ``OPENAI_API_KEY`` standing in when neither sets one, when every base either one sets
+    is OpenAI's."""
     params: Final = MappingProxyType[str, object](deployment["litellm_params"])
     credential: Final = _credential_values(params.get("litellm_credential_name"))
     effective: Final = MappingProxyType({**params, **credential})
@@ -646,22 +647,15 @@ def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
         *(credential.get(key) for key in _DEPLOYMENT_BASE_PARAMS),
     )
     api_key: Final = effective.get("api_key")
-    if (
-        _deployment_provider(effective) != "openai"
-        or not _is_openai_origin(bases)
-        or not isinstance(api_key, str)
-        or not api_key
-    ):
+    if _deployment_provider(effective) != "openai" or not _is_openai_origin(bases):
         return None
+    if not isinstance(api_key, str) or not api_key:
+        return os.getenv("OPENAI_API_KEY") or None
     from litellm.secret_managers.main import (
         get_secret_str,  # noqa: PLC0415  # secret_managers.main imports litellm, which imports this module
     )
 
     return (get_secret_str(api_key) if api_key.startswith("os.environ/") else api_key) or None
-
-
-def _environment_openai_key() -> str | None:
-    return (os.getenv("OPENAI_API_KEY") or None) if _is_openai_origin(()) else None
 
 
 def codex_catalog_openai_key(
@@ -671,8 +665,8 @@ def codex_catalog_openai_key(
 ) -> str | None:
     """The OpenAI API key the catalog fetch authenticates with: the first one among the listed entries'
     deployments that routes to OpenAI with every `api_base` and `base_url` it or its credential sets being
-    OpenAI's own, else ``OPENAI_API_KEY`` from the environment unless ``OPENAI_BASE_URL`` points elsewhere. A key
-    for an OpenAI-compatible server never leaves for OpenAI."""
+    OpenAI's own, ``OPENAI_API_KEY`` from the environment for one that sets no key. A key for an
+    OpenAI-compatible server never leaves for OpenAI, and a listing without an OpenAI deployment sends none."""
     registry: Final = llm_router.registry() if llm_router is not None else None
     deployments: Final = (
         tuple(
@@ -685,7 +679,7 @@ def codex_catalog_openai_key(
         if registry is not None
         else ()
     )
-    return next(filter(None, map(_deployment_openai_key, deployments)), None) or _environment_openai_key()
+    return next(filter(None, map(_deployment_openai_key, deployments)), None)
 
 
 def codex_catalog_rows(
