@@ -1,12 +1,16 @@
 import asyncio
 from datetime import datetime, timedelta
 from typing import Final
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis
 import pytest
 
 from litellm import Router, token_counter
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
+from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict, RouterErrors
 
@@ -43,14 +47,11 @@ def test_usage_based_routing_v1_selects_the_lowest_recorded_tpm() -> None:
     }
     now: Final = datetime.now()
     cache_keys: Final = tuple(
-        f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}"
-        for offset in range(60)
+        f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}" for offset in range(60)
     )
 
     for cache_key in cache_keys:
-        router.cache.set_cache(
-            key=cache_key, value=usage_by_deployment, ttl=float("inf")
-        )
+        router.cache.set_cache(key=cache_key, value=usage_by_deployment, ttl=float("inf"))
 
     deployment: Final = router.get_available_deployment(
         model=MODEL_GROUP,
@@ -135,9 +136,7 @@ async def test_v2_subclass_overriding_async_get_available_deployments_with_the_o
     )
     router.lowesttpm_logger_v2 = OldSignatureV2(router_cache=router.cache, routing_args={})
 
-    response: Final = await router.acompletion(
-        model=MODEL_GROUP, messages=[{"role": "user", "content": "x"}]
-    )
+    response: Final = await router.acompletion(model=MODEL_GROUP, messages=[{"role": "user", "content": "x"}])
 
     assert response.choices[0].message.content in {
         f"from {HIGH_USAGE_DEPLOYMENT_ID}",
@@ -209,3 +208,68 @@ def test_usage_based_routing_v1_rejects_a_deployment_that_reached_its_recorded_r
     router: Final = _router_with_recorded_rpm(recorded=RPM_LIMIT, enable_pre_call_checks=enable_pre_call_checks)
     with pytest.raises(ValueError, match=RouterErrors.no_deployments_available.value):
         router.completion(model=MODEL_GROUP, messages=[{"role": "user", "content": "hello"}])
+
+
+# --------------------------------------------------------------------------- concurrent successes, Redis (#44917)
+class _RedisWithReplyLatency(fakeredis.FakeAsyncRedis):
+    """fakeredis replies instantly, so concurrent callers never overlap. A real Redis reads the value
+    when the command arrives and the reply then spends time on the network while other callers run.
+    Yielding after the read reproduces that window."""
+
+    async def get(self, *args, **kwargs):
+        value = await super().get(*args, **kwargs)
+        await asyncio.sleep(0)
+        return value
+
+
+def _limited_deployment(deployment_id: str, **limits: int) -> DeploymentTypedDict:
+    deployment: Final = _deployment(deployment_id)
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], **limits}}
+
+
+@pytest.fixture
+def redis_backed_handler():
+    with patch("litellm._redis.get_redis_client", return_value=MagicMock()):
+        redis_cache: Final = RedisCache(host="localhost", port=6379)
+    with patch.object(redis_cache, "init_async_client", return_value=_RedisWithReplyLatency()):
+        yield LowestTPMLoggingHandler(router_cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache))
+
+
+async def _record_successes(
+    handler: LowestTPMLoggingHandler, deployment_id: str, total_tokens: int, times: int = 1
+) -> None:
+    kwargs: Final = {"litellm_params": {"metadata": {"model_group": MODEL_GROUP}, "model_info": {"id": deployment_id}}}
+    response: Final = {"usage": {"total_tokens": total_tokens}}
+    await asyncio.gather(*(handler.async_log_success_event(kwargs, response, None, None) for _ in range(times)))
+
+
+@pytest.mark.asyncio
+async def test_usage_based_routing_v1_counts_every_concurrent_success_toward_tpm(redis_backed_handler) -> None:
+    await _record_successes(redis_backed_handler, LOW_USAGE_DEPLOYMENT_ID, total_tokens=3, times=20)
+    await _record_successes(redis_backed_handler, HIGH_USAGE_DEPLOYMENT_ID, total_tokens=40)
+
+    deployment: Final = redis_backed_handler.get_available_deployments(
+        model_group=MODEL_GROUP,
+        healthy_deployments=[
+            _limited_deployment(LOW_USAGE_DEPLOYMENT_ID, tpm=50),
+            _limited_deployment(HIGH_USAGE_DEPLOYMENT_ID, tpm=1000),
+        ],
+    )
+
+    assert deployment["model_info"]["id"] == HIGH_USAGE_DEPLOYMENT_ID
+
+
+@pytest.mark.asyncio
+async def test_usage_based_routing_v1_counts_every_concurrent_success_toward_rpm(redis_backed_handler) -> None:
+    await _record_successes(redis_backed_handler, LOW_USAGE_DEPLOYMENT_ID, total_tokens=1, times=20)
+    await _record_successes(redis_backed_handler, HIGH_USAGE_DEPLOYMENT_ID, total_tokens=40)
+
+    deployment: Final = redis_backed_handler.get_available_deployments(
+        model_group=MODEL_GROUP,
+        healthy_deployments=[
+            _limited_deployment(LOW_USAGE_DEPLOYMENT_ID, rpm=20),
+            _limited_deployment(HIGH_USAGE_DEPLOYMENT_ID, rpm=1000),
+        ],
+    )
+
+    assert deployment["model_info"]["id"] == HIGH_USAGE_DEPLOYMENT_ID
