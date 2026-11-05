@@ -628,7 +628,32 @@ def test_langfuse_mapper_carries_the_caller_user_session_and_tags():
 def test_langfuse_mapper_omits_unset_trace_controls():
     attrs = LangfuseMapper().map(_llm_call(trace=TraceControls(user_id="", session_id=None, tags=())))
 
-    assert {"user.id", "session.id", "langfuse.trace.tags", "langfuse.trace.name"}.isdisjoint(attrs)
+    assert {
+        "user.id",
+        "session.id",
+        "langfuse.trace.tags",
+        "langfuse.trace.name",
+        "langfuse.environment",
+        "langfuse.release",
+        "langfuse.version",
+    }.isdisjoint(attrs)
+
+
+def test_langfuse_mapper_carries_environment_release_and_version():
+    controls: Final = TraceControls(
+        environment="staging",
+        release="commit-abc123",
+        version="sha256-deadbeef",
+    )
+    attrs: Final = LangfuseMapper().map(_llm_call(trace=controls))
+    assert attrs["langfuse.environment"] == "staging"
+    assert attrs["langfuse.release"] == "commit-abc123"
+    assert attrs["langfuse.version"] == "sha256-deadbeef"
+
+    root: Final = LangfuseMapper.trace_attributes(controls)
+    assert root["langfuse.environment"] == "staging"
+    assert root["langfuse.release"] == "commit-abc123"
+    assert root["langfuse.version"] == "sha256-deadbeef" 
 
 
 def test_langfuse_trace_attributes_match_between_root_and_generation():
