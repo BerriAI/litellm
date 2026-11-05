@@ -6849,9 +6849,15 @@ def _get_model_info_from_model_cost(key: str) -> dict[str, object]:
     return litellm.model_cost[key]
 
 
-def model_cost_row(key: str) -> Mapping[str, object]:
-    """The ``litellm.model_cost`` row stored under an exact ``key``, runtime registrations included."""
-    return _get_model_info_from_model_cost(key)
+def model_cost_row(name: str, provider: str) -> Mapping[str, object] | None:
+    """The ``litellm.model_cost`` row ``provider`` may use for ``name`` in O(1) probes, runtime registrations included.
+    Probes the provider-prefixed key, the bare key, then both without a dated snapshot suffix, and skips a row another
+    provider owns, so a bare key shared across providers never hides the provider's own row."""
+    bare: Final = name.removeprefix(f"{provider}/")
+    undated: Final = _strip_dated_snapshot_suffix(bare)
+    keys: Final = (f"{provider}/{bare}", bare, f"{provider}/{undated}", undated)
+    rows: Final = (_get_model_info_from_model_cost(key) for key in map(get_model_cost_key, keys) if key is not None)
+    return next((row for row in rows if row.get("litellm_provider") in (None, provider)), None)
 
 
 def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> bool:

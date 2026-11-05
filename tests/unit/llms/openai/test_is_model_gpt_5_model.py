@@ -320,6 +320,18 @@ class TestCostMapRoutesToReasoningConfig:
         assert optional_params["reasoning_effort"] == "none"
         assert optional_params["tools"] == [WEATHER_TOOL]
 
+    def test_dated_snapshot_of_a_cost_map_only_series_uses_the_base_row(self, cost_map_only_series: str) -> None:
+        dated: Final = f"{cost_map_only_series}-2026-03-01"
+        assert OpenAIGPT5Config.is_model_gpt_5_model(dated)
+        assert AzureOpenAIGPT5Config.is_model_gpt_5_model(dated)
+
+    def test_bare_key_owned_by_another_provider_does_not_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost, "nova-shared", {**COST_MAP_ONLY_SERIES_ROW, "litellm_provider": "azure"}
+        )
+        assert not OpenAIGPT5Config.is_model_gpt_5_model("nova-shared")
+        assert AzureOpenAIGPT5Config.is_model_gpt_5_model("nova-shared")
+
     def test_router_registered_deployment_row_selects_the_reasoning_config(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
