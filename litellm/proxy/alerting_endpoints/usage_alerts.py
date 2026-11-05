@@ -188,7 +188,7 @@ async def update_usage_alert_rule(
     await require_scope(user, store, data.scope_type, data.scope_id, write=True)
     saved: Final = await store.save_rule(data, user.user_id, existing=rule)
     if saved is None:
-        raise HTTPException(status_code=404, detail="Alert rule not found")
+        raise HTTPException(status_code=409, detail="Alert rule changed while being updated. Refresh and try again")
     return saved
 
 
@@ -199,7 +199,8 @@ async def delete_usage_alert_rule(rule_id: str, user: User, repository: Reposito
     if rule is None:
         raise HTTPException(status_code=404, detail="Alert rule not found")
     await require_scope(user, store, rule.scope_type, rule.scope_id, write=True)
-    await store.delete_rule(rule_id)
+    if not await store.delete_rule(rule_id, existing=rule):
+        raise HTTPException(status_code=409, detail="Alert rule changed while being deleted. Refresh and try again")
     return Response(status_code=204)
 
 

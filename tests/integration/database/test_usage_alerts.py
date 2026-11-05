@@ -211,6 +211,36 @@ async def test_ongoing_episode_preserves_its_original_evidence_and_activity_link
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_rule_scope_changes_reject_stale_updates_and_deletes(db: ManagementDatabase) -> None:
+    repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    definition: Final = UsageAlertRuleInput(
+        name="Concurrent scope edit", scope_type="user", scope_id="original-owner", metric="spend", direction="increase"
+    )
+    original: Final = await repository.save_rule(definition, "qa-admin")
+    assert original is not None
+    try:
+        moved: Final = await repository.save_rule(
+            definition.model_copy(update={"scope_id": "different-owner"}), "qa-admin", existing=original
+        )
+        assert moved is not None
+        assert await repository.save_rule(definition, "original-owner", existing=original) is None
+        assert not await repository.delete_rule(original.id, existing=original)
+        assert await repository.get_rule(original.id) == moved
+        current: Final = await repository.save_rule(
+            definition.model_copy(update={"scope_id": moved.scope_id, "name": "Current authorized edit"}),
+            "qa-admin",
+            existing=moved,
+        )
+        assert current is not None
+        assert not await repository.delete_rule(original.id, existing=moved)
+        assert await repository.delete_rule(original.id, existing=current)
+        assert await repository.save_rule(definition, "qa-admin", existing=current) is None
+        assert await repository.get_rule(original.id) is None
+    finally:
+        await repository.delete_rule(original.id)
+
+
+@pytest.mark.asyncio(loop_scope="session")
 @pytest.mark.parametrize(
     "changed_field,new_value",
     [("metric", "latency"), ("direction", "decrease"), ("scope_type", "user"), ("scope_id", "semantic-other")],

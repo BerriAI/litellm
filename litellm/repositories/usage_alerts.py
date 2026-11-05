@@ -223,19 +223,35 @@ class UsageAlertsRepository:
         rows: Final = await self.database.query_raw(
             """INSERT INTO "LiteLLM_UsageAlertRule" (id,scope_type,scope_id,enabled,record) VALUES ($1,$2,$3,$4,$5::jsonb)
             ON CONFLICT (id) DO UPDATE SET scope_type=EXCLUDED.scope_type,scope_id=EXCLUDED.scope_id,enabled=EXCLUDED.enabled,record=EXCLUDED.record
-            WHERE NOT "LiteLLM_UsageAlertRule".deleted RETURNING record""",
+            WHERE NOT "LiteLLM_UsageAlertRule".deleted
+                AND ("LiteLLM_UsageAlertRule".record->>'updated_at')::timestamptz=$6::text::timestamptz
+                AND "LiteLLM_UsageAlertRule".scope_type=$7
+                AND "LiteLLM_UsageAlertRule".scope_id IS NOT DISTINCT FROM $8::text
+            RETURNING record""",
             rule.id,
             rule.scope_type,
             rule.scope_id,
             rule.enabled,
             rule.model_dump_json(),
+            existing.updated_at.isoformat() if existing else None,
+            existing.scope_type if existing else None,
+            existing.scope_id if existing else None,
         )
         saved: Final = TypeAdapter(tuple[_Record, ...]).validate_python(rows)
         return _rule(saved[0].record) if saved else None
 
-    async def delete_rule(self, rule_id: str) -> None:
-        await self.database.query_raw(
-            'UPDATE "LiteLLM_UsageAlertRule" SET deleted=true,enabled=false WHERE id=$1 RETURNING id', rule_id
+    async def delete_rule(self, rule_id: str, *, existing: UsageAlertRule | None = None) -> bool:
+        return bool(
+            await self.database.query_raw(
+                """UPDATE "LiteLLM_UsageAlertRule" SET deleted=true,enabled=false
+            WHERE id=$1 AND NOT deleted AND ($2::text::timestamptz IS NULL OR (
+                (record->>'updated_at')::timestamptz=$2::text::timestamptz
+                AND scope_type=$3 AND scope_id IS NOT DISTINCT FROM $4::text)) RETURNING id""",
+                rule_id,
+                existing.updated_at.isoformat() if existing else None,
+                existing.scope_type if existing else None,
+                existing.scope_id if existing else None,
+            )
         )
 
     async def list_rules(
