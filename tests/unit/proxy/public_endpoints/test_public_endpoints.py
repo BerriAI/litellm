@@ -147,29 +147,20 @@ def test_get_litellm_model_cost_map_catalog_only_excludes_runtime_registered_ent
     )
 
 
-def test_get_litellm_model_cost_map_returns_cost_map():
-    app = FastAPI()
+def test_get_litellm_model_cost_map_returns_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    model_cost: Final = {
+        "audio-model": {"input_cost_per_second": 0.1, "mode": "audio_transcription"},
+        "token-model": {"input_cost_per_token": 0.01, "mode": "chat"},
+    }
+    monkeypatch.setattr(litellm, "model_cost", model_cost)
+    app: Final = FastAPI()
     app.include_router(router)
-    client = TestClient(app)
+    client: Final = TestClient(app)
 
-    response = client.get("/public/litellm_model_cost_map")
+    response: Final = client.get("/public/litellm_model_cost_map")
 
     assert response.status_code == 200
-    payload = response.json()
-    assert isinstance(payload, dict)
-    assert len(payload) > 0, "Expected model cost map to contain at least one model"
-
-    # Verify the structure contains expected keys for at least one model
-    # Check for a common model like gpt-4 or gpt-3.5-turbo
-    model_keys = list(payload.keys())
-    assert len(model_keys) > 0
-
-    # Verify at least one model has expected cost fields
-    sample_model = model_keys[0]
-    sample_model_data = payload[sample_model]
-    assert isinstance(sample_model_data, dict)
-    # Check for common cost fields that should be present
-    assert "input_cost_per_token" in sample_model_data or "output_cost_per_token" in sample_model_data
+    assert response.json() == model_cost
 
 
 def test_public_ai_hub_info_is_public_by_default(monkeypatch):
@@ -536,7 +527,9 @@ def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
     (
         ("TypeSafe", "TypeSafe", LlmProviders.TYPESAFE),
         ("Nace", "Nace", LlmProviders.NACE),
+        ("PARALLEL_AI", "Parallel AI", LlmProviders.PARALLEL_AI),
         ("EU_JEV", "eu/jev", LlmProviders.EU_JEV),
+        ("EMPIRIOLABS", "EmpirioLabs AI", LlmProviders.EMPIRIOLABS),
     ),
 )
 def test_decisions_provider_fields(provider_key: str, display_name: str, provider: LlmProviders) -> None:
@@ -1804,25 +1797,40 @@ def test_get_agent_fields_appends_inherited_provider_credential_fields():
 
 
 @pytest.mark.parametrize("preference", ["auto_install", None])
-def test_public_skill_hub_echoes_registered_installation_preference(preference):
+def test_public_skill_hub_echoes_registered_installation_preference(preference: str | None) -> None:
+    from collections.abc import Mapping
+
+    from prisma.models import LiteLLM_ClaudeCodePluginTable
+
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import register_plugin
+    from litellm.repositories.plugin_upload_repository import PluginUploadRepository
     from litellm.types.proxy.claude_code_endpoints import RegisterPluginRequest
+
+    def create(data: Mapping[str, object]) -> LiteLLM_ClaudeCodePluginTable:
+        defaults: Final = {"id": "plugin-id", "enabled": True, "anonymous_download_count": 0}
+        return LiteLLM_ClaudeCodePluginTable.model_validate({**defaults, **data})
+
+    def find_many(where: Mapping[str, object]) -> list[LiteLLM_ClaudeCodePluginTable]:
+        return [create(table.create.call_args.kwargs["data"])]
 
     table: Final = MagicMock()
     table.find_unique = AsyncMock(return_value=None)
-    table.create = AsyncMock(side_effect=lambda data: SimpleNamespace(id="plugin-id", **data))
-    table.find_many = AsyncMock(
-        side_effect=lambda where: [SimpleNamespace(id="plugin-id", **table.create.call_args.kwargs["data"])]
-    )
+    table.create = AsyncMock(side_effect=create)
+    table.find_many = AsyncMock(side_effect=find_many)
     prisma: Final = MagicMock()
     prisma.db.litellm_claudecodeplugintable = table
+    prisma.writer_db = prisma.db
+    prisma.db.tx.return_value.__aenter__.return_value = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
+    prisma.db.litellm_claudecodepluginversion.create = AsyncMock()
     app: Final = FastAPI()
     app.include_router(router)
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         asyncio.run(
             register_plugin(
+                uploads=PluginUploadRepository(prisma),
                 request=RegisterPluginRequest(
                     name="security-review",
                     source={

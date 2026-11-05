@@ -2,16 +2,22 @@
 #   picks based on response time (for streaming, this is time to first token)
 from collections.abc import Mapping
 from datetime import datetime
+from functools import partial
 from typing import Final
 
 import litellm
-from litellm import ModelResponse, token_counter, verbose_logger
+from litellm import ModelResponse, verbose_logger
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models, str_keyed
+from litellm.litellm_core_utils.deployment_pricing import (
+    deployment_backend_models,
+    deployment_pricing_models,
+    str_keyed,
+)
+from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
 
 
 def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float | None]:
@@ -235,7 +241,9 @@ class LowestCostLoggingHandler(CustomLogger):
                 }
 
         try:
-            input_tokens = token_counter(messages=messages, text=input)
+            input_tokens = embedding_aware_token_count(
+                messages, input, partial(deployment_backend_models, healthy_deployments)
+            )
         except Exception:
             input_tokens = 0
 

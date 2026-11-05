@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     split_leading_system_run,
     string_field,
 )
+from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client, header_value
 from litellm.types.files import get_file_extension_from_mime_type
@@ -76,7 +77,7 @@ from .common_utils import (
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
 )
-from .image_handling import convert_url_to_base64
+from .image_handling import convert_url_to_base64, is_pdf_media_type
 
 
 def default_pt(messages):
@@ -910,8 +911,17 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
         )
 
 
+def _anthropic_https_url_block(
+    image_url: str, image_format: str | None
+) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
+    source: Final = AnthropicContentParamSourceUrl(type="url", url=image_url)
+    if image_format and is_pdf_media_type(image_format):
+        return AnthropicMessagesDocumentParam(type="document", source=source)
+    return AnthropicMessagesImageParam(type="image", source=source)
+
+
 def create_anthropic_image_param(
-    image_url_input: str | dict,
+    image_url_input: str | Mapping[str, object],
     format: str | None = None,
     is_bedrock_invoke: bool = False,
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
@@ -920,13 +930,11 @@ def create_anthropic_image_param(
 
     Supports both URL references (for HTTP/HTTPS URLs) and base64 encoding.
     """
-    # Extract URL and format from input
-    if isinstance(image_url_input, str):
-        image_url = image_url_input
-    else:
-        image_url = image_url_input.get("url", "")
-        if format is None:
-            format = image_url_input.get("format")
+    url_value: Final = image_url_input if isinstance(image_url_input, str) else image_url_input.get("url")
+    format_value: Final = None if isinstance(image_url_input, str) else image_url_input.get("format")
+    image_url: Final = url_value if isinstance(url_value, str) else ""
+    explicit_format: Final = format if format is not None else format_value
+    image_format: Final = explicit_format if isinstance(explicit_format, str) else None
 
     # Check if the image URL is an HTTP/HTTPS URL
     if image_url.startswith("http://") or image_url.startswith("https://"):
@@ -934,21 +942,14 @@ def create_anthropic_image_param(
         # as these providers don't support URL sources for images
         if is_bedrock_invoke or image_url.startswith("http://"):
             base64_url: Final = convert_url_to_base64(url=image_url)
-            image_chunk = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
-            return _anthropic_content_element_factory(image_chunk)
+            image_chunk = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=image_format)
+            return anthropic_content_element_factory(image_chunk)
         else:
-            # HTTPS URL - pass directly for regular Anthropic
-            return AnthropicMessagesImageParam(
-                type="image",
-                source=AnthropicContentParamSourceUrl(
-                    type="url",
-                    url=image_url,
-                ),
-            )
+            return _anthropic_https_url_block(image_url, image_format)
     else:
         # Convert to base64 for data URIs or other formats
-        image_chunk = convert_to_anthropic_image_obj(openai_image_url=image_url, format=format)
-        return _anthropic_content_element_factory(image_chunk)
+        image_chunk = convert_to_anthropic_image_obj(openai_image_url=image_url, format=image_format)
+        return anthropic_content_element_factory(image_chunk)
 
 
 # The following XML functions will be deprecated once JSON schema support is available on Bedrock and Vertex
@@ -1328,7 +1329,7 @@ def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
 _get_thought_signature_from_tool = get_thought_signature_from_tool
 
 
-def _get_dummy_thought_signature() -> str:
+def get_dummy_thought_signature() -> str:
     """Generate a dummy thought signature for models that require it.
 
     This is used when transferring conversation history from older models
@@ -1415,7 +1416,7 @@ def convert_to_gemini_tool_call_invoke(
                         # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures#parallel_function_calling_example
                         is_first_function_call = len(_parts_list) == 0
                         if not thought_signature and is_first_function_call and needs_dummy_signature:
-                            thought_signature = _get_dummy_thought_signature()
+                            thought_signature = get_dummy_thought_signature()
                         if thought_signature:
                             part_dict["thoughtSignature"] = thought_signature
 
@@ -1439,7 +1440,7 @@ def convert_to_gemini_tool_call_invoke(
 
                 # If no signature found and model is gemini-3, use dummy signature
                 if not thought_signature and needs_dummy_signature:
-                    thought_signature = _get_dummy_thought_signature()
+                    thought_signature = get_dummy_thought_signature()
 
                 if thought_signature:
                     part_dict_function["thoughtSignature"] = thought_signature
@@ -2254,16 +2255,16 @@ def add_cache_control_to_content(
     return anthropic_content_element
 
 
-def _anthropic_content_element_factory(
+def anthropic_content_element_factory(
     image_chunk: GenericImageParsingChunk,
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    if image_chunk["media_type"] == "application/pdf":
+    if is_pdf_media_type(image_chunk["media_type"]):
         _anthropic_content_element: AnthropicMessagesDocumentParam | AnthropicMessagesImageParam = (
             AnthropicMessagesDocumentParam(
                 type="document",
                 source=AnthropicContentParamSource(
                     type="base64",
-                    media_type=image_chunk["media_type"],
+                    media_type="application/pdf",
                     data=image_chunk["data"],
                 ),
             )
@@ -4253,6 +4254,7 @@ def _convert_to_bedrock_tool_call_invoke(
     tool_calls: list,
     model: str | None = None,
     deployment_model: str | None = None,
+    model_info: Mapping[str, object] | None = None,
 ) -> list[BedrockContentBlock]:
     """
     OpenAI tool invokes:
@@ -4337,6 +4339,7 @@ def _convert_to_bedrock_tool_call_invoke(
                                     block_type="content_block",
                                     model=model,
                                     deployment_model=deployment_model,
+                                    model_info=model_info,
                                 )
                                 if _cache_point_block is not None:
                                     _parts_list.append(_cache_point_block)
@@ -4357,6 +4360,7 @@ def _convert_to_bedrock_tool_call_invoke(
                         block_type="content_block",
                         model=model,
                         deployment_model=deployment_model,
+                        model_info=model_info,
                     )
                     if cache_point_block is not None:
                         _parts_list.append(cache_point_block)
@@ -5028,6 +5032,7 @@ class BedrockConverseMessagesProcessor:
         deployment_model: str | None = None,
         base_model: str | None = None,
         drop_params: bool = False,
+        model_info: Mapping[str, object] | None = None,
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
 
@@ -5090,6 +5095,7 @@ class BedrockConverseMessagesProcessor:
                                 block_type="content_block",
                                 model=model,
                                 deployment_model=deployment_model,
+                                model_info=model_info,
                             )
                             if _cache_point_block is not None:
                                 _parts.append(_cache_point_block)
@@ -5097,7 +5103,11 @@ class BedrockConverseMessagesProcessor:
                 elif message_content and isinstance(message_content, str):
                     _part = BedrockContentBlock(text=message_content)
                     _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                        message_block, block_type="content_block", model=model, deployment_model=deployment_model
+                        message_block,
+                        block_type="content_block",
+                        model=model,
+                        deployment_model=deployment_model,
+                        model_info=model_info,
                     )
                     user_content.append(_part)
                     if _cache_point_block is not None:
@@ -5148,6 +5158,7 @@ class BedrockConverseMessagesProcessor:
                         block_type="content_block",
                         model=model,
                         deployment_model=deployment_model,
+                        model_info=model_info,
                     )
                     if cache_point_block is not None:
                         tool_content.append(cache_point_block)
@@ -5213,6 +5224,7 @@ class BedrockConverseMessagesProcessor:
                             block_type="content_block",
                             model=model,
                             deployment_model=deployment_model,
+                            model_info=model_info,
                         )
                         if _cache_point_block is not None and not (
                             drop_params and _as_thinking_block(element) is not None
@@ -5230,6 +5242,7 @@ class BedrockConverseMessagesProcessor:
                         block_type="content_block",
                         model=model,
                         deployment_model=deployment_model,
+                        model_info=model_info,
                     )
                     if _cache_point_block is not None:
                         assistant_content.append(_cache_point_block)
@@ -5238,7 +5251,7 @@ class BedrockConverseMessagesProcessor:
                 if _tool_calls:
                     assistant_content.extend(
                         _convert_to_bedrock_tool_call_invoke(
-                            _tool_calls, model=model, deployment_model=deployment_model
+                            _tool_calls, model=model, deployment_model=deployment_model, model_info=model_info
                         )
                     )
 
@@ -5433,6 +5446,7 @@ def _bedrock_converse_messages_pt(
     deployment_model: str | None = None,
     base_model: str | None = None,
     drop_params: bool = False,
+    model_info: Mapping[str, object] | None = None,
 ) -> list[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -5501,6 +5515,7 @@ def _bedrock_converse_messages_pt(
                             block_type="content_block",
                             model=model,
                             deployment_model=deployment_model,
+                            model_info=model_info,
                         )
                         if _cache_point_block is not None:
                             _parts.append(_cache_point_block)
@@ -5508,7 +5523,11 @@ def _bedrock_converse_messages_pt(
             elif message_content and isinstance(message_content, str):
                 _part = BedrockContentBlock(text=message_content)
                 _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                    message_block, block_type="content_block", model=model, deployment_model=deployment_model
+                    message_block,
+                    block_type="content_block",
+                    model=model,
+                    deployment_model=deployment_model,
+                    model_info=model_info,
                 )
                 user_content.append(_part)
                 if _cache_point_block is not None:
@@ -5561,6 +5580,7 @@ def _bedrock_converse_messages_pt(
                     block_type="content_block",
                     model=model,
                     deployment_model=deployment_model,
+                    model_info=model_info,
                 )
                 if cache_point_block is not None:
                     tool_content.append(cache_point_block)
@@ -5627,6 +5647,7 @@ def _bedrock_converse_messages_pt(
                             block_type="content_block",
                             model=model,
                             deployment_model=deployment_model,
+                            model_info=model_info,
                         )
                         if _cache_point_block is not None and not (
                             drop_params and _as_thinking_block(element) is not None
@@ -5639,14 +5660,20 @@ def _bedrock_converse_messages_pt(
                     assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                    assistant_message_block, block_type="content_block", model=model, deployment_model=deployment_model
+                    assistant_message_block,
+                    block_type="content_block",
+                    model=model,
+                    deployment_model=deployment_model,
+                    model_info=model_info,
                 )
                 if _cache_point_block is not None:
                     assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
                 assistant_content.extend(
-                    _convert_to_bedrock_tool_call_invoke(_tool_calls, model=model, deployment_model=deployment_model)
+                    _convert_to_bedrock_tool_call_invoke(
+                        _tool_calls, model=model, deployment_model=deployment_model, model_info=model_info
+                    )
                 )
 
             msg_i += 1
@@ -5702,7 +5729,10 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
 
 
 def add_cache_point_tool_block(
-    tool: dict, model: str | None = None, deployment_model: str | None = None
+    tool: dict,
+    model: str | None = None,
+    deployment_model: str | None = None,
+    model_info: Mapping[str, object] | None = None,
 ) -> BedrockToolBlock | None:
     from litellm.llms.bedrock.common_utils import (
         bedrock_cache_point_ttl_supported,
@@ -5710,7 +5740,7 @@ def add_cache_point_tool_block(
     )
 
     cache_control: Final = tool.get("cache_control", None)
-    if cache_control is not None and bedrock_model_accepts_cache_points(model, deployment_model):
+    if cache_control is not None and bedrock_model_accepts_cache_points(model, deployment_model, model_info):
         cache_point: Final = cache_control.get("type", "ephemeral")
         if cache_point == "ephemeral":
             cache_point_block: Final[CachePointBlock] = {"type": "default"}
@@ -5747,7 +5777,10 @@ def _is_bedrock_tool_block(tool: dict) -> bool:
 
 
 def _bedrock_tools_pt(
-    tools: list, model: str | None = None, deployment_model: str | None = None
+    tools: list,
+    model: str | None = None,
+    deployment_model: str | None = None,
+    model_info: Mapping[str, object] | None = None,
 ) -> list[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -5868,7 +5901,9 @@ def _bedrock_tools_pt(
         tool_block_list.append(tool_block)
 
         ## ADD CACHE POINT TOOL BLOCK ##
-        cache_point_tool_block = add_cache_point_tool_block(tool, model=model, deployment_model=deployment_model)
+        cache_point_tool_block = add_cache_point_tool_block(
+            tool, model=model, deployment_model=deployment_model, model_info=model_info
+        )
         if cache_point_tool_block is not None:
             tool_block_list.append(cache_point_tool_block)
 
@@ -5916,8 +5951,13 @@ def function_call_prompt(
     llm_provider: str,
     drop_params: bool,
 ) -> list[dict[str, object]]:
+    prompt_functions: Final = tools_without_hosted_mcp(
+        functions, model=model, route=llm_provider, drop_params=drop_params
+    )
+    if not prompt_functions:
+        return messages
     header: Final = """To call a function, reply with JSON ONLY in this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}}. Once a function result answers the request, reply to the user in plain text instead of calling a function again. The following functions are available to you:"""
-    function_prompt: Final = header + "".join(f"\n{function}\n" for function in functions)
+    function_prompt: Final = header + "".join(f"\n{function}\n" for function in prompt_functions)
     if not any(_is_system_message(message) for message in messages):
         return [*messages, {"role": "system", "content": function_prompt}]
     return [

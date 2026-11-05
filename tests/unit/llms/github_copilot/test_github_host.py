@@ -54,6 +54,7 @@ def test_ghe_endpoints_ignore_github_com_url_overrides(monkeypatch: pytest.Monke
     assert endpoints.device_code_url == "https://octo.ghe.com/login/device/code"
     assert endpoints.access_token_url == "https://octo.ghe.com/login/oauth/access_token"
     assert endpoints.api_key_url == "https://api.octo.ghe.com/copilot_internal/v2/token"
+    assert endpoints.copilot_user_url == "https://api.octo.ghe.com/copilot_internal/user"
     assert endpoints.user_url == "https://api.octo.ghe.com/user"
     assert endpoints.default_copilot_api_base == "https://copilot-api.octo.ghe.com"
     assert endpoints.client_id == "custom-client"

@@ -26,7 +26,6 @@ export function AriaAnswer({
   };
   return (
     <article aria-label={`${ARIA_AGENT_LABEL} answer`} className="space-y-3">
-      <p className="text-xs font-medium text-muted-foreground">{ARIA_AGENT_LABEL}</p>
       <div ref={answerRef} className="space-y-4">
         {chart && <UsageAnswerChart chart={chart} />}
         <ChatMessageContent
@@ -35,9 +34,16 @@ export function AriaAnswer({
           isLastMessage={false}
           isStreaming={false}
           actions={
-            <Button variant="ghost" size="sm" onClick={exportAnswer} data-export-exclude>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={exportAnswer}
+              data-export-exclude
+              aria-label="Export answer"
+              title="Export answer"
+              className="text-muted-foreground"
+            >
               <Download className="size-3.5" />
-              Export answer
             </Button>
           }
         />

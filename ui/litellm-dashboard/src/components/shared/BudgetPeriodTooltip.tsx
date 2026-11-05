@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 import { CircleHelp } from "lucide-react";
 
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
+import i18n from "@/i18n/i18n";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { budgetPeriodRange } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -21,10 +22,14 @@ const describePeriod = (budgetDuration: string, budgetResetAt: string | null | u
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const period = budgetPeriodRange(budgetDuration, budgetResetAt);
   if (period) {
-    return `Budget period: ${formatPeriodDate(period.start)} to ${formatPeriodDate(period.end)} (${timeZone})`;
+    return i18n.t("shared.budgetPeriodTooltip.budgetPeriod", {
+      start: formatPeriodDate(period.start),
+      end: formatPeriodDate(period.end),
+      timeZone,
+    });
   }
   if (budgetResetAt && dayjs(budgetResetAt).isValid()) {
-    return `Next reset: ${formatPeriodDate(budgetResetAt)} (${timeZone})`;
+    return i18n.t("shared.budgetPeriodTooltip.nextReset", { date: formatPeriodDate(budgetResetAt), timeZone });
   }
   return null;
 };
@@ -35,15 +40,22 @@ export const budgetPeriodLines = ({
   budgetDuration,
   budgetResetAt,
 }: BudgetPeriodTooltipProps): readonly string[] => {
-  const spendLine = `${budgetDuration ? "Spend this period" : "Spend so far"}: $${formatNumberWithCommas(spend ?? 0, 4)}`;
-  if (maxBudget == null) return ["No budget set", spendLine];
-  const maxBudgetLine = `Max budget: $${formatNumberWithCommas(maxBudget, 2)}`;
-  if (!budgetDuration) return ["Lifetime budget, never resets", maxBudgetLine, spendLine];
+  const spendLine = i18n.t("shared.budgetPeriodTooltip.spendLine", {
+    label: budgetDuration
+      ? i18n.t("shared.budgetPeriodTooltip.spendThisPeriod")
+      : i18n.t("shared.budgetPeriodTooltip.spendSoFar"),
+    amount: formatNumberWithCommas(spend ?? 0, 4),
+  });
+  if (maxBudget == null) return [i18n.t("shared.budgetPeriodTooltip.noBudgetSet"), spendLine];
+  const maxBudgetLine = i18n.t("shared.budgetPeriodTooltip.maxBudget", {
+    amount: formatNumberWithCommas(maxBudget, 2),
+  });
+  if (!budgetDuration) return [i18n.t("shared.budgetPeriodTooltip.lifetimeBudget"), maxBudgetLine, spendLine];
   const periodLine = describePeriod(budgetDuration, budgetResetAt);
   return [
     ...(periodLine ? [periodLine] : []),
     maxBudgetLine,
-    `Reset interval: ${getBudgetDurationLabel(budgetDuration)}`,
+    i18n.t("shared.budgetPeriodTooltip.resetInterval", { interval: getBudgetDurationLabel(budgetDuration) }),
     spendLine,
   ];
 };

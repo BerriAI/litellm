@@ -510,6 +510,36 @@ class TestModelRateLimitingCheckIOTokens:
         assert request_kwargs["metadata"][OTPM_RESERVED_KEY] == model_max_output
 
     @pytest.mark.asyncio
+    async def test_otpm_reservation_uses_each_deployments_output_limit(self) -> None:
+        backend_model: Final = "openai/gpt-4o-mini"
+        catalog_max_output: Final = litellm.get_model_info(model=backend_model)["max_output_tokens"]
+        assert isinstance(catalog_max_output, int)
+        otpm_limit: Final = int(max(catalog_max_output, 987) / NO_MAX_TOKENS_TPM_RESERVATION_FRACTION) + 1
+        check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
+
+        async def _reserved(deployment_id: str, model_info: dict[str, object]) -> int:
+            metadata: Final[dict[str, object]] = {}
+            request_kwargs: Final[dict[str, object]] = {
+                "messages": [{"role": "user", "content": "hello"}],
+                "metadata": metadata,
+            }
+            set_io_token_rate_limit_request_kwargs(request_kwargs, metadata_channel="metadata")
+            deployment: Final = {
+                "litellm_params": {"model": backend_model, "otpm": otpm_limit},
+                "model_info": {"id": deployment_id, **model_info},
+            }
+            await check.async_pre_call_check(deployment)
+            reservation: Final = metadata.get(OTPM_RESERVED_KEY)
+            assert isinstance(reservation, int)
+            return reservation
+
+        plain: Final = await _reserved("io-plain-gpt-4o-mini", {})
+        override: Final = await _reserved("io-overridden-gpt-4o-mini", {"max_output_tokens": 987})
+
+        assert plain == catalog_max_output
+        assert override == 987
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("use_sync_check", [False, True])
     async def test_base_model_does_not_change_the_default_otpm_reservation(self, use_sync_check: bool):
         check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
