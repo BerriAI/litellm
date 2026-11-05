@@ -31,7 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
@@ -58,6 +58,7 @@ from litellm.llms.anthropic.common_utils import (
     anthropic_pass_through_api_base,
     merge_anthropic_beta_headers,
 )
+from litellm.llms.azure.common_utils import entra_rejection_in
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
     is_azure_body_model_inference_endpoint,
@@ -1417,13 +1418,12 @@ async def handle_bedrock_count_tokens(
         if deployment is not None:
             model_litellm_params: Final = deployment.get("litellm_params", {})
 
-            # Get the resolved model ID from the configuration
             if "model" in model_litellm_params:
                 resolved_model = model_litellm_params["model"]
 
             # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
             for key, value in model_litellm_params.items():
-                if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
+                if key != "user_api_key_dict":
                     litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
@@ -2382,6 +2382,16 @@ async def _relay_router_model(
         )
     except httpx.HTTPStatusError as upstream_error:
         return await _relay_upstream_response(upstream_error.response)
+    except Exception as error:
+        rejection: Final = entra_rejection_in(error)
+        if rejection is None:
+            raise
+        raise ProxyException(
+            message=redact_internal_details_from_client_message(rejection.message),
+            type=ProxyErrorTypes.auth_error,
+            param=None,
+            code=rejection.status_code,
+        ) from error
 
     if not is_streaming_request:
         return await _relay_upstream_response(cast(httpx.Response, result))

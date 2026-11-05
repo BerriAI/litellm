@@ -588,3 +588,10 @@ async def test_group_reserves_on_its_current_deployments_after_another_vendors_d
     by_own_name: Final = litellm.token_counter(model="prod", messages=_MULTILINGUAL_MESSAGES)
     assert openai_only != by_own_name
     assert (await _input_tokens(router, "prod"))["prod"] == by_own_name
+
+
+@pytest.mark.parametrize("window", [{}, {"budget_duration": "1d"}, {"reset_at": "2026-11-03T00:00:00Z"}])
+def test_fixed_budget_window_requires_duration_and_reset_boundary(window: object) -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
+
+    assert fixed_budget_window(window) is None
