@@ -27,7 +27,7 @@ import {
   MCPServerCostInfo,
   TRANSPORT,
   TRANSPORT_ITEMS,
-  AUTH_TYPE_ITEMS,
+  authTypeItemsFor,
   getMcpOAuthMode,
   oauth2FlowToFormValue,
 } from "@/components/mcp_tools/types";
@@ -47,6 +47,7 @@ import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import { StdioDisabledBanner, TransportSelectItems } from "./StdioAvailability";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
+import SecretHeadersFields from "./SecretHeadersFields";
 import IdJagFormFields from "./IdJagFormFields";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPLogoSelector from "./MCPLogoSelector";
@@ -195,6 +196,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
   const isIdJagAuthType = authType === AUTH_TYPE.OAUTH2_ID_JAG;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
+  const isSecretHeadersAuthType = authType === AUTH_TYPE.SECRET_HEADERS;
   // Same fallback as the delegate switch below: the value is undefined until the field mounts, so
   // reading it alone flashes the "no OAuth flow set" warning at a server that already has one.
   const oauthFlowTypeValue =
@@ -688,6 +690,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         args: undefined,
         env_json: undefined,
         stdio_config: undefined,
+        ...(isSecretHeadersAuthType ? { auth_type: undefined } : {}),
       };
       setFieldsValue(form, clearedForOpenapi);
     } else {
@@ -1014,12 +1017,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       }}
                     >
                       {(control) => (
-                        <Select {...selectControl<string>(control)} items={AUTH_TYPE_ITEMS}>
+                        <Select {...selectControl<string>(control)} items={authTypeItemsFor(transportType)}>
                           <SelectTrigger {...selectTriggerControl(control)} className="w-full">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {AUTH_TYPE_ITEMS.map((item) => (
+                            {authTypeItemsFor(transportType).map((item) => (
                               <SelectItem key={item.value} value={item.value}>
                                 {item.label}
                               </SelectItem>
@@ -1154,6 +1157,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 {!isStdioTransport && isTokenExchangeAuthType && <TokenExchangeFormFields isEditing />}
 
                 {!isStdioTransport && isIdJagAuthType && <IdJagFormFields isEditing />}
+
+                {!isStdioTransport && !isOpenAPITransport && isSecretHeadersAuthType && (
+                  <SecretHeadersFields isEditing={mcpServer.auth_type === AUTH_TYPE.SECRET_HEADERS} />
+                )}
 
                 {!isStdioTransport && isAwsSigV4AuthType && (
                   <>

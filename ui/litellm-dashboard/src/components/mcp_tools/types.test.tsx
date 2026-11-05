@@ -16,6 +16,7 @@ import {
   withoutMintedTokenCredentials,
   credentialAuthClass,
   isUnsupportedOnGatewayConnect,
+  authTypeItemsFor,
 } from "./types";
 
 describe("getOAuthAuthorizationIdentity", () => {
@@ -353,5 +354,17 @@ describe("preservedAdminCredentials vs preservedDeclaredAppCredentials", () => {
     expect(preservedDeclaredAppCredentials({ client_id: "cid", upstream_resource: "auto" })).toEqual({
       client_id: "cid",
     });
+  });
+});
+
+describe("authTypeItemsFor", () => {
+  it("offers secret headers for every transport except OpenAPI", () => {
+    const offered = (transport: string) => authTypeItemsFor(transport).some((item) => item.value === "secret_headers");
+    expect([TRANSPORT.HTTP, TRANSPORT.SSE, undefined].map((transport) => offered(transport as string))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(offered(TRANSPORT.OPENAPI)).toBe(false);
   });
 });
