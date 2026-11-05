@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.exceptions import APIError, InternalServerError, MidStreamFallbackError
+from litellm.exceptions import APIError, GuardrailRaisedException, InternalServerError, MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.caching.caching import DualCache
@@ -480,6 +480,105 @@ class TestProxyBaseLLMRequestProcessing:
         except ValueError:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "block_exc",
+        [
+            GuardrailRaisedException(
+                guardrail_name="block-secrets",
+                message="Content blocked: secret detected",
+                blocked_content=True,
+            ),
+            HTTPException(status_code=400, detail="Content blocked: secret detected"),
+        ],
+        ids=["guardrail-raised-exception", "content-filter-http-exception"],
+    )
+    async def test_common_processing_pre_call_logic_redacts_blocked_request_body_on_guardrail_block(
+        self, monkeypatch, block_exc
+    ):
+        secret = "glpat-FAKE-NOT-A-REAL-TOKEN-1111"
+        raw_body = {
+            "model": "small",
+            "messages": [{"role": "user", "content": f"my token is {secret}"}],
+            "max_tokens": 20,
+        }
+        data = {"model": "small", "messages": raw_body["messages"]}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            data["proxy_server_request"] = {
+                "url": "http://localhost/v1/chat/completions",
+                "method": "POST",
+                "body": dict(raw_body),
+            }
+            return data
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=block_exc)
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        processing_obj = ProxyBaseLLMRequestProcessing(data=data)
+
+        with pytest.raises(type(block_exc)):
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=ProxyUserAPIKeyAuth(),
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=MagicMock(spec=ProxyConfig),
+                route_type="acompletion",
+            )
+
+        assert processing_obj.data["proxy_server_request"]["body"] == {
+            "model": "small",
+            "[redacted]": "blocked by guardrail",
+        }, "blocked request body still holds the raw prompt in the spend-log snapshot"
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_keeps_body_on_non_guardrail_pre_call_failure(self, monkeypatch):
+        raw_body = {
+            "model": "small",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+        data = {"model": "small", "messages": raw_body["messages"]}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            data["proxy_server_request"] = {
+                "url": "http://localhost/v1/chat/completions",
+                "method": "POST",
+                "body": dict(raw_body),
+            }
+            return data
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=ValueError("boom"))
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        processing_obj = ProxyBaseLLMRequestProcessing(data=data)
+
+        with pytest.raises(ValueError, match="boom"):
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=ProxyUserAPIKeyAuth(),
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=MagicMock(spec=ProxyConfig),
+                route_type="acompletion",
+            )
+
+        assert processing_obj.data["proxy_server_request"]["body"] == raw_body, (
+            "non-guardrail pre_call failure must not rewrite the stored body"
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])
