@@ -324,6 +324,8 @@ class DailyActivityRepository:
         )
 
     async def daily_rows(self, scope: DailyActivityScope, *, page: int, page_size: int) -> DailyRowsPage:
+        if scope.provider is not None or scope.model_pairs:
+            raise ValueError("Provider cohorts require the aggregated Activity API")
         table: Final = _daily_rows_table(self._prisma_client, scope.table)
         adjusted_start, adjusted_end = adjust_dates_for_timezone(
             scope.start_date,

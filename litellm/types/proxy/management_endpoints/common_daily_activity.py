@@ -182,6 +182,8 @@ class KeySpendMetrics(LiteLLMBaseModel):
     failed_requests: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    total_response_time_ms: int = 0
+    timed_requests: int = 0
 
 
 class KeySpendActivityRow(LiteLLMBaseModel):
@@ -214,6 +216,8 @@ class UserActivityRow(LiteLLMBaseModel):
     api_requests: int = 0
     successful_requests: int = 0
     failed_requests: int = 0
+    total_response_time_ms: int = 0
+    timed_requests: int = 0
 
 
 class DailyActivityUserPageResponse(LiteLLMBaseModel):

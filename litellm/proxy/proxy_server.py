@@ -428,6 +428,7 @@ from litellm.proxy.alerting_endpoints.model_deprecation_alerts import (
     router as model_deprecation_alerts_router,
 )
 from litellm.proxy.alerting_endpoints.usage_alerts import router as usage_alerts_router
+from litellm.proxy.alerting_endpoints.issues import router as issues_router
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -22440,6 +22441,7 @@ app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
 app.include_router(model_deprecation_alerts_router)
 app.include_router(usage_alerts_router)
+app.include_router(issues_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)

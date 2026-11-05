@@ -8343,6 +8343,160 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Issues */
+        get: operations["list_issues_issues_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/issues/families": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Issue Families */
+        get: operations["list_issue_families_issues_families_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/issues/families/{family}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Issue Family */
+        patch: operations["update_issue_family_issues_families__family__patch"];
+        trace?: never;
+    };
+    "/issues/{issue_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Issue */
+        get: operations["get_issue_issues__issue_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Issue */
+        patch: operations["update_issue_issues__issue_id__patch"];
+        trace?: never;
+    };
+    "/issues/{issue_id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Issue Activity */
+        get: operations["get_issue_activity_issues__issue_id__activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/issues/{issue_id}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Issue Impact */
+        get: operations["get_issue_impact_issues__issue_id__impact_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/issues/{issue_id}/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Issue Keys */
+        get: operations["get_issue_keys_issues__issue_id__keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/issues/{issue_id}/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Issue Signals */
+        get: operations["list_issue_signals_issues__issue_id__signals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/issues/{issue_id}/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Issue Users */
+        get: operations["get_issue_users_issues__issue_id__users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jwt/key/mapping/delete": {
         parameters: {
             query?: never;
@@ -34710,6 +34864,302 @@ export interface components {
             /** Is Accepted */
             is_accepted: boolean;
         };
+        /** Issue */
+        Issue: {
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+            cohort: components["schemas"]["IssueCohort"];
+            /** Cohort Key */
+            cohort_key: string;
+            /**
+             * Comparisons
+             * @default []
+             */
+            comparisons: components["schemas"]["IssueComparison"][];
+            deprecation?: components["schemas"]["IssueDeprecation"] | null;
+            /**
+             * Explanation
+             * @default
+             */
+            explanation: string;
+            /**
+             * Family
+             * @enum {string}
+             */
+            family: "retirement" | "latency" | "reliability" | "spend" | "traffic";
+            /**
+             * First Seen
+             * Format: date-time
+             */
+            first_seen: string;
+            /**
+             * Grouping Reason
+             * @enum {string}
+             */
+            grouping_reason: "same_resource" | "dominant_key" | "provider_cohort" | "model_deprecation";
+            /** Id */
+            id: string;
+            impact?: components["schemas"]["IssueImpact"];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "performance" | "model_deprecation";
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Observed On
+             * Format: date
+             */
+            observed_on: string;
+            /**
+             * Range End
+             * Format: date
+             */
+            range_end: string;
+            /**
+             * Range Start
+             * Format: date
+             */
+            range_start: string;
+            /** Scope Label */
+            scope_label?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** IssueCohort */
+        IssueCohort: {
+            /**
+             * Model Pairs
+             * @default []
+             */
+            model_pairs: components["schemas"]["IssueModelPair"][];
+            /** Scope Id */
+            scope_id?: string | null;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "deployment" | "key" | "user" | "team" | "model" | "provider";
+        };
+        /** IssueComparison */
+        IssueComparison: {
+            /**
+             * Baseline End
+             * Format: date
+             */
+            baseline_end: string;
+            /** Baseline Sample Days */
+            baseline_sample_days?: number | null;
+            /**
+             * Baseline Start
+             * Format: date
+             */
+            baseline_start: string;
+            /** Baseline Value */
+            baseline_value: number;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "increase" | "decrease";
+            /**
+             * Metric
+             * @enum {string}
+             */
+            metric: "spend" | "requests" | "latency" | "errors" | "error_rate";
+            /** Observed Value */
+            observed_value: number;
+            /** Threshold */
+            threshold: number;
+        };
+        /** IssueDeprecation */
+        IssueDeprecation: {
+            /** Last Day Requests */
+            last_day_requests: number;
+            /**
+             * Last Used Date
+             * Format: date
+             */
+            last_used_date: string;
+            model: components["schemas"]["ModelDeprecationInfo"];
+            /** Requests */
+            requests: number;
+            state: components["schemas"]["DeprecationAlertState"];
+            /** Usage Model */
+            usage_model: string;
+        };
+        /** IssueFamilyList */
+        IssueFamilyList: {
+            /** Data */
+            data: components["schemas"]["IssueFamilySetting"][];
+        };
+        /** IssueFamilyPolicy */
+        IssueFamilyPolicy: {
+            /** Baseline Days */
+            baseline_days: number | null;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "increase" | "decrease";
+            /** Enabled */
+            enabled: boolean | null;
+            /** Enabled Rules */
+            enabled_rules: number;
+            /** Min History Days */
+            min_history_days: number | null;
+            /** Min Requests */
+            min_requests: number | null;
+            /** Min Value */
+            min_value: number | null;
+            /** Mixed */
+            mixed: boolean;
+            /** Multiplier */
+            multiplier: number | null;
+            /** Total Rules */
+            total_rules: number;
+        };
+        /** IssueFamilyPolicyUpdate */
+        IssueFamilyPolicyUpdate: {
+            /** Baseline Days */
+            baseline_days?: number | null;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "increase" | "decrease";
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Min History Days */
+            min_history_days?: number | null;
+            /** Min Requests */
+            min_requests?: number | null;
+            /** Min Value */
+            min_value?: number | null;
+            /** Multiplier */
+            multiplier?: number | null;
+        };
+        /** IssueFamilySetting */
+        IssueFamilySetting: {
+            /** Enabled */
+            enabled: boolean | null;
+            /** Enabled Rules */
+            enabled_rules: number;
+            /**
+             * Family
+             * @enum {string}
+             */
+            family: "spend" | "latency" | "reliability" | "traffic";
+            /** Policies */
+            policies: components["schemas"]["IssueFamilyPolicy"][];
+            /** Total Rules */
+            total_rules: number;
+        };
+        /** IssueFamilyUpdate */
+        IssueFamilyUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /**
+             * Policies
+             * @default []
+             */
+            policies: components["schemas"]["IssueFamilyPolicyUpdate"][];
+        };
+        /** IssueImpact */
+        IssueImpact: {
+            /** Keys */
+            keys?: number | null;
+            /** Measured Keys */
+            measured_keys?: number | null;
+            /** Measured Models */
+            measured_models?: number | null;
+            /** Models */
+            models?: number | null;
+            /** Requests */
+            requests?: number | null;
+            /** Teams */
+            teams?: number | null;
+            /** Users */
+            users?: number | null;
+        };
+        /** IssueList */
+        IssueList: {
+            /** Data */
+            data: components["schemas"]["Issue"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /** IssueModelPair */
+        IssueModelPair: {
+            /** Model */
+            model: string;
+            /** Provider */
+            provider: string;
+        };
+        /** IssueSignal */
+        IssueSignal: {
+            deprecation?: components["schemas"]["IssueDeprecation"] | null;
+            /** Issue Id */
+            issue_id: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "usage_alert" | "model_deprecation";
+            /** Source Id */
+            source_id: string;
+            usage_alert?: components["schemas"]["UsageAlert"] | null;
+        };
+        /** IssueSignalList */
+        IssueSignalList: {
+            /** Data */
+            data: components["schemas"]["IssueSignal"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /** IssueUpdate */
+        IssueUpdate: {
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "open" | "resolved" | "dismissed";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+        };
         /**
          * ItemReference
          * @description An internal identifier for an item to reference.
@@ -34868,6 +35318,16 @@ export interface components {
              * @default 0
              */
             successful_requests: number;
+            /**
+             * Timed Requests
+             * @default 0
+             */
+            timed_requests: number;
+            /**
+             * Total Response Time Ms
+             * @default 0
+             */
+            total_response_time_ms: number;
             /**
              * Total Tokens
              * @default 0
@@ -50485,7 +50945,7 @@ export interface components {
              * Metric
              * @enum {string}
              */
-            metric: "spend" | "requests" | "latency" | "errors";
+            metric: "spend" | "requests" | "latency" | "errors" | "error_rate";
             /** Observed Value */
             observed_value: number;
             /** Rule Id */
@@ -50588,7 +51048,7 @@ export interface components {
              * Metric
              * @enum {string}
              */
-            metric: "spend" | "requests" | "latency" | "errors";
+            metric: "spend" | "requests" | "latency" | "errors" | "error_rate";
             representative: components["schemas"]["UsageAlert"];
         };
         /** UsageAlertGroupUpdate */
@@ -50706,7 +51166,7 @@ export interface components {
              * Metric
              * @enum {string}
              */
-            metric: "spend" | "requests" | "latency" | "errors";
+            metric: "spend" | "requests" | "latency" | "errors" | "error_rate";
             /**
              * Min History Days
              * @default 3
@@ -50774,7 +51234,7 @@ export interface components {
              * Metric
              * @enum {string}
              */
-            metric: "spend" | "requests" | "latency" | "errors";
+            metric: "spend" | "requests" | "latency" | "errors" | "error_rate";
             /**
              * Min History Days
              * @default 3
@@ -51349,6 +51809,16 @@ export interface components {
              * @default 0
              */
             successful_requests: number;
+            /**
+             * Timed Requests
+             * @default 0
+             */
+            timed_requests: number;
+            /**
+             * Total Response Time Ms
+             * @default 0
+             */
+            total_response_time_ms: number;
             /**
              * Total Tokens
              * @default 0
@@ -64981,6 +65451,338 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InvitationModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_issues_issues_get: {
+        parameters: {
+            query?: {
+                kind?: ("performance" | "model_deprecation") | null;
+                family?: ("retirement" | "latency" | "reliability" | "spend" | "traffic") | null;
+                status?: ("open" | "resolved" | "dismissed") | null;
+                scope_type?: ("deployment" | "key" | "user" | "team" | "model" | "provider") | null;
+                scope_id?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_issue_families_issues_families_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueFamilyList"];
+                };
+            };
+        };
+    };
+    update_issue_family_issues_families__family__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                family: "spend" | "latency" | "reliability" | "traffic";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueFamilyUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueFamilySetting"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_issue_issues__issue_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Issue"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_issue_issues__issue_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Issue"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_issue_activity_issues__issue_id__activity_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+            };
+            header?: never;
+            path: {
+                issue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_issue_impact_issues__issue_id__impact_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+            };
+            header?: never;
+            path: {
+                issue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueImpact"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_issue_keys_issues__issue_id__keys_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                issue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityKeyPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_issue_signals_issues__issue_id__signals_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                issue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueSignalList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_issue_users_issues__issue_id__users_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                issue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityUserPageResponse"];
                 };
             };
             /** @description Validation Error */
@@ -79013,7 +79815,7 @@ export interface operations {
             query?: {
                 scope_type?: ("deployment" | "key" | "user" | "team" | "model") | null;
                 scope_id?: string | null;
-                metric?: ("spend" | "requests" | "latency" | "errors") | null;
+                metric?: ("spend" | "requests" | "latency" | "errors" | "error_rate") | null;
                 status?: ("open" | "resolved" | "dismissed") | null;
                 start_date?: string | null;
                 end_date?: string | null;

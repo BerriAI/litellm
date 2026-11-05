@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -75,6 +76,8 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     exclusion_index: Final = entity_index + int(has_entity_array)
     model_index: Final = exclusion_index + int(bool(scope.exclude_entity_ids))
     api_keys_index: Final = model_index + int(bool(scope.model))
+    provider_index: Final = api_keys_index + int(bool(scope.api_keys))
+    pairs_index: Final = provider_index + int(scope.provider is not None)
     conditions: Final = (
         f"date >= ${start_index}",
         f"date <= ${start_index + 1}",
@@ -83,6 +86,21 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             if scope.entity_ids == ()
             else (f'"{scope.entity_id_field}" = ANY(${entity_index}::text[])',)
             if has_entity_array
+            else ()
+        ),
+        *(
+            (f"COALESCE(NULLIF(custom_llm_provider, ''), 'unknown') = ${provider_index}",)
+            if scope.provider is not None
+            else ()
+        ),
+        *(
+            (
+                f"EXISTS (SELECT 1 FROM jsonb_to_recordset(${pairs_index}::jsonb) "
+                f"AS cohort(match_provider text, match_model text) WHERE "
+                f"cohort.match_provider=COALESCE(NULLIF(custom_llm_provider, ''), 'unknown') "
+                f"AND cohort.match_model={_MODEL_EXPR})",
+            )
+            if scope.model_pairs
             else ()
         ),
         *(
@@ -113,6 +131,16 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         *((list(scope.exclude_entity_ids),) if scope.exclude_entity_ids else ()),
         *((scope.model,) if scope.model else ()),
         *((list(scope.api_keys),) if scope.api_keys else ()),
+        *((scope.provider,) if scope.provider is not None else ()),
+        *(
+            (
+                json.dumps(
+                    tuple({"match_provider": provider, "match_model": model} for provider, model in scope.model_pairs)
+                ),
+            )
+            if scope.model_pairs
+            else ()
+        ),
     )
     return " AND ".join(conditions), params
 
@@ -301,7 +329,9 @@ def _key_spend_select() -> str:
             COALESCE(SUM(successful_requests), 0)::bigint AS successful_requests,
             COALESCE(SUM(failed_requests), 0)::bigint AS failed_requests,
             COALESCE(SUM(cache_read_input_tokens), 0)::bigint AS cache_read_input_tokens,
-            COALESCE(SUM(cache_creation_input_tokens), 0)::bigint AS cache_creation_input_tokens"""
+            COALESCE(SUM(cache_creation_input_tokens), 0)::bigint AS cache_creation_input_tokens,
+            COALESCE(SUM(total_response_time_ms), 0)::bigint AS total_response_time_ms,
+            COALESCE(SUM(timed_requests), 0)::bigint AS timed_requests"""
 
 
 def build_key_page_sql(scope: DailyActivityScope, *, offset: int, limit: int) -> SqlQuery:
@@ -339,7 +369,9 @@ def _user_spend_select() -> str:
             (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0))::bigint AS total_tokens,
             COALESCE(SUM(api_requests), 0)::bigint AS api_requests,
             COALESCE(SUM(successful_requests), 0)::bigint AS successful_requests,
-            COALESCE(SUM(failed_requests), 0)::bigint AS failed_requests"""
+            COALESCE(SUM(failed_requests), 0)::bigint AS failed_requests,
+            COALESCE(SUM(total_response_time_ms), 0)::bigint AS total_response_time_ms,
+            COALESCE(SUM(timed_requests), 0)::bigint AS timed_requests"""
 
 
 def build_user_page_sql(scope: DailyActivityScope, *, offset: int, limit: int) -> SqlQuery:

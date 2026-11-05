@@ -6,7 +6,7 @@ from typing import Literal, Self, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 UsageAlertScope: TypeAlias = Literal["deployment", "key", "user", "team", "model"]
-UsageAlertMetric: TypeAlias = Literal["spend", "requests", "latency", "errors"]
+UsageAlertMetric: TypeAlias = Literal["spend", "requests", "latency", "errors", "error_rate"]
 UsageAlertDirection: TypeAlias = Literal["increase", "decrease"]
 UsageAlertStatus: TypeAlias = Literal["open", "resolved", "dismissed"]
 UsageAlertChannel: TypeAlias = Literal["email", "slack"]

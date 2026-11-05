@@ -3,7 +3,6 @@
 import json
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
-from itertools import product
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -17,6 +16,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
+from litellm.types.proxy.usage_alert_defaults import DEFAULT_USAGE_RULE_IDS
 from litellm.types.proxy.usage_alerts import (
     UsageAlert,
     UsageAlertChannel,
@@ -49,6 +49,14 @@ class AlertDatabase(Protocol):
     async def query_raw(self, query: str, *args: object) -> object: ...
 
 
+class ResourceLabelScope(Protocol):
+    @property
+    def scope_type(self) -> str: ...
+
+    @property
+    def scope_id(self) -> str | None: ...
+
+
 class _Record(BaseModel, frozen=True):
     record: Mapping[str, object]
 
@@ -75,7 +83,7 @@ class _GroupPage(BaseModel, frozen=True):
 
 
 class _ResourceLabel(BaseModel, frozen=True):
-    scope_type: UsageAlertScope
+    scope_type: str
     scope_id: str | None
     label: str | None
 
@@ -98,14 +106,7 @@ class _Ownership(BaseModel, frozen=True):
     team_id: str | None
 
 
-_DEFAULT_RULE_IDS: Final = frozenset(
-    str(uuid5(NAMESPACE_URL, f"litellm:usage-alert:{scope}:{metric}:{direction}"))
-    for scope, metric, direction in product(
-        ("deployment", "key", "user", "team", "model"),
-        ("spend", "requests", "latency", "errors"),
-        ("increase", "decrease"),
-    )
-)
+_DEFAULT_RULE_IDS: Final = DEFAULT_USAGE_RULE_IDS
 
 
 def _rule(record: Mapping[str, object]) -> UsageAlertRule:
@@ -405,8 +406,8 @@ class UsageAlertsRepository:
             )
         )
         page: Final = rows[0]
-        labels: Final[Mapping[tuple[UsageAlertScope, str | None], str | None]] = (
-            await self._group_labels(page.data) if page.data else {}
+        labels: Final[Mapping[tuple[str, str | None], str | None]] = (
+            await self.resource_labels(page.data) if page.data else {}
         )
         return UsageAlertGroupList(
             data=tuple(
@@ -434,9 +435,9 @@ class UsageAlertsRepository:
             offset=offset,
         )
 
-    async def _group_labels(
-        self, groups: tuple[_GroupRow, ...]
-    ) -> Mapping[tuple[UsageAlertScope, str | None], str | None]:
+    async def resource_labels(
+        self, groups: tuple[ResourceLabelScope, ...]
+    ) -> Mapping[tuple[str, str | None], str | None]:
         rows: Final = TypeAdapter(tuple[_ResourceLabel, ...]).validate_python(
             await self.database.query_raw(
                 """WITH scopes AS (
@@ -446,7 +447,8 @@ class UsageAlertsRepository:
                     WHEN 'key' THEN COALESCE(NULLIF(k.key_alias,''),NULLIF(k.key_name,''))
                     WHEN 'team' THEN NULLIF(t.team_alias,'')
                     WHEN 'user' THEN COALESCE(NULLIF(u.user_alias,''),NULLIF(u.user_email,''))
-                    WHEN 'model' THEN s.scope_id WHEN 'deployment' THEN 'Gateway' END AS label
+                    WHEN 'model' THEN s.scope_id WHEN 'provider' THEN s.scope_id
+                    WHEN 'deployment' THEN 'Gateway' END AS label
                 FROM scopes s LEFT JOIN "LiteLLM_VerificationToken" k ON s.scope_type='key' AND k.token=s.key_id
                     LEFT JOIN "LiteLLM_TeamTable" t ON s.scope_type='team' AND t.team_id=s.scope_id
                     LEFT JOIN "LiteLLM_UserTable" u ON s.scope_type='user' AND u.user_id=s.scope_id""",

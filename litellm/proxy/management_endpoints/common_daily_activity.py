@@ -1128,7 +1128,7 @@ async def get_daily_activity_aggregated(
                 scope, include_entity_breakdown=include_entity_breakdown, api_key_limit=api_key_limit
             ),
             _guardrail_spend_or_empty(repository, scope)
-            if include_guardrail_breakdown and not scope.model
+            if include_guardrail_breakdown and not scope.model and scope.provider is None and not scope.model_pairs
             else asyncio.sleep(0, result=()),
         )
         records: Final = aggregated_rows.grouping_rows
