@@ -10,7 +10,7 @@ from litellm.repositories.usage_alert_metrics import DailyAlertMetrics
 
 class ComparisonRule(Protocol):
     @property
-    def metric(self) -> Literal["spend", "requests", "latency", "errors"]: ...
+    def metric(self) -> Literal["spend", "requests", "latency", "errors", "error_rate"]: ...
 
     @property
     def direction(self) -> Literal["increase", "decrease"]: ...
@@ -48,6 +48,9 @@ def _value(metric: str, rows: Sequence[DailyAlertMetrics], days: int) -> float |
         return sum(row.spend for row in rows) / days
     if metric == "errors":
         return sum(row.errors for row in rows) / days
+    if metric == "error_rate":
+        requests: Final = sum(row.requests for row in rows)
+        return 100 * sum(row.errors for row in rows) / requests if requests else None
     return sum(row.requests for row in rows) / days
 
 

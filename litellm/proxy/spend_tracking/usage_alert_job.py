@@ -1,17 +1,17 @@
 """Once-daily evaluation, polled hourly by one database-elected worker."""
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from itertools import chain, groupby, product
+from itertools import chain, groupby
 from typing import (
     TYPE_CHECKING,
     Final,
     Protocol,
     cast,  # noqa: TID251  # generated Prisma delegate supplies the repository protocol
 )
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import uuid4
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.SlackAlerting.usage_alerts import UsageAlertDelivery, configured_destinations
@@ -20,11 +20,11 @@ from litellm.repositories.usage_alert_health import UsageAlertHealthRepository
 from litellm.repositories.usage_alert_metrics import DailyAlertMetrics, MetricsDatabase, UsageAlertMetricsRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.integrations.slack_alerting import AlertType
+from litellm.types.proxy.usage_alert_defaults import USAGE_ALERT_SCOPES, default_usage_rules, is_default_usage_rule
 from litellm.types.proxy.usage_alerts import (
     UsageAlert,
     UsageAlertChannel,
     UsageAlertEvaluationStatus,
-    UsageAlertMetric,
     UsageAlertNotification,
     UsageAlertObservation,
     UsageAlertRule,
@@ -37,29 +37,6 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 USAGE_ALERT_JOB_ID: Final = "daily_usage_alerts"
-_SCOPES: Final[tuple[UsageAlertScope, ...]] = ("deployment", "key", "user", "team", "model")
-_METRICS: Final[tuple[UsageAlertMetric, ...]] = ("spend", "requests", "latency", "errors")
-_MIN_VALUES: Final = {"spend": 10, "requests": 100, "latency": 100, "errors": 10}
-
-
-def default_usage_rules(
-    channels: tuple[UsageAlertChannel, ...] = (), *, legacy_user_spend_alerts: bool = False
-) -> tuple[UsageAlertRuleInput, ...]:
-    return tuple(
-        UsageAlertRuleInput(
-            name=f"Daily {scope} {metric} {direction}",
-            scope_type=scope,
-            metric=metric,
-            direction=direction,
-            min_value=_MIN_VALUES[metric],
-            notification_channels=(
-                ()
-                if legacy_user_spend_alerts and (scope, metric, direction) == ("user", "spend", "increase")
-                else channels
-            ),
-        )
-        for scope, metric, direction in product(_SCOPES, _METRICS, ("increase", "decrease"))
-    )
 
 
 def completed_day(now: datetime) -> date:
@@ -102,11 +79,11 @@ def _observations(
             continue
         if rule.scope_id is not None and rule.scope_id != entity:
             continue
-        comparison = compare_daily_usage(rule, tuple(group), target)  # rebind-ok: comparison for the current entity
+        comparison: Final = compare_daily_usage(rule, tuple(group), target)
         if comparison is None:
             continue
         evaluated = True
-        identity = None if rule.scope_type == "deployment" else entity  # rebind-ok: scope identity for this entity
+        identity: Final = None if rule.scope_type == "deployment" else entity
         if not comparison.breached and identity not in active:
             continue
         changed.append(
@@ -123,19 +100,15 @@ def _observations(
     return _Observations(evaluated, tuple(changed))
 
 
-def _default_rule(rule: UsageAlertRule) -> bool:
-    return rule.id == str(uuid5(NAMESPACE_URL, f"litellm:usage-alert:{rule.scope_type}:{rule.metric}:{rule.direction}"))
-
-
 def _suppressed_entities(rule: UsageAlertRule, enabled: tuple[UsageAlertRule, ...]) -> frozenset[str | None]:
-    if not _default_rule(rule):
+    if not is_default_usage_rule(rule):
         return frozenset()
     matching: Final = tuple(
         other
         for other in enabled
         if (other.scope_type, other.metric, other.direction) == (rule.scope_type, rule.metric, rule.direction)
     )
-    return frozenset(other.scope_id for other in matching if not _default_rule(other))
+    return frozenset(other.scope_id for other in matching if not is_default_usage_rule(other))
 
 
 class IncidentDelivery(Protocol):
@@ -150,6 +123,8 @@ class UsageAlertJob:
         health: UsageAlertHealthRepository,
         delivery: IncidentDelivery,
         defaults: tuple[UsageAlertRuleInput, ...] | None = None,
+        *,
+        deprecation_projection: Callable[[datetime], Awaitable[None]] | None = None,
     ) -> None:
         self._store = store
         self._metrics = metrics
@@ -157,9 +132,16 @@ class UsageAlertJob:
         self._delivery = delivery
         self._defaults = default_usage_rules() if defaults is None else defaults
         self._defaults_registered = False
+        self._deprecation_projection = deprecation_projection
 
     @classmethod
-    def from_prisma(cls, prisma: "PrismaClient", slack: "SlackAlerting") -> "UsageAlertJob":
+    def from_prisma(
+        cls,
+        prisma: "PrismaClient",
+        slack: "SlackAlerting",
+        *,
+        deprecation_projection: Callable[[datetime], Awaitable[None]] | None = None,
+    ) -> "UsageAlertJob":
         database: Final = cast(MetricsDatabase, prisma.writer_db)  # cast-ok: generated Prisma delegate
         return cls(
             UsageAlertsRepository.from_prisma(prisma),
@@ -172,6 +154,7 @@ class UsageAlertJob:
                 else (),
                 legacy_user_spend_alerts=AlertType.user_spend_anomalies in slack.alert_types,
             ),
+            deprecation_projection=deprecation_projection,
         )
 
     async def run(self, now: datetime | None = None) -> None:
@@ -200,6 +183,8 @@ class UsageAlertJob:
         return tuple(pages)
 
     async def _run(self, now: datetime) -> None:
+        if self._deprecation_projection is not None:
+            await self._deprecation_projection(now)
         if not self._defaults_registered:
             await self._store.ensure_default_rules(self._defaults)
             self._defaults_registered = True
@@ -209,7 +194,7 @@ class UsageAlertJob:
         for offset in range(0, len(rules), 500):
             complete.update(await self._store.completed_rule_ids(rules[offset : offset + 500], target))
         due: Final = tuple(rule for rule in rules if rule.id not in complete)
-        for scoped in (tuple(rule for rule in due if rule.scope_type == scope) for scope in _SCOPES):
+        for scoped in (tuple(rule for rule in due if rule.scope_type == scope) for scope in USAGE_ALERT_SCOPES):
             if scoped:
                 await self._scope(scoped, target, rules)
         await self._notify()
