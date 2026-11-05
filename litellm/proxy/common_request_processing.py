@@ -357,8 +357,10 @@ def resolve_litellm_call_id(client_call_id: str | None) -> str:
     return str(uuid.uuid4())
 
 
-def should_return_raw_model_name(request_data: dict[str, object]) -> bool:
-    return any(
+def should_return_raw_model_name(
+    request_data: dict[str, object], general_settings: Mapping[str, object] | None = None
+) -> bool:
+    return (general_settings is not None and general_settings.get("return_raw_model_name") is True) or any(
         isinstance(metadata, dict) and metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True
         for metadata in (request_data.get("metadata"), request_data.get("litellm_metadata"))
     )
@@ -3314,7 +3316,9 @@ class ProxyBaseLLMRequestProcessing:
                             proxy_logging_obj=proxy_logging_obj,
                             request=request,
                             restamp_model=(
-                                None if should_return_raw_model_name(self.data) else requested_model_from_client
+                                None
+                                if should_return_raw_model_name(self.data, general_settings)
+                                else requested_model_from_client
                             ),
                         )
                         selected_data_generator = wrap_sse_stream_with_keepalive_pings(
@@ -3480,7 +3484,7 @@ class ProxyBaseLLMRequestProcessing:
                 response_obj=response,
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
-                return_raw_model_name=should_return_raw_model_name(self.data),
+                return_raw_model_name=should_return_raw_model_name(self.data, general_settings),
             )
 
         fastapi_response.headers.update(

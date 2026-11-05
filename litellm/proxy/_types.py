@@ -2480,6 +2480,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    return_raw_model_name: bool = Field(
+        False,
+        description=(
+            "Preserve the upstream response model instead of replacing it with the requested model alias. "
+            "Applies to streaming and non-streaming responses. The per-request raw-model opt-out remains supported."
+        ),
+    )
+
     use_spend_logs_ledger: bool = Field(
         False,
         description="Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.",
