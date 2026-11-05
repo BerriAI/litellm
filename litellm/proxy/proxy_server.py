@@ -423,6 +423,9 @@ from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
+from litellm.proxy.alerting_endpoints.model_deprecation_alerts import (
+    router as model_deprecation_alerts_router,
+)
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -790,9 +793,6 @@ from litellm.proxy.management_endpoints.management_v1 import (
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
     router as model_access_group_management_router,
-)
-from litellm.proxy.management_endpoints.model_deprecation_alerts import (
-    router as model_deprecation_alerts_router,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (  # noqa: F401, RUF100  # legacy module exports
     _add_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
