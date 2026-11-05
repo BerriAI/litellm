@@ -12968,8 +12968,12 @@ class _VendorGuardrail(CustomGuardrail):
         self.calls = 0
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         self.calls += 1
         self.order.append(self.guardrail_name or "")
         if self.behavior == "block":
@@ -12983,7 +12987,7 @@ class _VendorGuardrail(CustomGuardrail):
         return data
 
     async def async_moderation_hook(
-        self, data: dict, user_api_key_dict: ProxyUserAPIKeyAuth, call_type: CallTypesLiteral
+        self, data: dict[str, object], user_api_key_dict: ProxyUserAPIKeyAuth, call_type: CallTypesLiteral
     ) -> None:
         self.calls += 1
 
@@ -12997,8 +13001,12 @@ class _CustomerRoutingGuardrail(CustomGuardrail):
         self.calls = 0
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         self.calls += 1
         if data.get("model") == "virtual-model":
             data["model"] = "gpt-4o-mini"
@@ -13022,7 +13030,7 @@ class _CustomerTextGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -13040,8 +13048,12 @@ class _BuiltInContentCheck(CustomLogger):
         self.seen: Final[list[str]] = []
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         self.seen.append(json.dumps(data.get("messages")))
         return data
 
@@ -13072,8 +13084,12 @@ class _ModelMappingHook(CustomLogger):
         self.order: Final = order if order is not None else []
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         self.order.append("mapping-hook")
         if data.get("model") != self.source:
             return data
@@ -13087,15 +13103,23 @@ class _TaggingHook(CustomLogger):
     """A customer callback that adds a tag to the request."""
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
-        return {**data, "metadata": {**(data.get("metadata") or {}), "tags": ["over-budget-tag"]}}
+        self,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
+        return {**data, "metadata": {**_as_mapping(data.get("metadata")), "tags": ["over-budget-tag"]}}
 
 
 class _EmailMaskingHook(CustomLogger):
     async def async_pre_call_hook(
-        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         _mask_emails(data)
         return data
 
@@ -13106,8 +13130,12 @@ class _RejectingHook(CustomLogger):
         self.model: Final = model
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         if self.model in (None, data.get("model")):
             raise HTTPException(status_code=403, detail="rejected by hook")
         return data
@@ -13119,8 +13147,12 @@ class _RateLimitingHook(CustomLogger):
         self.model: Final = model
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         if data.get("model") == self.model:
             raise ProxyRateLimitError(detail=f"rpm limit reached for {self.model}")
         return data
@@ -13135,8 +13167,12 @@ class _ContentEnforcer(CustomLogger):
         self.calls = 0
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self,
+        user_api_key_dict: ProxyUserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         self.calls += 1
         self.order.append("content-enforcer")
         return data
@@ -13148,7 +13184,7 @@ class _ModerationHook(CustomLogger):
         self.calls = 0
 
     async def async_moderation_hook(
-        self, data: dict, user_api_key_dict: ProxyUserAPIKeyAuth, call_type: CallTypesLiteral
+        self, data: dict[str, object], user_api_key_dict: ProxyUserAPIKeyAuth, call_type: CallTypesLiteral
     ) -> None:
         self.calls += 1
 
@@ -13186,7 +13222,7 @@ class _FailureLogRecorder(CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: ProxyUserAPIKeyAuth,
         traceback_str: str | None = None,
@@ -13205,7 +13241,7 @@ class _Sent:
 
 
 async def _send(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     callbacks: Sequence[CustomLogger],
     model: str | None = "does-not-exist",
     route_type: Literal["acompletion", "atext_completion", "aresponses", "aembedding"] = "acompletion",
@@ -13289,7 +13325,9 @@ async def _send(
     )
 
 
-def _attach_policy_pipeline(monkeypatch, mode: Literal["pre_call", "post_call"], guardrail_name: str) -> None:
+def _attach_policy_pipeline(
+    monkeypatch: pytest.MonkeyPatch, mode: Literal["pre_call", "post_call"], guardrail_name: str
+) -> None:
     from litellm.proxy.policy_engine import attachment_registry, policy_registry
 
     policies: Final = policy_registry.PolicyRegistry()
@@ -13321,8 +13359,8 @@ class TestUnroutableModelSkipsPreCallGuardrails:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("behavior", ["pass", "mask", "block", "unreachable"])
     async def test_unknown_model_gets_the_invalid_model_error_without_calling_the_guardrail(
-        self, monkeypatch, behavior
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, behavior: Literal["pass", "mask", "block", "unreachable"]
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior=behavior)
 
         guarded: Final = await _send(monkeypatch, [guardrail])
@@ -13339,8 +13377,8 @@ class TestUnroutableModelSkipsPreCallGuardrails:
         [pytest.param(None, id="missing"), pytest.param("", id="empty"), pytest.param("m" * 5000, id="5000-chars")],
     )
     async def test_missing_or_malformed_model_gets_the_routing_error_without_calling_the_guardrail(
-        self, monkeypatch, model
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, model: str | None
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="block")
 
         guarded: Final = await _send(monkeypatch, [guardrail], model=model)
@@ -13351,7 +13389,7 @@ class TestUnroutableModelSkipsPreCallGuardrails:
         assert guardrail.calls == 0
 
     @pytest.mark.asyncio
-    async def test_unknown_model_skips_a_parallel_guardrail(self, monkeypatch):
+    async def test_unknown_model_skips_a_parallel_guardrail(self, monkeypatch: pytest.MonkeyPatch) -> None:
         guardrail: Final = _VendorGuardrail(behavior="block", run_in_parallel=True)
 
         sent: Final = await _send(monkeypatch, [guardrail])
@@ -13361,7 +13399,9 @@ class TestUnroutableModelSkipsPreCallGuardrails:
         assert guardrail.calls == 0
 
     @pytest.mark.asyncio
-    async def test_endpoint_without_a_router_skips_the_guardrail_for_an_unknown_model(self, monkeypatch):
+    async def test_endpoint_without_a_router_skips_the_guardrail_for_an_unknown_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="block")
 
         guarded: Final = await _send(monkeypatch, [guardrail], use_router=False)
@@ -13381,7 +13421,12 @@ class TestUnroutableModelSkipsPreCallGuardrails:
             pytest.param("atext_completion", {}, id="completions"),
         ],
     )
-    async def test_unknown_model_on_other_routes_skips_the_guardrail(self, monkeypatch, route_type, body):
+    async def test_unknown_model_on_other_routes_skips_the_guardrail(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        route_type: Literal["acompletion", "atext_completion", "aresponses", "aembedding"],
+        body: Mapping[str, object],
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="block")
 
         guarded: Final = await _send(monkeypatch, [guardrail], route_type=route_type, body=body)
@@ -13392,7 +13437,9 @@ class TestUnroutableModelSkipsPreCallGuardrails:
         assert guardrail.calls == 0
 
     @pytest.mark.asyncio
-    async def test_model_a_hook_swaps_for_another_unknown_model_is_rejected_under_the_new_name(self, monkeypatch):
+    async def test_model_a_hook_swaps_for_another_unknown_model_is_rejected_under_the_new_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="block")
         swap: Final = _ModelMappingHook(target="still-unknown", returns_new_request=True)
 
@@ -13403,7 +13450,9 @@ class TestUnroutableModelSkipsPreCallGuardrails:
         assert guardrail.calls == 0
 
     @pytest.mark.asyncio
-    async def test_guardrail_that_would_reroute_an_unknown_model_is_not_called(self, monkeypatch):
+    async def test_guardrail_that_would_reroute_an_unknown_model_is_not_called(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="reroute")
 
         sent: Final = await _send(monkeypatch, [guardrail], model="guard-reroute")
@@ -13413,7 +13462,9 @@ class TestUnroutableModelSkipsPreCallGuardrails:
         assert guardrail.calls == 0
 
     @pytest.mark.asyncio
-    async def test_rate_limit_fallback_to_an_unknown_model_skips_the_guardrail(self, monkeypatch):
+    async def test_rate_limit_fallback_to_an_unknown_model_skips_the_guardrail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="mask")
 
         sent: Final = await _send(
@@ -13430,8 +13481,8 @@ class TestUnroutableModelSkipsPreCallGuardrails:
 
     @pytest.mark.asyncio
     async def test_key_with_router_settings_gets_the_invalid_model_error_without_calling_the_guardrail(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="block")
         key: Final = ProxyUserAPIKeyAuth(request_route="/v1/chat/completions", router_settings={"num_retries": 0})
 
@@ -13493,7 +13544,9 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
             ),
         ],
     )
-    async def test_failure_log_hides_every_field_a_skipped_guardrail_would_have_scanned(self, monkeypatch, body):
+    async def test_failure_log_hides_every_field_a_skipped_guardrail_would_have_scanned(
+        self, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]
+    ) -> None:
         sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask")], body=body)
 
         assert sent.status == 400
@@ -13516,7 +13569,12 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
             pytest.param("atext_completion", {}, id="completions"),
         ],
     )
-    async def test_failure_log_hides_the_input_of_other_routes(self, monkeypatch, route_type, body):
+    async def test_failure_log_hides_the_input_of_other_routes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        route_type: Literal["acompletion", "atext_completion", "aresponses", "aembedding"],
+        body: Mapping[str, object],
+    ) -> None:
         sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask")], route_type=route_type, body=body)
 
         assert sent.status == 400
@@ -13525,7 +13583,7 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
     @pytest.mark.asyncio
     async def test_failure_log_hides_content_a_skipped_parallel_guardrail_would_have_scanned(
         self, monkeypatch: pytest.MonkeyPatch
-    ):
+    ) -> None:
         sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask", run_in_parallel=True)])
 
         assert sent.status == 400
@@ -13533,8 +13591,8 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
 
     @pytest.mark.asyncio
     async def test_failure_log_hides_content_when_a_built_in_hook_rejects_after_a_skipped_guardrail(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
         key: Final = ProxyUserAPIKeyAuth(
             api_key=hash_token("sk-rpm-one"),
@@ -13554,7 +13612,7 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
     @pytest.mark.asyncio
     async def test_failure_log_hides_content_when_a_tag_budget_rejects_after_a_skipped_guardrail(
         self, monkeypatch: pytest.MonkeyPatch
-    ):
+    ) -> None:
         async def over_budget(**_: object) -> None:
             raise litellm.BudgetExceededError(current_cost=10.0, max_budget=5.0)
 
@@ -13569,7 +13627,7 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
     @pytest.mark.asyncio
     async def test_built_in_hook_after_a_skipped_guardrail_is_not_sent_the_content_it_would_have_masked(
         self, monkeypatch: pytest.MonkeyPatch
-    ):
+    ) -> None:
         check: Final = _BuiltInContentCheck()
 
         sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask"), check])
@@ -13587,8 +13645,8 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
         ],
     )
     async def test_failure_log_hides_content_only_when_the_skipped_guardrail_applied(
-        self, monkeypatch, stream_scope, stream, content_hidden
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, stream_scope: str, stream: bool, content_hidden: bool
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="mask")
         guardrail.apply_stream_scope(stream_scope)
 
@@ -13601,14 +13659,16 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
 class TestUnroutableModelFailureLogNamesOnlyGuardrailsThatRan:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("run_in_parallel", [False, True], ids=["sequential", "parallel"])
-    async def test_failure_log_leaves_out_a_skipped_default_on_guardrail(self, monkeypatch, run_in_parallel):
+    async def test_failure_log_leaves_out_a_skipped_default_on_guardrail(
+        self, monkeypatch: pytest.MonkeyPatch, run_in_parallel: bool
+    ) -> None:
         sent: Final = await _send(monkeypatch, [_VendorGuardrail(run_in_parallel=run_in_parallel)])
 
         assert sent.status == 400
         assert sent.failure_logs[0]["applied_guardrails"] == []
 
     @pytest.mark.asyncio
-    async def test_failure_log_keeps_an_operator_guardrail_that_ran(self, monkeypatch):
+    async def test_failure_log_keeps_an_operator_guardrail_that_ran(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class OperatorGuardrail(_VendorGuardrail):
             __module__ = "operator_guardrails.checks"
 
@@ -13621,7 +13681,9 @@ class TestUnroutableModelFailureLogNamesOnlyGuardrailsThatRan:
         assert sent.failure_logs[0]["applied_guardrails"] == ["operator"]
 
     @pytest.mark.asyncio
-    async def test_failure_log_keeps_a_name_an_operator_guardrail_shares_with_a_skipped_one(self, monkeypatch):
+    async def test_failure_log_keeps_a_name_an_operator_guardrail_shares_with_a_skipped_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         class OperatorGuardrail(_VendorGuardrail):
             __module__ = "operator_guardrails.checks"
 
@@ -13634,7 +13696,9 @@ class TestUnroutableModelFailureLogNamesOnlyGuardrailsThatRan:
         assert "shared" in sent.failure_logs[0]["applied_guardrails"]
 
     @pytest.mark.asyncio
-    async def test_failure_log_names_a_guardrail_that_blocked_a_routable_model(self, monkeypatch):
+    async def test_failure_log_names_a_guardrail_that_blocked_a_routable_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="block")
 
         sent: Final = await _send(monkeypatch, [guardrail], model="gpt-4o-mini")
@@ -13659,8 +13723,14 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
     )
     @pytest.mark.parametrize("check", ["guardrail", "parallel-guardrail", "content-enforcer"])
     async def test_hook_listed_after_a_pre_call_check_can_still_rename_a_virtual_model(
-        self, monkeypatch, route_type, body, virtual, target, check
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        route_type: Literal["acompletion", "atext_completion", "aresponses", "aembedding"],
+        body: Mapping[str, object],
+        virtual: str,
+        target: str,
+        check: str,
+    ) -> None:
         guardrail: Final = _VendorGuardrail(run_in_parallel=check == "parallel-guardrail")
         enforcer: Final = _ContentEnforcer()
         mapping: Final = _ModelMappingHook(source=virtual, target=target)
@@ -13680,7 +13750,7 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
     @pytest.mark.parametrize("customer_guardrail", [_CustomerRoutingGuardrail, _InheritedCustomerGuardrail])
     async def test_customer_guardrail_can_still_rename_a_virtual_model(
         self, monkeypatch: pytest.MonkeyPatch, customer_guardrail: type[_CustomerRoutingGuardrail]
-    ):
+    ) -> None:
         guardrail: Final = _VendorGuardrail()
         customer: Final = customer_guardrail()
 
@@ -13699,7 +13769,7 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         monkeypatch: pytest.MonkeyPatch,
         customer_guardrail: type[_CustomerRoutingGuardrail] | type[_CustomerTextGuardrail],
         run_in_parallel: bool,
-    ):
+    ) -> None:
         customer: Final = customer_guardrail(run_in_parallel=run_in_parallel)
 
         sent: Final = await _send(monkeypatch, [customer])
@@ -13711,8 +13781,8 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("mapping_first", [True, False])
     async def test_pre_call_pipeline_does_not_stop_a_hook_from_renaming_a_virtual_model(
-        self, monkeypatch, mapping_first
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, mapping_first: bool
+    ) -> None:
         guardrail: Final = _VendorGuardrail(name="pipeline-guardrail")
         _attach_policy_pipeline(monkeypatch, "pre_call", "pipeline-guardrail")
         mapping: Final = _ModelMappingHook()
@@ -13725,7 +13795,7 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         assert guardrail.calls == 1
 
     @pytest.mark.asyncio
-    async def test_rate_limiter_still_counts_requests_for_unknown_models(self, monkeypatch):
+    async def test_rate_limiter_still_counts_requests_for_unknown_models(self, monkeypatch: pytest.MonkeyPatch) -> None:
         proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
         key: Final = ProxyUserAPIKeyAuth(
             api_key=hash_token("sk-rpm-one"),
@@ -13745,13 +13815,15 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         assert statuses == [400, 429, 429]
 
     @pytest.mark.asyncio
-    async def test_hook_listed_after_a_guardrail_still_runs_for_an_unknown_model(self, monkeypatch):
+    async def test_hook_listed_after_a_guardrail_still_runs_for_an_unknown_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sent: Final = await _send(monkeypatch, [_VendorGuardrail(), _RejectingHook()])
 
         assert (sent.status, sent.message) == (403, "rejected by hook")
 
     @pytest.mark.asyncio
-    async def test_during_call_hooks_still_run_for_an_unknown_model(self, monkeypatch):
+    async def test_during_call_hooks_still_run_for_an_unknown_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         moderation: Final = _ModerationHook()
         during_call_guardrail: Final = _VendorGuardrail(name="during-call", event_hook=GuardrailEventHooks.during_call)
 
@@ -13762,7 +13834,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("with_guardrail", [False, True])
-    async def test_pre_call_completed_event_is_still_emitted_for_an_unknown_model(self, monkeypatch, with_guardrail):
+    async def test_pre_call_completed_event_is_still_emitted_for_an_unknown_model(
+        self, monkeypatch: pytest.MonkeyPatch, with_guardrail: bool
+    ) -> None:
         sent: Final = await _send(monkeypatch, [_VendorGuardrail()] if with_guardrail else [])
 
         assert sent.status == 400
@@ -13795,8 +13869,8 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         ],
     )
     async def test_guardrail_block_after_a_rename_logs_the_same_models_as_before(
-        self, monkeypatch, returns_new_request, expected
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, returns_new_request: bool, expected: Mapping[str, object]
+    ) -> None:
         mapping: Final = _ModelMappingHook(returns_new_request=returns_new_request)
 
         sent: Final = await _send(monkeypatch, [mapping, _VendorGuardrail(behavior="block")], model="virtual-model")
@@ -13806,7 +13880,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         assert [log["request_has_call_id"] for log in sent.failure_logs] == [False]
 
     @pytest.mark.asyncio
-    async def test_hook_rejection_after_the_guardrail_passed_logs_the_request_as_sent(self, monkeypatch):
+    async def test_hook_rejection_after_the_guardrail_passed_logs_the_request_as_sent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sent: Final = await _send(
             monkeypatch, [_ModelMappingHook(), _VendorGuardrail(), _RejectingHook()], model="virtual-model"
         )
@@ -13817,7 +13893,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         ] == [("virtual-model", [{"role": "user", "content": f"email {_RAW_EMAIL}"}], False)]
 
     @pytest.mark.asyncio
-    async def test_unknown_model_without_guardrails_logs_the_request_its_hooks_produced(self, monkeypatch):
+    async def test_unknown_model_without_guardrails_logs_the_request_its_hooks_produced(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sent: Final = await _send(monkeypatch, [_EmailMaskingHook()])
 
         assert sent.status == 400
@@ -13827,7 +13905,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         ] == [([{"role": "user", "content": "email [EMAIL]"}], [{"role": "user", "content": "email [EMAIL]"}], True)]
 
     @pytest.mark.asyncio
-    async def test_post_call_only_pipeline_leaves_the_failure_log_of_an_unknown_model_unredacted(self, monkeypatch):
+    async def test_post_call_only_pipeline_leaves_the_failure_log_of_an_unknown_model_unredacted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail(name="post-call-guardrail", event_hook=GuardrailEventHooks.post_call)
         _attach_policy_pipeline(monkeypatch, "post_call", "post-call-guardrail")
 
@@ -13839,7 +13919,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         ]
 
     @pytest.mark.asyncio
-    async def test_rejection_by_a_hook_listed_before_the_guardrail_is_logged_as_before(self, monkeypatch):
+    async def test_rejection_by_a_hook_listed_before_the_guardrail_is_logged_as_before(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="mask")
 
         sent: Final = await _send(monkeypatch, [_RejectingHook(), guardrail])
@@ -13851,7 +13933,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         ]
 
     @pytest.mark.asyncio
-    async def test_rate_limited_unknown_model_whose_fallback_a_hook_rejects_is_logged_as_before(self, monkeypatch):
+    async def test_rate_limited_unknown_model_whose_fallback_a_hook_rejects_is_logged_as_before(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail(behavior="mask")
 
         sent: Final = await _send(
@@ -13886,16 +13970,20 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         ],
     )
     async def test_model_registry_is_read_once_for_the_name_routing_ends_up_with(
-        self, monkeypatch, model, callbacks, expected_lookups
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model: str,
+        callbacks: Callable[[], Sequence[CustomLogger]],
+        expected_lookups: tuple[str, ...],
+    ) -> None:
         sent: Final = await _send(monkeypatch, callbacks(), model=model)
 
         assert sent.registry_lookups == expected_lookups
 
     @pytest.mark.asyncio
     async def test_model_created_on_another_replica_is_served_with_its_guardrail_on_the_first_request(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         router: Final = _routing_router()
         guardrail: Final = _VendorGuardrail()
 
@@ -13918,7 +14006,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         assert sent.registry_lookups == ("created-on-a-sibling",)
 
     @pytest.mark.asyncio
-    async def test_routable_model_runs_every_hook_and_guardrail_once_in_configured_order(self, monkeypatch):
+    async def test_routable_model_runs_every_hook_and_guardrail_once_in_configured_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         order: Final = list[str]()
 
         sent: Final = await _send(
@@ -13930,7 +14020,7 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         assert (sent.status, order) == (200, ["mapping-hook", "vendor-guardrail", "content-enforcer"])
 
     @pytest.mark.asyncio
-    async def test_guardrail_still_blocks_a_routable_model(self, monkeypatch):
+    async def test_guardrail_still_blocks_a_routable_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         guardrail: Final = _VendorGuardrail(behavior="block")
 
         sent: Final = await _send(monkeypatch, [guardrail, _RejectingHook()], model="gpt-4o-mini")
@@ -13938,7 +14028,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         assert (sent.status, sent.message, guardrail.calls) == (400, "Prompt blocked by vendor policy", 1)
 
     @pytest.mark.asyncio
-    async def test_hook_that_renames_a_blocked_model_to_a_routable_one_is_served(self, monkeypatch):
+    async def test_hook_that_renames_a_blocked_model_to_a_routable_one_is_served(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail()
 
         sent: Final = await _send(
@@ -13986,8 +14078,8 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         ],
     )
     async def test_request_the_router_resolves_itself_still_runs_its_guardrail(
-        self, monkeypatch, model, body, llm_router
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, model: str, body: Mapping[str, object], llm_router: Callable[[], Router]
+    ) -> None:
         guardrail: Final = _VendorGuardrail()
 
         await _send(monkeypatch, [guardrail], model=model, body=body, llm_router=llm_router())
@@ -13996,7 +14088,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("kind", ["content-enforcer", "pipeline-guardrail"])
-    async def test_unknown_model_still_runs_pipelines_and_content_enforcers(self, monkeypatch, kind):
+    async def test_unknown_model_still_runs_pipelines_and_content_enforcers(
+        self, monkeypatch: pytest.MonkeyPatch, kind: str
+    ) -> None:
         guardrail: Final = _VendorGuardrail(name="pipeline-guardrail")
         enforcer: Final = _ContentEnforcer()
         if kind == "pipeline-guardrail":
@@ -14008,7 +14102,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         assert (enforcer.calls if kind == "content-enforcer" else guardrail.calls) == 1
 
     @pytest.mark.asyncio
-    async def test_guardrails_still_run_for_an_unknown_model_when_one_reroutes_sensitive_data(self, monkeypatch):
+    async def test_guardrails_still_run_for_an_unknown_model_when_one_reroutes_sensitive_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         guardrail: Final = _VendorGuardrail()
         router_guardrail: Final = CustomGuardrail(
             guardrail_name="sensitive-router",
@@ -14023,8 +14119,8 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
 
     @pytest.mark.asyncio
     async def test_built_in_hook_that_routes_an_unknown_model_after_a_skipped_guardrail_gets_the_routing_error(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from litellm.proxy.hooks.sensitive_data_routing import PROXY_SensitiveDataRoutingHandler
         from litellm.proxy.utils import InternalUsageCache
 
@@ -14044,7 +14140,9 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
         assert "Invalid model name passed in model=does-not-exist" in sent.message
 
     @pytest.mark.asyncio
-    async def test_caller_that_skips_guardrails_still_runs_content_enforcers_for_a_renamed_model(self, monkeypatch):
+    async def test_caller_that_skips_guardrails_still_runs_content_enforcers_for_a_renamed_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from litellm.proxy import proxy_server
 
         enforcer: Final = _ContentEnforcer()
