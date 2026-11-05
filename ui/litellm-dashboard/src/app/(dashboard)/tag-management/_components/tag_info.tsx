@@ -50,13 +50,12 @@ const budgetPayload = (value: TagEditFormValues["max_budget"]): number | null | 
 
 interface TagEditFormProps {
   tag: Tag;
-  seedBudgetFields: boolean;
   userModels: string[];
   onCancel: () => void;
   onSave: (values: TagEditFormValues) => Promise<void>;
 }
 
-const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userModels, onCancel, onSave }) => {
+const TagEditForm: React.FC<TagEditFormProps> = ({ tag, userModels, onCancel, onSave }) => {
   const { t } = useTranslation();
   const [budgetSectionOpen, setBudgetSectionOpen] = useState(false);
   const form = useZodForm(tagEditSchema, {
@@ -64,8 +63,8 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
       name: tag.name,
       description: tag.description,
       models: tag.models,
-      max_budget: seedBudgetFields ? tag.litellm_budget_table?.max_budget : undefined,
-      budget_duration: seedBudgetFields ? tag.litellm_budget_table?.budget_duration : undefined,
+      max_budget: tag.litellm_budget_table?.max_budget ?? undefined,
+      budget_duration: tag.litellm_budget_table?.budget_duration ?? undefined,
     },
   });
 
@@ -279,7 +278,6 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
           <CardContent>
             <TagEditForm
               tag={tagDetails}
-              seedBudgetFields={editTag}
               userModels={userModels}
               onCancel={() => setIsEditing(false)}
               onSave={handleSave}

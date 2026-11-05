@@ -41,6 +41,14 @@ const renderEditor = async () => {
   return { user, nameInput };
 };
 
+const renderEditorOpenedFromDetailPage = async () => {
+  const user = userEvent.setup();
+  render(<TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin editTag={false} />);
+  await user.click(await screen.findByRole("button", { name: "Edit Tag" }));
+  await screen.findByLabelText("Tag Name");
+  return { user };
+};
+
 describe("TagInfoView save payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -122,6 +130,39 @@ describe("TagInfoView save payload", () => {
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
     expect(mockTagUpdateCall).toHaveBeenCalledWith("sk-test", expect.objectContaining({ max_budget: 10 }));
   });
+
+  it("prefills the budget and reset interval when Edit Tag is clicked on the detail page", async () => {
+    const { user } = await renderEditorOpenedFromDetailPage();
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+    expect(await screen.findByLabelText("Max Budget (USD)")).toHaveValue(10);
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(mockTagUpdateCall).toHaveBeenCalledWith(
+      "sk-test",
+      expect.objectContaining({ max_budget: 10, budget_duration: "7d" }),
+    );
+  });
+
+  it.each([{ editTag: true }, { editTag: false }])(
+    "saves a description edit on a tag whose budget fields are null, editTag=$editTag",
+    async ({ editTag }) => {
+      const unsetBudgetTag = {
+        ...tag,
+        litellm_budget_table: { max_budget: null, budget_duration: null, soft_budget: 5, tpm_limit: null },
+      } as unknown as Tag;
+      mockTagInfoCall.mockResolvedValue({ "prod-tag": unsetBudgetTag });
+      const user = userEvent.setup();
+      render(<TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin editTag={editTag} />);
+      if (!editTag) await user.click(await screen.findByRole("button", { name: "Edit Tag" }));
+
+      fireEvent.change(await screen.findByLabelText("Description"), { target: { value: "updated description" } });
+      await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+      expect(mockTagUpdateCall).toHaveBeenCalledWith(
+        "sk-test",
+        expect.objectContaining({ description: "updated description", max_budget: undefined }),
+      );
+    },
+  );
 
   it("blocks negative budgets before sending the request", async () => {
     const { user } = await renderEditor();
