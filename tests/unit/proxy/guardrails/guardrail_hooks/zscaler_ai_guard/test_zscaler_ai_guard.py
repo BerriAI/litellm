@@ -243,7 +243,7 @@ async def _execute_policy_bodies(
                 "texts": ["every", "message"],
                 "structured_messages": [*_CONVERSATION, {"role": "assistant", "content": "Prefilled answer:"}],
             },
-            None,
+            "What is two plus two?",
         ),
         (
             {
@@ -251,6 +251,16 @@ async def _execute_policy_bodies(
                 "structured_messages": [
                     *_CONVERSATION,
                     {"role": "tool", "tool_call_id": "call_1", "content": "tool output"},
+                ],
+            },
+            "What is two plus two?",
+        ),
+        (
+            {
+                "texts": ["every", "message"],
+                "structured_messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "assistant", "content": "Prefilled answer:"},
                 ],
             },
             None,
@@ -264,6 +274,7 @@ async def _execute_policy_bodies(
         "texts-only-route",
         "ends-on-assistant",
         "ends-on-tool",
+        "no-user-message",
     ],
 )
 async def test_request_scan_sends_only_the_last_user_turn(

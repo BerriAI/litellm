@@ -5,7 +5,7 @@
 # +-------------------------------------------------------------+
 import os
 from collections.abc import Mapping, Sequence
-from itertools import chain, takewhile
+from itertools import chain, dropwhile, takewhile
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
@@ -266,7 +266,8 @@ class ZscalerAIGuard(CustomGuardrail):
 
     @staticmethod
     def _last_user_turn_texts(messages: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
-        last_user_turn: Final = tuple(takewhile(lambda message: message.get("role") == "user", reversed(messages)))
+        from_last_user_message: Final = dropwhile(lambda message: message.get("role") != "user", reversed(messages))
+        last_user_turn: Final = tuple(takewhile(lambda message: message.get("role") == "user", from_last_user_message))
         return tuple(chain.from_iterable(map(ZscalerAIGuard._content_texts, reversed(last_user_turn))))
 
     @staticmethod
