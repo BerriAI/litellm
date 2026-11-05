@@ -2623,7 +2623,7 @@ def redact_proxy_server_request_body_on_guardrail_block(
     body: Final = proxy_server_request.get("body")
     if not isinstance(body, dict):
         return
-    for field in ("messages", "prompt", "input"):
+    for field in ("messages", "prompt", "input", "instructions", "system"):
         if field in body:
             body[field] = "[REDACTED - BLOCKED BY GUARDRAIL]"
 

@@ -1410,6 +1410,8 @@ def test_redact_proxy_server_request_body_on_guardrail_block():
                 "model": "gpt-4",
                 "messages": [{"role": "user", "content": "secret password is supersecret"}],
                 "prompt": "supersecret prompt",
+                "instructions": "supersecret instruction",
+                "system": "supersecret system",
             },
         },
     }
@@ -1419,6 +1421,8 @@ def test_redact_proxy_server_request_body_on_guardrail_block():
     body = data["proxy_server_request"]["body"]
     assert body["messages"] == "[REDACTED - BLOCKED BY GUARDRAIL]"
     assert body["prompt"] == "[REDACTED - BLOCKED BY GUARDRAIL]"
+    assert body["instructions"] == "[REDACTED - BLOCKED BY GUARDRAIL]"
+    assert body["system"] == "[REDACTED - BLOCKED BY GUARDRAIL]"
     assert "supersecret" not in json.dumps(body)
 
 
