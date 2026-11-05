@@ -450,6 +450,14 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     litellm_native_routes = [
+        "/skill-hub/skills",
+        "/skill-hub/skills/upload",
+        "/skill-hub/skills/import",
+        "/skill-hub/skills/{name}",
+        "/skill-hub/skills/{name}/archive",
+        "/skill-hub/skills/{name}/content",
+        "/skill-hub/skills/{name}/publish",
+        "/skill-hub/skills/{name}/unpublish",
         "/rag/ingest",
         "/v1/rag/ingest",
         "/rag/query",

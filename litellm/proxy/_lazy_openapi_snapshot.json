@@ -58849,6 +58849,871 @@
       }
     }
   },
+  "skill_hub": {
+    "components": {
+      "schemas": {
+        "Body_upload_skill_skill_hub_skills_upload_post": {
+          "properties": {
+            "file": {
+              "contentMediaType": "application/octet-stream",
+              "description": "Agent Skills ZIP with SKILL.md and optional supporting files",
+              "title": "File",
+              "type": "string"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "required": [
+            "file"
+          ],
+          "title": "Body_upload_skill_skill_hub_skills_upload_post",
+          "type": "object"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ImportSkillRequest": {
+          "properties": {
+            "path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Repository-relative skill directory",
+              "title": "Path"
+            },
+            "ref": {
+              "default": "HEAD",
+              "description": "Git commit, tag or branch to import",
+              "title": "Ref",
+              "type": "string"
+            },
+            "skill": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill name to select when a repository contains several skills",
+              "title": "Skill"
+            },
+            "url": {
+              "description": "Public skills.sh skill URL or GitHub repository URL",
+              "title": "Url",
+              "type": "string"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Version label for the imported snapshot",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "title": "ImportSkillRequest",
+          "type": "object"
+        },
+        "SkillHubList": {
+          "properties": {
+            "count": {
+              "title": "Count",
+              "type": "integer"
+            },
+            "next_offset": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Offset"
+            },
+            "skills": {
+              "items": {
+                "$ref": "#/components/schemas/SkillHubSkill"
+              },
+              "title": "Skills",
+              "type": "array"
+            }
+          },
+          "required": [
+            "skills",
+            "count",
+            "next_offset"
+          ],
+          "title": "SkillHubList",
+          "type": "object"
+        },
+        "SkillHubMetadata": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Domain"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keywords"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "title": "SkillHubMetadata",
+          "type": "object"
+        },
+        "SkillHubPublication": {
+          "additionalProperties": false,
+          "properties": {},
+          "title": "SkillHubPublication",
+          "type": "object"
+        },
+        "SkillHubSkill": {
+          "properties": {
+            "content_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content Url"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "download_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Download Url"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "source": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Source",
+              "type": "object"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            },
+            "visibility": {
+              "enum": [
+                "public",
+                "private"
+              ],
+              "title": "Visibility",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "visibility",
+            "source"
+          ],
+          "title": "SkillHubSkill",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/skill-hub/skills": {
+        "get": {
+          "description": "Browse the caller's public and granted private skills.",
+          "operationId": "list_skills_skill_hub_skills_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "query",
+              "required": false,
+              "schema": {
+                "default": "",
+                "title": "Query",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 50,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubList"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Skills",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/import": {
+        "post": {
+          "description": "Import a public skills.sh or GitHub skill as a portable snapshot.",
+          "operationId": "import_skill_skill_hub_skills_import_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportSkillRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSkill"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Import Skill",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/upload": {
+        "post": {
+          "description": "Publish a portable skill while retaining Claude marketplace compatibility.",
+          "operationId": "upload_skill_skill_hub_skills_upload_post",
+          "requestBody": {
+            "content": {
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_upload_skill_skill_hub_skills_upload_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSkill"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Upload Skill",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}": {
+        "delete": {
+          "description": "Delete a skill and its managed archive.",
+          "operationId": "remove_skill_skill_hub_skills__name__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "204": {
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Remove Skill",
+          "tags": [
+            "skill_hub"
+          ]
+        },
+        "get": {
+          "description": "Read one visible skill and its portable download URL.",
+          "operationId": "get_skill_skill_hub_skills__name__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSkill"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Skill",
+          "tags": [
+            "skill_hub"
+          ]
+        },
+        "put": {
+          "description": "Replace registry metadata, clearing omitted fields and preserving skill files.",
+          "operationId": "replace_skill_metadata_skill_hub_skills__name__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubMetadata"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSkill"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Replace Skill Metadata",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/archive": {
+        "get": {
+          "description": "Download the complete portable skill, with SKILL.md at the ZIP root.",
+          "operationId": "download_skill_skill_hub_skills__name__archive_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "digest",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Digest"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/zip": {
+                  "schema": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Download Skill",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/content": {
+        "get": {
+          "description": "Read the original SKILL.md without downloading supporting files.",
+          "operationId": "skill_content_skill_hub_skills__name__content_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "text/markdown": {}
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Skill Content",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/publish": {
+        "post": {
+          "description": "Make a skill public using the existing Hub publication policy.",
+          "operationId": "publish_skill_skill_hub_skills__name__publish_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SkillHubPublication"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": " Body"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSkill"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Publish Skill",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/unpublish": {
+        "post": {
+          "description": "Remove a skill from public discovery while retaining explicit grants.",
+          "operationId": "unpublish_skill_skill_hub_skills__name__unpublish_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SkillHubPublication"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": " Body"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubSkill"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Unpublish Skill",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      }
+    }
+  },
   "tools": {
     "components": {
       "schemas": {

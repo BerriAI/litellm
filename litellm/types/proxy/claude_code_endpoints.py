@@ -150,6 +150,7 @@ class PluginListItem(LiteLLMBaseModel):
     enabled: bool
     created_at: str | None
     updated_at: str | None
+    has_agent_skill_metadata: bool = Field(default=False, exclude=True)
 
 
 class ListPluginsResponse(LiteLLMBaseModel):
