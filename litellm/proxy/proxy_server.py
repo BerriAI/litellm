@@ -639,7 +639,7 @@ from litellm.proxy.db.request_error_tracking import (
     flush_request_errors,
     request_error_accumulator,
 )
-from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
+from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed, late_write_abandoned
 from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
     ui_discovery_endpoints_router,
@@ -4236,7 +4236,8 @@ async def increment_spend_counter_cache(
                 )
             )
         except Exception:
-            await invalidate_spend_counter(counter_key=counter_key)
+            if not late_write_abandoned():
+                await invalidate_spend_counter(counter_key=counter_key)
             raise
         spend_counter_cache.in_memory_cache.set_cache(
             key=counter_key,

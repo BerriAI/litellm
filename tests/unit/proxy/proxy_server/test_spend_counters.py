@@ -3419,40 +3419,97 @@ async def test_a_fresh_read_released_with_a_stale_read_joins_the_set_the_stale_r
     assert redis.values[counter] == 6.0
 
 
+class _SetFailsOnReleaseRedis(_HeldSetRedis):
+    """Holds each set on the wire and fails it once released, while a DEL still reaches Redis."""
+
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
+        if kwargs.get("only_if_missing"):
+            self.set_sent.set()
+            await self.release_set.wait()
+            raise ConnectionError("Timeout reading from socket")
+        return await super().async_increment(key, value, **kwargs)
+
+
 @pytest.mark.asyncio
-async def test_a_set_failing_after_its_request_was_cancelled_deletes_the_counter_and_logs_no_stray_task_error(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("cancelled", "counter_left", "in_memory_left"),
+    [
+        pytest.param(True, 9.0, 6.0, id="cancelled-keeps-the-counter-as-mains-cancelled-add-does"),
+        pytest.param(False, None, None, id="still-waiting-deletes-it-as-mains-failed-add-does"),
+    ],
+)
+async def test_a_set_failing_after_its_request_was_cancelled_keeps_the_counter_and_logs_no_stray_task_error(
+    monkeypatch: pytest.MonkeyPatch, cancelled: bool, counter_left: float | None, in_memory_left: float | None
 ) -> None:
     counter: Final = "spend:end_user:cancelled-set-fails"
-    redis: Final = _HeldSetRedis()
+    redis: Final = _SetFailsOnReleaseRedis()
     _process(monkeypatch, redis, cached_spend=6.0)
-
-    async def _cancel_a_request_with_its_set_on_the_wire() -> None:
-        read_before_seed: Final = asyncio.Event()
-        go: Final = asyncio.Event()
-        stale: Final = asyncio.ensure_future(
-            _a_request_read_cold_before_this_process_seeded(redis, counter, read_before_seed, go)
-        )
-        await read_before_seed.wait()
-        await _cold_start(redis, counter)
-        go.set()
-        await redis.set_sent.wait()
+    read_before_seed: Final = asyncio.Event()
+    go: Final = asyncio.Event()
+    stale: Final = asyncio.ensure_future(
+        _a_request_read_cold_before_this_process_seeded(redis, counter, read_before_seed, go)
+    )
+    await read_before_seed.wait()
+    await _cold_start(redis, counter)
+    go.set()
+    await redis.set_sent.wait()
+    if cancelled:
         stale.cancel()
         await asyncio.wait((stale,))
-
-    await _cancel_a_request_with_its_set_on_the_wire()
     stray: Final[list[object]] = []  # mutable-ok: collects what the loop's exception handler is given
     asyncio.get_running_loop().set_exception_handler(lambda _, context: stray.append(context))
-    redis.failing = True
+    redis.values[counter] = 9.0
     redis.release_set.set()
+    await asyncio.wait((stale,))
     for _ in range(20):
         await asyncio.sleep(0)
-    redis.failing = False
     gc.collect()
     await asyncio.sleep(0)
 
+    assert redis.values.get(counter) == counter_left
+    assert ps.spend_counter_cache.in_memory_cache.get_cache(key=counter) == in_memory_left
+    assert stale.cancelled() or isinstance(stale.exception(), ConnectionError)
     assert stray == []
-    assert ps.spend_counter_cache.in_memory_cache.get_cache(key=counter) is None
+
+
+@pytest.mark.asyncio
+async def test_only_the_late_write_sees_that_its_request_was_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    counter: Final = "spend:end_user:abandoned-stays-in-the-write"
+    redis: Final = _HeldSetRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+    seen: Final[list[tuple[str, bool]]] = []  # mutable-ok: records who saw the request as gone
+
+    original_increment: Final = redis.async_increment
+
+    async def increment_noting_abandoned(key: str, value: float, **kwargs: object) -> float:
+        current: Final = await original_increment(key, value, **kwargs)
+        if kwargs.get("only_if_missing"):
+            seen.append(("write", spend_counter_reseed.late_write_abandoned()))
+        return current
+
+    monkeypatch.setattr(redis, "async_increment", increment_noting_abandoned)
+    read_before_seed: Final = asyncio.Event()
+    go: Final = asyncio.Event()
+
+    async def request() -> None:
+        try:
+            await _a_request_read_cold_before_this_process_seeded(redis, counter, read_before_seed, go)
+        except asyncio.CancelledError:
+            seen.append(("request", spend_counter_reseed.late_write_abandoned()))
+            raise
+
+    stale: Final = asyncio.ensure_future(request())
+    await read_before_seed.wait()
+    await _cold_start(redis, counter)
+    go.set()
+    await redis.set_sent.wait()
+    stale.cancel()
+    await asyncio.wait((stale,))
+    redis.release_set.set()
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    assert seen == [("request", False), ("write", True)]
 
 
 @pytest.mark.asyncio

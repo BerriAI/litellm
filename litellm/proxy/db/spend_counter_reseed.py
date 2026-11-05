@@ -16,7 +16,7 @@ import asyncio
 import functools
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -128,6 +128,13 @@ async def _wait_for_cold_seed(in_flight: asyncio.Future[float | None]) -> None:
 
 
 _late_writes: Final[set[asyncio.Task[float | None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
+_late_write_abandoned: Final[ContextVar[asyncio.Event | None]] = ContextVar("late_spend_write_abandoned", default=None)
+
+
+def late_write_abandoned() -> bool:
+    """Whether this runs in a late write whose request was cancelled, which main's add would not have outlived."""
+    abandoned: Final = _late_write_abandoned.get()
+    return abandoned is not None and abandoned.is_set()
 
 
 def _late_write_finished(task: asyncio.Task[float | None]) -> None:
@@ -137,11 +144,19 @@ def _late_write_finished(task: asyncio.Task[float | None]) -> None:
 
 
 async def _landing_even_if_cancelled(write: Coroutine[object, object, float | None]) -> float | None:
-    """Await ``write`` in a task of its own, so cancelling the caller leaves it to land as a command already sent does."""
-    task: Final = asyncio.ensure_future(write)
+    """Await ``write`` in a task of its own, so cancelling the caller leaves it to land as a command already sent does,
+    and marks it abandoned from then on, so ``late_write_abandoned`` holds inside it."""
+    abandoned: Final = asyncio.Event()
+    context: Final = copy_context()
+    context.run(_late_write_abandoned.set, abandoned)
+    task: Final = context.run(asyncio.ensure_future, write)
     _late_writes.add(task)
     task.add_done_callback(_late_write_finished)
-    return await asyncio.shield(task)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        abandoned.set()
+        raise
 
 
 def _redis_breaker_closed(spend_counter_cache: "DualCache") -> bool:
@@ -209,7 +224,8 @@ class SpendCounterReseed:
         ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` across its counters, runs ``set_if_missing``, which calls its argument
         if it added the spend, in place of ``add``, then runs ``add`` too if it did not and the counter holds less than
         the spend it should already hold, beyond what INCRBYFLOAT's 17 decimal places can round away.
-        Those two steps finish even if the request is cancelled, and stay the add in flight until they do. A request on
+        Those two steps finish even if the request is cancelled, and stay the add in flight until they do, but once it is
+        cancelled a failure in them leaves the counter as main's cancelled add does, without the DEL. A request on
         another event loop than the add in flight, one that finds the Redis circuit breaker not closed, and each other
         process, still run ``add``."""
         seed: Final = _cached_spend_seed(spend_counter_cache, counter_key)

@@ -16,6 +16,8 @@ import inspect
 import itertools
 import json
 import logging
+import math
+import re
 import threading
 import time
 import weakref
@@ -24,6 +26,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
+from decimal import Decimal
 from types import FrameType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
@@ -139,9 +142,24 @@ _INCREMENT_IF_PRESENT_LUA: Final = (
 )
 
 _LUA_COUNT: Final = TypeAdapter(int)
-_INCRBYFLOAT_REPLY: Final = TypeAdapter(float)
+_PLAIN_DECIMAL: Final = re.compile(r"-?[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?")
 _LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
+
+
+def _as_incrbyfloat_writes(value: float) -> str:
+    """``value`` as INCRBYFLOAT writes it into a missing key: 17 decimal places with the trailing zeros cut."""
+    text: Final = format(Decimal(repr(value)), ".17f").rstrip("0").rstrip(".")
+    return "0" if text == "-0" else text
+
+
+def _plain_float(reply: object) -> float | None:
+    """The finite float a stored value spells in plain decimal or exponent form, or None for anything else."""
+    text: Final = reply.decode(errors="replace") if isinstance(reply, bytes) else reply
+    if not isinstance(text, str) or _PLAIN_DECIMAL.fullmatch(text) is None:
+        return None
+    number: Final = float(text)
+    return number if math.isfinite(number) else None
 
 
 def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, ...]:
@@ -1474,17 +1492,20 @@ class RedisCache(BaseCache):
             await _redis_client.expire(key, ttl)
         return float(result)
 
-    async def _setnx_and_read_back(self, key: str, value: float, ttl: int | None) -> tuple[bool, float] | None:
-        """SETNX, a zero INCRBYFLOAT that reads the key back, and its TTL command in one round trip: whether the key was
-        created and the value it holds, or None when the server refused a command rather than failed to answer."""
+    async def _set_if_missing_and_get(self, key: str, value: float, ttl: int | None) -> tuple[bool, float] | None:
+        """SET NX GET and its TTL command in one round trip: whether the key was created and the value it holds, or
+        None when the server refused a command rather than failed to answer, or the key holds a value this does not
+        read as INCRBYFLOAT would. SET NX GET is one command, so a refused one wrote nothing."""
         from redis.exceptions import ClusterError, RedisError
         from redis.exceptions import ConnectionError as RedisConnectionError
         from redis.exceptions import TimeoutError as RedisTimeoutError
 
+        if not math.isfinite(value):
+            return None
+        stored: Final = _as_incrbyfloat_writes(value)
         try:
             async with self._async_commands().pipeline(transaction=False) as pipe:
-                pipe.setnx(name=key, value=value)
-                pipe.incrbyfloat(name=key, amount=0)
+                pipe.set(name=key, value=stored, nx=True, get=True)
                 if ttl is not None:
                     pipe.expire(key, ttl)
                 replies: Final[Sequence[object]] = await pipe.execute()  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # redis generics
@@ -1492,7 +1513,10 @@ class RedisCache(BaseCache):
             if isinstance(e, (RedisConnectionError, RedisTimeoutError, ClusterError)):
                 raise
             return None
-        return replies[0] == 1, _INCRBYFLOAT_REPLY.validate_python(replies[1])  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # redis generics
+        if replies[0] is None:
+            return True, float(stored)
+        held: Final = _plain_float(replies[0])  # pyright: ignore[reportUnknownArgumentType]  # redis generics
+        return None if held is None else (False, held)
 
     async def _set_if_missing_with_ttl(
         self,
@@ -1504,8 +1528,9 @@ class RedisCache(BaseCache):
         on_added: Callable[[], None] | None,
     ) -> float:
         """The value the key holds after setting it if it was missing. A server that refuses the commands this sends,
-        such as a user denied SETNX, gets a plain add instead. ``on_added`` runs when this call added the value."""
-        written: Final = await self._setnx_and_read_back(key=key, value=value, ttl=ttl)
+        such as a user denied SET or a Redis before 7.0, and a key holding a value INCRBYFLOAT might read differently,
+        get a plain add instead. ``on_added`` runs when this call added the value."""
+        written: Final = await self._set_if_missing_and_get(key=key, value=value, ttl=ttl)
         current: Final = (
             await self._incrbyfloat_with_ttl(_redis_client, key=key, value=value, ttl=ttl, refresh_ttl=refresh_ttl)
             if written is None
