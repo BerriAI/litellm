@@ -527,8 +527,9 @@ def quoted_request_texts(text: str, texts: Collection[str]) -> frozenset[str]:
 def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str | None:
     """
     ``text`` with each quote of ``echoes`` replaced by ``REDACTED_BY_LITELLM`` in one left-to-right pass, the
-    longest where several start at one place. ``None`` when ``echoes`` turn up more often than a failure path
-    should look through.
+    longest where several start at one place. An echo that is a single word only counts where it stands as its own
+    word, so a prompt such as ``Error`` leaves ``RateLimitError`` alone. ``None`` when ``echoes`` turn up more often
+    than a failure path should look through.
     """
     found: Final = tuple(
         itertools.islice(
@@ -537,7 +538,17 @@ def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str | None:
     )
     if len(found) > _MAX_ECHO_OCCURRENCES:
         return None
-    ends: Final = dict(sorted((span for span in found if _stands_alone(text, *span)), key=lambda span: span[1]))
+    echo_starts: Final = frozenset(start for start, _, _ in found)
+    echo_ends: Final = frozenset(end for _, end, _ in found)
+    counted: Final = (
+        (start, end)
+        for start, end, single_word in found
+        if not single_word
+        or (
+            (start in echo_ends or _is_break_before(text, start)) and (end in echo_starts or _is_break_after(text, end))
+        )
+    )
+    ends: Final = dict(sorted(counted, key=lambda span: span[1]))
     starts: Final = sorted(ends)
     frontiers: Final = itertools.accumulate(starts, functools.partial(_frontier_after, ends), initial=0)
     chosen: Final = tuple(start for start, frontier in zip(starts, frontiers) if start >= frontier)
@@ -554,15 +565,16 @@ def _frontier_after(ends: Mapping[int, int], frontier: int, start: int) -> int:
     return ends[start] if start >= frontier else frontier
 
 
-def _quote_spans(text: str, form: str) -> Iterator[tuple[int, int]]:
-    """Where each quote of ``form`` in ``text`` starts and ends, overlaps included. A form short enough to occur in
-    ordinary wording only counts between quotes."""
+def _quote_spans(text: str, form: str) -> Iterator[tuple[int, int, bool]]:
+    """Where each quote of ``form`` in ``text`` starts and ends, overlaps included, and whether ``form`` is a single
+    word. A form short enough to occur in ordinary wording only counts between quotes."""
     if len(form) >= _MIN_UNQUOTED_TEXT_LENGTH:
-        return ((start, start + len(form)) for start in _found(text, form))
+        single_word: Final = form.isascii() and form.replace("_", "").isalnum()
+        return ((start, start + len(form), single_word) for start in _found(text, form))
     quoted_starts: Final = itertools.chain.from_iterable(
         _found(text, f"{opening}{form}{closing}") for opening, closing in itertools.product(_QUOTES, repeat=2)
     )
-    return ((start + 1, start + 1 + len(form)) for start in quoted_starts)
+    return ((start + 1, start + 1 + len(form), False) for start in quoted_starts)
 
 
 def _found(text: str, piece: str) -> Iterator[int]:
@@ -575,18 +587,26 @@ def _found(text: str, piece: str) -> Iterator[int]:
     )
 
 
-def _stands_alone(text: str, start: int, end: int) -> bool:
-    """Whether ``text[start:end]`` is not part of a longer word. An escape such as ``\\n`` before it counts as a break."""
-    return (not _is_word_character(text[start]) or _is_word_break(text, start)) and (
-        not _is_word_character(text[end - 1]) or end == len(text) or not _is_word_character(text[end])
-    )
-
-
-def _is_word_break(text: str, index: int) -> bool:
+def _is_break_before(text: str, index: int) -> bool:
+    """
+    Whether a word starts at ``index`` of ``text``. An escape such as ``\\n`` before it and a ``REDACTED_BY_LITELLM``
+    an earlier pass put there count as breaks.
+    """
     return (
         index == 0
         or not _is_word_character(text[index - 1])
+        or text.endswith(REDACTED_BY_LITELLM, 0, index)
         or _ESCAPE_TAIL.search(text, max(0, index - 10), index) is not None
+    )
+
+
+def _is_break_after(text: str, index: int) -> bool:
+    """Whether a word ends at ``index`` of ``text``. A pydantic ``input_value=`` or a ``REDACTED_BY_LITELLM`` right
+    after it counts as a break."""
+    return (
+        index == len(text)
+        or not _is_word_character(text[index])
+        or text.startswith((_INPUT_VALUE_LABEL, REDACTED_BY_LITELLM), index)
     )
 
 

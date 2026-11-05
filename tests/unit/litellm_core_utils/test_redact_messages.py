@@ -2477,6 +2477,37 @@ def test_scrub_request_text_replaces_a_prompt_that_stands_as_its_own_word(error:
     assert scrub_request_text(error, request_texts("Error")) == scrubbed
 
 
+@pytest.mark.parametrize(
+    ("texts", "error", "scrubbed"),
+    [
+        (
+            ("my ssn is 1234",),
+            "litellm.BadRequestErrormy ssn is 1234Error",
+            "litellm.BadRequestErrorredacted-by-litellmError",
+        ),
+        (("Hello", "world"), "content: Helloworld!", "content: redacted-by-litellmredacted-by-litellm!"),
+        (
+            ("secretinput_value=",),
+            "bad: secretinput_value=x",
+            "bad: redacted-by-litellminput_value=redacted-by-litellm",
+        ),
+        (("Firstinput_value=1", "Second"), "x: Firstinput_value=1Second", "x: redacted-by-litellmredacted-by-litellm"),
+        (("Firstinput_value=1", "Second"), "x: SecondFirstinput_value=1", "x: redacted-by-litellmredacted-by-litellm"),
+    ],
+    ids=[
+        "several_words_inside_a_word",
+        "next_to_another_text",
+        "before_its_own_input_value_label",
+        "after_an_earlier_replacement",
+        "before_an_earlier_replacement",
+    ],
+)
+def test_scrub_request_text_replaces_a_prompt_glued_to_other_text_when_it_is_not_one_word(
+    texts: tuple[str, ...], error: str, scrubbed: str
+) -> None:
+    assert scrub_request_text(error, request_texts(*texts)) == scrubbed
+
+
 def test_scrub_request_text_replaces_the_longest_prompt_that_starts_at_one_place() -> None:
     scrubbed: Final = scrub_request_text("bad: secret code list", request_texts("secret", "secret code", "code list"))
 
