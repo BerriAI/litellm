@@ -87,10 +87,15 @@ async def flush_accounting_deliveries(
         for _ in range(batch_size):
             if time.monotonic() >= retry_deadline or not _progressed(await run_batch(retry_only=True)):
                 break
-        await repository.cleanup_applied(
-            retention_days=int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_RETENTION_DAYS", "1")),
-            batch_size=batch_size * 2,
-        )
+        retention_days: Final = int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_RETENTION_DAYS", "1"))
+        cleanup_deadline: Final = time.monotonic() + 5
+        for _ in range(batch_size):
+            if (
+                await repository.cleanup_applied(retention_days=retention_days, batch_size=batch_size * 2)
+                < batch_size * 2
+                or time.monotonic() >= cleanup_deadline
+            ):
+                break
         metrics: Final = await repository.metrics()
         record_deliveries(metrics, time.monotonic() - started)
         if metrics.batch_count >= int(

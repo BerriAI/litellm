@@ -103,6 +103,30 @@ async def test_worker_drains_a_backlog_in_one_run_one_configured_batch_per_trans
         await client.db.disconnect()
 
 
+@pytest.mark.asyncio
+async def test_worker_removes_more_expired_receipts_than_one_cleanup_batch_in_one_run(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.accounting.worker import flush_accounting_deliveries
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "100")
+    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    with psycopg.connect(parity_database, autocommit=True) as connection:
+        connection.execute(
+            'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch, state, applied_at) '
+            "SELECT 'expired-' || n, '{}'::jsonb, false, 'applied', CURRENT_TIMESTAMP - INTERVAL '2 days' "
+            "FROM generate_series(1, 501) AS n"
+        )
+    await client.db.connect()
+    try:
+        await flush_accounting_deliveries(DBSpendUpdateWriter(), client, proxy_server.proxy_logging_obj)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (0,)
+    finally:
+        await client.db.disconnect()
+
+
 @pytest.mark.parametrize("ledger", [False, True])
 @pytest.mark.parametrize("exclude_messages", [False, True])
 @pytest.mark.asyncio
