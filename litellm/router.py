@@ -232,7 +232,7 @@ if TYPE_CHECKING:
         """What type checkers see: the constructor's parameters and the endpoints' return types. The
         endpoints are served by the core at run time (litellm/router_rust/invoke/endpoints.py)."""
 
-        __init__ = _router_init  # pyright: ignore[reportAssignmentType, reportIncompatibleMethodOverride]  # Router(...)'s parameters
+        __init__: Callable[..., None] = _router_init  # pyright: ignore[reportIncompatibleMethodOverride, reportIncompatibleVariableOverride, reportUnknownVariableType]  # a bare assignment would read as RustCore's constructor
 
         @classmethod
         def from_config(cls, config: RouterConfig, host: PythonHost = python_host) -> "Router": ...
