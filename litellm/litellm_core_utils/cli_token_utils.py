@@ -292,8 +292,9 @@ def _note_what_the_keychain_answered(outcome: SecretErase, record: CliTokenRecor
     A keychain that could not be read kept this logout from revoking the login, so the note holds
     that login's record without its secret, and the next logout or login that finds the keychain
     answering pairs it with the entry to revoke it. One that would not give up its entry had already
-    handed this logout the refresh token, so its note holds nothing to revoke again. A logout with no
-    file to end keeps whatever note an earlier one left.
+    handed this logout the refresh token, so its note holds nothing to revoke again. A login that
+    kept its secret in the file never reached the keychain, so the note an earlier logout left still
+    names the login the keychain holds and stays, and a logout with no file to end keeps it too.
 
     The secret is off disk by the time this runs, so a note that will not be written or removed is
     no reason to fail the logout. The warning printed now is then the only one the user gets.
@@ -306,8 +307,17 @@ def _note_what_the_keychain_answered(outcome: SecretErase, record: CliTokenRecor
             case SecretStranded():
                 _write_keychain_not_cleared_note(note, None)
             case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
-                if record is not None:
-                    _write_keychain_not_cleared_note(note, record)
+                _note_a_keychain_left_unchecked(note, record)
+
+
+def _note_a_keychain_left_unchecked(note: Path, record: CliTokenRecord | None) -> None:
+    if record is None:
+        return
+    if not _holds_a_secret(record):
+        _write_keychain_not_cleared_note(note, record)
+        return
+    if not note.exists():
+        _write_keychain_not_cleared_note(note, None)
 
 
 def _write_keychain_not_cleared_note(note: Path, record: CliTokenRecord | None) -> None:

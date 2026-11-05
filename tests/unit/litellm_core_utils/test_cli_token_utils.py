@@ -56,7 +56,6 @@ def _token_file(home):
 
 
 def _everything_on_disk(home):
-    """Every file left under ~/.litellm, read together, so a secret cannot hide in one a test did not name."""
     return "".join(path.read_text() for path in (home / ".litellm").rglob("*") if path.is_file())
 
 
@@ -786,10 +785,6 @@ class TestClearCliToken:
     def test_a_keychain_that_kept_the_secret_is_still_warned_about_once_it_is_out_of_reach(
         self, isolated_home, secret_vault_factory
     ):
-        """The keychain refused to give up the entry, so the first logout said so. A second logout
-        made after the keychain went out of reach cannot see that entry either, and reading the token
-        file the first logout removed as proof of a clean keychain retracts that warning while the
-        credential is still there."""
         _write_metadata_only_file(isolated_home)
         vault = secret_vault_factory(blob=_blob(), erasable=False)
         assert clear_cli_token(vault=vault) == SecretStranded()
@@ -845,10 +840,6 @@ class TestClearCliToken:
     def test_a_logout_that_cannot_check_the_keychain_still_ends_the_local_login(
         self, isolated_home, secret_vault_factory, failure
     ):
-        """Sign in on a machine with no usable keychain, so the credential lands in the token file,
-        and log out. The warning about the keychain is about an earlier login, not this one. Leaving
-        a file behind that every reader takes for a keychain-backed login keeps `lite whoami` saying
-        the machine is signed in, and keeps the SDK looking for a key, after the user logged out."""
         vault = secret_vault_factory(available=False, failure=failure)
         save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-in-file", user_id="u-1"), vault=vault)
 
@@ -894,10 +885,6 @@ class TestClearCliToken:
     def test_a_keychain_that_answers_again_never_signs_an_ended_login_back_in(
         self, isolated_home, secret_vault_factory
     ):
-        """Sign in while the keychain works, sign in again once it is out of reach, and log out. The
-        first login's entry is still in the keychain. Once the keychain answers again, nothing on
-        disk may pair with that entry, or the machine is signed back in to a login the user ended.
-        The next logout is the one that can finally erase the entry, and then it can say so."""
         vault = secret_vault_factory()
         save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-first"), vault=vault)
         vault.available = False
@@ -913,9 +900,6 @@ class TestClearCliToken:
         assert vault.blob is None
 
     def test_a_keychain_confirmed_clean_is_not_warned_about_again(self, isolated_home, secret_vault_factory):
-        """A logout that left the keychain unchecked, then one that erased it, answer the first
-        warning in full. A keychain that goes out of reach after that holds nothing of ours, so a
-        logout then has nothing to warn about."""
         vault = secret_vault_factory()
         save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-first"), vault=vault)
         vault.available = False
@@ -927,6 +911,26 @@ class TestClearCliToken:
         vault.available = False
 
         assert clear_cli_token(vault=vault) == SecretErased()
+
+    def test_a_second_logout_that_misses_the_keychain_keeps_the_first_login_revocable(
+        self, isolated_home, secret_vault_factory
+    ):
+        vault = secret_vault_factory()
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-first", timestamp=1000.0), vault=vault
+        )
+        vault.available = False
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-second", refresh_token="rt-second", timestamp=2000.0), vault=vault
+        )
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+
+        vault.available = True
+        left = load_cli_token_left_in_keychain(vault=vault)
+
+        assert left is not None
+        assert (left.key, left.refresh_token) == ("sk-first", "rt-first")
 
     @pytest.mark.parametrize("failure", [KeyringNotInstalled(), KeyringDisabled(), KeyringUnreachable()])
     def test_logging_out_of_a_machine_that_never_logged_in_invents_nothing_to_warn_about(
@@ -1003,9 +1007,6 @@ class TestClearCliToken:
     def test_a_full_disk_still_keeps_the_unchecked_keychain_on_record(
         self, isolated_home, secret_vault_factory, monkeypatch
     ):
-        """A disk with no room for a new file still lets the token file go, and the room that frees
-        is what the note about the unchecked keychain needs. Without the note, the next logout reads
-        the missing file as a keychain already known to be clean."""
         path = _write_legacy_file(isolated_home)
         monkeypatch.setattr(
             "litellm.litellm_core_utils.private_json.tempfile.mkstemp",
