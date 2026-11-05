@@ -132,8 +132,7 @@ async def update_family(
             WHERE NOT r.deleted AND (r.record->>'updated_at')::timestamptz=x.revision::timestamptz
             ORDER BY r.id FOR UPDATE OF r
         ), changed AS (
-            UPDATE "LiteLLM_UsageAlertRule" r SET record=x.record,enabled=(x.record->>'enabled')::boolean,
-                updated_at=(x.record->>'updated_at')::timestamptz AT TIME ZONE 'UTC'
+            UPDATE "LiteLLM_UsageAlertRule" r SET record=x.record,enabled=(x.record->>'enabled')::boolean
             FROM incoming x WHERE r.id=x.record->>'id' AND NOT r.deleted
                 AND (r.record->>'updated_at')::timestamptz=x.revision::timestamptz
                 AND (SELECT count(*) FROM eligible)=(SELECT count(*) FROM incoming) RETURNING r.id

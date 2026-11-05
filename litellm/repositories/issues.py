@@ -317,7 +317,14 @@ class IssuesRepository:
         cursor: str | None = None,
         scope_type: IssueScope | None = None,
         metric: UsageAlertMetric | None = None,
+        scope_ids: tuple[str, ...] | None = None,
     ) -> tuple[IssueProjectionSignal, ...]:
+        if not 1 <= limit <= 500:
+            raise ValueError("Read between one and 500 source signals")
+        if scope_ids == ():
+            return ()
+        if scope_ids is not None and len(scope_ids) > 500:
+            raise ValueError("Filter at most 500 source scopes")
         return TypeAdapter(tuple[IssueProjectionSignal, ...]).validate_python(
             await self.database.query_raw(
                 """SELECT a.record AS alert,r.record AS rule,a.evaluation_day
@@ -328,29 +335,70 @@ class IssuesRepository:
                     AND a.record->>'direction'=r.record->>'direction'
                     AND (r.scope_id IS NULL OR a.scope_id=r.scope_id)
                     AND ($2::text IS NULL OR a.id>$2) AND ($4::text IS NULL OR a.scope_type=$4)
-                    AND ($5::text IS NULL OR a.metric=$5) ORDER BY a.id LIMIT $3""",
+                    AND ($5::text IS NULL OR a.metric=$5)
+                    AND ($6::text[] IS NULL OR a.scope_id=ANY($6::text[])) ORDER BY a.id LIMIT $3""",
                 day.isoformat(),
                 cursor,
                 limit,
                 scope_type,
                 metric,
+                list(scope_ids) if scope_ids is not None else None,
             )
         )
 
     async def recover_issues(self, day: date) -> int:
         rows: Final = TypeAdapter(tuple[_Count, ...]).validate_python(
             await self.database.query_raw(
-                """WITH changed AS (
+                """WITH healthy AS (
+                SELECT i.id FROM "LiteLLM_Issue" i JOIN "LiteLLM_IssueSignal" s ON s.issue_id=i.id
+                LEFT JOIN "LiteLLM_UsageAlertIncident" a ON a.id=s.source_id
+                WHERE i.kind='performance' AND i.active AND i.scope_type<>'provider' AND s.source='usage_alert'
+                    AND s.record->'usage_alert'->>'scope_type'=i.scope_type
+                    AND s.record->'usage_alert'->>'scope_id' IS NOT DISTINCT FROM i.scope_id
+                    AND ((i.family='spend' AND s.record->'usage_alert'->>'metric'='spend')
+                        OR (i.family='latency' AND s.record->'usage_alert'->>'metric'='latency')
+                        OR (i.family='traffic' AND s.record->'usage_alert'->>'metric'='requests')
+                        OR (i.family='reliability' AND s.record->'usage_alert'->>'metric' IN ('errors','error_rate')))
+                GROUP BY i.id HAVING bool_and(a.id IS NOT NULL AND NOT a.breached AND a.evaluation_day<=$1)
+            ), changed AS (
                 UPDATE "LiteLLM_Issue" i SET active=false,
                     status=CASE WHEN status='open' THEN 'resolved' ELSE status END,updated_at=CURRENT_TIMESTAMP
-                WHERE kind='performance' AND active
-                    AND EXISTS(SELECT 1 FROM "LiteLLM_IssueSignal" s WHERE s.issue_id=i.id AND s.source='usage_alert')
-                    AND NOT EXISTS(SELECT 1 FROM "LiteLLM_IssueSignal" s
-                        LEFT JOIN "LiteLLM_UsageAlertIncident" a ON a.id=s.source_id
-                        WHERE s.issue_id=i.id AND s.source='usage_alert'
-                            AND (a.id IS NULL OR a.evaluation_day>$1 OR a.breached)) RETURNING i.id
+                WHERE id IN(SELECT id FROM healthy) AND active RETURNING id
             ) SELECT count(*)::int AS count FROM changed""",
                 day.isoformat(),
+            )
+        )
+        return rows[0].count
+
+    async def active_provider_issues(self, limit: int = 500, cursor: str | None = None) -> tuple[Issue, ...]:
+        if not 1 <= limit <= 500:
+            raise ValueError("Read between one and 500 provider issues")
+        rows: Final = TypeAdapter(tuple[_IssueRow, ...]).validate_python(
+            await self.database.query_raw(
+                f"""SELECT {_RECORD} AS record {_JOIN}
+                WHERE i.kind='performance' AND i.scope_type='provider' AND i.active
+                    AND ($2::text IS NULL OR i.id>$2) ORDER BY i.id LIMIT $1""",
+                limit,
+                cursor,
+            )
+        )
+        return tuple(row.record for row in rows)
+
+    async def recover_issue_ids(self, ids: tuple[str, ...], observed_at: datetime) -> int:
+        if len(ids) > 500 or observed_at.tzinfo is None:
+            raise ValueError("Recover at most 500 issues with a timezone-aware observation")
+        if not ids:
+            return 0
+        rows: Final = TypeAdapter(tuple[_Count, ...]).validate_python(
+            await self.database.query_raw(
+                """WITH changed AS (
+                UPDATE "LiteLLM_Issue" SET active=false,
+                    status=CASE WHEN status='open' THEN 'resolved' ELSE status END,updated_at=CURRENT_TIMESTAMP
+                WHERE id=ANY($1::text[]) AND kind='performance' AND active AND last_seen<=$2::timestamp(3)
+                RETURNING id
+            ) SELECT count(*)::int AS count FROM changed""",
+                list(ids),
+                _utc(observed_at),
             )
         )
         return rows[0].count
@@ -377,7 +425,7 @@ class IssuesRepository:
                 """WITH changed AS (
                 UPDATE "LiteLLM_Issue" SET active=false,
                     status=CASE WHEN status='open' THEN 'resolved' ELSE status END,updated_at=CURRENT_TIMESTAMP
-                WHERE kind='model_deprecation' AND active AND last_seen<$1::timestamp RETURNING id
+                WHERE kind='model_deprecation' AND active AND last_seen<$1::timestamp(3) RETURNING id
             ) SELECT count(*)::int AS count FROM changed""",
                 _utc(observed_at),
             )
@@ -453,6 +501,10 @@ class IssuesRepository:
                 JOIN "LiteLLM_UsageAlertRule" r ON r.id=b.rule_id
                 JOIN "LiteLLM_UsageAlertIncident" a ON a.id=b.source_id AND a.rule_id=r.id
                 WHERE b.delivery_id=d.id AND r.enabled AND NOT r.deleted AND a.breached AND a.status='open'
+                    AND (r.record->'notification_channels') ? (d.record->>'channel')
+                    AND (d.record->>'channel'<>'email' OR
+                        (jsonb_array_length(d.record->'email_recipients')>0
+                         AND (d.record->'email_recipients') <@ (r.record->'email_recipients')))
                     AND (r.record->>'updated_at')::timestamptz=b.rule_revision::timestamptz
                     AND NULLIF(a.evaluation_revision,'')::timestamptz=b.rule_revision::timestamptz
                     AND a.scope_type=r.scope_type AND a.metric=r.record->>'metric'

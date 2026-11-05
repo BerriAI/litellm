@@ -59,7 +59,7 @@ Replace `issue-example` with an ID returned by `/issues`. Activity uses the issu
 
 Supporting signals have their own saved comparisons and relationship explanations. Their baseline windows can differ, so do not derive a combined error rate or unit cost by adding their displayed values. Administrators and admin viewers can inspect broader supporting signals. A scoped reader receives only signals for the exact key, user, or team they can access. That restriction applies before the signal count and pagination; broader totals are not disclosed.
 
-A continuing Performance issue retains its initial comparison and cohort while `last_seen` advances. New supporting observations do not rewrite the original evidence. After a healthy observation ends every linked source episode, a later breach starts a new issue. Retirement details refresh as usage and the provider schedule change. A retirement issue with no recent use becomes inactive; actual new traffic can reopen it.
+A continuing Performance issue retains its initial comparison and cohort while `last_seen` advances. New supporting observations do not rewrite the original evidence. Resource issues recover when their primary metric recovers for that resource; broader supporting observations do not keep them open. Provider issues require a fresh comparison of the saved provider/model cohort. Missing history or coverage does not establish recovery. A later breach starts a new issue. Retirement details refresh as usage and the provider schedule change. A retirement issue with no recent use becomes inactive; actual new traffic can reopen it.
 
 Resolve or dismiss an issue using the current status from the read response:
 
