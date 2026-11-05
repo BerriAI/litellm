@@ -47,7 +47,7 @@ def _requested_spec_url(request: pytest.FixtureRequest) -> str | None:
 def _load_openapi_spec(live_url: str | None) -> LoadedSpec:
     if live_url is None:
         return LoadedSpec(source=str(OPENAPI_SPEC_SNAPSHOT), spec=json.loads(OPENAPI_SPEC_SNAPSHOT.read_text()))
-    with httpx.Client(transport=httpx.HTTPTransport(retries=3), timeout=30.0) as client:
+    with httpx.Client(transport=httpx.HTTPTransport(retries=3), timeout=30.0, follow_redirects=True) as client:
         response: Final = client.get(live_url)
     response.raise_for_status()
     return LoadedSpec(source=str(response.url), spec=response.json())

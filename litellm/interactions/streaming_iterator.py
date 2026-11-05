@@ -68,6 +68,7 @@ class BaseInteractionsAPIStreamingIterator:
         self.hop_count = 1
         self.pending_hop: Mapping[str, object] | None = None
         self.held_completed: InteractionsAPIStreamingResponse | None = None
+        self.last_hop_token: str | None = None
         self.hop_usages: tuple[Mapping[str, object], ...] = ()
         self.interactions_api_config = interactions_api_config
         self.completed_response: InteractionsAPIStreamingResponse | None = None
@@ -162,12 +163,14 @@ class BaseInteractionsAPIStreamingIterator:
         interaction: Final = interaction_of(event)
         if self.request_body is None or event.get("event_type") != "interaction.completed" or interaction is None:
             return False
-        if (token := continuation_token_of(interaction)) is None:
+        if (token := continuation_token_of(interaction)) is None or token == self.last_hop_token:
+            self.held_completed = None
             return False
         usage: Final = usage_of(interaction)
         self.hop_usages = (*self.hop_usages, *((usage,) if usage is not None else ()))
         self.pending_hop = hop_request(self.request_body, interaction, token)
         self.held_completed = streaming_response
+        self.last_hop_token = token
         return True
 
     def _release_held_completed(self) -> InteractionsAPIStreamingResponse | None:
@@ -223,7 +226,6 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
         self.stream_iterator = aiter_sse_lines(response.aiter_text())
         self.hop_count += 1
         self.pending_hop = None
-        self.held_completed = None
         return None
 
     def __aiter__(self):
@@ -242,6 +244,8 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
                             return held
                         continue
                     self.finished = True
+                    if (held := self._release_held_completed()) is not None:
+                        return held
                     raise StopAsyncIteration
 
                 result = self._process_chunk(chunk)
@@ -313,7 +317,6 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
         self.stream_iterator = iter_sse_lines(response.iter_text())
         self.hop_count += 1
         self.pending_hop = None
-        self.held_completed = None
         return None
 
     def __iter__(self):
@@ -332,6 +335,8 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
                             return held
                         continue
                     self.finished = True
+                    if (held := self._release_held_completed()) is not None:
+                        return held
                     raise StopIteration
 
                 result = self._process_chunk(chunk)
