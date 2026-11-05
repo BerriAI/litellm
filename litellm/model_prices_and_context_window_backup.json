@@ -2125,6 +2125,7 @@
     "anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -2213,6 +2214,7 @@
     "global.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -2301,6 +2303,7 @@
     "us.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2389,6 +2392,7 @@
     "eu.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2472,6 +2476,7 @@
     "au.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2560,6 +2565,7 @@
     "jp.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2958,6 +2964,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -3002,6 +3009,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -3046,6 +3054,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -3090,6 +3099,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -3134,6 +3144,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -3178,6 +3189,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -4063,6 +4075,7 @@
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "input_cost_per_token": 5e-06,
         "output_cost_per_token": 2.5e-05,
         "litellm_provider": "azure_ai",
@@ -4204,6 +4217,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -16507,6 +16521,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -17042,6 +17057,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -21910,6 +21926,7 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
@@ -22068,6 +22085,7 @@
         "prompt_cache_min_tokens": 1024,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
@@ -50492,6 +50510,7 @@
         "prompt_cache_min_tokens": 1024,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -50569,6 +50588,7 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/us-gov-west-1/index.json",
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -52974,6 +52994,7 @@
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_creation_input_token_cost_batches": 3.125e-06,
@@ -53012,6 +53033,7 @@
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_creation_input_token_cost_batches": 3.125e-06,
@@ -53261,6 +53283,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -60636,6 +60659,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -64768,6 +64792,14 @@
                 "description": "Any Claude Fable or Mythos id, under any provider namespace and any version. These families always think and reject thinking.type=disabled with a 400; the Anthropic transformations omit the param instead, so the model falls back to its default adaptive thinking.",
                 "model_info": {
                     "thinking_always_on": true
+                }
+            },
+            {
+                "name": "claude-thinking-on-by-default",
+                "pattern": "claude-[a-z]+-[5-9](?!\\d)",
+                "description": "Claude at major 5 or higher, in any id shape that contains claude-<family>-<major>. Anthropic's thinking docs list every Claude 5+ model as thinking by default (on or always on) when the request sends no thinking param, and every 4.x as off. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. The response_format json tool is then left unforced, since a forced tool call skips the model's thinking.",
+                "model_info": {
+                    "thinking_on_by_default": true
                 }
             },
             {
@@ -69293,6 +69325,7 @@
         "output_cost_per_token": 1.2e-05,
         "prompt_cache_min_tokens": 1024,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -69368,6 +69401,7 @@
         "output_cost_per_token": 3e-05,
         "prompt_cache_min_tokens": 512,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -69624,6 +69658,7 @@
         "output_cost_per_token": 1.2e-05,
         "prompt_cache_min_tokens": 1024,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -69689,6 +69724,7 @@
         "output_cost_per_token": 3e-05,
         "prompt_cache_min_tokens": 512,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -75440,6 +75476,7 @@
     "apac.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -75556,6 +75593,7 @@
         "max_output_tokens": 128000,
         "mode": "chat",
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -77060,6 +77098,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -77112,6 +77151,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -77156,6 +77196,7 @@
         "thinking_always_on": false,
         "prompt_cache_min_tokens": 512,
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -77203,6 +77244,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -77239,6 +77281,7 @@
         "max_output_tokens": 128000,
         "mode": "chat",
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -77295,6 +77338,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -77341,6 +77385,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -77381,6 +77426,7 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -77422,6 +77468,7 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -77468,6 +77515,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -77519,6 +77567,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -77565,6 +77614,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -77625,6 +77675,7 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -77676,6 +77727,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -77726,6 +77778,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -77770,6 +77823,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -79529,6 +79583,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -79743,6 +79798,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -79909,6 +79965,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -81894,6 +81951,7 @@
         "prompt_cache_min_tokens": 512.0,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_adaptive_thinking": true,
+        "thinking_on_by_default": true,
         "supports_anthropic_thinking_payload": true,
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
