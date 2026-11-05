@@ -18,7 +18,9 @@ from openai.types.responses.tool_param import Mcp
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.mcp_server import operations as mcp_operations
 from litellm.proxy.common_utils.user_api_key_cache import object_permission_cache_key
@@ -503,6 +505,56 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
     post_call_failure_hook.assert_awaited_once()
     assert post_call_failure_hook.await_args is not None
     assert post_call_failure_hook.await_args.kwargs.get("route") == "/responses/mcp/call_tool"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("behavior", [None, "tool_result", "raise"])
+@pytest.mark.parametrize("error_kind", ["pii", "guardrail", "http", "string_http", "unattributed_http"])
+async def test_mcp_block_behavior_preserves_failure_logging_and_propagates_only_opted_in_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    behavior: Literal["tool_result", "raise"] | None,
+    error_kind: str,
+) -> None:
+    call_tool: Final = _setup_mcp_call_environment(monkeypatch)
+    failure_hook: Final = _setup_proxy_logging(monkeypatch)
+    callback: Final = CustomGuardrail(guardrail_name="blocked")
+    callback.mcp_block_behavior = behavior
+    unrelated: Final = CustomGuardrail(guardrail_name="other")
+    unrelated.mcp_block_behavior = "raise"
+    monkeypatch.setattr(litellm, "callbacks", [unrelated, callback])
+    error: Final = (
+        BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="blocked")
+        if error_kind == "pii"
+        else GuardrailRaisedException(guardrail_name="blocked", message="denied")
+        if error_kind == "guardrail"
+        else HTTPException(status_code=400, detail="denied")
+        if error_kind == "string_http"
+        else HTTPException(
+            status_code=400,
+            detail={"error": "denied", **({"guardrail_name": "blocked"} if error_kind == "http" else {})},
+        )
+    )
+    if error_kind == "string_http":
+        enrich_http_exception_with_guardrail_context(error, callback)
+    call_tool.side_effect = error
+    tool_calls: Final = [{"id": "blocked-call", "function": {"name": "search", "arguments": "{}"}}]
+    auth: Final = UserAPIKeyAuth(api_key="test-key")
+
+    if behavior == "raise" and error_kind != "unattributed_http":
+        with pytest.raises(type(error)) as caught:
+            await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                tool_server_map={"search": "local"}, tool_calls=tool_calls, user_api_key_auth=auth
+            )
+        assert caught.value is error
+    else:
+        results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+            tool_server_map={"search": "local"}, tool_calls=tool_calls, user_api_key_auth=auth
+        )
+        assert len(results) == 1
+        assert results[0]["tool_call_id"] == "blocked-call"
+        expected_prefix: Final = "Tool call failed" if "http" in error_kind else "Tool call blocked"
+        assert results[0]["result"].startswith(expected_prefix)
+    failure_hook.assert_awaited_once()
 
 
 @pytest.mark.asyncio

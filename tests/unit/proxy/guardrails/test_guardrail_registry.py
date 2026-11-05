@@ -22,6 +22,38 @@ def test_get_guardrail_initializer_from_hooks():
     assert "aim" in initializers
 
 
+@pytest.mark.parametrize("provider", ["presidio", "panw_prisma_airs", "litellm_content_filter"])
+@pytest.mark.parametrize("behavior", [None, "tool_result", "raise"])
+def test_mcp_block_behavior_reaches_initialized_provider(
+    monkeypatch: pytest.MonkeyPatch, provider: str, behavior: str | None
+) -> None:
+    import litellm
+
+    for name in (
+        "callbacks",
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, name, [])
+    handler: Final = InMemoryGuardrailHandler()
+    params: Final = {
+        "guardrail": provider,
+        "mode": "pre_mcp_call",
+        "api_key": "test-key",
+        "profile_name": "test-profile",
+        "presidio_analyzer_api_base": "http://localhost:5001",
+        "presidio_anonymizer_api_base": "http://localhost:5002",
+        **({"mcp_block_behavior": behavior} if behavior is not None else {}),
+    }
+    result: Final = handler.initialize_guardrail(guardrail={"guardrail_name": "mcp-behavior", "litellm_params": params})
+    assert result is not None
+    callback: Final = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+    assert callback.mcp_block_behavior == behavior
+
+
 def test_guardrail_class_registry():
     from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 

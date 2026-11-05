@@ -19,10 +19,12 @@ def enrich_http_exception_with_guardrail_context(exc: BaseException, callback: o
         return
     if not isinstance(exc, HTTPException):
         return
+    guardrail_name: Final[object] = getattr(callback, "guardrail_name", None)
     detail: Final = getattr(exc, "detail", None)
     if not isinstance(detail, dict):
+        if isinstance(guardrail_name, str):
+            setattr(exc, "guardrail_name", guardrail_name)  # noqa: B010  # HTTPException does not declare guardrail_name
         return
-    guardrail_name: Final[object] = getattr(callback, "guardrail_name", None)
     if guardrail_name:
         detail.setdefault("guardrail_name", guardrail_name)
     event_hook: Final[object] = getattr(callback, "event_hook", None)
