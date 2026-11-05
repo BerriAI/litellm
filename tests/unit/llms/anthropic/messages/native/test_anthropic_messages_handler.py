@@ -2716,3 +2716,23 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     assert first["tools"] == [tool]
     assert second == {**first, "tools": [{"name": "lookup_record", "input_schema": {"type": "object"}}]}
     assert _JSON_BODY.validate_python(response)["id"] == "msg_strict_retry"
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("openai/gpt-5.5", "vertex_ai/claude-opus-4-8", "bedrock/anthropic.claude-opus-4-8-v1:0"),
+    ids=("chat_bridge", "vertex_native", "bedrock_native"),
+)
+def test_a_thread_on_a_leg_without_message_threads_is_a_400_before_any_upstream_call(model: str) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.messages.native.handler import anthropic_messages_handler
+
+    with pytest.raises(AnthropicError, match="thread: message threads are not supported") as raised:
+        anthropic_messages_handler(
+            max_tokens=64,
+            messages=[{"role": "user", "content": "hi"}],
+            model=model,
+            api_key="synthetic-key",
+            thread={"type": "continue", "previous_message_id": "msg_01previous"},
+        )
+    assert raised.value.status_code == 400

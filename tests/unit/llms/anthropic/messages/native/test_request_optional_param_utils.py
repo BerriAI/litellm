@@ -6,6 +6,8 @@ Regression tests for the /v1/messages request-parse fast paths:
   while resolving the (static) type hints only once per process.
 """
 
+from typing import Final
+
 import pytest
 
 import litellm
@@ -133,3 +135,11 @@ def test_sampling_param_raises_clean_400_without_drop_params(monkeypatch):
             model="claude-opus-4-7",
             drop_params=False,
         )
+
+
+def test_the_thread_field_survives_optional_param_filtering():
+    thread: Final = {"type": "continue", "previous_message_id": "msg_01previous"}
+    result: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+        {"max_tokens": 64, "thread": thread}
+    )
+    assert result == {"max_tokens": 64, "thread": thread}
