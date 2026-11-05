@@ -7196,6 +7196,10 @@ def embedding(
                 or get_secret_str("CO_API_KEY")
                 or litellm.api_key
             )
+            # Honor COHERE_API_BASE like the rerank path (rerank_api/main.py) and
+            # the databricks/hosted_vllm embedding branches do; without this the
+            # gateway URL was silently ignored for embeddings.
+            api_base = api_base or litellm.api_base or get_secret_str("COHERE_API_BASE")
 
             response = base_llm_http_handler.embedding(
                 model=model,
