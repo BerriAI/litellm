@@ -4,10 +4,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { METRIC_LABELS, RuleInput, SCOPE_LABELS, UsageRule } from "./usageAlertApi";
-import { DEFAULT_RULE, METRIC_MINIMUMS, ruleInputFromForm } from "./ruleForm";
+import { DEFAULT_RULE, METRIC_MINIMUMS, METRIC_REQUEST_MINIMUMS, ruleInputFromForm } from "./ruleForm";
 import UsageRuleResourceSelect, { allResourcesLabel } from "./UsageRuleResourceSelect";
 
-const METRIC_UNITS = { spend: "USD", latency: "ms", requests: "requests", errors: "errors" };
+const METRIC_UNITS = {
+  spend: "USD",
+  latency: "ms",
+  requests: "requests",
+  errors: "errors",
+  error_rate: "percentage points",
+};
 
 const SELECT_CLASS =
   "h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:ring-2 focus-visible:ring-ring";
@@ -37,7 +43,9 @@ export default function UsageRuleForm({
   const [name, setName] = useState<string | null>(rule?.name ?? null);
   const [minimum, setMinimum] = useState(initial.min_value ?? METRIC_MINIMUMS[initial.metric]);
   const [minimumChanged, setMinimumChanged] = useState(false);
-  const [email, setEmail] = useState(initial.notification_channels?.includes("email") ?? false);
+  const [requests, setRequests] = useState(initial.min_requests ?? METRIC_REQUEST_MINIMUMS[initial.metric]);
+  const [requestsChanged, setRequestsChanged] = useState(false);
+  const [email, setEmail] = useState(initial.notification_channels?.includes("email") === true);
   const [baselineDays, setBaselineDays] = useState(initial.baseline_days ?? 7);
   const [historyDays, setHistoryDays] = useState(initial.min_history_days ?? 3);
   const changeBaselineDays = (value: string) => {
@@ -56,6 +64,7 @@ export default function UsageRuleForm({
   };
   const changeMetric = (next: RuleInput["metric"]) => {
     if (!rule && !minimumChanged) setMinimum(METRIC_MINIMUMS[next]);
+    if (!rule && !requestsChanged) setRequests(METRIC_REQUEST_MINIMUMS[next]);
     setMetric(next);
   };
   return (
@@ -225,7 +234,11 @@ export default function UsageRuleForm({
               type="number"
               required
               min={0}
-              defaultValue={initial.min_requests}
+              value={requests}
+              onChange={(event) => {
+                setRequests(Number(event.target.value));
+                setRequestsChanged(true);
+              }}
             />
           </div>
           <div className="space-y-1">

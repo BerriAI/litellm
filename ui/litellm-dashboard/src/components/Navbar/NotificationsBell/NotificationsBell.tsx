@@ -19,21 +19,16 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cva.config";
 import { isNewerVersion } from "@/utils/versionUtils";
 import { AlertTriangle, ArrowUpRight, Bell, ChevronDown } from "lucide-react";
-import DeprecationAlertItem from "@/components/ModelDeprecationAlerts/DeprecationAlertItem";
-import { type DeprecationAlert } from "@/components/ModelDeprecationAlerts/deprecationAlerts";
-import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
-import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
-import { migrationHref } from "@/components/ModelDeprecationAlerts/migrationRoute";
+import RecommendedReplacement from "@/components/ModelDeprecationAlerts/RecommendedReplacement";
 import {
-  type AlertGroupPage,
-  formatAlertChange,
-  METRIC_SHORT_LABELS,
-  SCOPE_LABELS,
-  usageAlertGroupName,
-  usageAlertGroupHref,
-  useUsageAlertGroups,
-} from "@/components/UsageAlerts/usageAlertApi";
-import { uiHref } from "@/utils/uiHref";
+  IssuePage,
+  issueComparisonText,
+  issueDate,
+  issueHref,
+  issueResource,
+  issuesHref,
+  useIssues,
+} from "@/components/Issues/issueApi";
 import React, { Fragment, useState } from "react";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n/i18n";
@@ -153,8 +148,9 @@ function ProductUpdates({
 }
 
 interface NotificationsBellViewProps {
-  deprecationAlerts?: readonly DeprecationAlert[];
-  usageAlertGroups?: AlertGroupPage;
+  issues?: IssuePage;
+  issuesPending?: boolean;
+  issuesFailed?: boolean;
   deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
@@ -164,29 +160,23 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   currentVersion,
   latestRelease,
   deploymentHealthLink,
-  deprecationAlerts,
-  usageAlertGroups,
+  issues,
+  issuesPending,
+  issuesFailed,
 }) => {
   const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
   const announcements = upgrade ? [upgrade, AUTO_ROUTER_ANNOUNCEMENT] : [AUTO_ROUTER_ANNOUNCEMENT];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
 
-  const openAlerts = (deprecationAlerts ?? []).filter((alert) => effectiveAlertStatus(alert) === AlertStatus.Open);
-  const openDeprecations = openAlerts.length;
-  const openUsageAlerts = usageAlertGroups?.total ?? 0;
-  const needsAttention = openDeprecations + openUsageAlerts > 0;
+  const count = issues?.total ?? 0;
+  const needsAttention = count > 0;
+  const showIssues = Boolean(issues || issuesPending || issuesFailed);
   let label =
     unreadCount > 0
       ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
       : t("shell.notifications.bell.trigger");
-  if (openDeprecations > 0) {
-    label = `Notifications, ${openDeprecations} model deprecation ${openDeprecations === 1 ? "alert needs" : "alerts need"} attention`;
-  }
-  if (openUsageAlerts > 0) {
-    const count = openDeprecations + openUsageAlerts;
-    label = `Notifications, ${count} ${count === 1 ? "alert group needs" : "alert groups need"} attention`;
-  }
+  if (needsAttention) label = `Notifications, ${count} ${count === 1 ? "issue needs" : "issues need"} attention`;
 
   return (
     <Popover>
@@ -216,63 +206,40 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
         </PopoverTitle>
         <div aria-label="Notification content" className="min-h-0 overflow-y-auto overscroll-contain">
           <div className="space-y-3 p-4">
-            {openUsageAlerts > 0 && (
-              <>
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium">Performance</p>
-                  <a className="text-xs text-primary hover:underline" href={uiHref("alerts?type=usage")}>
-                    View all {openUsageAlerts}
-                  </a>
-                </div>
-                {usageAlertGroups?.data.slice(0, 3).map((group) => (
-                  <a
-                    key={group.id}
-                    href={usageAlertGroupHref(group)}
-                    className="block space-y-1 rounded-md py-1 text-sm hover:underline"
-                  >
-                    <p
-                      className="truncate font-medium"
-                      title={group.scope_label ?? group.scope_id ?? usageAlertGroupName(group)}
-                    >
-                      {usageAlertGroupName(group)}
-                    </p>
-                    <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      {group.metrics.map(({ metric, representative }) => (
-                        <span key={metric}>
-                          {METRIC_SHORT_LABELS[metric]} {formatAlertChange(representative)}
-                        </span>
-                      ))}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {SCOPE_LABELS[group.scope_type]} · {group.day} UTC
-                    </p>
-                  </a>
-                ))}
-                <Separator />
-              </>
+            {showIssues && (
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium">Issues</p>
+                <a className="text-xs text-primary hover:underline" href={issuesHref()}>
+                  View all{count > 0 ? ` ${count}` : ""}
+                </a>
+              </div>
             )}
-            {openAlerts.length > 0 && (
-              <>
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium">Model deprecations</p>
-                  <a className="text-xs text-primary hover:underline" href={migrationHref()}>
-                    View all {openDeprecations}
-                  </a>
-                </div>
-                {openAlerts.slice(0, 3).map((alert) => (
-                  <Fragment key={alert.id}>
-                    <Separator />
-                    <DeprecationAlertItem alert={alert} />
-                  </Fragment>
-                ))}
-                <Separator />
-              </>
+            {issuesPending && (
+              <p role="status" className="text-xs text-muted-foreground">
+                Loading issues…
+              </p>
             )}
-            {deprecationAlerts && openAlerts.length === 0 && (
-              <a href={migrationHref()} className="text-sm font-medium text-primary hover:underline">
-                View model deprecations
-              </a>
+            {issuesFailed && (
+              <p className="text-xs text-muted-foreground">Could not load issues. Open Issues to retry.</p>
             )}
+            {issues?.data.map((issue) => (
+              <article key={issue.id} className="space-y-1 border-t pt-3" aria-label={issue.title}>
+                <a
+                  href={issueHref(issue.id)}
+                  className="block truncate text-sm font-medium hover:underline"
+                  title={issue.title}
+                >
+                  {issue.title}
+                </a>
+                <p className="truncate text-xs text-muted-foreground" title={issue.cohort.scope_id ?? "Gateway"}>
+                  {issueResource(issue)}
+                </p>
+                <p className="text-xs text-muted-foreground">{issueComparisonText(issue)}</p>
+                <p className="text-xs text-muted-foreground">{issueDate(issue.observed_on)} UTC</p>
+                {issue.deprecation && <RecommendedReplacement recommendation={issue.deprecation.model} />}
+              </article>
+            ))}
+            {issues?.total === 0 && <p className="text-xs text-muted-foreground">No open issues.</p>}
           </div>
         </div>
         <ProductUpdates announcements={announcements} unreadCount={unreadCount} hasAlerts={needsAttention} />
@@ -288,14 +255,14 @@ export const NotificationsBell: React.FC<{ accessToken: string | null; deploymen
 }) => {
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const { data: latestRelease } = useLatestReleaseInfo(accessToken);
-  const { data: deprecationAlerts } = useDeprecationAlerts(accessToken);
-  const { data: usageAlertGroups } = useUsageAlertGroups(accessToken, "open", { limit: 3 });
+  const issueQuery = useIssues(accessToken, { limit: 3 });
   return (
     <NotificationsBellView
       currentVersion={healthData?.litellm_version}
       latestRelease={latestRelease}
-      deprecationAlerts={deprecationAlerts}
-      usageAlertGroups={usageAlertGroups}
+      issues={issueQuery.data}
+      issuesPending={issueQuery.enabled && issueQuery.isPending}
+      issuesFailed={issueQuery.enabled && issueQuery.isError}
       deploymentHealthLink={deploymentHealthLink}
     />
   );

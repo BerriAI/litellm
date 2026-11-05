@@ -1,18 +1,10 @@
 import { renderWithProviders, screen } from "../../../../tests/test-utils";
 import { AUTO_ROUTER_DOCS_URL, NotificationsBell, NotificationsBellView } from "./NotificationsBell";
 import type { LatestReleaseInfo } from "@/app/(dashboard)/hooks/latestRelease/useLatestReleaseInfo";
-import type { AlertGroupPage, UsageAlert } from "@/components/UsageAlerts/usageAlertApi";
+import { SPEND_ISSUE, RETIREMENT_ISSUE } from "@/components/Issues/issueFixtures";
 import React from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@/components/ModelDeprecationAlerts/useDeprecationAlerts", () => ({
-  useDeprecationAlerts: () => ({
-    data: [],
-    scope: "test",
-    range: { start_date: "2026-10-06", end_date: "2026-11-04" },
-  }),
-}));
 
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
   useHealthReadinessDetails: vi.fn(),
@@ -20,9 +12,9 @@ vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () 
 vi.mock("@/app/(dashboard)/hooks/latestRelease/useLatestReleaseInfo", () => ({
   useLatestReleaseInfo: vi.fn(),
 }));
-vi.mock("@/components/UsageAlerts/usageAlertApi", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/components/UsageAlerts/usageAlertApi")>()),
-  useUsageAlertGroups: () => ({ data: undefined }),
+vi.mock("@/components/Issues/issueApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/Issues/issueApi")>()),
+  useIssues: () => ({ data: undefined, enabled: false }),
 }));
 
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
@@ -187,81 +179,20 @@ describe("NotificationsBell", () => {
   });
 });
 
-const DEPRECATION = {
-  id: "sonnet:2026-11-30:imminent",
-  usageModel: "anthropic/claude-sonnet-4-5",
-  requests: 18432,
-  lastUsedDate: "2026-11-04",
-  lastDayRequests: 123,
-  model: {
-    model_name: "support",
-    litellm_model: "anthropic/claude-sonnet-4-5",
-    deprecation_date: "2026-11-30",
-    days_until_deprecation: 26,
-    status: "imminent" as const,
-    successor_model: "recommended-model",
-  },
-};
+const ISSUES = { data: [SPEND_ISSUE, RETIREMENT_ISSUE], total: 2, limit: 3, offset: 0 };
 
-const ACTIVITY_PATH =
-  "/api-keys?key=reporting-test-id&detail_tab=activity&activity_from=2026-10-28&activity_to=2026-11-04&alert=incident-test";
-const INCIDENT: UsageAlert = {
-  id: "incident-test",
-  rule_id: "rule-test",
-  rule_name: "Daily cost",
-  scope_type: "key",
-  scope_id: "reporting-test-id",
-  metric: "spend",
-  direction: "increase",
-  status: "open",
-  day: "2026-11-04",
-  observed_value: 120,
-  baseline_value: 30,
-  baseline_start: "2026-10-28",
-  baseline_end: "2026-11-03",
-  threshold: 90,
-  first_seen: "2026-11-05T01:00:00Z",
-  last_seen: "2026-11-05T01:00:00Z",
-  notification_attempts: 0,
-  notified_channels: [],
-  activity_path: ACTIVITY_PATH,
-};
-const GROUPS: AlertGroupPage = {
-  data: [
-    {
-      id: "group-test",
-      scope_type: "key",
-      scope_id: "reporting-test-id",
-      scope_label: "Checkout key",
-      day: "2026-11-04",
-      incident_count: 4,
-      activity_path: ACTIVITY_PATH,
-      metrics: (["spend", "requests", "errors", "latency"] as const).map((metric) => ({
-        metric,
-        incident_count: 1,
-        representative: { ...INCIDENT, id: `incident-${metric}`, metric },
-      })),
-    },
-  ],
-  total: 1,
-  limit: 3,
-  offset: 0,
-};
-
-describe("grouped performance notifications", () => {
+describe("issue notifications", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => localStorage.clear());
 
-  it("shows one resource link for its four signals and keeps resources outside the scroll area", async () => {
+  it("opens issue-owned investigations and keeps resources outside the scrolling content", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} usageAlertGroups={GROUPS} />);
-    await user.click(screen.getByRole("button", { name: "Notifications, 1 alert group needs attention" }));
-    const destination = screen.getByRole("link", { name: /Checkout key/ });
-    expect(destination).toHaveAttribute("href", `/ui${ACTIVITY_PATH}`);
-    expect(destination).toHaveTextContent("Requests ↑ 4×");
-    expect(destination).toHaveTextContent("Errors ↑ 4×");
-    expect(destination).toHaveTextContent("2026-11-04 UTC");
-    expect(screen.getByRole("link", { name: "View all 1" })).toHaveAttribute("href", "/ui/alerts?type=usage");
+    renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} issues={ISSUES} />);
+    await user.click(screen.getByRole("button", { name: "Notifications, 2 issues need attention" }));
+    const destination = screen.getByRole("link", { name: SPEND_ISSUE.title });
+    expect(destination).toHaveAttribute("href", "/ui/alerts?issue=issue-checkout-spend");
+    expect(screen.getByRole("article", { name: SPEND_ISSUE.title })).toHaveTextContent("↑ 20× · $600.00 vs $30.00");
+    expect(screen.getByRole("link", { name: "View all 2" })).toHaveAttribute("href", "/ui/alerts");
     const content = screen.getByLabelText("Notification content");
     expect(content).toContainElement(destination);
     expect(content).not.toContainElement(screen.getByRole("link", { name: "Docs", exact: true }));
@@ -270,33 +201,16 @@ describe("grouped performance notifications", () => {
     await user.click(screen.getByRole("button", { name: /What’s new/ }));
     expect(announcement("LiteLLM Auto Router")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^mark as read$/i }));
-    expect(screen.getByRole("button", { name: "Notifications, 1 alert group needs attention" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notifications, 2 issues need attention" })).toBeInTheDocument();
   });
 
-  it("preserves deprecation provenance and destinations alongside Performance groups", async () => {
+  it("preserves retirement recommendation provenance alongside performance issues", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <NotificationsBellView
-        currentVersion={null}
-        latestRelease={null}
-        usageAlertGroups={GROUPS}
-        deprecationAlerts={[
-          {
-            ...DEPRECATION,
-            model: {
-              ...DEPRECATION.model,
-              successor_model_source: "model_cost_map",
-              deprecation_source: "https://provider.example/model-retirements",
-            },
-          },
-        ]}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "Notifications, 2 alert groups need attention" }));
-    expect(screen.getByRole("link", { name: /Checkout key/ })).toHaveAttribute("href", `/ui${ACTIVITY_PATH}`);
-    expect(screen.getByRole("link", { name: "Review migration" })).toHaveAttribute(
+    renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} issues={ISSUES} />);
+    await user.click(screen.getByRole("button", { name: "Notifications, 2 issues need attention" }));
+    expect(screen.getByRole("link", { name: RETIREMENT_ISSUE.title })).toHaveAttribute(
       "href",
-      "/ui/alerts?type=model-deprecations&model=anthropic%2Fclaude-sonnet-4-5",
+      "/ui/alerts?issue=issue-model-retirement",
     );
     expect(screen.getByRole("link", { name: "LiteLLM model cost map" })).toHaveAttribute(
       "href",
@@ -304,66 +218,7 @@ describe("grouped performance notifications", () => {
     );
     const notice = screen.getByRole("link", { name: /Provider deprecation notice/ });
     expect(notice).toHaveAttribute("href", "https://provider.example/model-retirements");
-    expect(notice).toHaveAttribute("target", "_blank");
     expect(notice).toHaveAttribute("rel", "noopener noreferrer");
-    expect(screen.getByRole("article", { name: /retires in 26 days/ })).toContainElement(notice);
-  });
-});
-
-describe("model deprecation notifications", () => {
-  beforeEach(() => localStorage.clear());
-  afterEach(() => localStorage.clear());
-  it("should show last seen and link to the migration workspace and open alerts inbox", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(
-      <NotificationsBellView currentVersion={null} latestRelease={null} deprecationAlerts={[DEPRECATION]} />,
-    );
-    await user.click(screen.getByRole("button", { name: /1 model deprecation alert/ }));
-    expect(screen.getByRole("article", { name: /retires in 26 days/ })).toHaveTextContent("Last seen 2026-11-04 UTC");
-    expect(screen.getByRole("link", { name: "Review migration" })).toHaveAttribute(
-      "href",
-      "/ui/alerts?type=model-deprecations&model=anthropic%2Fclaude-sonnet-4-5",
-    );
-    expect(screen.getByRole("link", { name: "View all 1" })).toHaveAttribute(
-      "href",
-      "/ui/alerts?type=model-deprecations",
-    );
-    expect(screen.getByText("recommended-model")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Dismiss", exact: true })).not.toBeInTheDocument();
-  });
-  it("should clear the warning when the alert has a shared resolved acknowledgement", () => {
-    const state = {
-      model: DEPRECATION.usageModel,
-      deprecation_date: "2026-11-30",
-      status: "resolved" as const,
-      last_seen_date: "2026-11-04",
-      last_seen_requests: 123,
-    };
-    renderWithProviders(
-      <NotificationsBellView
-        currentVersion={null}
-        latestRelease={null}
-        deprecationAlerts={[{ ...DEPRECATION, state }]}
-      />,
-    );
-    expect(bell(1)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /model deprecation alert/ })).not.toBeInTheDocument();
-  });
-  it("should reopen a resolved alert when more requests arrive on the last-seen day", () => {
-    const state = {
-      model: DEPRECATION.usageModel,
-      deprecation_date: "2026-11-30",
-      status: "resolved" as const,
-      last_seen_date: "2026-11-04",
-      last_seen_requests: 122,
-    };
-    renderWithProviders(
-      <NotificationsBellView
-        currentVersion={null}
-        latestRelease={null}
-        deprecationAlerts={[{ ...DEPRECATION, state }]}
-      />,
-    );
-    expect(screen.getByRole("button", { name: /1 model deprecation alert/ })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: RETIREMENT_ISSUE.title })).toContainElement(notice);
   });
 });

@@ -20,7 +20,7 @@ export const pageDescriptions: Record<string, string> = {
   "tool-policies": "Configure tool use policies and permissions",
   "vector-stores": "Manage vector databases for embeddings",
   new_usage: "View usage analytics and metrics",
-  alerts: "Review and resolve model deprecation alerts across keys and teams",
+  alerts: "Investigate model retirement, reliability, latency, spend, and traffic changes",
   "cost-optimization": "Track and configure cost-saving features: prompt compression, caching, and auto routing",
   "model-insights": "Model Leaderboard: compare usage, spend, tokens, and task mix across this gateway",
   logs: "Access request and response logs",

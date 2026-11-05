@@ -1,6 +1,8 @@
 import type { RuleInput } from "./usageAlertApi";
 
-export const METRIC_MINIMUMS = { spend: 10, requests: 100, latency: 100, errors: 10 };
+export const METRIC_MINIMUMS = { spend: 10, requests: 1000, latency: 500, errors: 10, error_rate: 2 };
+
+export const METRIC_REQUEST_MINIMUMS = { spend: 0, requests: 100, latency: 100, errors: 100, error_rate: 500 };
 
 export const DEFAULT_RULE: RuleInput = {
   name: "",
@@ -11,7 +13,7 @@ export const DEFAULT_RULE: RuleInput = {
   multiplier: 3,
   baseline_days: 7,
   min_history_days: 3,
-  min_requests: 100,
+  min_requests: METRIC_REQUEST_MINIMUMS.spend,
   min_value: METRIC_MINIMUMS.spend,
   enabled: true,
   notification_channels: [],

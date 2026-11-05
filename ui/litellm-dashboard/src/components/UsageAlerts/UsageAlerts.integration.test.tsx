@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { act, fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
-import UsageAlertsPanel from "./UsageAlertsPanel";
+import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
+import UsageRules from "./UsageRules";
+import { FAMILY_SETTINGS } from "@/components/Issues/issueFixtures";
 import UsageAlertContext from "./UsageAlertContext";
 import UsageRuleForm from "./UsageRuleForm";
 import type { RuleInput, UsageRule } from "./usageAlertApi";
@@ -37,29 +38,6 @@ const observation = {
   activity_path:
     "/api-keys?key=reporting-test-id&detail_tab=activity&activity_from=2026-10-28&activity_to=2026-11-04&alert=incident-test",
 };
-const measurements = [
-  observation,
-  { ...observation, id: "requests-test", metric: "requests", observed_value: 420, baseline_value: 120, threshold: 360 },
-  { ...observation, id: "latency-test", metric: "latency", observed_value: 900, baseline_value: 200, threshold: 600 },
-  { ...observation, id: "errors-test", metric: "errors", observed_value: 40, baseline_value: 4, threshold: 14 },
-];
-const group = {
-  id: "key-day",
-  scope_type: "key",
-  scope_id: "reporting-test-id",
-  scope_label: "Checkout key",
-  day: observation.day,
-  incident_count: 4,
-  activity_path: observation.activity_path,
-  metrics: measurements.map((alert) => ({
-    metric: alert.metric,
-    incident_count: 1,
-    representative: {
-      ...alert,
-      activity_path: observation.activity_path.replace("alert=incident-test", `alert=${alert.id}`),
-    },
-  })),
-};
 const defaultSummary = {
   total: 40,
   enabled: 40,
@@ -85,8 +63,6 @@ const savedRule: UsageRule = {
   created_by: "test-admin",
   is_default: false,
 };
-let duplicateMetrics = false;
-let historyTotal = 21;
 const calls: { path: string; method: string; body: unknown; query: URLSearchParams }[] = [];
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -112,8 +88,6 @@ describe("usage alerts API integration", () => {
   beforeEach(() => {
     testQueryClient.clear();
     calls.length = 0;
-    duplicateMetrics = false;
-    historyTotal = 21;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const request = input instanceof Request ? input : new Request(input);
       const url = new URL(request.url);
@@ -122,39 +96,7 @@ describe("usage alerts API integration", () => {
       calls.push(call);
       if (url.pathname === "/management/v1/users/me") return json({ user_id: "test-admin", user_role: "proxy_admin" });
       if (url.pathname === "/usage/alerts/incident-test") return json({ ...observation, status: "resolved" });
-      if (url.pathname.startsWith("/usage/alerts/history-") && request.method === "PATCH") {
-        historyTotal -= 1;
-        return json({ ...observation, status: "resolved" });
-      }
-      if (url.pathname === "/usage/alert-groups" && request.method === "PATCH") return json({ updated_count: 4 });
-      if (url.pathname === "/usage/alert-groups") {
-        const offset = Number(url.searchParams.get("offset") ?? 0);
-        const matchingGroup = duplicateMetrics
-          ? {
-              ...group,
-              metrics: group.metrics.map((metric) => ({
-                ...metric,
-                incident_count: metric.metric === "spend" ? historyTotal : 1,
-              })),
-            }
-          : group;
-        const data =
-          offset === 0
-            ? [matchingGroup]
-            : [{ ...group, id: "second-page", scope_id: "second-key", scope_label: "Second key" }];
-        const page = { data, total: 26, limit: 25, offset };
-        return json(page);
-      }
-      if (url.pathname === "/usage/alerts") {
-        const offset = Number(url.searchParams.get("offset") ?? 0);
-        const data = Array.from({ length: Math.min(10, Math.max(0, historyTotal - offset)) }, (_, index) => ({
-          ...observation,
-          id: `history-${offset + index}`,
-          rule_name: `Spend rule ${offset + index + 1}`,
-        }));
-        const page = { data, total: historyTotal, limit: 10, offset };
-        return json(page);
-      }
+      if (url.pathname === "/issues/families") return json(FAMILY_SETTINGS);
       if (url.pathname === "/usage/alert-rules" && request.method === "POST") {
         return ruleResponse(body);
       }
@@ -180,86 +122,6 @@ describe("usage alerts API integration", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("shows the saved evidence, links to exact Activity context, and pages server-side", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<UsageAlertsPanel />);
-    const link = await screen.findByRole("link", { name: "Checkout key (reporting-test-id)" });
-    expect(link).toHaveAttribute("href", `/ui${observation.activity_path}`);
-    expect(screen.getByRole("link", { name: "Requests ↑ 3.5×" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Cost ↑ 4×" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Errors ↑ 10×" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Latency ↑ 4.5×" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Details for Checkout key" }));
-    expect(screen.getByText("$120.00")).toBeInTheDocument();
-    expect(screen.getByText("$30.00")).toBeInTheDocument();
-    expect(screen.getByText("At least $90.00")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Go to next page", exact: true }));
-    expect(await screen.findByRole("link", { name: "Second key (second-key)" })).toBeInTheDocument();
-    expect(calls.some((call) => call.path === "/usage/alert-groups" && call.query.get("offset") === "25")).toBe(true);
-  });
-
-  it("updates an incident through the public API", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<UsageAlertsPanel />);
-    await user.click(await screen.findByRole("button", { name: "Details for Checkout key" }));
-    await user.click(screen.getByRole("button", { name: "Actions for Spend alert" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Resolve", exact: true }));
-    await waitFor(() => expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ status: "resolved" }));
-    expect(calls.find((call) => call.method === "PATCH")?.path).toBe("/usage/alerts/incident-test");
-  });
-
-  it("updates the exact resource/day group without changing other statuses", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<UsageAlertsPanel />);
-    await user.click(await screen.findByRole("button", { name: "Actions for Checkout key" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Dismiss", exact: true }));
-    const expected = {
-      scope_type: "key",
-      scope_id: "reporting-test-id",
-      day: "2026-11-04",
-      expected_status: "open",
-      status: "dismissed",
-    };
-    await waitFor(() => expect(calls.find((call) => call.method === "PATCH")?.body).toEqual(expected));
-    expect(calls.find((call) => call.method === "PATCH")?.path).toBe("/usage/alert-groups");
-  });
-
-  it("loads complete matching-rule pages only on demand and returns to the last valid page after an update", async () => {
-    duplicateMetrics = true;
-    const user = userEvent.setup();
-    renderWithProviders(<UsageAlertsPanel />);
-    await user.click(await screen.findByRole("button", { name: "Details for Checkout key" }));
-    expect(calls.some((call) => call.path === "/usage/alerts")).toBe(false);
-    await user.click(screen.getByRole("button", { name: "View 21 matching rules" }));
-    expect(await screen.findByText(/^Spend rule 1 ·/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Next", exact: true }));
-    expect(await screen.findByText(/^Spend rule 11 ·/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Next", exact: true }));
-    expect(await screen.findByText(/^Spend rule 21 ·/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Actions for Spend alert" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Resolve", exact: true }));
-    expect(await screen.findByText("11–20 of 20 matching alerts")).toBeInTheDocument();
-    const history = calls.filter((call) => call.path === "/usage/alerts");
-    expect(history.at(-1)?.query.get("offset")).toBe("10");
-    expect(history.at(-1)?.query.get("scope_id")).toBe("reporting-test-id");
-    expect(history.at(-1)?.query.get("start_date")).toBe("2026-11-04");
-    expect(history.at(-1)?.query.get("metric")).toBe("spend");
-  });
-
-  it("hides cached global incidents when the viewer loses global spend access", async () => {
-    renderWithProviders(<UsageAlertsPanel />);
-    expect(await screen.findByRole("link", { name: "Checkout key (reporting-test-id)" })).toBeInTheDocument();
-    await act(async () => {
-      testQueryClient.setQueriesData(
-        { queryKey: ["currentUser"] },
-        { user_id: "test-admin", user_role: "internal_user_viewer" },
-      );
-    });
-    await waitFor(() =>
-      expect(screen.queryByRole("link", { name: "Checkout key (reporting-test-id)" })).not.toBeInTheDocument(),
-    );
-  });
-
   it("shows saved evidence on the matching entity without recomputing from a current rule", async () => {
     renderWithProviders(<UsageAlertContext alertId="incident-test" scope="key" entityId="reporting-test-id" />);
     expect(await screen.findByText(/Spend was \$120.00 on 2026-11-04 UTC/)).toHaveTextContent(
@@ -277,8 +139,9 @@ describe("usage alerts API integration", () => {
 
   it("creates a configurable team rule with notification settings through the public API", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<UsageAlertsPanel />);
-    await user.click(await screen.findByRole("button", { name: "Alert rules" }));
+    renderWithProviders(<UsageRules accessToken="test-access-token" />);
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(screen.getByText("Custom rules", { selector: "summary" }));
     await user.click(await screen.findByRole("button", { name: "New rule", exact: true }));
     fireEvent.change(screen.getByLabelText("Resource"), { target: { value: "team" } });
     await user.click(screen.getByRole("combobox", { name: "Team" }));
@@ -302,7 +165,7 @@ describe("usage alerts API integration", () => {
       multiplier: 2,
       baseline_days: 1,
       min_history_days: 1,
-      min_value: 100,
+      min_value: 1000,
       notification_channels: ["email"],
       email_recipients: ["oncall@example.com"],
     };
@@ -311,10 +174,11 @@ describe("usage alerts API integration", () => {
 
   it("creates a useful default without opening Advanced or listing forty default rules", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<UsageAlertsPanel />);
-    await user.click(await screen.findByRole("button", { name: "Alert rules" }));
-    expect(await screen.findByText("40 of 40 default rules enabled")).toBeInTheDocument();
-    expect(calls.find((call) => call.path === "/usage/alert-rules")?.query.get("kind")).toBe("custom");
+    renderWithProviders(<UsageRules accessToken="test-access-token" />);
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(await screen.findByRole("button", { name: "Edit Unexpected spend" })).toBeInTheDocument();
+    expect(calls.some((call) => call.path === "/usage/alert-rules")).toBe(false);
+    await user.click(screen.getByText("Custom rules", { selector: "summary" }));
     await user.click(screen.getByRole("button", { name: "New rule", exact: true }));
     expect(screen.getByLabelText("Name")).not.toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save rule" }));
@@ -326,7 +190,7 @@ describe("usage alerts API integration", () => {
       multiplier: 3,
       baseline_days: 7,
       min_history_days: 3,
-      min_requests: 100,
+      min_requests: 0,
       min_value: 10,
       notification_channels: [],
     };
@@ -335,8 +199,9 @@ describe("usage alerts API integration", () => {
 
   it("selects the exact reporting model through bounded options rather than a deployment alias", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<UsageAlertsPanel />);
-    await user.click(await screen.findByRole("button", { name: "Alert rules" }));
+    renderWithProviders(<UsageRules accessToken="test-access-token" />);
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(screen.getByText("Custom rules", { selector: "summary" }));
     await user.click(await screen.findByRole("button", { name: "New rule", exact: true }));
     fireEvent.change(screen.getByLabelText("Resource"), { target: { value: "model" } });
     await user.click(screen.getByRole("combobox", { name: "Model" }));
@@ -350,8 +215,9 @@ describe("usage alerts API integration", () => {
 
   it("recovers from a rejected email recipient when email is disabled without losing the draft", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<UsageAlertsPanel />);
-    await user.click(await screen.findByRole("button", { name: "Alert rules" }));
+    renderWithProviders(<UsageRules accessToken="test-access-token" />);
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(screen.getByText("Custom rules", { selector: "summary" }));
     await user.click(await screen.findByRole("button", { name: "New rule", exact: true }));
     await user.click(screen.getByRole("checkbox", { name: "Email", exact: true }));
     fireEvent.change(screen.getByLabelText("Email recipients"), { target: { value: "invalid-recipient" } });

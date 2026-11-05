@@ -287,7 +287,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "alerts",
         page: "alerts",
-        label: "Alerts",
+        label: "Issues",
         icon: <Bell {...ICON} />,
         roles: rolesWithCapability("viewGlobalSpend"),
       },
