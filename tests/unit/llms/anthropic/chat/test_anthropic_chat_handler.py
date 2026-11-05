@@ -2,6 +2,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,9 +14,10 @@ from openai.types.chat import ChatCompletionChunk
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
@@ -27,24 +29,34 @@ from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
+def _text_delta_stream(text: str) -> bytes:
+    events: Final = (
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}),
+    )
+    return "".join(
+        f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n" for name, payload in events
+    ).encode()
+
+
+def _streamed_text(chunks: list[object]) -> str:
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks if isinstance(chunk, ModelResponseStream))
+
+
 @pytest.mark.asyncio
 async def test_make_call_passes_logging_obj_to_client_post():
     """make_call must pass logging_obj to client.post so track_llm_api_timing can set llm_api_duration_ms for litellm_overhead_time_ms."""
     mock_client = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.aiter_lines = MagicMock(
-        return_value=iter([b'data: {"type":"message_start"}\n', b'data: {"type":"message_delta"}\n'])
-    )
-    mock_client.post.return_value = mock_response
+    mock_client.post.return_value = httpx.Response(200, stream=httpx.ByteStream(_text_delta_stream("Hi there")))
 
     logging_obj = MagicMock()
 
-    await make_call(
+    completion_stream, _ = await make_call(
         client=mock_client,
         api_base="https://api.anthropic.com/v1/messages",
         headers={},
         data="{}",
-        model="claude-3-5-haiku",
+        model="claude-haiku-5-5",
         messages=[{"role": "user", "content": "Hi"}],
         logging_obj=logging_obj,
         timeout=60.0,
@@ -54,6 +66,39 @@ async def test_make_call_passes_logging_obj_to_client_post():
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args[1]
     assert call_kwargs.get("logging_obj") is logging_obj
+    assert _streamed_text([chunk async for chunk in completion_stream]) == "Hi there"
+
+
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
+
+
+async def _streamed_chunks(sync_stream: bool, text: str) -> list[object]:
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=httpx.ByteStream(_text_delta_stream(text)))
+    )
+    call_args: Final = {
+        "api_base": "https://api.anthropic.com/v1/messages",
+        "headers": {},
+        "data": "{}",
+        "model": "claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "logging_obj": MagicMock(),
+        "timeout": 60.0,
+        "json_mode": False,
+    }
+    if sync_stream:
+        sync_iterator, _ = make_sync_call(client=HTTPHandler(client=httpx.Client(transport=transport)), **call_args)
+        return list(sync_iterator)
+    async_iterator, _ = await make_call(client=AsyncHTTPHandler(transport=transport), **call_args)
+    return [chunk async for chunk in async_iterator]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_stream", [True, False])
+async def test_streamed_text_keeps_unicode_line_separators(sync_stream: bool) -> None:
+    chunks: Final = await _streamed_chunks(sync_stream, _LINE_SEPARATED_TEXT)
+
+    assert _streamed_text(chunks) == _LINE_SEPARATED_TEXT
 
 
 def test_anthropic_completion_does_not_send_deployment_default_limits():
@@ -210,6 +255,7 @@ def test_anthropic_tool_call_error_is_mapped_from_the_provider_response():
 async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop(async_only_image_fetch):
     http_image_url = f"http://img.example/{uuid.uuid4()}.png"
     https_image_url = f"https://img.example/{uuid.uuid4()}.png"
+    https_pdf_link = f"https://img.example/{uuid.uuid4()}/page.pdf?w=600"
     captured = {}
 
     def handle(request):
@@ -239,6 +285,7 @@ async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop
                     {"type": "text", "text": "What colour is this?"},
                     {"type": "image_url", "image_url": {"url": http_image_url}},
                     {"type": "image_url", "image_url": {"url": https_image_url}},
+                    {"type": "image_url", "image_url": {"url": https_pdf_link}},
                 ],
             }
         ],
@@ -247,11 +294,193 @@ async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop
     )
 
     assert response.choices[0].message.content == "Green"
-    assert async_only_image_fetch.fetched == [http_image_url]
+    assert async_only_image_fetch.fetched == [http_image_url, https_pdf_link]
     sources = [part["source"] for part in captured["body"]["messages"][0]["content"] if part["type"] == "image"]
     assert sources == [
         {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
         {"type": "url", "url": https_image_url},
+        {"type": "url", "url": https_pdf_link},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("download_limit_mb", (0, 50), ids=("downloads-disabled", "link-unreachable"))
+async def test_anthropic_async_completion_sends_a_pdf_path_link_it_cannot_download_as_a_link(
+    monkeypatch: pytest.MonkeyPatch, download_limit_mb: int
+) -> None:
+    pdf_link: Final = f"https://img.example/{uuid.uuid4()}/page.pdf?fm=png"
+    captured: Final[dict[str, object]] = {}
+
+    async def unreachable(client: object, url: str, **kwargs: object) -> httpx.Response:
+        return httpx.Response(404, request=httpx.Request("GET", url))
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "A chart"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(image_handling, "async_safe_get", unreachable)
+    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", download_limit_mb)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response: Final = await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link}}]}],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert response.choices[0].message.content == "A chart"
+    assert captured["body"]["messages"][0]["content"] == [{"type": "image", "source": {"type": "url", "url": pdf_link}}]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_async_completion_gives_up_on_a_pdf_link_within_the_non_llm_connection_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_link: Final = f"https://unreachable.example/{uuid.uuid4()}/report.pdf"
+    fetch_timeouts: Final[list[object]] = []
+    captured: Final[dict[str, object]] = {}
+
+    async def unreachable(client: object, url: str, **kwargs: object) -> httpx.Response:
+        fetch_timeouts.append(kwargs.get("timeout"))
+        raise httpx.ConnectTimeout("no route to host")
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "A chart"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(image_handling, "async_safe_get", unreachable)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link}}]}],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert captured["body"]["messages"][0]["content"] == [{"type": "image", "source": {"type": "url", "url": pdf_link}}]
+    assert fetch_timeouts == [NON_LLM_CONNECTION_TIMEOUT]
+
+
+def _anthropic_reply(captured: dict[str, object]) -> Callable[[httpx.Request], httpx.Response]:
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "A report"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    return handle
+
+
+def _served_pdf_slice(url: str) -> httpx.Response:
+    return httpx.Response(
+        206, content=b"%PDF-1.7\n", headers={"content-type": "binary/octet-stream"}, request=httpx.Request("GET", url)
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_async_completion_sends_a_link_that_serves_a_pdf_as_a_url_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_link: Final = f"https://files.example/{uuid.uuid4()}/download?file=report.pdf"
+    probes: Final[list[object]] = []
+    captured: Final[dict[str, object]] = {}
+
+    async def serve_pdf_slice(client: object, url: str, **kwargs: object) -> httpx.Response:
+        probes.append(kwargs.get("headers"))
+        return _served_pdf_slice(url)
+
+    monkeypatch.setattr(image_handling, "async_safe_get", serve_pdf_slice)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_anthropic_reply(captured)))
+
+    await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": pdf_link}, "cache_control": {"type": "ephemeral"}}
+                ],
+            }
+        ],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert captured["body"]["messages"][0]["content"] == [
+        {"type": "document", "source": {"type": "url", "url": pdf_link}, "cache_control": {"type": "ephemeral"}}
+    ]
+    assert probes == [{"Range": "bytes=0-1023"}]
+
+
+def test_anthropic_sync_completion_sends_a_link_that_serves_a_pdf_as_a_url_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_link: Final = f"https://files.example/{uuid.uuid4()}/report.pdf"
+    png_at_pdf_link: Final = f"https://files.example/{uuid.uuid4()}/page.pdf?fm=png"
+    captured: Final[dict[str, object]] = {}
+
+    def serve(client: object, url: str, **kwargs: object) -> httpx.Response:
+        if url == pdf_link:
+            return _served_pdf_slice(url)
+        return httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(image_handling, "safe_get", serve)
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_anthropic_reply(captured))))
+
+    litellm.completion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": pdf_link}},
+                    {"type": "image_url", "image_url": {"url": png_at_pdf_link}},
+                ],
+            }
+        ],
+        client=client,
+        api_key="sk-ant-unit-test",
+    )
+
+    assert captured["body"]["messages"][0]["content"] == [
+        {"type": "document", "source": {"type": "url", "url": pdf_link}},
+        {"type": "image", "source": {"type": "url", "url": png_at_pdf_link}},
     ]
 
 
@@ -494,7 +723,11 @@ def test_streamed_thinking_blocks_accumulate_in_the_openai_sdk_and_replay_withou
         {"type": "content_block_delta", "index": 2, "delta": {"type": "thinking_delta", "thinking": "Step 3."}},
         {"type": "content_block_delta", "index": 2, "delta": {"type": "signature_delta", "signature": "sig-b"}},
         {"type": "content_block_stop", "index": 2},
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 9}},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 9},
+        },
         {"type": "message_stop"},
     )
 
@@ -515,7 +748,11 @@ def test_streamed_thinking_blocks_accumulate_in_the_openai_sdk_and_replay_withou
         "thinking_blocks": message["thinking_blocks"],
     }
     replayed: Final = anthropic_messages_pt(
-        messages=[{"role": "user", "content": "Capital of France?"}, next_turn, {"role": "user", "content": "And Spain?"}],
+        messages=[
+            {"role": "user", "content": "Capital of France?"},
+            next_turn,
+            {"role": "user", "content": "And Spain?"},
+        ],
         model="claude-haiku-4-5",
         llm_provider="anthropic",
     )
@@ -3600,6 +3837,51 @@ def test_streamed_refusal_stop_details_reach_the_assembled_message():
     assert provider_fields["stop_details"] == stop_details
 
 
+def test_streamed_refusal_explanation_reaches_the_client_as_the_message_refusal():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
+
+    assert assembled.choices[0].message.refusal == stop_details["explanation"]
+
+
+def test_streamed_refusal_without_an_explanation_sets_no_message_refusal():
+    assembled: Final = _assemble_stream(
+        _message_stream_events("refusal", {"type": "refusal", "category": "cyber", "explanation": None})
+    )
+
+    assert assembled.choices[0].message.get("refusal") is None
+
+
+def _paused_search_stream_events() -> tuple[dict, ...]:
+    message_start, message_delta, message_stop = _message_stream_events("pause_turn", None)
+    return (
+        message_start,
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_pending", "name": "web_search", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query": "next city"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {**message_delta, "delta": {"stop_reason": "pause_turn", "stop_sequence": None}},
+        message_stop,
+    )
+
+
+def test_streamed_pause_turn_is_an_unfinished_turn_listing_the_query_it_will_run():
+    assembled: Final = _assemble_stream(_paused_search_stream_events())
+
+    assert assembled.choices[0].finish_reason == "length"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "pause_turn"
+    pending: Final = provider_fields["web_search_calls"]["srvtoolu_pending"]
+    assert (pending.status, pending.action.query) == ("in_progress", "next city")
+
+
 def test_streamed_end_turn_carries_no_stop_details():
     assembled: Final = _assemble_stream(_message_stream_events("end_turn", None))
 
@@ -3607,3 +3889,186 @@ def test_streamed_end_turn_carries_no_stop_details():
     provider_fields: Final = assembled.choices[0].message.provider_specific_fields or {}
     assert "stop_details" not in provider_fields
     assert "stop_reason" not in provider_fields
+
+
+def test_message_start_surfaces_input_transformations_on_the_first_chunk() -> None:
+    input_transformations: Final = [{"type": "thinking_block_binding", "count": 2}]
+    chunk: Final = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+            "input_transformations": input_transformations,
+        },
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    first_chunk: Final = iterator.chunk_parser(chunk=chunk)
+
+    assert first_chunk.choices[0].delta.provider_specific_fields == {"input_transformations": input_transformations}
+    assert first_chunk.model == "claude-sonnet-4-6"
+
+
+def test_message_start_without_input_transformations_has_no_provider_specific_fields() -> None:
+    chunk: Final = {
+        "type": "message_start",
+        "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-6", "content": []},
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    assert iterator.chunk_parser(chunk=chunk).choices[0].delta.provider_specific_fields is None
+
+
+def _anthropic_chat_request_for_bound_thinking(
+    extra_headers: dict[str, str] | None, drop_params: bool | None = None
+) -> httpx.Request:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_bound",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    thinking: Final = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            thinking=thinking,
+            extra_headers=extra_headers,
+            drop_params=drop_params,
+        )
+    finally:
+        client.close()
+    assert thinking == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    return captured_requests[0]
+
+
+def _anthropic_chat_body_for_bound_thinking(
+    extra_headers: dict[str, str] | None, drop_params: bool | None = None
+) -> dict[str, object]:
+    return json.loads(_anthropic_chat_request_for_bound_thinking(extra_headers, drop_params).content)
+
+
+def test_anthropic_chat_keeps_block_binding_when_the_final_header_carries_the_binding_beta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    body: Final = _anthropic_chat_body_for_bound_thinking(
+        {"anthropic-beta": "thinking-binding-controls-2026-08-01"}, drop_params=True
+    )
+    assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_anthropic_chat_adds_the_binding_beta_so_block_binding_is_kept(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _anthropic_chat_request_for_bound_thinking(None, drop_params=drop_params)
+    assert json.loads(request.content)["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+    }
+    assert "thinking-binding-controls-2026-08-01" in request.headers["anthropic-beta"].split(",")
+
+
+def test_anthropic_chat_sends_block_binding_as_is_without_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    body: Final = _anthropic_chat_body_for_bound_thinking(None)
+    assert body["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+
+
+class _AnthropicChatUpstream:
+    def __init__(self) -> None:
+        self.anthropic_beta: tuple[str, ...] = ()
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.anthropic_beta = tuple(request.headers.get_list("anthropic-beta"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_beta_row",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+
+_BETAS_FOUNDRY_REJECTS_AND_ACCEPTS: Final = "advisor-tool-2026-03-01,thinking-binding-controls-2026-08-01"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "forwarded_betas"),
+    [
+        pytest.param(
+            "https://res.services.ai.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry",
+        ),
+        pytest.param(
+            "https://res.cognitiveservices.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry-cognitiveservices",
+        ),
+        pytest.param(
+            "https://res.openai.azure.com/anthropic",
+            frozenset({"thinking-binding-controls-2026-08-01"}),
+            id="foundry-openai",
+        ),
+        pytest.param(
+            "https://api.anthropic.com",
+            frozenset(_BETAS_FOUNDRY_REJECTS_AND_ACCEPTS.split(",")),
+            id="anthropic",
+        ),
+    ],
+)
+def test_anthropic_chat_completion_picks_the_beta_row_by_api_base(
+    monkeypatch: pytest.MonkeyPatch, api_base: str, forwarded_betas: frozenset[str]
+) -> None:
+    from litellm import anthropic_beta_headers_manager
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    upstream: Final = _AnthropicChatUpstream()
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream.respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Say ok"}],
+            api_base=api_base,
+            api_key="test-key",
+            extra_headers={"anthropic-beta": _BETAS_FOUNDRY_REJECTS_AND_ACCEPTS},
+            client=client,
+        )
+    finally:
+        client.close()
+
+    assert frozenset(",".join(upstream.anthropic_beta).split(",")) == forwarded_betas

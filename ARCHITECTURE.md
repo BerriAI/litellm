@@ -2,6 +2,8 @@
 
 This document helps contributors understand where to make changes in LiteLLM.
 
+For why a layer is shaped the way it is, read the architecture decision records in [`docs/adrs/`](docs/adrs/AGENTS.md) (Python SDK and proxy) and [`litellm-rust/docs/adrs/`](litellm-rust/docs/adrs/AGENTS.md) (Rust core)
+
 ---
 
 ## How It Works
@@ -238,6 +240,8 @@ graph LR
 6. `logging_obj.async_success_handler()` triggers callbacks including `_ProxyDBLogger.async_log_success_event()`
 7. `DBSpendUpdateWriter.update_database()` queues spend increments to Redis
 8. Background job `update_spend` flushes queued spend to PostgreSQL every 60s
+
+Cost lookup falls back to the response model when the provider-reported name cannot be priced. Explicitly registered zero rates remain zero, and custom deployment pricing or an explicit `base_model` retain precedence
 
 ### Data Access Layer (Models & Repositories)
 

@@ -2,6 +2,7 @@
 
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, Info, MoreHorizontal } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { StatusBadge } from "@/components/shared/table_cells";
@@ -15,6 +16,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import i18n from "@/i18n/i18n";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 export interface AgentHubData {
@@ -48,10 +50,11 @@ interface AgentHubRowActionsProps {
 }
 
 function AgentHubRowActions({ agent, onAgentClick }: AgentHubRowActionsProps) {
+  const { t } = useTranslation();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open agent actions"
+        aria-label={t("aiHub.agentHubColumns.rowActions.openActions")}
         data-testid={`agent-hub-actions-${agent.agent_id || agent.name}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -60,14 +63,14 @@ function AgentHubRowActions({ agent, onAgentClick }: AgentHubRowActionsProps) {
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem data-testid="agent-hub-action-details" onClick={() => onAgentClick(agent)}>
           <Info />
-          View details
+          {t("aiHub.agentHubColumns.rowActions.viewDetails")}
         </DropdownMenuItem>
         <DropdownMenuItem
           data-testid="agent-hub-action-copy"
-          onClick={() => void copyToClipboard(agent.name, "Agent name copied")}
+          onClick={() => void copyToClipboard(agent.name, t("aiHub.agentHubColumns.rowActions.nameCopied"))}
         >
           <Copy />
-          Copy agent name
+          {t("aiHub.agentHubColumns.rowActions.copyName")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -82,8 +85,8 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
   {
     id: "name",
     accessorKey: "name",
-    meta: { title: "Agent Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Agent Name" />,
+    meta: { title: i18n.t("aiHub.agentHubColumns.name") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("aiHub.agentHubColumns.name")} />,
     size: 200,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -94,8 +97,8 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
   {
     id: "description",
     accessorKey: "description",
-    meta: { title: "Description", className: "hidden md:table-cell" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Description" />,
+    meta: { title: i18n.t("aiHub.agentHubColumns.description"), className: "hidden md:table-cell" },
+    header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("aiHub.agentHubColumns.description")} />,
     size: 240,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -108,8 +111,8 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
   {
     id: "version",
     accessorKey: "version",
-    meta: { title: "Version", skeleton: "badge", className: "hidden lg:table-cell" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Version" />,
+    meta: { title: i18n.t("aiHub.agentHubColumns.version"), skeleton: "badge", className: "hidden lg:table-cell" },
+    header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("aiHub.agentHubColumns.version")} />,
     size: 100,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -122,8 +125,8 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
   {
     id: "protocolVersion",
     accessorKey: "protocolVersion",
-    meta: { title: "Protocol", className: "hidden lg:table-cell" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Protocol" />,
+    meta: { title: i18n.t("aiHub.agentHubColumns.protocol"), className: "hidden lg:table-cell" },
+    header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("aiHub.agentHubColumns.protocol")} />,
     size: 100,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -131,8 +134,8 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
   },
   {
     id: "skills",
-    meta: { title: "Skills", skeleton: "chips" },
-    header: "Skills",
+    meta: { title: i18n.t("aiHub.agentHubColumns.skills"), skeleton: "chips" },
+    header: i18n.t("aiHub.agentHubColumns.skills"),
     size: 180,
     enableSorting: false,
     cell: ({ row }) => {
@@ -140,7 +143,7 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
       return (
         <div className="flex flex-col gap-1">
           <span className="text-xs font-medium">
-            {skills.length} skill{skills.length !== 1 ? "s" : ""}
+            {i18n.t("aiHub.agentHubColumns.skillCount", { count: skills.length })}
           </span>
           {skills.length > 0 && (
             <div className="flex flex-wrap gap-1">
@@ -158,8 +161,8 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
   },
   {
     id: "capabilities",
-    meta: { title: "Capabilities", skeleton: "chips" },
-    header: "Capabilities",
+    meta: { title: i18n.t("aiHub.agentHubColumns.capabilities"), skeleton: "chips" },
+    header: i18n.t("aiHub.agentHubColumns.capabilities"),
     size: 160,
     enableSorting: false,
     cell: ({ row }) => {
@@ -182,8 +185,8 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
   },
   {
     id: "io_modes",
-    meta: { title: "I/O Modes", skeleton: "twoLine", className: "hidden xl:table-cell" },
-    header: "I/O Modes",
+    meta: { title: i18n.t("aiHub.agentHubColumns.ioModes"), skeleton: "twoLine", className: "hidden xl:table-cell" },
+    header: i18n.t("aiHub.agentHubColumns.ioModes"),
     size: 150,
     enableSorting: false,
     cell: ({ row }) => {
@@ -192,10 +195,12 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
       return (
         <div className="flex flex-col gap-0.5 text-xs">
           <span>
-            <span className="font-medium">In:</span> {inputModes.join(", ") || "-"}
+            <span className="font-medium">{i18n.t("aiHub.agentHubColumns.inputLabel")}</span>{" "}
+            {inputModes.join(", ") || "-"}
           </span>
           <span>
-            <span className="font-medium">Out:</span> {outputModes.join(", ") || "-"}
+            <span className="font-medium">{i18n.t("aiHub.agentHubColumns.outputLabel")}</span>{" "}
+            {outputModes.join(", ") || "-"}
           </span>
         </div>
       );
@@ -204,8 +209,8 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
   {
     id: "is_public",
     accessorKey: "is_public",
-    meta: { title: "Public", skeleton: "badge", className: "hidden md:table-cell" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Public" />,
+    meta: { title: i18n.t("aiHub.agentHubColumns.public"), skeleton: "badge", className: "hidden md:table-cell" },
+    header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("aiHub.agentHubColumns.public")} />,
     size: 100,
     enableSorting: true,
     sortingFn: (rowA, rowB) => {
@@ -215,13 +220,18 @@ export const getAgentHubTableColumns = ({ onAgentClick }: AgentHubTableColumnsDe
     },
     cell: ({ row }) => {
       const isPublic = row.original.is_public === true;
-      return <StatusBadge tone={isPublic ? "success" : "neutral"} label={isPublic ? "Yes" : "No"} />;
+      return (
+        <StatusBadge
+          tone={isPublic ? "success" : "neutral"}
+          label={isPublic ? i18n.t("aiHub.agentHubColumns.yes") : i18n.t("aiHub.agentHubColumns.no")}
+        />
+      );
     },
   },
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{i18n.t("aiHub.agentHubColumns.actions")}</span>,
     size: 64,
     enableSorting: false,
     enableHiding: false,

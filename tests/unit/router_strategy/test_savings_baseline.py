@@ -1,6 +1,7 @@
 import pytest
 
 from litellm.router import Router
+from litellm.router_api import RoutingContext
 from litellm.router_strategy.savings_baseline import (
     Baseline,
     _models_in,
@@ -12,7 +13,7 @@ from litellm.router_strategy.savings_baseline import (
 
 
 @pytest.fixture
-def parent() -> Router:
+def parent() -> RoutingContext:
     return Router(
         model_list=[
             {"model_name": "cheap", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
@@ -20,7 +21,7 @@ def parent() -> Router:
             {"model_name": "pool", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
             {"model_name": "pool", "litellm_params": {"model": "anthropic/claude-opus-5"}},
         ]
-    )
+    )._core_ctx
 
 
 @pytest.mark.parametrize(
@@ -121,7 +122,7 @@ class TestResolveBaseline:
         served; a dashboard counterfactual must not be able to take routing down."""
 
         class Exploding:
-            def deployments_named(self, model_name):
+            def registry(self):
                 raise RuntimeError("router is mid-reload")
 
         assert resolve_baseline(Exploding(), ["anything"]) is None
@@ -142,8 +143,8 @@ class TestDeploymentsPricedByBaseModel:
     """
 
     @staticmethod
-    def _router(*deployments: dict) -> Router:
-        return Router(model_list=list(deployments))
+    def _router(*deployments: dict) -> RoutingContext:
+        return Router(model_list=list(deployments))._core_ctx
 
     def test_model_info_base_model_is_preferred_over_the_deployment_name(self):
         router = self._router(
@@ -206,7 +207,7 @@ class TestDeploymentPricingOverrides:
                 {"model_name": "top", "litellm_params": {"model": "anthropic/claude-opus-5"}},
             ]
         )
-        assert resolve_baseline(router, ["cheap", "top"]).model == "anthropic/claude-opus-5"
+        assert resolve_baseline(router._core_ctx, ["cheap", "top"]).model == "anthropic/claude-opus-5"
 
         overridden = Router(
             model_list=[
@@ -221,4 +222,4 @@ class TestDeploymentPricingOverrides:
                 {"model_name": "top", "litellm_params": {"model": "anthropic/claude-opus-5"}},
             ]
         )
-        assert resolve_baseline(overridden, ["cheap", "top"]).model == "anthropic/claude-haiku-4-5"
+        assert resolve_baseline(overridden._core_ctx, ["cheap", "top"]).model == "anthropic/claude-haiku-4-5"

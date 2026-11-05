@@ -423,6 +423,148 @@ class TestUseResponsesApiBridgeFlag:
         assert request.headers["authorization"] == "Bearer fake-azure-ad-token"
         assert "chat_template_kwargs" not in json.loads(request.read())
 
+    def test_bridge_rejects_a_responses_field_it_cannot_translate_when_drop_params_is_off(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.responses(
+                model="databricks/my-custom-model",
+                input="Hello",
+                max_tool_calls=5,
+                api_base="https://example.databricks.test/serving-endpoints",
+                api_key="fake-databricks-api-key",
+                num_retries=0,
+            )
+
+        assert upstream.call_count == 0, "the provider must not be called for a field the bridge cannot translate"
+        assert raised.value.status_code == 400
+        assert "max_tool_calls" in str(raised.value)
+        assert "drop_params" in str(raised.value)
+
+    @pytest.mark.parametrize("drop_params_source", ["request", "global"])
+    def test_bridge_drops_a_responses_field_it_cannot_translate_when_drop_params_is_on(
+        self, drop_params_source: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        response: Final = litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            max_tool_calls=5,
+            chat_template_kwargs={"thinking": True},
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+            **({"drop_params": True} if drop_params_source == "request" else {}),
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read()) == {
+            "model": "my-custom-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "chat_template_kwargs": {"thinking": True},
+        }
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_bridge_drops_a_responses_field_it_cannot_translate_when_the_deployment_sets_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "bridged",
+                    "litellm_params": {
+                        "model": "databricks/my-custom-model",
+                        "api_base": "https://example.databricks.test/serving-endpoints",
+                        "api_key": "fake-databricks-api-key",
+                        "drop_params": True,
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+
+        response: Final = router.responses(model="bridged", input="Hello", max_tool_calls=5)
+
+        assert upstream.call_count == 1
+        request_body: Final = json.loads(upstream.calls[0].request.read())
+        assert "max_tool_calls" not in request_body
+        assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_allowed_openai_params_sends_a_responses_field_through_the_bridge(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            max_tool_calls=5,
+            allowed_openai_params=["max_tool_calls"],
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read())["max_tool_calls"] == 5
+
+    def test_bridge_still_honors_additional_drop_params_for_a_responses_field_it_cannot_translate(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        response: Final = litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            max_tool_calls=5,
+            additional_drop_params=["max_tool_calls"],
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read()) == {
+            "model": "my-custom-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_bridge_still_quietly_drops_responses_fields_it_already_handles(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        upstream: Final = _databricks_chat_upstream(respx_mock)
+
+        litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            store=False,
+            include=["reasoning.encrypted_content"],
+            truncation="auto",
+            metadata={"k": "v"},
+            background=False,
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read()) == {
+            "model": "my-custom-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+
     @patch.object(import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses")
     @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
     async def test_bridge_flag_forwarded_to_file_search_emulation(self, mock_get_config, mock_call_aresponses):
@@ -574,6 +716,24 @@ class TestUseResponsesApiBridgeFlag:
 # Deployment-pinned routing mode (deployment_routing_mode / responses_api_bridge_check)
 _CHAT: Final[Mapping[str, JsonValue]] = {"id": "dep-1", "mode": "chat"}
 _RESPONSES: Final[Mapping[str, JsonValue]] = {"id": "dep-1", "mode": "responses"}
+
+
+def _databricks_chat_upstream(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "my-custom-model",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+        )
+    )
 
 
 def _pin_shared_mode(monkeypatch: pytest.MonkeyPatch, model: str, mode: str) -> None:
@@ -942,3 +1102,281 @@ async def test_chatgpt_completion_routes_to_responses_without_a_provider_catalog
 def test_missing_catalog_entry_does_not_force_other_providers_to_responses(provider: str) -> None:
     info, model = responses_api_bridge_check(model="test-chatgpt-routing-control", custom_llm_provider=provider)
     assert (info.get("mode"), model) == (None, "test-chatgpt-routing-control")
+
+
+_GPT_5_6_CHUNKS: Final = (
+    {
+        "id": "chatcmpl-123",
+        "object": "chat.completion.chunk",
+        "created": 1677652288,
+        "model": "gpt-5.6",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Answer"}, "finish_reason": None}],
+    },
+    {
+        "id": "chatcmpl-123",
+        "object": "chat.completion.chunk",
+        "created": 1677652288,
+        "model": "gpt-5.6",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+    },
+)
+
+
+def _openai_chat_upstream(respx_mock: respx.MockRouter, stream: bool) -> respx.Route:
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions")
+    if stream:
+        return route.respond(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(chunk)}\n\n" for chunk in _GPT_5_6_CHUNKS) + "data: [DONE]\n\n",
+        )
+    return route.respond(
+        200,
+        json={
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": "gpt-5.6",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+        },
+    )
+
+
+async def _bridged_responses_call(asynchronous: bool, stream: bool, **kwargs: object) -> None:
+    if not asynchronous:
+        response = litellm.responses(
+            input="Hello", stream=stream, api_key="fake-provider-api-key", num_retries=0, **kwargs
+        )
+        _ = list(response) if stream else response
+        return
+    response = await litellm.aresponses(
+        input="Hello", stream=stream, api_key="fake-provider-api-key", num_retries=0, **kwargs
+    )
+    _ = [event async for event in response] if stream else response
+
+
+@pytest.mark.parametrize("verbosity", ["low", "high"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_bridge_sends_text_verbosity_as_chat_verbosity(
+    verbosity: str, asynchronous: bool, stream: bool, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = _openai_chat_upstream(respx_mock, stream)
+
+    await _bridged_responses_call(
+        asynchronous, stream, model="openai/gpt-5.6", use_chat_completions_api=True, text={"verbosity": verbosity}
+    )
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read()) == {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "verbosity": verbosity,
+        **({"stream": True, "stream_options": {"include_usage": True}} if stream else {}),
+    }
+
+
+_JSON_SCHEMA_TEXT_FORMAT: Final = {
+    "type": "json_schema",
+    "name": "answer",
+    "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+    "strict": True,
+}
+_JSON_SCHEMA_RESPONSE_FORMAT: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "answer",
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+        "strict": True,
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_fields"),
+    [
+        pytest.param(
+            {"verbosity": "low", "format": _JSON_SCHEMA_TEXT_FORMAT},
+            {"response_format": _JSON_SCHEMA_RESPONSE_FORMAT, "verbosity": "low"},
+            id="verbosity-and-format",
+        ),
+        pytest.param(
+            {"format": _JSON_SCHEMA_TEXT_FORMAT}, {"response_format": _JSON_SCHEMA_RESPONSE_FORMAT}, id="format-only"
+        ),
+        pytest.param(None, {}, id="no-text"),
+    ],
+)
+def test_bridge_maps_text_format_alongside_verbosity(
+    text: dict[str, object] | None,
+    expected_fields: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    upstream: Final = _openai_chat_upstream(respx_mock, stream=False)
+
+    litellm.responses(
+        model="openai/gpt-5.6",
+        input="Hello",
+        use_chat_completions_api=True,
+        api_key="fake-provider-api-key",
+        num_retries=0,
+        **({"text": text} if text is not None else {}),
+    )
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read()) == {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "Hello"}],
+        **expected_fields,
+    }
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_bridge_rejects_text_verbosity_the_provider_does_not_support_when_drop_params_is_off(
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = _databricks_chat_upstream(respx_mock)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        await _bridged_responses_call(
+            asynchronous,
+            False,
+            model="databricks/my-custom-model",
+            text={"verbosity": "low"},
+            api_base="https://example.databricks.test/serving-endpoints",
+        )
+
+    assert upstream.call_count == 0, "the provider must not be called with a verbosity it does not support"
+    assert raised.value.status_code == 400
+    assert "verbosity" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("call_kwargs", "global_drop_params", "expected_fields"),
+    [
+        pytest.param({"drop_params": True}, False, {}, id="request-drop-params"),
+        pytest.param({}, True, {}, id="global-drop-params"),
+        pytest.param({"allowed_openai_params": ["verbosity"]}, False, {"verbosity": "low"}, id="allowed-openai-params"),
+    ],
+)
+def test_bridge_text_verbosity_follows_provider_param_validation(
+    call_kwargs: dict[str, object],
+    global_drop_params: bool,
+    expected_fields: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    upstream: Final = _databricks_chat_upstream(respx_mock)
+
+    response: Final = litellm.responses(
+        model="databricks/my-custom-model",
+        input="Hello",
+        text={"verbosity": "low"},
+        api_base="https://example.databricks.test/serving-endpoints",
+        api_key="fake-databricks-api-key",
+        num_retries=0,
+        **call_kwargs,
+    )
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read()) == {
+        "model": "my-custom-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+        **expected_fields,
+    }
+    assert response.output[0].content[0].text == "Answer"
+
+
+def test_native_responses_route_keeps_text_verbosity_nested(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        200,
+        json={
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+    litellm.responses(
+        model="openai/gpt-5.6",
+        input="Hello",
+        text={"verbosity": "low"},
+        api_key="fake-provider-api-key",
+        num_retries=0,
+    )
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read()) == {
+        "model": "gpt-5.6",
+        "input": "Hello",
+        "text": {"verbosity": "low"},
+    }
+
+
+_CLIENT_TOOL_SEARCH: Final = {
+    "type": "tool_search",
+    "execution": "client",
+    "description": "Search the deferred app tools.",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+}
+
+
+@pytest.mark.parametrize("verbosity", ["low", "high"])
+@pytest.mark.asyncio
+async def test_bridge_sends_text_verbosity_on_a_client_tool_search_follow_up_turn(
+    verbosity: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = _openai_chat_upstream(respx_mock, stream=False)
+
+    await _bridged_responses_call(
+        True,
+        False,
+        model="openai/gpt-5.6",
+        use_chat_completions_api=True,
+        previous_response_id="chatcmpl-earlier-turn",
+        tools=[_CLIENT_TOOL_SEARCH],
+        text={"verbosity": verbosity},
+    )
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read()) == {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "tool_search",
+                    "description": _CLIENT_TOOL_SEARCH["description"],
+                    "parameters": _CLIENT_TOOL_SEARCH["parameters"],
+                },
+            }
+        ],
+        "verbosity": verbosity,
+    }

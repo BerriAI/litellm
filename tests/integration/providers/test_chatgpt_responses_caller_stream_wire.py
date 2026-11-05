@@ -392,12 +392,13 @@ def test_extra_body_stream_false_gets_json(rig: _Rig, model: str) -> None:
     _landed(model, identity)
 
 
-def test_string_input_is_refused_by_the_vendor_as_a_400(rig: _Rig, model: str) -> None:
+def test_string_input_reaches_the_vendor_as_one_user_message(rig: _Rig, model: str) -> None:
     marker: Final = uuid.uuid4().hex
     response: Final = _post(rig, "/v1/responses", {"model": model, "input": _prompt(marker), **_NO_CACHE})
-    _assert_error(response, status=400, message=cv.INPUT_MUST_BE_A_LIST)
-    (request,) = rig.wire.drain()
-    assert rv.JSON_OBJECT.validate_json(request.body)["input"] == _prompt(marker), request.body
+    identity: Final = _assert_json_answer(response, marker)
+    forwarded: Final = _only_forwarded(rig, marker)
+    assert forwarded["input"] == [{"role": "user", "content": _prompt(marker)}], forwarded
+    _landed(model, identity)
 
 
 def test_vendor_401_reaches_the_caller_as_401(rig: _Rig, model: str) -> None:

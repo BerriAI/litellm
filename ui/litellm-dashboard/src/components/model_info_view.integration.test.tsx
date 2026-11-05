@@ -1,11 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
+import ModelDeprecationBanner from "@/app/(dashboard)/models-and-endpoints/components/ModelDeprecationBanner";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 vi.mock("./model_info/KubernetesPodsCard", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="kubernetes-pods-card">{modelId}</div>,
 }));
@@ -19,7 +21,6 @@ vi.mock("../../utils/dataUtils", () => ({
 }));
 
 vi.mock("./networking", () => ({
-  modelInfoV1Call: vi.fn(),
   credentialGetCall: vi.fn(),
   credentialListCall: vi.fn(),
   getGuardrailsList: vi.fn(),
@@ -45,9 +46,23 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   useModelCostMap: (...args: any[]) => mockUseModelCostMap(...args),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ accessToken: "test-token", userRole: "Admin" }),
+}));
+
 const mockUseTeams = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/(dashboard)/hooks/users/useUsers")>();
+  return { ...actual, useUserLookup: vi.fn() };
+});
+
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 const mockUsePtuCostAttributionEnabled = vi.fn();
@@ -56,7 +71,6 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () =>
 }));
 
 const mockToast = vi.mocked(toast);
-const mockModelInfoV1Call = vi.mocked(networking.modelInfoV1Call);
 const mockCredentialGetCall = vi.mocked(networking.credentialGetCall);
 const mockCredentialListCall = vi.mocked(networking.credentialListCall);
 const mockGetGuardrailsList = vi.mocked(networking.getGuardrailsList);
@@ -67,6 +81,8 @@ const mockModelPatchUpdateCall = vi.mocked(networking.modelPatchUpdateCall);
 const mockModelDeleteCall = vi.mocked(networking.modelDeleteCall);
 const mockCredentialCreateCall = vi.mocked(networking.credentialCreateCall);
 const mockVectorStoreListCall = vi.mocked(networking.vectorStoreListCall);
+
+const TEST_TODAY = new Date(2026, 10, 4);
 
 describe("ModelInfoView", () => {
   let queryClient: QueryClient;
@@ -109,6 +125,7 @@ describe("ModelInfoView", () => {
       },
     });
     vi.clearAllMocks();
+    vi.mocked(useUserLookup).mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
     mockUsePtuCostAttributionEnabled.mockReturnValue(false);
     mockUseTeams.mockReturnValue({ data: undefined, isLoading: false, error: null });
 
@@ -132,10 +149,6 @@ describe("ModelInfoView", () => {
       data: {},
       isLoading: false,
       error: null,
-    });
-
-    mockModelInfoV1Call.mockResolvedValue({
-      data: [defaultModelData],
     });
 
     mockCredentialGetCall.mockResolvedValue({
@@ -189,6 +202,10 @@ describe("ModelInfoView", () => {
     mockCredentialCreateCall.mockResolvedValue({});
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
@@ -197,6 +214,70 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("Model Settings")).toBeInTheDocument();
     });
+  });
+
+  it("refreshes deprecation banner data after updating model credentials", async () => {
+    const deprecatedResponse = {
+      checked_at: "2026-06-01T00:00:00Z",
+      warn_within_days: 30,
+      deprecated: [
+        {
+          model_name: "old-model",
+          litellm_provider: null,
+          deprecation_date: "2026-06-01",
+          days_until_deprecation: -1,
+          status: "deprecated",
+          successor_model: null,
+        },
+      ],
+      imminent: [],
+      upcoming: [],
+    };
+    const currentResponse = {
+      checked_at: "2026-06-02T00:00:00Z",
+      warn_within_days: 30,
+      deprecated: [],
+      imminent: [
+        {
+          model_name: "current-model",
+          litellm_provider: null,
+          deprecation_date: "2026-11-30",
+          days_until_deprecation: 26,
+          status: "imminent",
+          successor_model: null,
+        },
+      ],
+      upcoming: [],
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(deprecatedResponse))
+      .mockResolvedValueOnce(Response.json(currentResponse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <>
+        <ModelInfoView {...DEFAULT_ADMIN_PROPS} />
+        <ModelDeprecationBanner today={TEST_TODAY} />
+      </>,
+      { wrapper },
+    );
+
+    expect(await screen.findByText("old-model was deprecated on 2026-06-01")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("update-api-key-button"));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByPlaceholderText("Enter the new API key"), {
+      target: { value: "new-api-key" },
+    });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Update API Key" }));
+
+    expect(await screen.findByText("current-model deprecates on 2026-11-30, in 26 days")).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(
+      fetchMock.mock.calls.map(
+        ([input]) => new URL(input instanceof Request ? input.url : String(input), "http://localhost").pathname,
+      ),
+    ).toEqual(["/model/deprecations", "/model/deprecations"]);
   });
 
   it("shows Kubernetes pods for discovery-enabled models", async () => {
@@ -394,7 +475,6 @@ describe("ModelInfoView", () => {
       model_info: { ...defaultModelData.model_info, mode: "chat", key: "anthropic.claude-haiku-4-5" },
     };
     mockUseModelsInfo.mockReturnValue({ data: { data: [displayedModel] }, isLoading: false, error: null });
-    mockModelInfoV1Call.mockResolvedValue({ data: [displayedModel] });
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
     await waitFor(() => {
@@ -869,7 +949,6 @@ describe("ModelInfoView", () => {
 
     const renderWithPtuModel = () => {
       mockUseModelsInfo.mockReturnValue({ data: { data: [ptuModelData] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [ptuModelData] });
       return render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     };
 
@@ -967,7 +1046,6 @@ describe("ModelInfoView", () => {
         model_info: { ...defaultModelData.model_info, team_id: "team-1", input_cost_per_token: 0.0000003 },
       };
       mockUseModelsInfo.mockReturnValue({ data: { data: [seededModel] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [seededModel] });
       const user = userEvent.setup();
       render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
@@ -1008,7 +1086,6 @@ describe("ModelInfoView", () => {
         model_info: { ...ptuModelData.model_info, cost_per_ptu_per_hour: null, ptu_effective_from: null },
       };
       mockUseModelsInfo.mockReturnValue({ data: { data: [halfSetPtuModel] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [halfSetPtuModel] });
       const user = userEvent.setup();
       render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
@@ -1057,7 +1134,6 @@ describe("ModelInfoView", () => {
         model_info: { ...ptuModelData.model_info, ptu_effective_from: null, ptu_effective_to: null },
       };
       mockUseModelsInfo.mockReturnValue({ data: { data: [undatedPtuModel] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [undatedPtuModel] });
       const user = userEvent.setup();
       render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
@@ -1201,7 +1277,6 @@ describe("ModelInfoView", () => {
       isLoading: false,
       error: null,
     });
-    mockModelInfoV1Call.mockResolvedValue({ data: [maskedModelData] });
 
     const user = userEvent.setup();
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
@@ -1500,6 +1575,18 @@ describe("ModelInfoView", () => {
     });
   });
 
+  it("shows the creator alias as a link to the user page", async () => {
+    vi.mocked(useUserLookup).mockReturnValue({
+      data: { user_alias: "Alice", user_email: "alice@example.com" },
+    } as ReturnType<typeof useUserLookup>);
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByRole("link", { name: "Alice" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/users?user=123"),
+    );
+  });
+
   describe("team alias", () => {
     const teamModel = {
       ...defaultModelData,
@@ -1508,7 +1595,6 @@ describe("ModelInfoView", () => {
 
     beforeEach(() => {
       mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
     });
 
     const readRawJson = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -1555,7 +1641,6 @@ describe("ModelInfoView", () => {
 
     it("shows Not Set and no team_alias for a model without a team", async () => {
       mockUseModelsInfo.mockReturnValue({ data: { data: [defaultModelData] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [defaultModelData] });
       mockUseTeams.mockReturnValue({
         data: [{ team_id: "team-1", team_alias: "alpha" }],
         isLoading: false,
@@ -1849,7 +1934,6 @@ describe("ModelInfoView", () => {
 
       beforeEach(() => {
         mockUseModelsInfo.mockReturnValue({ data: { data: [withCacheWriteTiers] }, isLoading: false, error: null });
-        mockModelInfoV1Call.mockResolvedValue({ data: [withCacheWriteTiers] });
       });
 
       it("shows both configured cache write rates per million tokens", async () => {
@@ -1926,7 +2010,6 @@ describe("ModelInfoView", () => {
         model_info: { ...defaultModelData.model_info, team_id: "team-1" },
       };
       mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
       const user = userEvent.setup();
       await enterEditMode(user);
 
@@ -1952,7 +2035,6 @@ describe("ModelInfoView", () => {
         model_info: { ...defaultModelData.model_info, team_id: "team-1" },
       };
       mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
       const user = userEvent.setup();
       await enterEditMode(user);
 
@@ -1992,7 +2074,6 @@ describe("ModelInfoView", () => {
         model_info: { ...defaultModelData.model_info, team_id: "team-1" },
       };
       mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
       const user = userEvent.setup();
       render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole={userRole} />, { wrapper });
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
@@ -2069,7 +2150,6 @@ describe("ModelInfoView", () => {
         litellm_params: litellmParamsWithoutCredential,
       };
       mockUseModelsInfo.mockReturnValue({ data: { data: [modelWithoutCredential] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [modelWithoutCredential] });
       const user = userEvent.setup();
       await enterEditMode(user);
 
@@ -2150,7 +2230,6 @@ describe("ModelInfoView", () => {
         litellm_params: { ...defaultModelData.litellm_params, model: "openai/gpt-4*" },
       };
       mockUseModelsInfo.mockReturnValue({ data: { data: [wildcard] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [wildcard] });
       mockUseModelHub.mockReturnValue({
         data: { data: [{ model_group: "openai/gpt-4o", providers: ["openai"] }] },
         isLoading: false,
@@ -2207,7 +2286,6 @@ describe("ModelInfoView", () => {
           litellm_params: { ...defaultModelData.litellm_params, cache_control_injection_points: points },
         };
         mockUseModelsInfo.mockReturnValue({ data: { data: [data] }, isLoading: false, error: null });
-        mockModelInfoV1Call.mockResolvedValue({ data: [data] });
       };
 
       it("omits the key when the deployment has none and the operator leaves the toggle alone", async () => {
@@ -2330,7 +2408,6 @@ describe("ModelInfoView", () => {
         litellm_params: { ...defaultModelData.litellm_params, cache_read_input_token_cost: 0.000001 },
       };
       mockUseModelsInfo.mockReturnValue({ data: { data: [withCacheRead] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [withCacheRead] });
       const user = userEvent.setup();
       await enterEditMode(user);
       setInputCost("2");
@@ -2365,7 +2442,6 @@ describe("ModelInfoView", () => {
         },
       };
       mockUseModelsInfo.mockReturnValue({ data: { data: [resolved] }, isLoading: false, error: null });
-      mockModelInfoV1Call.mockResolvedValue({ data: [resolved] });
       const user = userEvent.setup();
       await enterEditMode(user);
       setInputCost("5");

@@ -99,6 +99,7 @@ class TestPreCallToolCheckReturnsHeaders:
         server = self._make_server()
 
         proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging.has_pre_call_guardrails.return_value = False
         proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
         proxy_logging.convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
         proxy_logging.pre_call_hook = AsyncMock(return_value={"modified_arguments": {"key": "val"}})
@@ -130,6 +131,7 @@ class TestPreCallToolCheckReturnsHeaders:
         hook_headers = {"Authorization": "Bearer signed-jwt", "X-Trace-Id": "abc123"}
 
         proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging.has_pre_call_guardrails.return_value = False
         proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
         proxy_logging.convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
         proxy_logging.pre_call_hook = AsyncMock(return_value={"extra_headers": hook_headers})
@@ -161,6 +163,7 @@ class TestPreCallToolCheckReturnsHeaders:
         server = self._make_server()
 
         proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging.has_pre_call_guardrails.return_value = False
         proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
         proxy_logging.convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
         proxy_logging.pre_call_hook = AsyncMock(return_value=None)
@@ -193,6 +196,7 @@ class TestPreCallToolCheckReturnsHeaders:
         modified_args = {"key": "modified", "extra": "added"}
 
         proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging.has_pre_call_guardrails.return_value = False
         proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
         proxy_logging.convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
         proxy_logging.pre_call_hook = AsyncMock(return_value={"modified_arguments": modified_args})
@@ -226,6 +230,7 @@ class TestPreCallToolCheckReturnsHeaders:
         hook_headers = {"Authorization": "Bearer jwt"}
 
         proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging.has_pre_call_guardrails.return_value = False
         proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
         proxy_logging.convert_mcp_to_llm_format = MagicMock(return_value={"model": "fake"})
         proxy_logging.pre_call_hook = AsyncMock(return_value={"dummy": True})
@@ -1031,6 +1036,7 @@ class TestMcpRateLimitServerNameSurfacing:
             return {"model": "fake"}
 
         proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging.has_pre_call_guardrails.return_value = False
         proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
         proxy_logging.convert_mcp_to_llm_format = MagicMock(side_effect=capture_convert)
         proxy_logging.pre_call_hook = AsyncMock(return_value=None)
@@ -1467,6 +1473,7 @@ class TestPreCallToolCheckExposesClientHeaders:
             return {"model": "fake"}
 
         proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging.has_pre_call_guardrails.return_value = False
         proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value=MagicMock())
         proxy_logging.convert_mcp_to_llm_format = MagicMock(side_effect=capture)
         proxy_logging.pre_call_hook = AsyncMock(return_value=None)
