@@ -28,6 +28,7 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
+    is_caller_entra_credential_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     is_stream_stall,
@@ -129,6 +130,14 @@ def _trigger_cooldown_for_failed_deployment(
         if is_caller_scoped_auth_failure(deployment, exception_status):
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment %s: caller-scoped OAuth authentication failure.",
+                deployment_id,
+            )
+            return
+        if is_caller_entra_credential_failure(
+            deployment, ctx.default_litellm_params(), model_call_details, exception_status, exception
+        ):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment %s: Entra ID rejected a credential the caller sent.",
                 deployment_id,
             )
             return

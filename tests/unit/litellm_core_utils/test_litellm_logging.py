@@ -14643,3 +14643,50 @@ async def test_a_recovered_attempt_bills_a_failed_agentic_follow_up_but_not_a_fa
     assert own_cost > 0
     assert after_a_dropped_stream == pytest.approx(own_cost)
     assert after_a_failed_follow_up == pytest.approx(own_cost + _FAILED_ATTEMPT[1])
+
+
+def test_standard_logging_payload_reports_the_per_call_prices_the_request_was_billed_from() -> None:
+    """A direct call that sets its own prices is logged at those prices, not at the catalog row's rates."""
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+    from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
+
+    rates: Final = {"input_cost_per_token": 3e-06, "output_cost_per_token": 7e-06}
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    logging_obj: Final = LitellmLogging(
+        model="gpt-5.4-nano",
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=now,
+        litellm_call_id="per-call-prices",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano", user="", optional_params={}, litellm_params=rates, custom_llm_provider="openai"
+    )
+    logging_obj.set_per_call_pricing(per_call_model_info("gpt-5.4-nano", "openai", rates, "chat"))
+    response: Final = ModelResponse(
+        model="gpt-5.4-nano",
+        choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hi"))],
+        usage=litellm.Usage(prompt_tokens=10, completion_tokens=6, total_tokens=16),
+    )
+
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={
+            "model": "gpt-5.4-nano",
+            "custom_llm_provider": "openai",
+            "litellm_params": rates,
+            "response_cost": logging_obj.response_cost_calculator(result=response),
+        },
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(10 * 3e-06 + 6 * 7e-06)
+    model_map_value: Final = payload["model_map_information"]["model_map_value"]
+    assert model_map_value is not None
+    assert (model_map_value["input_cost_per_token"], model_map_value["output_cost_per_token"]) == (3e-06, 7e-06)

@@ -297,7 +297,15 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     reject_recursive_compactor,
     surface_for_call,
 )
-from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
+from litellm.router_strategy.least_busy import (
+    CALL_IDENTITY,
+    SELECTION_RESERVATION_MAX_KEYS,
+    LeastBusyLoggingHandler,
+    call_id_of,
+    owning_picks,
+    pick_reserves,
+    picks_reserve,
+)
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
@@ -321,6 +329,7 @@ from litellm.router_utils.cooldown_handlers import (
     get_cooldown_deployment_info,
     get_cooldown_deployments,
     is_background_response_poll_not_found,
+    is_caller_entra_credential_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     is_failure_outside_selected_deployment,
@@ -1497,13 +1506,14 @@ class PythonCore(DeprecatedRouterMembers):
         (``pass_through``).
         """
         if kind == "pick":
-            return await self._core_async_get_available_deployment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
-                model=model,
-                request_kwargs=request_kwargs if request_kwargs is not None else {},
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-            )
+            with picks_reserve(False):
+                return await self._core_async_get_available_deployment(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
+                    model=model,
+                    request_kwargs=request_kwargs if request_kwargs is not None else {},
+                    messages=messages,
+                    input=input,
+                    specific_deployment=specific_deployment,
+                )
         if kind == "healthy":
             return await self._core_async_get_healthy_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
                 model=model,
@@ -1515,13 +1525,14 @@ class PythonCore(DeprecatedRouterMembers):
                 health_check_probe=health_check_probe,
             )
         if kind == "pass_through":
-            return self._core_get_available_deployment_for_pass_through(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
-                model=model,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-                request_kwargs=request_kwargs,
-            )
+            with picks_reserve(False):
+                return self._core_get_available_deployment_for_pass_through(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
+                    model=model,
+                    messages=messages,
+                    input=input,
+                    specific_deployment=specific_deployment,
+                    request_kwargs=request_kwargs,
+                )
         raise ValueError(f"unknown select kind {kind!r}")
 
     def apply(self, changes: ChangeSet) -> ApplyResult:
@@ -1803,6 +1814,9 @@ class PythonCore(DeprecatedRouterMembers):
         self._core_cache = DualCache(
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
+        self._core_least_busy_reservations: InMemoryCache = InMemoryCache(
+            max_size_in_memory=SELECTION_RESERVATION_MAX_KEYS
+        )
         self._claude_code_session_router_cache: DualCache = DualCache(
             redis_cache=redis_cache,
             in_memory_cache=InMemoryCache(),
@@ -2306,7 +2320,9 @@ class PythonCore(DeprecatedRouterMembers):
         selector: RouterStrategySelector | None = None
         match self._normalize_strategy(strategy):
             case RoutingStrategy.LEAST_BUSY.value:
-                selector = LeastBusyLoggingHandler(router_cache=self._core_cache)
+                selector = LeastBusyLoggingHandler(
+                    router_cache=self._core_cache, reservation_store=self._core_least_busy_reservations
+                )
             case RoutingStrategy.USAGE_BASED_ROUTING.value:
                 selector = LowestTPMLoggingHandler(
                     router_cache=self._core_cache,
@@ -2771,6 +2787,7 @@ class PythonCore(DeprecatedRouterMembers):
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         request_kwargs: dict | None,
+        reserve: bool,
     ) -> Any | None:
         """
         Asks the strategy selector for a deployment. Caller handles
@@ -2786,6 +2803,8 @@ class PythonCore(DeprecatedRouterMembers):
                 ).async_get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
+                    reserve=reserve,
+                    call_id=call_id_of(CALL_IDENTITY.validate_python(request_kwargs or {})),
                 )
             case "usage-based-routing":
                 # `LowestTPMLoggingHandler` (v1) only exposes the sync
@@ -2832,6 +2851,7 @@ class PythonCore(DeprecatedRouterMembers):
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         request_kwargs: dict | None,
+        reserve: bool,
     ) -> Any | None:
         """
         Sync sibling of `_select_deployment_async`. Caller handles
@@ -2850,6 +2870,8 @@ class PythonCore(DeprecatedRouterMembers):
                 ).get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
+                    reserve=reserve,
+                    call_id=call_id_of(CALL_IDENTITY.validate_python(request_kwargs or {})),
                 )
             case "usage-based-routing" | "usage-based-routing-v2":
                 return require_attributes(
@@ -3573,12 +3595,13 @@ class PythonCore(DeprecatedRouterMembers):
             )
 
             # pick the one that is available (lowest TPM/RPM)
-            deployment = self.get_available_deployment(
-                model=model,
-                messages=messages,
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with picks_reserve(True):
+                deployment = self.get_available_deployment(
+                    model=model,
+                    messages=messages,
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
             self._drop_unsupported_classifier_reasoning_effort(
                 deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
                 model=model,
@@ -6154,12 +6177,13 @@ class PythonCore(DeprecatedRouterMembers):
         deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside _image_generation()- model: %s", model)
-            deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
-                model=model,
-                messages=[{"role": "user", "content": "prompt"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with picks_reserve(True):
+                deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
+                    model=model,
+                    messages=[{"role": "user", "content": "prompt"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
 
@@ -6546,37 +6570,38 @@ class PythonCore(DeprecatedRouterMembers):
         **kwargs,
     ):
         messages: Final = [{"role": "user", "content": prompt}]
-        try:
-            kwargs["model"] = model
-            kwargs["prompt"] = prompt
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+        with owning_picks(self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))):
+            try:
+                kwargs["model"] = model
+                kwargs["prompt"] = prompt
+                kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+                kwargs.setdefault("metadata", {}).update({"model_group": model})
 
-            # pick the one that is available (lowest TPM/RPM)
-            with endpoint_selection("text_completion", model=model):
-                deployment: Final = self.get_available_deployment(
-                    model=model,
-                    messages=messages,
-                    specific_deployment=kwargs.pop("specific_deployment", None),
-                    request_kwargs=kwargs,
+                # pick the one that is available (lowest TPM/RPM)
+                with endpoint_selection("text_completion", model=model), picks_reserve(True):
+                    deployment: Final = self.get_available_deployment(
+                        model=model,
+                        messages=messages,
+                        specific_deployment=kwargs.pop("specific_deployment", None),
+                        request_kwargs=kwargs,
+                    )
+
+                data: Final = deployment["litellm_params"].copy()
+                for k, v in self._core_default_litellm_params.items():
+                    if k not in kwargs:  # prioritize model-specific params > default router params
+                        kwargs[k] = v
+                    elif k == "metadata":
+                        kwargs[k].update(v)
+                pinned_model_id: Final = deployment_model_id_pin(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+                if pinned_model_id is not None:
+                    kwargs["model_id"] = pinned_model_id  # rebind-ok: this call's own kwargs, filled like the defaults
+
+                # call via litellm.completion()
+                return self._host.invoke("text_completion")(
+                    **{**data, "prompt": prompt, "caching": self._core_cache_responses, **kwargs}
                 )
-
-            data: Final = deployment["litellm_params"].copy()
-            for k, v in self._core_default_litellm_params.items():
-                if k not in kwargs:  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
-            pinned_model_id: Final = deployment_model_id_pin(_LITELLM_PARAMS_ADAPTER.validate_python(data))
-            if pinned_model_id is not None:
-                kwargs["model_id"] = pinned_model_id  # rebind-ok: this call's own kwargs, filled like the defaults
-
-            # call via litellm.completion()
-            return self._host.invoke("text_completion")(
-                **{**data, "prompt": prompt, "caching": self._core_cache_responses, **kwargs}
-            )
-        except Exception as e:
-            raise e
+            except Exception as e:
+                raise e
 
     async def atext_completion(
         self,
@@ -7719,64 +7744,69 @@ class PythonCore(DeprecatedRouterMembers):
         handler_name: Final = original_function.__name__
         metadata_variable_name: Final = get_router_metadata_variable_name(function_name="generic_api_call")
         deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
-        try:
-            verbose_router_logger.debug("Inside _generic_api_call() - handler: %s, model: %s", handler_name, model)
-            self._update_kwargs_before_fallbacks(
-                model=model,
-                kwargs=kwargs,
-                metadata_variable_name=metadata_variable_name,
-            )
-            with self._video_call_pin(handler_name, kwargs), self._route_capability_pin(handler_name):
-                deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
+        with owning_picks(self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))):
+            try:
+                verbose_router_logger.debug("Inside _generic_api_call() - handler: %s, model: %s", handler_name, model)
+                self._update_kwargs_before_fallbacks(
                     model=model,
-                    messages=kwargs.get("messages", None),
-                    input=kwargs.get("input", None),
-                    specific_deployment=kwargs.pop("specific_deployment", None),
-                    request_kwargs=kwargs,
+                    kwargs=kwargs,
+                    metadata_variable_name=metadata_variable_name,
                 )
-            self._update_kwargs_with_deployment(
-                deployment=deployment,
-                kwargs=kwargs,
-                function_name="generic_api_call",
-                splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
-            )
+                with (
+                    self._video_call_pin(handler_name, kwargs),
+                    self._route_capability_pin(handler_name),
+                    picks_reserve(True),
+                ):
+                    deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
+                        model=model,
+                        messages=kwargs.get("messages", None),
+                        input=kwargs.get("input", None),
+                        specific_deployment=kwargs.pop("specific_deployment", None),
+                        request_kwargs=kwargs,
+                    )
+                self._update_kwargs_with_deployment(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                    function_name="generic_api_call",
+                    splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+                )
 
-            data: Final = deployment["litellm_params"].copy()
-            model_name: Final = data["model"]
+                data: Final = deployment["litellm_params"].copy()
+                model_name: Final = data["model"]
 
-            self.total_calls[model_name] += 1
+                self.total_calls[model_name] += 1
 
-            # For passthrough routes, use the actual model from deployment
-            # and swap model name in endpoint if present
-            if "endpoint" in kwargs and kwargs["endpoint"]:
-                kwargs["endpoint"] = kwargs["endpoint"].replace(model, model_name)
-            kwargs["model"] = model_name
+                # For passthrough routes, use the actual model from deployment
+                # and swap model name in endpoint if present
+                if "endpoint" in kwargs and kwargs["endpoint"]:
+                    kwargs["endpoint"] = kwargs["endpoint"].replace(model, model_name)
+                kwargs["model"] = model_name
 
-            # Perform pre-call checks for routing strategy
-            self.routing_strategy_pre_call_checks(deployment=deployment)
+                # Perform pre-call checks for routing strategy
+                self.routing_strategy_pre_call_checks(deployment=deployment)
 
-            custom_llm_provider: Final = provider_for_generic_call(data)
+                custom_llm_provider: Final = provider_for_generic_call(data)
 
-            response: Final = original_function(
-                **{
-                    **data,
-                    "custom_llm_provider": custom_llm_provider,
-                    "caching": self._core_cache_responses,
-                    **kwargs,
-                }
-            )
+                response: Final = original_function(
+                    **{
+                        **data,
+                        "custom_llm_provider": custom_llm_provider,
+                        "caching": self._core_cache_responses,
+                        **kwargs,
+                    }
+                )
 
-            self.success_calls[model_name] += 1
-            verbose_router_logger.info("%s(model=%s)\x1b[32m 200 OK\x1b[0m", handler_name, model_name)
-            return response
-        except Exception as e:
-            verbose_router_logger.info("%s(model=%s)\x1b[31m Exception %s\x1b[0m", handler_name, model, e)
-            if model is not None:
-                self.fail_calls[model] += 1
-            self._stamp_failed_attempt(
-                e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
-            )
-            raise e
+                self.success_calls[model_name] += 1
+                verbose_router_logger.info("%s(model=%s)\x1b[32m 200 OK\x1b[0m", handler_name, model_name)
+                return response
+            except Exception as e:
+                verbose_router_logger.info("%s(model=%s)\x1b[31m Exception %s\x1b[0m", handler_name, model, e)
+                if model is not None:
+                    self.fail_calls[model] += 1
+                self._stamp_failed_attempt(
+                    e, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), picked=deployment is not None
+                )
+                raise e
 
     def embedding(
         self,
@@ -7800,7 +7830,7 @@ class PythonCore(DeprecatedRouterMembers):
         deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             verbose_router_logger.debug("Inside embedding()- model: %s", model)
-            with embedding_deployment_selection():
+            with embedding_deployment_selection(), picks_reserve(True):
                 deployment = self.get_available_deployment(  # rebind-ok: set on success, see pre-init
                     model=model,
                     input=input,
@@ -8109,68 +8139,71 @@ class PythonCore(DeprecatedRouterMembers):
         Returns:
             VectorStoreCreateResponse
         """
-        try:
-            # If model is None, use the factory function approach (direct SDK call)
-            if model is None:
-                from litellm.vector_stores.main import acreate
+        with owning_picks(self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))):
+            try:
+                # If model is None, use the factory function approach (direct SDK call)
+                if model is None:
+                    from litellm.vector_stores.main import acreate
 
-                # Use the factory function to handle the call
-                factory_fn: Final = self.factory_function(acreate, call_type="avector_store_create")
-                return await factory_fn(**kwargs)
+                    # Use the factory function to handle the call
+                    factory_fn: Final = self.factory_function(acreate, call_type="avector_store_create")
+                    return await factory_fn(**kwargs)
 
-            from litellm.vector_stores import acreate as avector_store_create_sdk
+                from litellm.vector_stores import acreate as avector_store_create_sdk
 
-            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "vector-store-api-fake-text"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
-            data: Final = deployment["litellm_params"].copy()
-            model_name: Final = data["model"]
-            self._update_kwargs_with_deployment(
-                deployment=deployment,
-                kwargs=kwargs,
-                function_name="avector_store_create",
-            )
-
-            model_client: Final = self._get_async_openai_model_client(
-                deployment=deployment,
-                kwargs=kwargs,
-            )
-            self.total_calls[model_name] += 1
-
-            # Get custom provider from deployment params
-            custom_llm_provider = data.get("custom_llm_provider")
-            _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                model=data["model"],
-                custom_llm_provider=custom_llm_provider,
-            )
-            custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
-
-            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
-                response = await avector_store_create_sdk(
-                    **{
-                        **data,
-                        "custom_llm_provider": custom_llm_provider,
-                        "caching": self._core_cache_responses,
-                        "client": model_client,
-                        **kwargs,
-                    }
+                parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
+                deployment: Final = await self._core_async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "vector-store-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
+                data: Final = deployment["litellm_params"].copy()
+                model_name: Final = data["model"]
+                self._update_kwargs_with_deployment(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                    function_name="avector_store_create",
                 )
 
-            self.success_calls[model_name] += 1
-            verbose_router_logger.info("litellm.avector_store_create(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
+                model_client: Final = self._get_async_openai_model_client(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                )
+                self.total_calls[model_name] += 1
 
-            return response
-        except Exception as e:
-            verbose_router_logger.exception(
-                "litellm.avector_store_create(model=%s)\x1b[31m Exception %s\x1b[0m", model, e
-            )
-            if model is not None:
-                self.fail_calls[model] += 1
-            raise e
+                # Get custom provider from deployment params
+                custom_llm_provider = data.get("custom_llm_provider")
+                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
+                    model=data["model"],
+                    custom_llm_provider=custom_llm_provider,
+                )
+                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+
+                async with self._deployment_slot(
+                    deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span
+                ):
+                    response = await avector_store_create_sdk(
+                        **{
+                            **data,
+                            "custom_llm_provider": custom_llm_provider,
+                            "caching": self._core_cache_responses,
+                            "client": model_client,
+                            **kwargs,
+                        }
+                    )
+
+                self.success_calls[model_name] += 1
+                verbose_router_logger.info("litellm.avector_store_create(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
+
+                return response
+            except Exception as e:
+                verbose_router_logger.exception(
+                    "litellm.avector_store_create(model=%s)\x1b[31m Exception %s\x1b[0m", model, e
+                )
+                if model is not None:
+                    self.fail_calls[model] += 1
+                raise e
 
     def _override_vector_store_methods_for_router(self):
         """
@@ -8418,12 +8451,13 @@ class PythonCore(DeprecatedRouterMembers):
         try:
             verbose_router_logger.debug("Inside _acancel_batch()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "batch-api-fake-text"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with picks_reserve(False):
+                deployment: Final = await self._core_async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "batch-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
 
             selected_deployment_id: Final = (deployment.get("model_info") or {}).get("id")
             data: Final = deployment["litellm_params"].copy()
@@ -9578,38 +9612,39 @@ class PythonCore(DeprecatedRouterMembers):
 
         mock_timeout: Final = kwargs.pop("mock_timeout", None)
 
-        try:
-            self._handle_mock_testing_fallbacks(
-                kwargs=kwargs,
-                model_group=model_group,
-                fallbacks=fallbacks,
-                context_window_fallbacks=context_window_fallbacks,
-                content_policy_fallbacks=content_policy_fallbacks,
-            )
+        with owning_picks(self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))):
+            try:
+                self._handle_mock_testing_fallbacks(
+                    kwargs=kwargs,
+                    model_group=model_group,
+                    fallbacks=fallbacks,
+                    context_window_fallbacks=context_window_fallbacks,
+                    content_policy_fallbacks=content_policy_fallbacks,
+                )
 
-            if mock_timeout is not None:
-                response = await self.async_function_with_retries(*args, **kwargs, mock_timeout=mock_timeout)
-            else:
-                response = await self.async_function_with_retries(*args, **kwargs)
-            if verbose_router_logger.isEnabledFor(logging.DEBUG):
-                verbose_router_logger.debug("Async Response: %s", response)
-            response = add_fallback_headers_to_response(
-                response=response,
-                attempted_fallbacks=0,
-            )
-            return response
-        except Exception as e:
-            return await self.async_function_with_fallbacks_common_utils(
-                e,
-                disable_fallbacks,
-                fallbacks,
-                context_window_fallbacks,
-                content_policy_fallbacks,
-                model_group,
-                args,
-                kwargs,
-                include_fallback_errors=include_fallback_errors,
-            )
+                if mock_timeout is not None:
+                    response = await self.async_function_with_retries(*args, **kwargs, mock_timeout=mock_timeout)
+                else:
+                    response = await self.async_function_with_retries(*args, **kwargs)
+                if verbose_router_logger.isEnabledFor(logging.DEBUG):
+                    verbose_router_logger.debug("Async Response: %s", response)
+                response = add_fallback_headers_to_response(
+                    response=response,
+                    attempted_fallbacks=0,
+                )
+                return response
+            except Exception as e:
+                return await self.async_function_with_fallbacks_common_utils(
+                    e,
+                    disable_fallbacks,
+                    fallbacks,
+                    context_window_fallbacks,
+                    content_policy_fallbacks,
+                    model_group,
+                    args,
+                    kwargs,
+                    include_fallback_errors=include_fallback_errors,
+                )
 
     def _handle_mock_testing_fallbacks(
         self,
@@ -10373,8 +10408,9 @@ class PythonCore(DeprecatedRouterMembers):
                 return False
 
             exception_status: Final = getattr(exception, "status_code", "")
+            failure_call_details: Final = _CALL_KWARGS_ADAPTER.validate_python(kwargs)
 
-            if is_caller_timeout_408(kwargs, exception_status):
+            if is_caller_timeout_408(failure_call_details, exception_status):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "A timeout the caller set caused this 408, not the deployment's health."
@@ -10396,6 +10432,18 @@ class PythonCore(DeprecatedRouterMembers):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "Caller-scoped OAuth authentication failed, not the deployment."
+                )
+                return False
+            if is_caller_entra_credential_failure(
+                caller_failure_deployment,
+                self._active_default_litellm_params(),
+                failure_call_details,
+                exception_status,
+                exception,
+            ):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Entra ID rejected a credential the caller sent, not the deployment's own."
                 )
                 return False
 
@@ -10906,6 +10954,7 @@ class PythonCore(DeprecatedRouterMembers):
             messages=None,
             input=None,
             request_kwargs=routing_kwargs,
+            reserve=False,
         )
         if selected is None:
             no_deployment: Final = await async_raise_no_deployment_exception(
@@ -16264,6 +16313,7 @@ class PythonCore(DeprecatedRouterMembers):
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
+                reserve=pick_reserves(default=True),
             )
 
     async def _async_get_available_deployment(
@@ -16273,6 +16323,7 @@ class PythonCore(DeprecatedRouterMembers):
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         specific_deployment: bool | None,
+        reserve: bool,
     ):
         if (
             self._core_routing_strategy != "usage-based-routing-v2"
@@ -16369,6 +16420,7 @@ class PythonCore(DeprecatedRouterMembers):
                     messages=messages,
                     input=input,
                     request_kwargs=request_kwargs,
+                    reserve=reserve and request_kwargs not in (None, {}),
                 )
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(
@@ -16538,6 +16590,7 @@ class PythonCore(DeprecatedRouterMembers):
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                reserve=pick_reserves(default=False) and request_kwargs not in (None, {}),
             )
 
             if deployment is None:
@@ -17415,6 +17468,7 @@ class PythonCore(DeprecatedRouterMembers):
             messages=messages,
             input=input,
             request_kwargs=request_kwargs,
+            reserve=pick_reserves(default=False) and request_kwargs not in (None, {}),
         )
 
         if deployment is None:
@@ -17595,6 +17649,7 @@ class PythonCore(DeprecatedRouterMembers):
             messages=messages,
             input=input,
             request_kwargs=request_kwargs,
+            reserve=pick_reserves(default=False) and request_kwargs not in (None, {}),
         )
 
         if deployment is None:
