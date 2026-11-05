@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formatdate
 from functools import partial, reduce
 from itertools import takewhile
 from operator import attrgetter
@@ -1952,6 +1953,7 @@ class ProxyLogging:
         self.daily_report_started: bool = False
         self.hanging_requests_check_started: bool = False
         self.deprecation_check_started: bool = False
+        self.deprecation_email_check_started: bool = False
 
     def startup_event(
         self,
@@ -1995,6 +1997,20 @@ class ProxyLogging:
             self.hanging_requests_check_started = True
 
         self._ensure_deprecation_check_scheduled()
+        self._ensure_deprecation_email_check_scheduled()
+
+    def _ensure_deprecation_email_check_scheduled(self) -> None:
+        """The email event opt-in controls reminders independently of Slack integration settings."""
+        if self.deprecation_email_check_started:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        from litellm.integrations.model_deprecation_email import run_scheduled_model_deprecation_emails
+
+        asyncio.create_task(run_scheduled_model_deprecation_emails())
+        self.deprecation_email_check_started = True
 
     def _ensure_deprecation_check_scheduled(self) -> None:
         """Alerting can be configured at startup or by a later config reload, so schedule from either path"""
@@ -2041,6 +2057,7 @@ class ProxyLogging:
 
         if updated_slack_alerting is True:
             self._ensure_deprecation_check_scheduled()
+            self._ensure_deprecation_email_check_scheduled()
             self.slack_alerting_instance.update_values(
                 alerting=self.alerting,
                 alerting_threshold=self.alerting_threshold,
@@ -8263,7 +8280,9 @@ async def send_email(
     receiver_email: str | None = None,
     subject: str | None = None,
     html: str | None = None,
-):
+    text: str | None = None,
+    message_id: str | None = None,
+) -> bool:
     """
     smtp_host,
     smtp_port,
@@ -8289,16 +8308,21 @@ async def send_email(
         raise ValueError(f"No HTML body provided for SMTP email. {html}")
 
     ## EMAIL SETUP ##
-    email_message: Final = MIMEMultipart()
+    email_message: Final = MIMEMultipart("alternative" if text is not None else "mixed")
     email_message["From"] = sender_email
     email_message["To"] = receiver_email
     email_message["Subject"] = subject
+    if message_id is not None:
+        email_message["Message-ID"] = message_id
+        email_message["Date"] = formatdate(usegmt=True)
     verbose_proxy_logger.debug("sending email from %s to %s", sender_email, receiver_email)
 
     if smtp_host is None:
         raise ValueError("Trying to use SMTP, but SMTP_HOST is not set")
 
     # Attach the body to the email
+    if text is not None:
+        email_message.attach(MIMEText(text, "plain"))
     email_message.attach(MIMEText(html, "html"))
 
     try:
@@ -8317,6 +8341,8 @@ async def send_email(
 
     except Exception as e:
         verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
+        return False
+    return True
 
 
 def hash_token(token: str):
