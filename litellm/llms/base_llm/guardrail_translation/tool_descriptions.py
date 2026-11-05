@@ -3,37 +3,20 @@ from __future__ import annotations
 import copy
 import functools
 import itertools
-from collections.abc import Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypeAlias
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from typing import Final, TypeAlias, TypeVar
 
 from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter, ValidationError
-
-from litellm.llms.base_llm.guardrail_translation.utils import (
-    effective_scan_only_tool_results_for_guardrail,
-    unappliable_request_rewrite,
-)
-from litellm.types.utils import GenericGuardrailAPIInputs
-
-if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+from typing_extensions import TypeIs  # noqa: TID251  # narrows JSON in place without copying it
 
 DescriptionPath: TypeAlias = tuple[str | int, ...]
 _Located: TypeAlias = tuple[DescriptionPath, JsonValue]
 
 _TOOLS: Final = TypeAdapter(list[JsonValue])
+_Tool = TypeVar("_Tool")  # rebind-ok: a TypeVar is declared by plain assignment
 
-
-def effective_scan_tool_descriptions_as_text_for_guardrail(guardrail_to_apply: CustomGuardrail) -> bool:
-    return (
-        guardrail_to_apply.supports_scan_tool_descriptions_as_text()
-        and getattr(guardrail_to_apply, "scan_tool_descriptions_as_text", None) is True
-        and not effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
-    )
-
-
-_TOOL_SCHEMA_KEYS: Final = ("parameters", "input_schema", "parametersJsonSchema", "parameters_json_schema")
-_DECLARATION_KEYS: Final = ("functionDeclarations", "function_declarations")
+_TOOL_SCHEMA_KEYS: Final = ("parameters", "input_schema")
 _SUBSCHEMA_KEYWORDS: Final = (
     "items",
     "additionalItems",
@@ -76,12 +59,6 @@ def _tool_holders(tool: JsonValue, path: DescriptionPath) -> Iterator[tuple[Desc
     yield path, tool
     if isinstance(function := tool.get("function"), dict):
         yield (*path, "function"), function
-    member_keys: Final = ("tools", *_DECLARATION_KEYS) if tool.get("type") == "namespace" else _DECLARATION_KEYS
-    for key in member_keys:
-        if isinstance(members := tool.get(key), list):
-            for index, member in enumerate(members):
-                if isinstance(member, dict):
-                    yield (*path, key, index), member
 
 
 def _schemas(
@@ -117,74 +94,64 @@ def _own_description(node: Mapping[str, JsonValue], path: DescriptionPath) -> It
         yield (*path, "description"), description
 
 
-def _child(node: JsonValue, key: str | int) -> JsonValue:
-    if isinstance(node, dict) and isinstance(key, str):
+def _is_object(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON keys are str  # mutable-ok: rewritten in place
+    return isinstance(value, dict)
+
+
+def _is_array(
+    value: object,
+) -> TypeIs[list[object]]:  # guard-ok: isinstance narrowing  # mutable-ok: rewritten in place
+    return isinstance(value, list)
+
+
+def _child(node: object, key: str | int) -> object:
+    if _is_object(node) and isinstance(key, str):
         return node.get(key)
-    if isinstance(node, list) and isinstance(key, int) and 0 <= key < len(node):
+    if _is_array(node) and isinstance(key, int) and 0 <= key < len(node):
         return node[key]
     return None
 
 
-def with_replaced_descriptions(tools: Sequence[JsonValue], replacements: Mapping[DescriptionPath, str]) -> JsonValue:
+def with_replaced_descriptions(
+    tools: Sequence[_Tool], replacements: Mapping[DescriptionPath, str]
+) -> list[_Tool]:  # mutable-ok: GenericGuardrailAPIInputs.tools is declared as a list
     rewritten: Final = copy.deepcopy(list(tools))
     for path, text in replacements.items():
         holder = functools.reduce(_child, path[:-1], rewritten)
-        if isinstance(holder, dict) and isinstance(key := path[-1], str):
+        if _is_object(holder) and isinstance(key := path[-1], str):
             holder[key] = text
     return rewritten
 
 
-async def scan_tool_descriptions(
-    data: dict[str, object],  # mutable-ok: apply_guardrail contract takes the request body as a dict
-    guardrail_to_apply: CustomGuardrail,
-) -> dict[str, object]:  # mutable-ok: pre-call hooks hand the request body on as a dict
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+async def scanned_tool_descriptions(
+    tools: Sequence[_Tool],
+    scan_text: Callable[[str], Awaitable[str]],
+    guardrail_name: str | None,
+) -> list[_Tool] | None:  # mutable-ok: GenericGuardrailAPIInputs.tools is declared as a list
+    """Run ``scan_text`` over every tool and schema ``description`` in OpenAI-format ``tools``.
 
-    if not effective_scan_tool_descriptions_as_text_for_guardrail(guardrail_to_apply):
-        return data
-    raw_tools: Final = data.get("tools")
-    if not isinstance(raw_tools, list) or not raw_tools:
-        return data
+    Returns the tools with changed descriptions written back at their original paths,
+    or None when nothing changed. ``scan_text`` blocks by raising.
+    """
     try:
-        tools: Final = _TOOLS.validate_python(raw_tools)
+        validated: Final = _TOOLS.validate_python(tools)
     except ValidationError as error:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "tool_descriptions_unscannable",
                 "message": (
-                    f"Guardrail '{guardrail_to_apply.guardrail_name}' has scan_tool_descriptions_as_text on, "
-                    "but tools[] is not plain JSON or is nested too deeply to read, so the request was rejected "
-                    "rather than sent with unscanned tool descriptions"
+                    f"Guardrail '{guardrail_name}' has scan_tool_descriptions_as_text on, but tools[] is not "
+                    "plain JSON or is nested too deeply to read, so the request was rejected rather than sent "
+                    "with unscanned tool descriptions"
                 ),
             },
         ) from error
-    entries: Final = tool_description_entries(tools)
-    if not entries:
-        return data
-    inputs: Final = GenericGuardrailAPIInputs(texts=[text for _, text in entries])
-    model: Final = data.get("model")
-    if isinstance(model, str):
-        inputs["model"] = model
-    logging_obj: Final = data.get("litellm_logging_obj")
-    guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(  # pyright: ignore[reportUnknownMemberType]  # apply_guardrail types request_data as a bare dict
-        inputs=inputs,
-        request_data=data,
-        input_type="request",
-        logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
-    )
-    returned_texts: Final = guardrailed_inputs.get("texts")
-    if returned_texts is None:
-        return data
-    if len(returned_texts) != len(entries):
-        raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
-    replacements: Final = {
-        path: new_text
-        for (path, old_text), new_text in zip(entries, returned_texts, strict=True)
-        if new_text != old_text
-    }
-    if not replacements:
-        return data
-    rewritten_tools: Final = with_replaced_descriptions(tools, replacements)
-    data["tools"] = rewritten_tools  # rebind-ok: the deployment hook reads only messages back from a returned dict
-    return data
+    replacements: Final[dict[DescriptionPath, str]] = {}  # mutable-ok: filled one scan at a time
+    for path, text in tool_description_entries(validated):
+        scanned = await scan_text(text)
+        if scanned != text:
+            replacements[path] = scanned
+    return with_replaced_descriptions(tools, replacements) if replacements else None

@@ -9,6 +9,7 @@
 
 
 import asyncio
+import functools
 import json
 import re
 import threading
@@ -32,6 +33,7 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
 from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none
+from litellm.llms.base_llm.guardrail_translation.tool_descriptions import scanned_tool_descriptions
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -253,9 +255,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
 
-    def supports_scan_tool_descriptions_as_text(self) -> bool:
-        return True
-
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
@@ -283,6 +282,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_score_thresholds: dict[PiiEntityType | str, float] | None = None,
         presidio_entities_deny_list: list[PiiEntityType | str] | None = None,
         presidio_analyze_chunk_size_bytes: int | None = None,
+        scan_tool_descriptions_as_text: bool | None = None,
         _callback_role: Literal["scan", "restore"] | None = None,
         **kwargs,
     ):
@@ -299,6 +299,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.output_parse_pii = output_parse_pii or False
         self.apply_to_output = apply_to_output
         self._callback_role = _callback_role
+        self.scan_tool_descriptions_as_text: Final = scan_tool_descriptions_as_text is True
 
         # When output_parse_pii or apply_to_output is enabled, the guardrail must
         # also run on post_call to unmask/mask the response.  Expand the event_hook
@@ -1839,6 +1840,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     request_data=request_data or {},
                 )
                 new_texts.append(modified_text)
+            tools: Final = inputs.get("tools")
+            if tools and input_type == "request" and self.scan_tool_descriptions_as_text:
+                scanned_tools: Final = await scanned_tool_descriptions(
+                    tools,
+                    functools.partial(
+                        self.check_pii,  # pyright: ignore[reportUnknownMemberType]  # check_pii types request_data as a bare dict
+                        output_parse_pii=self.output_parse_pii,
+                        presidio_config=None,
+                        request_data=request_data or {},
+                    ),
+                    self.guardrail_name,
+                )
+                if scanned_tools is not None:
+                    inputs["tools"] = scanned_tools  # rebind-ok: returned to the translation handler, like texts
         inputs["texts"] = new_texts
         return inputs
 

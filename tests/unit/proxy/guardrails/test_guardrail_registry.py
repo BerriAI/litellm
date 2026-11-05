@@ -1518,9 +1518,7 @@ class TestLoggingOnlyScopeValidation:
 
     def test_invalid_continue_flag_raises_without_tolerance(self) -> None:
         with pytest.raises(ValidationError):
-            LitellmParams(
-                guardrail="test", mode="logging_only", logging_only_continue_on_input_failure="banana"
-            )
+            LitellmParams(guardrail="test", mode="logging_only", logging_only_continue_on_input_failure="banana")
 
     def test_invalid_scope_literal_does_not_tolerate_other_litellm_params_errors(self) -> None:
         with pytest.raises(ValidationError):
@@ -1997,23 +1995,24 @@ async def test_rotate_guardrail_params_gives_up_on_a_row_that_keeps_changing(mon
     ],
     ids=["panw_prisma_airs", "presidio"],
 )
-def test_scan_tool_descriptions_as_text_is_accepted_on_text_guardrails(params: Mapping[str, str]) -> None:
-    guardrail = TestScanOnlyToolResultsInitRefusal()._initialize(
-        f"{params['guardrail']}-tool-scan", {**params, "scan_tool_descriptions_as_text": True}
-    )
-
-    assert guardrail is not None
-    assert guardrail["litellm_params"].scan_tool_descriptions_as_text is True
-
-
-def test_scan_tool_descriptions_as_text_is_rejected_on_other_guardrails() -> None:
-    with pytest.raises(ValueError, match="only supported on panw_prisma_airs and presidio"):
-        TestScanOnlyToolResultsInitRefusal()._initialize(
-            "generic-tool-scan",
-            {
-                "guardrail": "generic_guardrail_api",
-                "mode": "pre_call",
-                "api_base": "http://localhost:8092",
-                "scan_tool_descriptions_as_text": True,
-            },
+@pytest.mark.parametrize(("setting", "expected"), [(None, False), (False, False), (True, True)])
+def test_scan_tool_descriptions_as_text_reaches_the_text_guardrail_callback(
+    params: Mapping[str, str], setting: bool | None, expected: bool
+) -> None:
+    name: Final = f"{params['guardrail']}-tool-scan-{setting}"
+    extra: Final = {} if setting is None else {"scan_tool_descriptions_as_text": setting}
+    lists: Final = _all_callback_lists()
+    snapshots: Final = [list(cb_list) for cb_list in lists]
+    try:
+        InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail={"guardrail_name": name, "litellm_params": LitellmParams.model_validate({**params, **extra})},
         )
+        callbacks: Final = [
+            cb for cb in _all_callback_lists()[0] if isinstance(cb, CustomGuardrail) and cb.guardrail_name == name
+        ]
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+    assert callbacks
+    assert {getattr(cb, "scan_tool_descriptions_as_text", None) for cb in callbacks} == {expected}

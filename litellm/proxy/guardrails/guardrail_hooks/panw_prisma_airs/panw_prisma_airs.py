@@ -27,6 +27,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.tool_descriptions import scanned_tool_descriptions
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
@@ -213,6 +214,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         mask_request_content: bool = False,
         mask_response_content: bool = False,
         include_masked_response_on_block: object = False,
+        scan_tool_descriptions_as_text: object = False,
         app_name: str | None = None,
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
@@ -271,6 +273,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # them through unvalidated, so a bare "false" must not be treated as truthy.
         self.include_masked_response_on_block: Final[bool] = _parse_bool_setting(
             "include_masked_response_on_block", include_masked_response_on_block
+        )
+        self.scan_tool_descriptions_as_text: Final[bool] = _parse_bool_setting(
+            "scan_tool_descriptions_as_text", scan_tool_descriptions_as_text
         )
         # Coerce defensively. The dashboard UI persists this field as a JSON
         # string, and Pydantic extras (the path that splats model_dump into
@@ -1798,9 +1803,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def supports_scan_only_tool_results(self) -> bool:
         return False
 
-    def supports_scan_tool_descriptions_as_text(self) -> bool:
-        return True
-
     def supports_structured_messages(self) -> bool:
         return False
 
@@ -1832,6 +1834,55 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         stray field from the chat completion body that should be ignored.
         """
         return rd.get("name") if ("arguments" in rd or "mcp_arguments" in rd) else None
+
+    async def _scanned_text(
+        self,
+        text: str,
+        *,
+        is_response: bool,
+        metadata: Mapping[str, object],
+        call_id: object,
+        request_data: dict[str, object],  # mutable-ok: scan ids and error logging are recorded on the request
+        start_time: datetime,
+    ) -> str:
+        """Scan one text with AIRS: return it (masked if AIRS masked it) or raise when blocked."""
+        scan_result: Final = await self._call_panw_api(
+            content=text,
+            is_response=is_response,
+            metadata=metadata,
+            call_id=call_id,
+        )
+
+        # Handle API errors (transient/config)
+        if scan_result.get("_is_transient") or scan_result.get("_always_block"):
+            event_type: Final = GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call
+            self._handle_api_error_with_logging(
+                scan_result=scan_result,
+                data=request_data,
+                start_time=start_time,
+                event_type=event_type,
+                is_response=is_response,
+            )
+            # If we reach here, fallback_on_error="allow"
+            return text
+
+        self._record_scan_id(
+            request_data,
+            scan_result,
+            GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call,
+        )
+
+        action: Final = scan_result.get("action", "block")
+        masked_text: Final = self._get_masked_text(scan_result, is_response=is_response)
+
+        if action == "allow":
+            return masked_text if masked_text else text
+        if masked_text and (
+            (is_response and self.mask_response_content) or (not is_response and self.mask_request_content)
+        ):
+            return masked_text
+        error_detail: Final = self._build_error_detail(scan_result, is_response=is_response)
+        raise HTTPException(status_code=400, detail=error_detail)
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -1949,45 +2000,33 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 new_texts.append(text)
                 continue
 
-            scan_result = await self._call_panw_api(
-                content=text,
-                is_response=is_response,
-                metadata=metadata,
-                call_id=call_id,
-            )
-
-            # Handle API errors (transient/config)
-            if scan_result.get("_is_transient") or scan_result.get("_always_block"):
-                event_type = GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call
-                self._handle_api_error_with_logging(
-                    scan_result=scan_result,
-                    data=request_data,
-                    start_time=start_time,
-                    event_type=event_type,
+            new_texts.append(
+                await self._scanned_text(
+                    text,
                     is_response=is_response,
+                    metadata=metadata,
+                    call_id=call_id,
+                    request_data=request_data,
+                    start_time=start_time,
                 )
-                # If we reach here, fallback_on_error="allow"
-                new_texts.append(text)
-                continue
-
-            self._record_scan_id(
-                request_data,
-                scan_result,
-                GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call,
             )
 
-            action = scan_result.get("action", "block")
-            masked_text = self._get_masked_text(scan_result, is_response=is_response)
-
-            if action == "allow":
-                new_texts.append(masked_text if masked_text else text)
-            elif masked_text and (
-                (is_response and self.mask_response_content) or (not is_response and self.mask_request_content)
-            ):
-                new_texts.append(masked_text)
-            else:
-                error_detail = self._build_error_detail(scan_result, is_response=is_response)
-                raise HTTPException(status_code=400, detail=error_detail)
+        tools: Final = inputs.get("tools")
+        if tools and not is_response and self.scan_tool_descriptions_as_text:
+            scanned_tools: Final = await scanned_tool_descriptions(
+                tools,
+                functools.partial(
+                    self._scanned_text,
+                    is_response=False,
+                    metadata=metadata,
+                    call_id=call_id,
+                    request_data=request_data,
+                    start_time=start_time,
+                ),
+                self.guardrail_name,
+            )
+            if scanned_tools is not None:
+                inputs["tools"] = scanned_tools  # rebind-ok: returned to the translation handler, like texts
 
         # Scan tool call arguments — same masking policy as texts.
         # In-place modifications propagate for pre-call and OpenAI post-call.

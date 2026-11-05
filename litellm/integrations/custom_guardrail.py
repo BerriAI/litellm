@@ -298,7 +298,6 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
-
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
 
@@ -1245,9 +1244,6 @@ class CustomGuardrail(CustomLogger):
         silently scanning nothing on every request.
         """
         return True
-
-    def supports_scan_tool_descriptions_as_text(self) -> bool:
-        return False
 
     def structured_messages_cover_full_request(self) -> bool:
         """Whether returned ``structured_messages`` span the whole request.

@@ -164,10 +164,11 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             _callback_role="scan",
         )
         params.update(overrides)
-        # Passed outside the heterogeneous params dict so the argument keeps
-        # its precise int | None type.
+        # Passed outside the heterogeneous params dict so the arguments keep
+        # their precise types.
         callback: Final = OPTIONAL_PresidioPIIMasking(
             presidio_analyze_chunk_size_bytes=litellm_params.presidio_analyze_chunk_size_bytes,
+            scan_tool_descriptions_as_text=litellm_params.scan_tool_descriptions_as_text is True,
             **params,
         )
         litellm.logging_callback_manager.add_litellm_callback(callback)
@@ -285,6 +286,7 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         mask_request_content=getattr(litellm_params, "mask_request_content", False),
         mask_response_content=getattr(litellm_params, "mask_response_content", False),
         include_masked_response_on_block=getattr(litellm_params, "include_masked_response_on_block", False),  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is untyped in this function; pydantic extras require getattr
+        scan_tool_descriptions_as_text=getattr(litellm_params, "scan_tool_descriptions_as_text", False),  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is untyped in this function; pydantic extras require getattr
         app_name=getattr(litellm_params, "app_name", None),
         fallback_on_error=getattr(litellm_params, "fallback_on_error", "block"),
         # `timeout` is now declared on BaseLitellmParams (Optional[float] = None),

@@ -10,12 +10,15 @@ additionally be raw SSE frames, which are scanned for detection (a blocking
 guardrail raises) without rewriting the frames.
 """
 
+import copy
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional
 
 from pydantic import TypeAdapter
+from typing_extensions import TypeIs  # noqa: TID251  # narrows JSON in place without copying it
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -23,7 +26,12 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamTransformSink,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+    unappliable_request_rewrite,
+)
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.types.llms.openai import ChatCompletionToolParam, ChatCompletionToolParamFunctionChunk
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -33,6 +41,78 @@ if TYPE_CHECKING:
 
 _EMPTY_REQUEST_DATA: Final[Mapping[str, object]] = MappingProxyType({})
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+_DECLARATION_KEYS: Final = ("functionDeclarations", "function_declarations")
+_DECLARATION_SCHEMA_KEYS: Final = ("parameters", "parametersJsonSchema", "parameters_json_schema")
+
+
+@dataclass(frozen=True, slots=True)
+class _Declaration:
+    source: dict[str, object]  # mutable-ok: masked descriptions are written back into the request's declaration
+    schema_key: str | None
+    tool: ChatCompletionToolParam
+
+
+def _declaration(source: dict[str, object]) -> _Declaration:  # mutable-ok: see _Declaration.source
+    schema_key: Final = next((key for key in _DECLARATION_SCHEMA_KEYS if isinstance(source.get(key), dict)), None)
+    function: Final = ChatCompletionToolParamFunctionChunk(name=str(source.get("name") or ""))
+    if isinstance(description := source.get("description"), str):
+        function["description"] = description
+    if schema_key is not None and _is_object(schema := source.get(schema_key)):
+        function["parameters"] = copy.deepcopy(schema)
+    return _Declaration(
+        source=source, schema_key=schema_key, tool=ChatCompletionToolParam(type="function", function=function)
+    )
+
+
+def _is_object(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON keys are str  # mutable-ok: rewritten in place
+    return isinstance(value, dict)
+
+
+def _is_array(
+    value: object,
+) -> TypeIs[list[object]]:  # guard-ok: isinstance narrowing  # mutable-ok: rewritten in place
+    return isinstance(value, list)
+
+
+def _request_declarations(data: object) -> tuple[_Declaration, ...]:
+    tools: Final = _field(data, "tools")
+    if not _is_array(tools):
+        return ()
+    return tuple(  # comprehension-ok: flattens tools[].functionDeclarations[] in request order
+        _declaration(declaration)
+        for tool in tools
+        if _is_object(tool)
+        for key in _DECLARATION_KEYS
+        if _is_array(declarations := tool.get(key))
+        for declaration in declarations
+        if _is_object(declaration)
+    )
+
+
+def _write_back_declaration(declaration: _Declaration, guardrailed: object) -> None:
+    sent: Final = _field(declaration.tool, "function")
+    returned: Final = _field(guardrailed, "function")
+    description: Final = _field(returned, "description")
+    if isinstance(description, str) and description != _field(sent, "description"):
+        declaration.source["description"] = description  # rebind-ok: in-place request rewrite
+    parameters: Final = _field(returned, "parameters")
+    if declaration.schema_key is not None and _is_object(parameters) and parameters != _field(sent, "parameters"):
+        declaration.source[declaration.schema_key] = parameters  # rebind-ok: in-place request rewrite
+
+
+def _write_back_declarations(
+    declarations: Sequence[_Declaration], guardrailed_tools: Sequence[object] | None, guardrail_name: str | None
+) -> None:
+    if guardrailed_tools is None:
+        return
+    if len(guardrailed_tools) != len(declarations):
+        raise unappliable_request_rewrite(guardrail_name)
+    for declaration, guardrailed in zip(declarations, guardrailed_tools, strict=True):
+        _write_back_declaration(declaration, guardrailed)
 
 
 def _field(container: object, name: str) -> object | None:
@@ -174,6 +254,11 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
             if isinstance(model, str)
             else GenericGuardrailAPIInputs(texts=_texts_payload(_part_texts(text_parts)))
         )
+        declarations: Final = (
+            () if effective_scan_only_tool_results_for_guardrail(guardrail_to_apply) else _request_declarations(data)  # pyright: ignore[reportUnknownArgumentType]  # data is typed as a bare dict by BaseTranslation
+        )
+        if declarations:
+            inputs["tools"] = [declaration.tool for declaration in declarations]
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=data,
@@ -181,6 +266,8 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
         _write_back_texts(text_parts, guardrailed_inputs.get("texts"))
+        if declarations:
+            _write_back_declarations(declarations, guardrailed_inputs.get("tools"), guardrail_to_apply.guardrail_name)
         return data
 
     async def process_output_response(
