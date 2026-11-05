@@ -6,12 +6,23 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"reflect"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
 
 const endpointFallbackCreate = "/fallback"
+
+// fallbackReadBackDelays are the waits between read-backs after a fallback write. GET /fallback/{model}
+// answers from the in-memory router of whichever replica serves it, and replicas reload fallbacks from
+// the database only every proxy_config_reload_interval_seconds (30 s by default), so on a multi-replica
+// proxy the first read-back often reaches a replica that has not loaded the write yet. The waits add up
+// to 45 s, longer than one default reload.
+var fallbackReadBackDelays = []time.Duration{
+	1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 10 * time.Second, 10 * time.Second, 10 * time.Second,
+}
 
 type FallbackGetResponse struct {
 	Model          string   `json:"model"`
@@ -85,7 +96,44 @@ func upsertLiteLLMFallback(d *schema.ResourceData, m interface{}, action string)
 	}
 
 	d.SetId(d.Get("model").(string))
-	return resourceLiteLLMFallbackRead(d, m)
+	return readFallbackAfterWrite(d, m)
+}
+
+// readFallbackAfterWrite reads a fallback back after POST /fallback, retrying while the proxy answers 404
+// or still returns the previous fallback_models, since the read can reach a replica that has not reloaded
+// the write yet (see fallbackReadBackDelays). A refresh keeps treating 404 as removed, through
+// resourceLiteLLMFallbackRead, so drift is still detected.
+func readFallbackAfterWrite(d *schema.ResourceData, m interface{}) error {
+	id := d.Id()
+	want := expandStringList(d.Get("fallback_models").([]interface{}))
+
+	for attempt := 0; ; attempt++ {
+		if err := resourceLiteLLMFallbackRead(d, m); err != nil {
+			return err
+		}
+		got := expandStringList(d.Get("fallback_models").([]interface{}))
+		if d.Id() != "" && reflect.DeepEqual(got, want) {
+			return nil
+		}
+		if attempt == len(fallbackReadBackDelays) {
+			break
+		}
+		delay := fallbackReadBackDelays[attempt]
+		if d.Id() == "" {
+			log.Printf("[INFO] Fallback for model %s not visible yet (replica not reloaded), retrying in %v", id, delay)
+		} else {
+			log.Printf("[INFO] Fallback for model %s still shows %v instead of %v, retrying in %v", id, got, want, delay)
+		}
+		// the read cleared the ID and may have stored the old models; put back what was written
+		d.SetId(id)
+		if err := d.Set("fallback_models", want); err != nil {
+			return err
+		}
+		time.Sleep(delay)
+	}
+
+	d.SetId(id)
+	return fmt.Errorf("fallback for model %s was written but not read back with fallback_models %v after %d attempts; the proxy may still be reloading it, so re-running apply should resolve this", id, want, len(fallbackReadBackDelays)+1)
 }
 
 func resourceLiteLLMFallbackCreate(d *schema.ResourceData, m interface{}) error {
