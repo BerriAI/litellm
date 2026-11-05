@@ -16,6 +16,9 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -38,9 +41,6 @@ class ZscalerAIGuard(CustomGuardrail):
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
         ]
-
-    def supports_scan_only_tool_results(self) -> bool:
-        return False
 
     def __init__(
         self,
@@ -248,17 +248,19 @@ class ZscalerAIGuard(CustomGuardrail):
         verbose_proxy_logger.debug("ZscalerAIGuard: Successfully applied guardrail.")
         return inputs
 
-    @staticmethod
     def _content_to_scan(
+        self,
         inputs: GenericGuardrailAPIInputs,
         input_type: Literal["request", "response"],
     ) -> str | None:
         structured_messages: Final = inputs.get("structured_messages") or []
-        has_chat_completions_rows: Final = any("content" in message for message in structured_messages)
+        scans_last_user_turn: Final = (
+            input_type == "request"
+            and not effective_scan_only_tool_results_for_guardrail(self)
+            and any("content" in message for message in structured_messages)
+        )
         texts: Final = (
-            ZscalerAIGuard._last_user_turn_texts(structured_messages)
-            if input_type == "request" and has_chat_completions_rows
-            else inputs.get("texts", [])
+            self._last_user_turn_texts(structured_messages) if scans_last_user_turn else inputs.get("texts", [])
         )
         return " ".join(texts) if texts else None
 

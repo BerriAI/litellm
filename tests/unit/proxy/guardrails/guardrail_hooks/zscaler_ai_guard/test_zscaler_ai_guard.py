@@ -151,7 +151,9 @@ _CONVERSATION: Final = [
 
 
 async def _execute_policy_bodies(
-    inputs: GenericGuardrailAPIInputs, input_type: Literal["request", "response"]
+    inputs: GenericGuardrailAPIInputs,
+    input_type: Literal["request", "response"],
+    scan_only_tool_results: bool = False,
 ) -> tuple[object, ...]:
     received: Final = asyncio.Queue[object]()
 
@@ -161,13 +163,27 @@ async def _execute_policy_bodies(
 
     app: Final = web.Application()
     app.router.add_post("/v1/detection/execute-policy", execute_policy)
+    handler: Final = InMemoryGuardrailHandler()
     async with TestServer(app) as server:
-        guardrail: Final = ZscalerAIGuard(
-            api_key="test_key",
-            api_base=str(server.make_url("/v1/detection/execute-policy")),
-            policy_id=1,
-        )
-        returned: Final = await guardrail.apply_guardrail(inputs, {}, input_type)
+        guardrail_id: Final = handler.initialize_guardrail(
+            guardrail={
+                "guardrail_name": "zscaler-last-user-turn",
+                "litellm_params": {
+                    "guardrail": "zscaler_ai_guard",
+                    "mode": "pre_call",
+                    "api_key": "test_key",
+                    "api_base": str(server.make_url("/v1/detection/execute-policy")),
+                    "policy_id": 1,
+                    "scan_only_tool_results": scan_only_tool_results,
+                },
+            },
+        )["guardrail_id"]
+        try:
+            guardrail: Final = handler.guardrail_id_to_custom_guardrail[guardrail_id]
+            assert guardrail is not None
+            returned: Final = await guardrail.apply_guardrail(inputs, {}, input_type)
+        finally:
+            handler.delete_in_memory_guardrail(guardrail_id)
 
     assert returned is inputs
     return tuple(received.get_nowait() for _ in range(received.qsize()))
@@ -272,19 +288,30 @@ async def test_response_scan_sends_every_text() -> None:
     assert bodies == ({"direction": "OUT", "content": "First choice. Second choice.", "policyId": 1},)
 
 
-def test_scan_only_tool_results_is_rejected_at_initialization() -> None:
-    with pytest.raises(ValueError, match="never scans tool results"):
-        InMemoryGuardrailHandler().initialize_guardrail(
-            guardrail={
-                "guardrail_name": "zscaler-tool-results-only",
-                "litellm_params": {
-                    "guardrail": "zscaler_ai_guard",
-                    "mode": "pre_call",
-                    "api_key": "test_key",
-                    "scan_only_tool_results": True,
-                },
+@pytest.mark.asyncio
+async def test_scan_only_tool_results_sends_the_tool_results() -> None:
+    inputs: Final = GenericGuardrailAPIInputs(
+        texts=["Sunny, 22C"],
+        structured_messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    }
+                ],
             },
-        )
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny, 22C"},
+        ],
+    )
+
+    bodies: Final = await _execute_policy_bodies(inputs, "request", scan_only_tool_results=True)
+
+    assert bodies == ({"direction": "IN", "content": "Sunny, 22C", "policyId": 1},)
 
 
 @pytest.mark.asyncio
