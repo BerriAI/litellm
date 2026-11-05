@@ -12972,6 +12972,37 @@
   },
   "logs": {
     "common": {
+      "errorCodes": {
+        "badRequest": "400 - Bad Request",
+        "invalidAuthentication": "401 - Invalid Authentication",
+        "permissionDenied": "403 - Permission Denied",
+        "notFound": "404 - Not Found",
+        "requestTimeout": "408 - Request Timeout",
+        "unprocessableEntity": "422 - Unprocessable Entity",
+        "rateLimited": "429 - Rate Limited",
+        "internalServerError": "500 - Internal Server Error",
+        "badGateway": "502 - Bad Gateway",
+        "serviceUnavailable": "503 - Service Unavailable",
+        "overloaded": "529 - Overloaded"
+      },
+      "spanTypes": {
+        "llm": "LLM",
+        "agent": "Agent",
+        "mcp": "MCP",
+        "batch": "Batch"
+      },
+      "credentials": {
+        "clientOauthToken": "Client OAuth token",
+        "configuredKey": "Configured key"
+      },
+      "quickSelect": {
+        "lastMinute": "Last Minute",
+        "last15Minutes": "Last 15 Minutes",
+        "lastHour": "Last Hour",
+        "last4Hours": "Last 4 Hours",
+        "last24Hours": "Last 24 Hours",
+        "last7Days": "Last 7 Days"
+      },
       "podRouting": {
         "roundRobin": "Round robin",
         "sessionAffinity": "Session affinity",
@@ -13377,6 +13408,7 @@
         "note": "Note: This will only affect new requests after the configuration change."
       },
       "tools": {
+        "fallbackName": "Tool {{index}}",
         "title": "Tools",
         "summary": "{{provided}} provided, {{called}} called",
         "called": "called",
@@ -13509,6 +13541,15 @@
         "filtersDescription": "Narrow down request logs"
       },
       "filters": {
+        "search": "Search",
+        "statusOptions": {
+          "success": "Success",
+          "failure": "Failure"
+        },
+        "cacheOptions": {
+          "hit": "Cache Hit",
+          "miss": "Cache Miss"
+        },
         "teamId": "Team ID",
         "teamPlaceholder": "Search or select a team",
         "noTeams": "No teams found",
@@ -13589,6 +13630,13 @@
       }
     },
     "audit": {
+      "actionOptions": {
+        "created": "Created",
+        "updated": "Updated",
+        "deleted": "Deleted",
+        "rotated": "Rotated",
+        "killSwitchFired": "Kill switch fired"
+      },
       "panel": {
         "enterpriseTitle": "✨ Enterprise Feature.",
         "enterpriseDescription": "This is a LiteLLM Enterprise feature, and requires a valid key to use.",
@@ -13973,6 +14021,14 @@
       "weekOf": "Wk of {{date}}"
     },
     "breakdownChart": {
+      "granularityOptions": {
+        "day": "Daily",
+        "week": "Weekly"
+      },
+      "scaleOptions": {
+        "linear": "Linear",
+        "log": "Log"
+      },
       "metricNoun": {
         "spend": "spend",
         "tokens": "tokens",
@@ -13990,12 +14046,27 @@
       "loadingTopModels": "Loading top models"
     },
     "breakdown": {
+      "metricOptions": {
+        "spend": "Spend",
+        "tokens": "Tokens",
+        "requests": "Requests"
+      },
+      "dimensionOptions": {
+        "modelGroups": "Model",
+        "models": "Deployment",
+        "providers": "Provider"
+      },
       "metricLabel": "Metric",
       "groupByLabel": "Group by",
       "empty": "No usage in this range",
       "byProvider": "by {{provider}}"
     },
     "topAgents": {
+      "metricOptions": {
+        "tokens": "Tokens",
+        "spend": "Spend",
+        "requests": "Requests"
+      },
       "viewActivity": "View activity",
       "tokens": "{{tokens}} tokens",
       "viewAgentUsage": "View {{agent}} usage",
@@ -14006,6 +14077,9 @@
       "metricLabel": "Agent metric"
     },
     "agentCatalog": {
+      "labels": {
+        "claudeUnspecified": "Claude (unspecified)"
+      },
       "descriptions": {
         "claudeDesktop": "Anthropic's desktop assistant",
         "claudeCode": "Anthropic's coding agent",
@@ -14033,6 +14107,28 @@
       }
     },
     "errors": {
+      "entityLabels": {
+        "key": {
+          "singular": "Virtual key",
+          "plural": "Virtual keys"
+        },
+        "team": {
+          "singular": "Team",
+          "plural": "Teams"
+        },
+        "user": {
+          "singular": "User",
+          "plural": "Users"
+        },
+        "model": {
+          "singular": "Model",
+          "plural": "Models"
+        }
+      },
+      "rateViews": {
+        "total": "Total",
+        "status": "By status code"
+      },
       "entities": {
         "title": "Failures by identity",
         "subtitle": "Keys, teams, users and models ranked by failed requests",
@@ -14165,6 +14261,17 @@
       }
     },
     "entitySummary": {
+      "titles": {
+        "ptuHours": "PTU Hours",
+        "totalCost": "Total Cost",
+        "totalSpend": "Total Spend",
+        "totalRequests": "Total Requests",
+        "successfulRequests": "Successful Requests",
+        "failedRequests": "Failed Requests",
+        "totalTokens": "Total Tokens",
+        "requestCost": "Request Cost",
+        "flatCost": "Flat Cost"
+      },
       "tooltips": {
         "totalCost": "Request cost plus flat cost for reserved capacity. Select this tile to see the breakdown.",
         "requestCost": "Usage-based cost of the requests this entity sent during the selected period, priced per token.",
@@ -14174,6 +14281,14 @@
     },
     "entityUsage": {
       "chart": {
+        "granularityOptions": {
+          "day": "Daily",
+          "week": "Weekly"
+        },
+        "scaleOptions": {
+          "linear": "Linear",
+          "log": "Log"
+        },
         "flatCostSeries": "Flat cost",
         "metricTitle": {
           "spend": "Spend",
@@ -14259,6 +14374,10 @@
       "noUser": "(no user)"
     },
     "topModelView": {
+      "viewOptions": {
+        "table": "Table View",
+        "chart": "Chart View"
+      },
       "columns": {
         "model": "Model",
         "spendUsd": "Spend (USD)",
@@ -14286,6 +14405,8 @@
         "noData": "No endpoint usage data"
       },
       "barChart": {
+        "successful": "Successful",
+        "failed": "Failed",
         "title": "Success vs Failed Requests by Endpoint"
       },
       "lineChart": {
@@ -14296,6 +14417,7 @@
       "unknownModel": "Unknown model",
       "unknownProvider": "Unknown provider",
       "errors": {
+        "narrowRange": "Narrow the date range to fewer than 1,000 requests to see complete client usage",
         "selectUserOrTeam": "Select a user or team to view client usage",
         "incompleteData": "The proxy returned incomplete client usage data",
         "outsideUser": "The proxy returned usage outside the selected user",
@@ -14361,6 +14483,10 @@
       "loadMoreFailed": "Could not load more keys."
     },
     "topKeys": {
+      "viewOptions": {
+        "table": "Table View",
+        "chart": "Chart View"
+      },
       "keyNotInDatabase": "This key is no longer in the database (deleted, or a CLI/SSO session key), so its details can't be opened",
       "columns": {
         "keyId": "Key ID",
@@ -14554,6 +14680,10 @@
       }
     },
     "userAgentActivity": {
+      "viewOptions": {
+        "activeUsers": "Active users",
+        "perUser": "Per user"
+      },
       "noActiveUsers": "No active users in this period",
       "weekLabel": "Week {{number}}",
       "monthLabel": "Month {{number}}",
@@ -14694,6 +14824,10 @@
         "helps": "Which pages and tabs get used"
       }
     }
+  },
+  "promptCacheUsage": {
+    "readTooltip": "Input tokens read from the LLM provider's prompt cache (e.g. Anthropic / OpenAI), billed at a discounted rate. Reported by the provider.",
+    "creationTooltip": "Input tokens written to the LLM provider's prompt cache for reuse by later requests."
   },
   "organizations": {
     "view": {

@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -68,6 +69,7 @@ function ResponseCacheIndicator() {
 }
 
 function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
+  const { t } = useTranslation();
   if (usage?.servedFromResponseCache) {
     return <ResponseCacheIndicator />;
   }
@@ -80,7 +82,7 @@ function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
       {readTokens > 0 && (
         <MetricItem
           label="Cache Read"
-          tooltip={PROMPT_CACHE_READ_TOOLTIP}
+          tooltip={t(PROMPT_CACHE_READ_TOOLTIP)}
           icon={<Database className="size-3" aria-hidden="true" />}
           value={String(readTokens)}
         />
@@ -89,7 +91,7 @@ function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
       {creationTokens > 0 && (
         <MetricItem
           label="Cache Write"
-          tooltip={PROMPT_CACHE_CREATION_TOOLTIP}
+          tooltip={t(PROMPT_CACHE_CREATION_TOOLTIP)}
           icon={<DatabaseBackup className="size-3" aria-hidden="true" />}
           value={String(creationTokens)}
         />
