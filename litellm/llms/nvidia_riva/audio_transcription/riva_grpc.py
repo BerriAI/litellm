@@ -10,6 +10,7 @@ from typing import Any, Final, TypeAlias
 
 import grpc
 from google.protobuf.message import Message
+from pydantic import TypeAdapter
 
 from litellm.llms.nvidia_riva.audio_transcription import riva_asr_schema as schema
 from litellm.llms.nvidia_riva.common_utils import NvidiaRivaException
@@ -21,6 +22,8 @@ _CHUNK_SAMPLES: Final = 1600
 _CHUNK_BYTES: Final = _CHUNK_SAMPLES * 2
 
 CallMetadata: TypeAlias = tuple[tuple[str, str], ...]
+
+_ENDPOINTING_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
 def call_metadata(api_key: str | None, nvcf_function_id: object) -> CallMetadata:
@@ -53,13 +56,11 @@ def recognition_config(config: Mapping[str, Any]) -> Message:
 
 
 def _endpointing_config(endpointing: object) -> Message | None:
-    if not isinstance(endpointing, dict) or not endpointing:
-        return None
-    fields: Final[Mapping[str, object]] = endpointing
     try:
-        return schema.EndpointingConfig(**fields)
+        fields: Final = _ENDPOINTING_FIELDS.validate_python(endpointing)
+        return schema.EndpointingConfig(**fields) if fields else None
     except (ValueError, TypeError):
-        # An unknown or mistyped field falls back to Riva's default
+        # A missing, unknown or mistyped field falls back to Riva's default
         # endpointing rather than failing the whole request.
         return None
 
