@@ -141,6 +141,9 @@ async def publish_plugin(
     )
     if isinstance(version, PluginPublicationError):
         return version
+    current_manifest: Final = _MANIFEST.validate_json(current.manifest_json or "{}") if current is not None else {}
+    same_source: Final = current is not None and current_manifest.get("source") == publication.manifest.get("source")
+    review: Final = publication.review or (read_plugin_review(current_manifest) if same_source else None)
     publisher: Final = publication.review.approved_by if publication.review is not None else publication.created_by
     manifest_json: Final = json.dumps(
         {
@@ -151,7 +154,7 @@ async def publish_plugin(
             },
             "version": version,
             **({"_litellm_published_by": publisher} if publisher is not None else {}),
-            **({"_litellm_review": asdict(publication.review)} if publication.review is not None else {}),
+            **({"_litellm_review": asdict(review)} if review is not None else {}),
         }
     )
     if publication.content is not None and verified_archive(publication.content, manifest_json) is None:
@@ -181,7 +184,7 @@ async def publish_plugin(
             created.updated_at or timestamp,
             created.created_at,
             created.created_by,
-            publication.review,
+            review,
             publisher,
         )
     previous_archive: Final = await tx.litellm_claudecodepluginupload.find_unique(where={"plugin_name": current.name})
@@ -193,11 +196,7 @@ async def publish_plugin(
     history_count: Final = await tx.litellm_claudecodepluginversion.count(where={"plugin_id": current.id}, take=1)
     if history_count == 0:
         await _snapshot(tx, current, previous_content, None)
-    unchanged_content: Final = (
-        previous_content
-        if _MANIFEST.validate_json(current.manifest_json or "{}").get("source") == publication.manifest.get("source")
-        else None
-    )
+    unchanged_content: Final = previous_content if same_source else None
     content: Final = publication.content if publication.content is not None else unchanged_content
     updated: Final = await tx.litellm_claudecodeplugintable.update(where={"id": current.id}, data=data)
     if updated is None:
@@ -221,6 +220,6 @@ async def publish_plugin(
         updated.updated_at or timestamp,
         updated.created_at,
         updated.created_by,
-        publication.review,
+        review,
         publisher,
     )

@@ -150,10 +150,17 @@ async def test_first_legacy_update_preserves_its_original_snapshot(
     }
 
 
-@pytest.mark.parametrize("review", [None, PluginReview("reviewer@example.test", True)])
+@pytest.mark.parametrize("same_source", (True, False))
+@pytest.mark.parametrize("review", [None, PluginReview("reviewer@example.test", False)])
 @pytest.mark.asyncio
-async def test_publication_replaces_untrusted_or_stale_review_metadata(publication_tx: MagicMock, review: PluginReview | None) -> None:
-    current = publication_tx.litellm_claudecodeplugintable.find_unique.return_value
+async def test_publication_preserves_only_trusted_review_for_unchanged_source(
+    publication_tx: MagicMock, review: PluginReview | None, same_source: bool,
+) -> None:
+    original = publication_tx.litellm_claudecodeplugintable.find_unique.return_value
+    stored_review = {"approved_by": "original-reviewer", "security_scan_passed": True}
+    stored_manifest = {**json.loads(original.manifest_json), "_litellm_review": stored_review}
+    current = original.model_copy(update={"manifest_json": json.dumps(stored_manifest)})
+    publication_tx.litellm_claudecodeplugintable.find_unique.return_value = current
 
     async def update(where: Mapping[str, str], data: Mapping[str, object]) -> LiteLLM_ClaudeCodePluginTable:
         return current.model_copy(update=dict(data))
@@ -163,14 +170,19 @@ async def test_publication_replaces_untrusted_or_stale_review_metadata(publicati
         cast(PluginPublicationTransaction, publication_tx),
         PluginPublication("skill", None, "updated", {
             "_litellm_review": {"approved_by": "forged", "security_scan_passed": True},
-            "source": {"source": "github", "repo": "example/skills"},
+            "source": stored_manifest["source"] if same_source else {"source": "github", "repo": "example/skills"},
         }, "author", review=review),
         PluginPublicationBase(current.id, current.updated_at),
     )
     assert isinstance(result, PublishedPlugin)
     manifest = json.loads(publication_tx.litellm_claudecodeplugintable.update.call_args.kwargs["data"]["manifest_json"])
     assert manifest["_litellm_published_by"] == (review.approved_by if review else "author")
-    if review is None:
-        assert "_litellm_review" not in manifest
-    else:
-        assert manifest["_litellm_review"] == {"approved_by": review.approved_by, "security_scan_passed": True}
+    expected = (
+        {"approved_by": review.approved_by, "security_scan_passed": review.security_scan_passed} if review
+        else stored_review if same_source else None
+    )
+    assert manifest.get("_litellm_review") == expected
+    assert (None if result.review is None else {
+        "approved_by": result.review.approved_by, "security_scan_passed": result.review.security_scan_passed,
+    }) == expected
+    assert json.loads(publication_tx.litellm_claudecodepluginversion.create.call_args.kwargs["data"]["manifest_json"]).get("_litellm_review") == expected

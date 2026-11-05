@@ -1,6 +1,6 @@
 import type { SkillListQuery } from "@/components/claude_code_plugins/types";
 import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
-import { useSkillFilters } from "@/components/claude_code_plugins/skillCatalog";
+import { useSkillFilters, skillSortQuery } from "@/components/claude_code_plugins/skillCatalog";
 import React, { useState } from "react";
 import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { Trans, useTranslation } from "react-i18next";
@@ -121,8 +121,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
     query: filters.search,
     tag: filters.tag,
     security_scan_passed: scanResultFilter(filters.scan),
-    sort_by: filters.sortBy,
-    sort_order: filters.sortOrder,
+    ...skillSortQuery(sorting),
   };
   const plugins = useQuery({
     queryKey: [...queryScope, "published", catalogQuery],

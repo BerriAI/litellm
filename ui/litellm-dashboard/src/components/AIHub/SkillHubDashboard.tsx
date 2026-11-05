@@ -6,10 +6,16 @@ import { DataTable } from "@/components/shared/DataTable";
 import { getSkillHubTableColumns } from "@/components/AIHub/SkillHubTableColumns";
 import SkillDetail, { legacySkillDetail } from "@/components/claude_code_plugins/skill_detail";
 import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
-import { useSkillFilters, matchesSkillFilters, skillTags } from "@/components/claude_code_plugins/skillCatalog";
+import {
+  useSkillFilters,
+  matchesSkillFilters,
+  skillTags,
+  SKILL_SORT_FIELDS,
+} from "@/components/claude_code_plugins/skillCatalog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const ALL_DOMAINS = "__all_domains__";
+const DASHBOARD_SORT_FIELDS = [...SKILL_SORT_FIELDS, "category", "domain", "enabled"];
 
 interface SkillHubDashboardProps {
   skills: Plugin[];
@@ -50,7 +56,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   onPublishSuccess,
 }) => {
   const { t } = useTranslation();
-  const filters = useSkillFilters();
+  const filters = useSkillFilters(DASHBOARD_SORT_FIELDS);
   const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined);
   const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
 

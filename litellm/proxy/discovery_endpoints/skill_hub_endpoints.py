@@ -34,7 +34,7 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
     enable_plugin,
     get_plugin_downloads,
     header_key_caller,
-    list_plugins,
+    list_visible_plugins,
     plugin_archive_source_matches,
     plugin_archive_url,
     plugin_downloader,
@@ -151,7 +151,7 @@ async def list_skills(
     sort_order: Literal["asc", "desc"] = "asc",
 ) -> SkillHubList:
     """Browse the caller's public and granted private skills."""
-    catalog: Final = await list_plugins(enabled_only=False, user_api_key_dict=caller)
+    catalog: Final = await list_visible_plugins(enabled_only=False, user_api_key_dict=caller)
     needle: Final = query.strip().casefold()
     selected_tag: Final = tag.strip().casefold()
     matched: Final = tuple(

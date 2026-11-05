@@ -667,6 +667,7 @@ async def register_plugin(
     response_model=ListPluginsResponse,
 )
 async def list_plugins(
+    uploads: PluginUploadRepositoryDep,
     enabled_only: bool = False,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> ListPluginsResponse:
@@ -679,6 +680,17 @@ async def list_plugins(
     Returns:
         List of plugins with their metadata.
     """
+    catalog: Final = await list_visible_plugins(enabled_only, user_api_key_dict)
+    if uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    counts: Final = await uploads.download_counts(tuple(plugin.id for plugin in catalog.plugins))
+    return ListPluginsResponse(
+        plugins=[plugin.model_copy(update={"download_count": counts.get(plugin.id, 0)}) for plugin in catalog.plugins],
+        count=catalog.count,
+    )
+
+
+async def list_visible_plugins(enabled_only: bool, user_api_key_dict: UserAPIKeyAuth) -> ListPluginsResponse:
     try:
         prisma_client: Final = await get_prisma_client()
 

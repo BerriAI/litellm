@@ -1,4 +1,5 @@
 import type { SkillListQuery } from "./types";
+import type { SortingState } from "@tanstack/react-table";
 import { parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable/useUrlTableState";
 import { matchesSearchTerm } from "@/utils/searchUtils";
@@ -17,19 +18,28 @@ export interface SkillCatalogMetadata {
   keywords?: string[] | null;
 }
 
+export const SKILL_SORT_FIELDS = [
+  "name",
+  "download_count",
+  "created_at",
+  "updated_at",
+  "created_by",
+  "approved_by",
+  "security_scan_passed",
+] as const satisfies readonly NonNullable<SkillListQuery["sort_by"]>[];
+
+export function skillSortQuery(sorting: SortingState): Pick<SkillListQuery, "sort_by" | "sort_order"> {
+  return {
+    sort_by: SKILL_SORT_FIELDS.find((field) => field === sorting[0]?.id) ?? "name",
+    sort_order: sorting[0]?.desc ? "desc" : "asc",
+  };
+}
+
 const CATALOG_STATE: UrlTableStateOptions<never> = {
   keyPrefix: "skills_",
   defaultPageSize: 50,
   maxPageSize: 100,
-  sortFields: [
-    "name",
-    "download_count",
-    "created_at",
-    "updated_at",
-    "created_by",
-    "approved_by",
-    "security_scan_passed",
-  ],
+  sortFields: SKILL_SORT_FIELDS,
   defaultSort: { id: "name", desc: false },
   filterColumns: [],
 };
@@ -39,8 +49,8 @@ const FILTER_PARSERS = {
 };
 const FILTER_OPTIONS = { urlKeys: { tag: "skills_filter_tag", scan: "skills_filter_scan" } };
 
-export function useSkillFilters() {
-  const table = useUrlTableState(CATALOG_STATE);
+export function useSkillFilters(sortFields: readonly string[] = SKILL_SORT_FIELDS) {
+  const table = useUrlTableState({ ...CATALOG_STATE, sortFields });
   const [filters, setFilters] = useQueryStates(FILTER_PARSERS, FILTER_OPTIONS);
   const update = (next: { tag?: string; scan?: ScanFilter } | null) => {
     void setFilters(next);
@@ -48,8 +58,6 @@ export function useSkillFilters() {
   };
   return {
     ...table,
-    sortOrder: table.sorting[0].desc ? ("desc" as const) : ("asc" as const),
-    sortBy: table.sorting[0].id as NonNullable<SkillListQuery["sort_by"]>,
     ...filters,
     setTag: (tag: string) => update({ tag }),
     setScan: (scan: ScanFilter) => update({ scan }),

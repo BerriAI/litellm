@@ -196,20 +196,23 @@ def _assert_portable(response: httpx.Response) -> None:
         assert stat.S_IMODE(archive.getinfo("scripts/check.sh").external_attr >> 16) == 0o755
 
 
+@pytest.mark.parametrize("route", (f"{HUB}?limit=1", "/claude-code/plugins"))
 @pytest.mark.parametrize("key", (MASTER_KEY, PLAIN_KEY))
 async def test_catalog_counts_are_batched_for_the_page(
-    hub: HubClient, key: str,
+    hub: HubClient, key: str, route: str,
 ) -> None:
     assert (await _upload(hub, _zip(FILES))).status_code == 200
     record: Final = _stored_upload(hub)
     hub.plugins.find_many.return_value = [record, record.model_copy(update={"id": "other", "name": "zzz-other"})]
     hub.database.query_raw.reset_mock()
     hub.database.query_raw.return_value = [{"id": record.id, "download_count": 7}]
-    response: Final = await hub.client.get(f"{HUB}?limit=1", headers=_headers(key))
+    response: Final = await hub.client.get(route, headers=_headers(key))
     assert response.status_code == 200, response.text
-    assert [(item["id"], item["download_count"]) for item in response.json()["skills"]] == [(record.id, 7)]
+    items: Final = response.json()["plugins" if route == "/claude-code/plugins" else "skills"]
+    expected: Final = {record.id: 7, "other": 0} if route == "/claude-code/plugins" else {record.id: 7}
+    assert {item["id"]: item["download_count"] for item in items} == expected
     assert hub.database.query_raw.await_count == 1
-    assert hub.database.query_raw.await_args.args[1] == (record.id,)
+    assert set(hub.database.query_raw.await_args.args[1]) == set(expected)
     assert (await hub.client.get(f"{HUB}?offset=2", headers=_headers(key))).json()["skills"] == []
     assert hub.database.query_raw.await_count == 1
 
