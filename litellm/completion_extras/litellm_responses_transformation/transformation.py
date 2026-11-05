@@ -239,19 +239,23 @@ def _drops_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool
 
 
 def _messages_in_cache_mark_dialect(
-    model: str,
+    named_models: Sequence[str],
     messages: Sequence["AllMessageValues"],
     optional_params: Mapping[str, object],
     litellm_params: Mapping[str, object],
     model_info: Mapping[str, object] | None,
 ) -> Sequence["AllMessageValues"]:
-    if not AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
-        model,
-        _served_provider(litellm_params),
-        litellm_params.get("api_base"),
-        optional_params.get("prompt_cache_options"),
-        model_info,
-    ):
+    reads_breakpoints: Final = any(
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            name,
+            _served_provider(litellm_params),
+            litellm_params.get("api_base"),
+            optional_params.get("prompt_cache_options"),
+            model_info,
+        )
+        for name in named_models
+    )
+    if not reads_breakpoints:
         return messages
     return tuple(AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages)
 
@@ -1200,7 +1204,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
             _messages_in_cache_mark_dialect(
-                model,
+                named_models,
                 messages,
                 cast(Mapping[str, object], optional_params),  # cast-ok: upcast of the untyped params dict
                 litellm_params,

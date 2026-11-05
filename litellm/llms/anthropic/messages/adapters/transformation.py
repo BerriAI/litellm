@@ -265,6 +265,7 @@ class AnthropicAdapter:
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
         drop_params: bool = True,
+        keeps_cache_control: bool = False,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
         Translate Anthropic request params to OpenAI format, returning tool name mapping.
@@ -295,7 +296,7 @@ class AnthropicAdapter:
         (
             translated_body,
             tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        ) = LiteLLMAnthropicMessagesAdapter(keeps_cache_control=keeps_cache_control).translate_anthropic_to_openai(
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
@@ -380,8 +381,8 @@ _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.va
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self):
-        pass
+    def __init__(self, keeps_cache_control: bool = False) -> None:
+        self._keeps_cache_control: Final = keeps_cache_control
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -419,6 +420,8 @@ class LiteLLMAnthropicMessagesAdapter:
         source: object,
         target: object,
         model: str | None,
+        *,
+        has_prompt_cache_breakpoint_slot: bool = True,
     ) -> None:
         """
         Extract cache_control from source and add to target if it should be preserved.
@@ -437,7 +440,8 @@ class LiteLLMAnthropicMessagesAdapter:
         cache_control: Final = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.target_consumes_cache_control(model):
+        keeps_as_breakpoint: Final = self._keeps_cache_control and has_prompt_cache_breakpoint_slot
+        if cache_control and model and (keeps_as_breakpoint or self.target_consumes_cache_control(model)):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -592,7 +596,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                     "type": "text",
                                     "text": content.get("text", ""),
                                 }
-                                self._add_cache_control_if_applicable(content, text_block, model)
+                                self._add_cache_control_if_applicable(
+                                    content, text_block, model, has_prompt_cache_breakpoint_slot=False
+                                )
                                 if "cache_control" in text_block:
                                     has_cache_control_in_text = True
                                 assistant_content_list.append(text_block)
@@ -619,7 +625,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                     type="function",
                                     function=function_chunk,
                                 )
-                                self._add_cache_control_if_applicable(content, tool_call, model)
+                                self._add_cache_control_if_applicable(
+                                    content, tool_call, model, has_prompt_cache_breakpoint_slot=False
+                                )
                                 tool_calls.append(tool_call)
                             elif content.get("type") == "thinking":
                                 # Anthropic's schema has no cache_control on thinking or
@@ -883,7 +891,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
             tool_param = _chat_tool_param(function_chunk, tool)
-            self._add_cache_control_if_applicable(tool, tool_param, model)
+            self._add_cache_control_if_applicable(tool, tool_param, model, has_prompt_cache_breakpoint_slot=False)
             new_tools.append(tool_param)
 
         return new_tools, tool_name_mapping

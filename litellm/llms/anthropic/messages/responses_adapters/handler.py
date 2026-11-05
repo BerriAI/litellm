@@ -12,7 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
-    AnthropicCacheControlHook,
+    call_targets_openai_prompt_cache_breakpoint,
     routed_model_info,
     supports_openai_prompt_cache_breakpoint,
 )
@@ -181,17 +181,6 @@ def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: objec
     return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
 
 
-def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
-    provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    return AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
-        model,
-        provider if isinstance(provider, str) else None,
-        forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url"),
-        forwarded_kwargs.get("prompt_cache_options"),
-        routed_model_info(forwarded_kwargs.get("model_info")),
-    )
-
-
 def _model_takes_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
     provider: Final = forwarded_kwargs.get("custom_llm_provider")
     provider_name: Final = provider if isinstance(provider, str) else None
@@ -221,7 +210,7 @@ def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, objec
     """Client cache marks become breakpoints for a deployment that reads them, and a model that takes no breakpoints
     drops raw ones under drop_params."""
     drops_params: Final = drops_unsupported_params(forwarded_kwargs.get("drop_params"))
-    if _reads_prompt_cache_breakpoint(model, forwarded_kwargs):
+    if call_targets_openai_prompt_cache_breakpoint(model, forwarded_kwargs):
         return (
             _cache_control_as_wire_safe_prompt_cache_breakpoint
             if drops_params

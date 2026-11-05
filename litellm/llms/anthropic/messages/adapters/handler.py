@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.anthropic_cache_control_hook import call_targets_openai_prompt_cache_breakpoint
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -397,6 +398,12 @@ ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 ########################################################
 
 
+def _target_reads_prompt_cache_breakpoint(model: str, call_kwargs: Mapping[str, object]) -> bool:
+    base_model: Final = call_kwargs.get("base_model")
+    named_models: Final = (model, base_model) if isinstance(base_model, str) and base_model else (model,)
+    return any(call_targets_openai_prompt_cache_breakpoint(name, call_kwargs) for name in named_models)
+
+
 def _record_bridged_model_response(logging_obj: LiteLLMLoggingObject | None, completion_response: object) -> None:
     if logging_obj is not None and isinstance(completion_response, ModelResponse):
         logging_obj.record_bridged_model_response(completion_response)
@@ -678,6 +685,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
             drop_params=drop_params,
+            keeps_cache_control=_target_reads_prompt_cache_breakpoint(model, extra_kwargs),
         )
 
         if openai_request is None:

@@ -6170,6 +6170,69 @@ def test_transform_request_still_folds_a_string_system_message_behind_an_unmarke
     assert _roles_and_texts(request["input"]) == [("system", ["Stable prefix"]), ("user", ["hi"])]
 
 
+def _mantle_marked_texts(model: str, messages: list[object], **litellm_params: object) -> set[tuple[object, object]]:
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=cast(List[AllMessageValues], messages),  # cast-ok: the test builds chat messages as plain mappings
+        optional_params={},
+        litellm_params={"custom_llm_provider": "bedrock_mantle", **litellm_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    return {(role, text) for role, text, _ in _marked_parts_of(request["input"])}
+
+
+def test_transform_request_puts_no_breakpoint_on_empty_marked_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    marked: Final = _mantle_marked_texts(
+        "openai.gpt-5.6-sol",
+        [
+            {"role": "system", "content": "", "cache_control": _EPHEMERAL},
+            {"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": "", "cache_control": _EPHEMERAL}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "there"}, {"type": "text", "text": ""}],
+                "cache_control": _EPHEMERAL,
+            },
+        ],
+    )
+
+    assert marked == {("user", "there")}
+
+
+def test_transform_request_maps_only_an_object_cache_control_to_a_breakpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    marked: Final = _mantle_marked_texts(
+        "openai.gpt-5.6-sol",
+        [
+            {"role": "system", "content": "Rules", "cache_control": "ephemeral"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi", "cache_control": "ephemeral"},
+                    {"type": "text", "text": "there", "cache_control": _EPHEMERAL},
+                ],
+            },
+        ],
+    )
+
+    assert marked == {("user", "there")}
+
+
+def test_transform_request_maps_client_cache_control_for_an_alias_whose_base_model_reads_breakpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    marked: Final = _mantle_marked_texts(
+        "my-alias", list(_client_marked_messages()), base_model="openai.gpt-5.6-sol"
+    )
+
+    assert marked == {("system", "Stable prefix"), ("user", "hi")}
+
+
 def test_transform_request_leaves_client_cache_control_unmapped_for_a_deployment_that_does_not_read_breakpoints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

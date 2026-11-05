@@ -327,7 +327,7 @@ def whole_messages_within_cache_control_limit(
 
 
 def _part_with_cache_control_renamed(part: object) -> object:
-    if not _accepts_prompt_cache_breakpoint(part) or _attribute_or_key(part, "cache_control") is None:
+    if not _holds_prompt_cache_breakpoint(part) or not isinstance(_attribute_or_key(part, "cache_control"), Mapping):
         return part
     return cache_control_as_prompt_cache_breakpoint(_CONTENT_PART_ADAPTER.validate_python(part))
 
@@ -692,6 +692,10 @@ def _chat_transform_drops_tool_cache_control(tool: object) -> bool:
 
 def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
+
+
+def _holds_prompt_cache_breakpoint(block: object) -> bool:
+    return _accepts_prompt_cache_breakpoint(block) and _attribute_or_key(block, "text") != ""
 
 
 def _carries_prompt_cache_breakpoint(block: object) -> bool:
@@ -1256,7 +1260,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 },
             )
         )
-        if fields.get("cache_control") is None:
+        if not isinstance(fields.get("cache_control"), Mapping):
             return renamed
         return AnthropicCacheControlHook._insert_prompt_cache_breakpoint_in_message(renamed)
 
@@ -1351,7 +1355,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not _may_carry_prompt_cache_breakpoint(message):
             return message
         message_content: Final = message.get("content", None)
-        if isinstance(message_content, str):
+        if isinstance(message_content, str) and message_content:
             marked: Final = copy.copy(message)
             marked["content"] = [
                 with_prompt_cache_breakpoint(
@@ -1364,7 +1368,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 (
                     index
                     for index in range(len(message_content) - 1, -1, -1)
-                    if _accepts_prompt_cache_breakpoint(message_content[index])
+                    if _holds_prompt_cache_breakpoint(message_content[index])
                 ),
                 None,
             )
@@ -2005,3 +2009,14 @@ def messages_within_reserved_cache_control_cap(
             MAX_CACHE_CONTROL_BLOCKS,
         )
     return kept
+
+
+def call_targets_openai_prompt_cache_breakpoint(model: str, call_kwargs: Mapping[str, object]) -> bool:
+    provider: Final = call_kwargs.get("custom_llm_provider")
+    return AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+        model,
+        provider if isinstance(provider, str) else None,
+        call_kwargs.get("api_base") or call_kwargs.get("base_url"),
+        call_kwargs.get("prompt_cache_options"),
+        routed_model_info(call_kwargs.get("model_info")),
+    )
