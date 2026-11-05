@@ -746,8 +746,8 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                   name="cache_control"
                   label={
                     <>
-                      {CACHE_CONTROL_LABEL}
-                      <Hint text={CACHE_CONTROL_TOOLTIP} />
+                      {t(CACHE_CONTROL_LABEL)}
+                      <Hint text={t(CACHE_CONTROL_TOOLTIP)} />
                     </>
                   }
                   orientation="horizontal"
