@@ -1368,6 +1368,171 @@ def _base_model_widened_window(
 _SETTING_ATTRIBUTES: Final = frozenset("_core_" + name for name in SETTING_FIELDS)
 
 
+@lru_cache(maxsize=1)
+def _fallback_responses_stream_wrapper_class():
+    """
+    Build FallbackResponsesStreamWrapper once. Defined inside the method it was re-created on every
+    streamed request; a class object always sits in a reference cycle and its methods closed over the
+    source iterator, so each request and its bodies stayed in memory until a full garbage collection.
+    """
+    from litellm.responses.streaming_iterator import (
+        BaseResponsesAPIStreamingIterator,
+        get_openai_response_types,
+    )
+
+    _openai_types: Final = get_openai_response_types()
+
+    class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
+        """
+        Subclasses BaseResponsesAPIStreamingIterator only for isinstance
+        compatibility (proxy + interactions code paths check the type).
+        Bypasses the parent constructor and delegates iteration to an
+        async generator.
+        """
+
+        fallback_headers_adopted: bool = False
+        _terminal_event_types: tuple[str, ...] = (
+            _openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            _openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            _openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
+        )
+
+        def __init__(
+            self,
+            async_generator: "AsyncGenerator[ResponsesAPIStreamingResponse, None]",
+            source_iterator: object = None,
+        ):
+            import time
+            from datetime import datetime
+
+            self._async_generator = async_generator
+            self._source_iterator = source_iterator
+            self._billing_source: object = source_iterator
+            self._last_sequence_number = -1
+            # Mirror every attribute BaseResponsesAPIStreamingIterator.__init__
+            # would have set. The wrapper bypasses super().__init__ (it has no
+            # httpx.Response of its own and no provider config to drive), so
+            # we copy from source_iterator where applicable and use safe
+            # defaults elsewhere. This keeps inherited methods (e.g.
+            # _check_max_streaming_duration, _handle_failure) safe to call.
+            #
+            # The bridge path (LiteLLMCompletionStreamingIterator used by
+            # Anthropic/Bedrock/Vertex) does not call super().__init__ and
+            # is missing many of these attributes — use getattr fallbacks
+            # so wrapper construction never raises AttributeError. The
+            # bridge stores the logging object as `litellm_logging_obj`.
+            # base class declares non-Optional types for these
+            # fields but the bridge path (LiteLLMCompletionStreamingIterator)
+            # can legitimately omit them at runtime — keep the None
+            # fallback. Same lines passed mypy on the pre-fix file
+            # because the surrounding function body wasn't fully
+            # type-narrowed; the new typed terminal-event tuple above
+            # is what made these surface.
+            self.response = getattr(source_iterator, "response", None)
+            self.model = getattr(source_iterator, "model", None)
+            self.logging_obj = getattr(
+                source_iterator,
+                "logging_obj",
+                getattr(source_iterator, "litellm_logging_obj", None),
+            )
+            self.finished = False
+            self.responses_api_provider_config = getattr(source_iterator, "responses_api_provider_config", None)
+            self.completed_response = None
+            self.start_time = getattr(source_iterator, "start_time", datetime.now())
+            self._failure_handled = False
+            self._yielded_first_chunk = False
+            self._generated_content = ""
+            self._completed_response_cached = False
+            self._completed_response_logged = False
+            self._completed_response_cache_hit = None
+            self._persist_completed_response_before_logging = True
+            self._stream_created_time = time.time()
+            self.litellm_metadata = getattr(source_iterator, "litellm_metadata", None)
+            self.custom_llm_provider = getattr(source_iterator, "custom_llm_provider", None)
+            self.request_data = getattr(source_iterator, "request_data", {}) or {}
+            self.call_type = getattr(source_iterator, "call_type", None)
+            # Preserve hidden params so response headers (model_id,
+            # api_base, additional_headers) keep flowing.
+            self._hidden_params = dict(getattr(source_iterator, "_hidden_params", None) or {})
+
+        def adopt_fallback_headers(self, fallback_response: object) -> tuple[dict[str, object], dict[str, object]]:
+            prepared: Final = PythonCore._prepare_fallback_hidden_params(fallback_response)  # pyright: ignore[reportPrivateUsage]  # this wrapper is the router's own stream type
+            self._billing_source = fallback_response
+            self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}
+            self.fallback_headers_adopted = True
+            return prepared
+
+        def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
+            """
+            The event to bill on a client disconnect. After a mid-stream hop the primary
+            stream's relayed tokens are folded into the fallback's event, the way
+            _combine_responses_fallback_usage does for a natural end of stream.
+            """
+            from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+
+            current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
+            if self._billing_source is self._source_iterator:
+                return current
+            primary: Final = partial_responses_incomplete_event_on_disconnect(self._source_iterator)
+            if current is None or primary is None:
+                return current or primary
+            if primary.response.usage is not None:
+                PythonCore._combine_responses_fallback_usage(current, primary.response.usage)  # pyright: ignore[reportPrivateUsage]  # see above
+            return current
+
+        def __aiter__(self):
+            return self
+
+        @property
+        def yielded_first_chunk(self) -> bool:
+            return self._yielded_first_chunk
+
+        async def __anext__(self):
+            try:
+                chunk: Final = await self._async_generator.__anext__()
+            except StopAsyncIteration:
+                # The inner generator is exhausted. If we never sniffed a
+                # terminal event off a chunk (the bridge path emits the
+                # final response.completed via common_done_event_logic,
+                # which raises StopAsyncIteration after returning it),
+                # fall back to whatever the source iterator latched so
+                # the proxy's container-ownership hook still sees a
+                # completed_response instead of logging a spurious
+                # "no completed_response" warning.
+                if self.completed_response is None:
+                    self.completed_response = getattr(self._source_iterator, "completed_response", None)
+                raise
+            # Sniff the terminal stream event off each forwarded chunk
+            # so ``self.completed_response`` is populated regardless of
+            # which inner iterator produced it (source_iterator,
+            # fallback_iterator, or any future wrapper). Without this
+            # the proxy's container-ownership hook (which reads
+            # ``getattr(stream_response, "completed_response", None)``
+            # via extract_completed_responses_response) silently
+            # records nothing on streaming /v1/responses calls — every
+            # follow-up /v1/containers/<id>/files call then 403s for
+            # the very key that created the container (#30210).
+            if self.completed_response is None and getattr(chunk, "type", None) in self._terminal_event_types:
+                self.completed_response = chunk
+            self._yielded_first_chunk = True
+            sequence_number: Final = getattr(chunk, "sequence_number", None)
+            if not isinstance(sequence_number, int):
+                return chunk
+            if not self.fallback_headers_adopted:
+                self._last_sequence_number = max(self._last_sequence_number, sequence_number)
+                return chunk
+            self._last_sequence_number = max(self._last_sequence_number + 1, sequence_number)
+            if self._last_sequence_number == sequence_number:
+                return chunk
+            return chunk.model_copy(update={"sequence_number": self._last_sequence_number})
+
+        async def aclose(self):
+            # async generators always expose aclose — no defensive check needed.
+            await self._async_generator.aclose()
+
+    return FallbackResponsesStreamWrapper
+
+
 class PythonCore(DeprecatedRouterMembers):
     _core_model_names: set[str] = set()
     _core_cache_responses: bool | None = False
@@ -4420,161 +4585,8 @@ class PythonCore(DeprecatedRouterMembers):
             iterators on terminate.
         """
         from litellm.exceptions import MidStreamFallbackError
-        from litellm.responses.streaming_iterator import (
-            BaseResponsesAPIStreamingIterator,
-            get_openai_response_types,
-        )
 
         source_iterator: Final = response
-
-        # Pre-resolve the set of terminal stream event types so the
-        # per-chunk type check inside FallbackResponsesStreamWrapper
-        # stays cheap; mirrors the source-iterator filter at
-        # responses/streaming_iterator.py:243-247.
-        _openai_types: Final = get_openai_response_types()
-        _RESPONSES_TERMINAL_EVENT_TYPES: Final = (
-            _openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-            _openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
-            _openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
-        )
-
-        class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
-            """
-            Subclasses BaseResponsesAPIStreamingIterator only for isinstance
-            compatibility (proxy + interactions code paths check the type).
-            Bypasses the parent constructor and delegates iteration to an
-            async generator.
-            """
-
-            fallback_headers_adopted: bool = False
-
-            def __init__(self, async_generator: "AsyncGenerator[ResponsesAPIStreamingResponse, None]"):
-                import time
-                from datetime import datetime
-
-                self._async_generator = async_generator
-                self._billing_source: object = source_iterator
-                self._last_sequence_number = -1
-                # Mirror every attribute BaseResponsesAPIStreamingIterator.__init__
-                # would have set. The wrapper bypasses super().__init__ (it has no
-                # httpx.Response of its own and no provider config to drive), so
-                # we copy from source_iterator where applicable and use safe
-                # defaults elsewhere. This keeps inherited methods (e.g.
-                # _check_max_streaming_duration, _handle_failure) safe to call.
-                #
-                # The bridge path (LiteLLMCompletionStreamingIterator used by
-                # Anthropic/Bedrock/Vertex) does not call super().__init__ and
-                # is missing many of these attributes — use getattr fallbacks
-                # so wrapper construction never raises AttributeError. The
-                # bridge stores the logging object as `litellm_logging_obj`.
-                # base class declares non-Optional types for these
-                # fields but the bridge path (LiteLLMCompletionStreamingIterator)
-                # can legitimately omit them at runtime — keep the None
-                # fallback. Same lines passed mypy on the pre-fix file
-                # because the surrounding function body wasn't fully
-                # type-narrowed; the new typed terminal-event tuple above
-                # is what made these surface.
-                self.response = getattr(source_iterator, "response", None)
-                self.model = getattr(source_iterator, "model", None)
-                self.logging_obj = getattr(
-                    source_iterator,
-                    "logging_obj",
-                    getattr(source_iterator, "litellm_logging_obj", None),
-                )
-                self.finished = False
-                self.responses_api_provider_config = getattr(source_iterator, "responses_api_provider_config", None)
-                self.completed_response = None
-                self.start_time = getattr(source_iterator, "start_time", datetime.now())
-                self._failure_handled = False
-                self._yielded_first_chunk = False
-                self._generated_content = ""
-                self._completed_response_cached = False
-                self._completed_response_logged = False
-                self._completed_response_cache_hit = None
-                self._persist_completed_response_before_logging = True
-                self._stream_created_time = time.time()
-                self.litellm_metadata = getattr(source_iterator, "litellm_metadata", None)
-                self.custom_llm_provider = getattr(source_iterator, "custom_llm_provider", None)
-                self.request_data = getattr(source_iterator, "request_data", {}) or {}
-                self.call_type = getattr(source_iterator, "call_type", None)
-                # Preserve hidden params so response headers (model_id,
-                # api_base, additional_headers) keep flowing.
-                self._hidden_params = dict(getattr(source_iterator, "_hidden_params", None) or {})
-
-            def adopt_fallback_headers(self, fallback_response: object) -> tuple[dict[str, object], dict[str, object]]:
-                prepared: Final = PythonCore._prepare_fallback_hidden_params(fallback_response)
-                self._billing_source = fallback_response
-                self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}
-                self.fallback_headers_adopted = True
-                return prepared
-
-            def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
-                """
-                The event to bill on a client disconnect. After a mid-stream hop the primary
-                stream's relayed tokens are folded into the fallback's event, the way
-                _combine_responses_fallback_usage does for a natural end of stream.
-                """
-                from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
-
-                current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
-                if self._billing_source is source_iterator:
-                    return current
-                primary: Final = partial_responses_incomplete_event_on_disconnect(source_iterator)
-                if current is None or primary is None:
-                    return current or primary
-                if primary.response.usage is not None:
-                    PythonCore._combine_responses_fallback_usage(current, primary.response.usage)
-                return current
-
-            def __aiter__(self):
-                return self
-
-            @property
-            def yielded_first_chunk(self) -> bool:
-                return self._yielded_first_chunk
-
-            async def __anext__(self):
-                try:
-                    chunk: Final = await self._async_generator.__anext__()
-                except StopAsyncIteration:
-                    # The inner generator is exhausted. If we never sniffed a
-                    # terminal event off a chunk (the bridge path emits the
-                    # final response.completed via common_done_event_logic,
-                    # which raises StopAsyncIteration after returning it),
-                    # fall back to whatever the source iterator latched so
-                    # the proxy's container-ownership hook still sees a
-                    # completed_response instead of logging a spurious
-                    # "no completed_response" warning.
-                    if self.completed_response is None:
-                        self.completed_response = getattr(source_iterator, "completed_response", None)
-                    raise
-                # Sniff the terminal stream event off each forwarded chunk
-                # so ``self.completed_response`` is populated regardless of
-                # which inner iterator produced it (source_iterator,
-                # fallback_iterator, or any future wrapper). Without this
-                # the proxy's container-ownership hook (which reads
-                # ``getattr(stream_response, "completed_response", None)``
-                # via extract_completed_responses_response) silently
-                # records nothing on streaming /v1/responses calls — every
-                # follow-up /v1/containers/<id>/files call then 403s for
-                # the very key that created the container (#30210).
-                if self.completed_response is None and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
-                    self.completed_response = chunk
-                self._yielded_first_chunk = True
-                sequence_number: Final = getattr(chunk, "sequence_number", None)
-                if not isinstance(sequence_number, int):
-                    return chunk
-                if not self.fallback_headers_adopted:
-                    self._last_sequence_number = max(self._last_sequence_number, sequence_number)
-                    return chunk
-                self._last_sequence_number = max(self._last_sequence_number + 1, sequence_number)
-                if self._last_sequence_number == sequence_number:
-                    return chunk
-                return chunk.model_copy(update={"sequence_number": self._last_sequence_number})
-
-            async def aclose(self):
-                # async generators always expose aclose — no defensive check needed.
-                await self._async_generator.aclose()
 
         async def stream_with_fallbacks():
             held_lifecycle_events: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
@@ -4632,8 +4644,9 @@ class PythonCore(DeprecatedRouterMembers):
                                 exc,
                             )
 
-        wrapper: Final = FallbackResponsesStreamWrapper(
-            stream_with_fallbacks()  # pyright: ignore[reportArgumentType]  # relays response events typed as object
+        wrapper: Final = _fallback_responses_stream_wrapper_class()(
+            stream_with_fallbacks(),  # pyright: ignore[reportArgumentType]  # relays response events typed as object
+            source_iterator,
         )
         return wrapper
 

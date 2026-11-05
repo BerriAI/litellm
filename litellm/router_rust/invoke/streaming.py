@@ -42,6 +42,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -1516,32 +1517,32 @@ def _params_sent_to_deployment(attempt: StreamAttempt, deployment_id: object) ->
     return attempt.core.params_sent_to_deployment(attempt.request, deployment_id)
 
 
-def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it ports
-    attempt: StreamAttempt, response: "BaseResponsesAPIStreamingIterator"
-) -> "BaseResponsesAPIStreamingIterator":
-    """``_aresponses_streaming_iterator``: pre-output lifecycle events are held while a fallback can take
-    over; a mid-stream error falls back through the core, continuing after text."""
+@lru_cache(maxsize=1)
+def _fallback_responses_stream_wrapper_class():
+    """Built once: a class defined per request sits in a reference cycle with the source iterator its
+    methods closed over, holding each streamed request in memory until a full garbage collection."""
     import time
     from datetime import datetime, timezone
 
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator, get_openai_response_types
 
-    source_iterator: Final = response
-    attempt.reports_outcome = True  # rebind-ok: the wrapper reports this attempt's outcome
     openai_types: Final = get_openai_response_types()
-    terminal_event_types: Final = (
-        openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-        openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
-        openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
-    )
 
     class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
         """Subclasses the base iterator only for isinstance checks; iteration is the generator's."""
 
         fallback_headers_adopted: bool = False
+        _terminal_event_types: tuple[str, ...] = (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
+        )
 
-        def __init__(self, async_generator: AsyncGenerator[object, None]) -> None:  # pyright: ignore[reportMissingSuperCall]  # no httpx response of its own
+        def __init__(  # pyright: ignore[reportMissingSuperCall]  # no httpx response of its own
+            self, async_generator: AsyncGenerator[object, None], source_iterator: object = None
+        ) -> None:
             self._async_generator: Final = async_generator
+            self._source_iterator: Final = source_iterator
             self._billing_source: object = source_iterator
             self._last_sequence_number = -1
             self.response = getattr(source_iterator, "response", None)  # pyright: ignore[reportAttributeAccessIssue]  # copied from the source
@@ -1580,9 +1581,9 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
             from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
 
             current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
-            if self._billing_source is source_iterator:
+            if self._billing_source is self._source_iterator:
                 return current
-            primary: Final = partial_responses_incomplete_event_on_disconnect(source_iterator)
+            primary: Final = partial_responses_incomplete_event_on_disconnect(self._source_iterator)
             if current is None or primary is None:
                 return current or primary
             if primary.response.usage is not None:
@@ -1601,9 +1602,9 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 chunk: Final = await self._async_generator.__anext__()
             except StopAsyncIteration:
                 if self.completed_response is None:
-                    self.completed_response = getattr(source_iterator, "completed_response", None)
+                    self.completed_response = getattr(self._source_iterator, "completed_response", None)
                 raise
-            if self.completed_response is None and getattr(chunk, "type", None) in terminal_event_types:
+            if self.completed_response is None and getattr(chunk, "type", None) in self._terminal_event_types:
                 self.completed_response = chunk  # pyright: ignore[reportAttributeAccessIssue]  # the terminal event
             self._yielded_first_chunk = True
             sequence_number: Final = getattr(chunk, "sequence_number", None)
@@ -1619,6 +1620,17 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
 
         async def aclose(self) -> None:
             await self._async_generator.aclose()
+
+    return FallbackResponsesStreamWrapper
+
+
+def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it ports
+    attempt: StreamAttempt, response: "BaseResponsesAPIStreamingIterator"
+) -> "BaseResponsesAPIStreamingIterator":
+    """``_aresponses_streaming_iterator``: pre-output lifecycle events are held while a fallback can take
+    over; a mid-stream error falls back through the core, continuing after text."""
+    source_iterator: Final = response
+    attempt.reports_outcome = True  # rebind-ok: the wrapper reports this attempt's outcome
 
     def background_stream_can_release(item: object) -> bool:
         from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
@@ -1682,7 +1694,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                     except Exception as exc:  # noqa: BLE001  # closing is best-effort
                         verbose_router_logger.debug("stream_with_fallbacks(aresponses): error closing source: %s", exc)
 
-    wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
+    wrapper: Final = _fallback_responses_stream_wrapper_class()(stream_with_fallbacks(), source_iterator)
     return wrapper
 
 
