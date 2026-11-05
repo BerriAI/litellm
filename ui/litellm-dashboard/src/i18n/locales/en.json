@@ -1728,6 +1728,21 @@
       "unknown": "Unknown source"
     },
     "skillDetail": {
+      "history": {
+        "title": "Version history",
+        "explanation": "Published metadata and retained uploads. Updates automatically increment the patch version unless a higher version is specified.",
+        "loading": "Loading versions…",
+        "failed": "Could not load version history.",
+        "empty": "No recorded releases yet. Existing skills start recording history on their next published update.",
+        "legacy": "Legacy version",
+        "retained": "Uploaded ZIP retained and verified against its source digest.",
+        "reference": "Source reference only. External files may change and are not retained by LiteLLM.",
+        "metadata": "Published metadata",
+        "download": "Download retained ZIP",
+        "downloadFailed": "Could not download this version.",
+        "newer": "Newer",
+        "older": "Older"
+      },
       "back": "Skills",
       "tabs": {
         "overview": "Overview",
