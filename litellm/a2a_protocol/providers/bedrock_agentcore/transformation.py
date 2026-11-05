@@ -19,6 +19,7 @@ from litellm.a2a_protocol.utils import (
 )
 from litellm.exceptions import BadRequestError
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 
 RUNTIME_SESSION_ID_MIN_LENGTH: Final = 33
 RUNTIME_SESSION_ID_MAX_LENGTH: Final = 256
@@ -50,7 +51,7 @@ _RESERVED_PREFIX_HEADERS: Final[tuple[str, ...]] = (
 class _SSELineSource(Protocol):
     """Minimal streaming-response surface used to read SSE lines."""
 
-    def aiter_lines(self) -> AsyncIterator[str]: ...
+    def aiter_text(self) -> AsyncIterator[str]: ...
 
 
 def _filter_reserved_headers(
@@ -84,14 +85,23 @@ def _filter_reserved_headers(
     return filtered or None
 
 
+def _calling_key_hash(litellm_params: Mapping[str, object]) -> str | None:
+    principal: Final = litellm_params.get(A2A_USER_API_KEY_HASH_PARAM)
+    if principal is None or isinstance(principal, str):
+        return principal
+    if not principal:
+        return None
+    raise AttributeError(f"{type(principal).__name__!r} object has no attribute 'encode'", name="encode", obj=principal)
+
+
 def _request_scoped_runtime_session_id(
     params: Mapping[str, object],
-    litellm_params: Mapping[str, Any],
+    litellm_params: Mapping[str, object],
 ) -> str | None:
     context_id: Final = get_session_id_from_a2a_params(params)
     if not isinstance(context_id, str) or not context_id:
         return None
-    return scope_session_to_principal(context_id, litellm_params.get(A2A_USER_API_KEY_HASH_PARAM))
+    return scope_session_to_principal(context_id, _calling_key_hash(litellm_params))
 
 
 def _validate_runtime_session_id(session_id: str, model: str) -> str:
@@ -107,6 +117,13 @@ def _validate_runtime_session_id(session_id: str, model: str) -> str:
         model=model,
         llm_provider="bedrock",
     )
+
+
+def _agentcore_model_name(litellm_params: Mapping[str, object]) -> str:
+    model: Final = litellm_params.get("model", "")
+    if isinstance(model, str):
+        return model
+    raise AttributeError(f"{type(model).__name__!r} object has no attribute 'startswith'", name="startswith", obj=model)
 
 
 class BedrockAgentCoreA2ATransformation:
@@ -152,11 +169,8 @@ class BedrockAgentCoreA2ATransformation:
         """
         # Extract model and strip the "bedrock/" prefix
         # "bedrock/agentcore/arn:aws:..." → "agentcore/arn:aws:..."
-        model: Final = litellm_params.get("model", "")
-        if model.startswith("bedrock/"):
-            agentcore_model = model[len("bedrock/") :]
-        else:
-            agentcore_model = model
+        model: Final = _agentcore_model_name(litellm_params)
+        agentcore_model: Final = model.removeprefix("bedrock/")
 
         # Build optional_params from litellm_params (everything except model and custom_llm_provider)
         optional_params: Final = {k: v for k, v in litellm_params.items() if k not in ("model", "custom_llm_provider")}
@@ -231,7 +245,7 @@ class BedrockAgentCoreA2ATransformation:
         Yields:
             Parsed JSON dicts from SSE data lines
         """
-        async for line in response.aiter_lines():
+        async for line in aiter_sse_lines(response.aiter_text()):
             line = line.strip()
             if not line:
                 continue

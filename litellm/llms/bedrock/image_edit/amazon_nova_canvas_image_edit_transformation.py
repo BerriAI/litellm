@@ -17,6 +17,7 @@ import os
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from httpx._types import RequestFiles
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -319,7 +320,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, RequestFiles]:
         op: Final = dict(image_edit_optional_request_params)
         image_b64: Final = _file_types_to_b64(image)
 

@@ -6,14 +6,17 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-litellm-auth-types.workspace = true
+litellm-secret-value.workspace = true
 litellm-router-types.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 serde_yaml_ng = "0.10.0"
 strum.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
+litellm-error.workspace = true
 rstest.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }

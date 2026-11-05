@@ -553,3 +553,59 @@ async def test_store_unified_object_id_omits_unset_columns():
     assert "api_key" not in create_data
     assert "request_tags" not in create_data
     assert "unified-b" in store
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_drops_nul_characters_postgres_cannot_store():
+    """Regression (spend loss): Postgres rejects a NUL inside jsonb, and a client can send one
+    in a background response's instructions or tags. The row the cost poll bills from must
+    still be written, with only the NUL characters removed."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    instance, store = _in_memory_managed_files()
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alpha", api_key="hash-alice")
+    response = ResponsesAPIResponse(
+        id="resp_nul",
+        created_at=1,
+        status="queued",
+        model="gpt-5.6",
+        instructions="be brief\x00",
+        metadata={"note\x00": "keep\x00 this"},
+        output=[],
+    )
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-r",
+        file_object=response,
+        litellm_parent_otel_span=None,
+        model_object_id="resp_nul",
+        file_purpose="response",
+        user_api_key_dict=creator,
+        request_tags=["env\x00:prod"],
+        persist_attribution=True,
+    )
+
+    row = store["unified-r"]
+    assert "\\u0000" not in row["file_object"]
+    stored = json.loads(row["file_object"])
+    assert stored == json.loads(response.model_dump_json().replace("\\u0000", ""))
+    assert stored["instructions"] == "be brief"
+    assert stored["metadata"] == {"note": "keep this"}
+    assert row["request_tags"].data == ["env:prod"]
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_keeps_the_provider_json_when_it_has_no_nul():
+    instance, store = _in_memory_managed_files()
+    batch = _build_batch_response(batch_id="b", status="validating")
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=batch,
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=UserAPIKeyAuth(user_id="alice", api_key="hash-alice"),
+    )
+
+    assert store["unified-b"]["file_object"] == batch.model_dump_json()

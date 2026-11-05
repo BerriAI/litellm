@@ -12,7 +12,7 @@ def get_vertex_ai_partner_model_config(model: str, vertex_publisher_or_api_spec:
 
         return VertexAIAi21Config()
     elif vertex_publisher_or_api_spec == "openapi" or vertex_publisher_or_api_spec == "mistralai":
-        from .llama3.transformation import VertexAILlama3Config
+        from .llama.transformation import VertexAILlama3Config
 
         return VertexAILlama3Config()
     else:

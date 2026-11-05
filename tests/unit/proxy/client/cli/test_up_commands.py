@@ -15,8 +15,8 @@ from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsErro
 from litellm.proxy.client.cli.commands.up import (
     BackupRecord,
     UpError,
-    ensure_fresh_login,
     down,
+    ensure_fresh_login,
     load_json_or_empty,
     merge_claude_settings,
     read_backup,
@@ -371,6 +371,30 @@ class TestEnsureFreshLogin:
         ensure_fresh_login(_make_ctx("http://proxy-a:4000"))
 
         assert login_calls == [("http://proxy-a:4000", True)]
+
+    def test_logs_in_with_pkce_when_the_saved_pkce_default_is_on(self, monkeypatch):
+        """`lite config set pkce true` is honoured by the login `lite up` starts, not only by `lite login`."""
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
+        store = _FakeTokenStore(monkeypatch, {"key": "sk-a", "base_url": "http://proxy-a:4000"}, {})
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: True)
+        monkeypatch.setattr(up_module, "pkce_default", lambda: True)
+        login_calls = _capture_login(
+            monkeypatch,
+            on_login=lambda: store.log_in(_pkce_record("http://proxy-b:4000", seconds_left=86_400), "sk-pkce-fresh"),
+        )
+
+        ensure_fresh_login(_make_ctx("http://proxy-b:4000"))
+
+        assert login_calls == [("http://proxy-b:4000", True)]
+
+    def test_names_the_pkce_login_in_the_non_interactive_error_when_the_saved_pkce_default_is_on(self, monkeypatch):
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: False)
+        _FakeTokenStore(monkeypatch, {"key": "sk-a", "base_url": "http://proxy-a:4000"}, {})
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: True)
+        monkeypatch.setattr(up_module, "pkce_default", lambda: True)
+
+        with pytest.raises(UpError, match="Run `lite login --pkce` first"):
+            ensure_fresh_login(_make_ctx("http://proxy-b:4000"))
 
     def test_names_the_pkce_login_in_the_non_interactive_error_for_a_pkce_credential(self, monkeypatch):
         monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: False)

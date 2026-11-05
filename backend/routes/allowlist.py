@@ -32,6 +32,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/token",
     "/onboarding/",
     "/audit",
+    "/telemetry/",
     "/oauth/",
     "/invitation/",
     "/jwt/",
@@ -54,6 +55,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/cache_settings",
     "/coordination_redis/",
     "/cost_tracking",
+    "/subscription_accounts/",
     "/cost_optimization/",
     "/cost/",
     "/credentials",
@@ -164,6 +166,7 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
 BACKEND_MOUNT_PATHS: frozenset[str] = frozenset(
     {
         "/admin",
+        "/metrics",
         "/swagger",  # API documentation static assets belong to the backend
         "/mcp",  # lazily-mounted MCP sub-app serves on the backend component
     }

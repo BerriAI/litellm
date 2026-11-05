@@ -75,6 +75,7 @@ class _PrismaClientView(Protocol):
 
 
 _MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
+_RAW_COLUMN: Final = TypeAdapter(object)
 _JSON_ENCODED_TEAM_FIELDS: Final = (
     "metadata",
     "model_spend",
@@ -142,7 +143,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         )
         if not rows:
             return None
-        raw_value: Final[object] = rows[0]["members_with_roles"]
+        raw_value: Final = _RAW_COLUMN.validate_python(rows[0]["members_with_roles"])
         parsed: Final[object] = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
         if not parsed:
             return []

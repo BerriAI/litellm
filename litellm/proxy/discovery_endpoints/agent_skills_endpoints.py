@@ -10,7 +10,6 @@ import asyncio
 import re
 from collections.abc import Sequence
 from itertools import groupby
-from operator import itemgetter
 from types import MappingProxyType
 from typing import Final
 
@@ -173,11 +172,15 @@ def _slugify(raw: str | None) -> str | None:
     return _NON_SLUG_PATTERN.sub("-", raw.lower()).strip("-")[:MAX_SKILL_NAME_LENGTH].rstrip("-") or None
 
 
+def _entry_name(entry: tuple[int, str]) -> str:
+    return entry[1]
+
+
 def _deduplicated(names: Sequence[str]) -> tuple[str, ...]:
     ordinals: Final = MappingProxyType(
         {
             position: ordinal
-            for _, duplicates in groupby(sorted(enumerate(names), key=itemgetter(1)), key=itemgetter(1))
+            for _, duplicates in groupby(sorted(enumerate(names), key=_entry_name), key=_entry_name)
             for ordinal, (position, _) in enumerate(duplicates)
         }
     )

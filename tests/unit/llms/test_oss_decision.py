@@ -13,6 +13,15 @@ pytestmark: Final = pytest.mark.parametrize("provider", ["laya", "bespoke"])
         (None, None, "http://decision.test/root", "oss-env-key"),
         ("http://custom.test/", None, "http://custom.test", None),
         ("http://custom.test/", "explicit-key", "http://custom.test", "explicit-key"),
+        ("http://custom.test/", "", "http://custom.test", None),
+        ("http://decision.test/root", None, "http://decision.test/root", "oss-env-key"),
+        ("http://decision.test/root/", "", "http://decision.test/root", "oss-env-key"),
+        ("http://decision.test/root", "explicit-key", "http://decision.test/root", "explicit-key"),
+        ("http://decision.test/root/v1/", None, "http://decision.test/root", "oss-env-key"),
+        ("http://decision.test/root/v2", None, "http://decision.test/root/v2", None),
+        ("http://v1", None, "http://v1", None),
+        ("http://v1/v1/", None, "http://v1", None),
+        ("http://[::1]:8000/v1", None, "http://[::1]:8000", None),
     ],
 )
 def test_oss_credentials_stay_with_their_configured_destination(
@@ -30,6 +39,21 @@ def test_oss_credentials_stay_with_their_configured_destination(
     connection: Final = oss_connection(provider, base, key)
     assert (connection.api_base, connection.api_key) == (expected_base, expected_key)
     assert "key" not in repr(connection)
+
+
+@pytest.mark.parametrize(
+    ("env_base", "base"),
+    [
+        ("http://decision.test/root/v1/", "http://decision.test/root"),
+        ("http://decision.test/root", "http://decision.test/root/v1"),
+    ],
+)
+def test_oss_env_key_follows_its_server_with_or_without_the_v1_suffix(
+    monkeypatch: pytest.MonkeyPatch, provider: OssDecisionProvider, env_base: str, base: str
+) -> None:
+    monkeypatch.setenv(f"{provider.upper()}_API_BASE", env_base)
+    monkeypatch.setenv(f"{provider.upper()}_API_KEY", "oss-env-key")
+    assert oss_connection(provider, base).api_key == "oss-env-key"
 
 
 @pytest.mark.parametrize(
@@ -51,7 +75,9 @@ def test_oss_missing_server_does_not_fall_back_to_typesafe(
         oss_connection(provider)
 
 
-def test_oss_request_accepts_the_name_ollama_serves_nimble_under_only_for_bespoke(provider: OssDecisionProvider) -> None:
+def test_oss_request_accepts_the_name_ollama_serves_nimble_under_only_for_bespoke(
+    provider: OssDecisionProvider,
+) -> None:
     body: Final = {"model": "nimble"}
     if provider == "bespoke":
         assert validate_oss_request(provider, body) == "nimble"

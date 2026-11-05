@@ -22,7 +22,11 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from typing import Final
 from unittest.mock import MagicMock
+
+from psycopg import AsyncConnection
+from psycopg.rows import dict_row
 
 import pytest
 from fastapi import HTTPException
@@ -48,7 +52,7 @@ _HELD_LOCK_KEY_SQL = (
 _LOCK_WAITER_SQL = (
     "SELECT count(*)::int AS waiters FROM pg_locks "
     "WHERE locktype = 'advisory' AND NOT granted "
-    "AND classid::bigint = $1 AND objid::bigint = $2"
+    "AND classid::bigint = %s AND objid::bigint = %s"
 )
 _LOCK_WAIT_TIMEOUT_SECONDS = 20.0
 _LOCK_POLL_SECONDS = 0.01
@@ -66,21 +70,17 @@ async def _hold_team_lock(held, team_id: str) -> tuple[int, int]:
     return rows[0]["classid"], rows[0]["objid"]
 
 
-async def _await_lock_contention(watcher, lock_key: tuple[int, int], task, what: str) -> None:
-    """Block until Postgres reports `task` queued behind the held lock.
-
-    This is the assertion that the endpoint serializes on the team's advisory lock, and it
-    is what a fixed sleep was standing in for: the endpoint is only provably waiting once a
-    non-granted advisory lock on the same key exists. `watcher` must be a connection that is
-    not itself blocked, so it can observe the queue."""
-    classid, objid = lock_key
-    deadline = time.monotonic() + _LOCK_WAIT_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if task.done():
-            raise AssertionError(f"{what} returned without waiting on the team's advisory lock") from task.exception()
-        if (await watcher.query_raw(_LOCK_WAITER_SQL, classid, objid))[0]["waiters"]:
-            return
-        await asyncio.sleep(_LOCK_POLL_SECONDS)
+async def _await_lock_contention(lock_key: tuple[int, int], task: asyncio.Task[object], what: str) -> None:
+    deadline: Final = time.monotonic() + _LOCK_WAIT_TIMEOUT_SECONDS
+    async with await AsyncConnection.connect(os.environ["DATABASE_URL"], autocommit=True, row_factory=dict_row) as watcher:
+        while time.monotonic() < deadline:
+            if task.done():
+                raise AssertionError(f"{what} returned without waiting on the team's advisory lock") from task.exception()
+            cursor: Final = await watcher.execute(_LOCK_WAITER_SQL, lock_key)
+            observed: Final = await cursor.fetchone()
+            if observed is not None and observed["waiters"]:
+                return
+            await asyncio.sleep(_LOCK_POLL_SECONDS)
     raise AssertionError(f"{what} never queued on the team's advisory lock within {_LOCK_WAIT_TIMEOUT_SECONDS}s")
 
 
@@ -171,7 +171,7 @@ async def test_member_add_blocked_by_delete_writes_no_dangling_reference():
                 async with blocker.tx(timeout=timedelta(seconds=30)) as held:
                     lock_key = await _hold_team_lock(held, team_id)
                     task = asyncio.create_task(add_member())
-                    await _await_lock_contention(db, lock_key, task, "member_add")
+                    await _await_lock_contention(lock_key, task, "member_add")
 
                     await held.execute_raw(_DELETE_TEAM, team_id)
 
@@ -234,7 +234,7 @@ async def test_member_delete_blocked_by_member_add_removes_from_the_fresh_roster
                     async with blocker.tx(timeout=timedelta(seconds=30)) as held:
                         lock_key = await _hold_team_lock(held, team_id)
                         task = asyncio.create_task(run_delete())
-                        await _await_lock_contention(db, lock_key, task, "member_delete")
+                        await _await_lock_contention(lock_key, task, "member_delete")
 
                         await held.litellm_teamtable.update(
                             where={"team_id": team_id},
@@ -311,7 +311,7 @@ async def test_delete_blocked_by_member_add_sweeps_the_fresh_reference():
                     async with blocker.tx(timeout=timedelta(seconds=30)) as held:
                         lock_key = await _hold_team_lock(held, team_id)
                         task = asyncio.create_task(run_delete())
-                        await _await_lock_contention(db, lock_key, task, "delete_team")
+                        await _await_lock_contention(lock_key, task, "delete_team")
 
                         await held.litellm_usertable.upsert(
                             where={"user_id": user_id},

@@ -5,7 +5,7 @@ External producers (e.g. the litellm-rust gateway) POST finished logging
 payloads here; the proxy replays them through the standard callback fan-out.
 """
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import Field
 
@@ -17,7 +17,7 @@ class CallbackLogRecord(LiteLLMBaseModel):
     """A single finished logging event to replay through the callbacks."""
 
     status: Literal["success", "failure"]
-    standard_logging_payload: dict[str, Any]
+    standard_logging_payload: dict[str, object]
     error: str | None = None
 
 

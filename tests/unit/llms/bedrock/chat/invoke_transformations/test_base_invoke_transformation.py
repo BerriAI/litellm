@@ -242,6 +242,33 @@ def test_transform_response_hands_json_mode_to_nova():
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "temperature": 21}
 
 
+@pytest.mark.parametrize(("finish_reason", "expected"), [("MAX_TOKENS", "length"), (None, "stop")])
+def test_transform_response_accepts_null_cohere_finish_reason(finish_reason: str | None, expected: str) -> None:
+    from litellm.types.utils import ModelResponse
+
+    raw_response: Final = httpx.Response(
+        200,
+        json={"generations": [{"text": "Hello there", "finish_reason": finish_reason}]},
+        request=httpx.Request("POST", "https://bedrock"),
+    )
+
+    result: Final = AmazonInvokeConfig().transform_response(
+        model="invoke/cohere.command-text-v14",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key=None,
+    )
+
+    assert result.choices[0].message.content == "Hello there"
+    assert result.choices[0].finish_reason == expected
+
+
 def _stream_invoke_completion_with_spied_client(**kwargs: object) -> tuple[MagicMock, MagicMock]:
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -343,15 +370,18 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
     router: Final = litellm.Router(
-        model_list=[{"model_name": "invoke-chunked", "litellm_params": {**INVOKE_DEPLOYMENT, **deployment_extras}}]
+        model_list=[{"model_name": "invoke-chunked", "litellm_params": {**INVOKE_DEPLOYMENT, **deployment_extras}}],
+        num_retries=0,
     )
 
-    router.completion(
-        model="invoke-chunked",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        client=client,
-    )
+    # the empty body is a stream that ends before its first chunk, which the Router now reports from the call
+    with pytest.raises(litellm.BadGatewayError):
+        router.completion(
+            model="invoke-chunked",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+        )
 
     mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
     data: Final = client.post.call_args.kwargs["data"]

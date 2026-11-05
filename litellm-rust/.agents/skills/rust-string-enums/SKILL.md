@@ -1,6 +1,8 @@
 ---
 name: rust-string-enums
 description: Define or refactor Rust string-valued enums and their Serde adapters in litellm-rust, using Strum and serde_with while preserving parsing, wire values, and schemas
+metadata:
+  internal: true
 ---
 
 # Rust string enums
