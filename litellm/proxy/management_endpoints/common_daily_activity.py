@@ -29,7 +29,7 @@ from litellm.repositories.daily_activity_buckets import (
     model_group_bucket,
     raw_api_key_filter,
 )
-from litellm.repositories.daily_activity_repository import DailyActivityRepository
+from litellm.repositories.daily_activity_repository import DailyActivityQueryDatabase, DailyActivityRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
     DailySpendData,
@@ -572,8 +572,12 @@ class _ProxyDailyActivityReads:
         )
 
 
-def daily_activity_repository(prisma_client: PrismaClient) -> DailyActivityRepository:
-    return DailyActivityRepository(prisma_client, proxy_reads=_ProxyDailyActivityReads(prisma_client))
+def daily_activity_repository(
+    prisma_client: PrismaClient, *, query_database: DailyActivityQueryDatabase | None = None
+) -> DailyActivityRepository:
+    return DailyActivityRepository(
+        prisma_client, proxy_reads=_ProxyDailyActivityReads(prisma_client), query_database=query_database
+    )
 
 
 def daily_activity_scope(
