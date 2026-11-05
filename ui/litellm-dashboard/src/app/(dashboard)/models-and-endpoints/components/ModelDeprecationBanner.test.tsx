@@ -61,10 +61,43 @@ describe("ModelDeprecationBanner", () => {
     mockedUseModelDeprecations.mockReturnValue(
       queryResult(
         makeResponse({
-          upcoming: [makeInfo({ status: "upcoming" })],
+          upcoming: [makeInfo({ deprecation_date: "2026-12-05", status: "upcoming" })],
         }),
       ),
     );
+
+    renderBanner();
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("includes server-upcoming models at the local warning-window boundary", () => {
+    const upcomingInfoOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "due-in-window",
+      deprecation_date: "2026-12-04",
+      days_until_deprecation: 31,
+      status: "upcoming",
+    };
+    const info = makeInfo(upcomingInfoOverrides);
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ upcoming: [info] })));
+
+    renderBanner();
+
+    expect(screen.getByText("1 model deprecates within 30 days")).toBeInTheDocument();
+    expect(within(screen.getByRole("list")).getByRole("listitem")).toHaveTextContent(
+      "due-in-window deprecates on 2026-12-04, in 30 days",
+    );
+  });
+
+  it("does not show server-upcoming models one day past the local warning window", () => {
+    const upcomingInfoOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "due-outside-window",
+      deprecation_date: "2026-12-05",
+      days_until_deprecation: 31,
+      status: "upcoming",
+    };
+    const info = makeInfo(upcomingInfoOverrides);
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ upcoming: [info] })));
 
     renderBanner();
 

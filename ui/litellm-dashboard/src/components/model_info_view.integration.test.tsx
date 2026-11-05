@@ -82,6 +82,8 @@ const mockModelDeleteCall = vi.mocked(networking.modelDeleteCall);
 const mockCredentialCreateCall = vi.mocked(networking.credentialCreateCall);
 const mockVectorStoreListCall = vi.mocked(networking.vectorStoreListCall);
 
+const TEST_TODAY = new Date(2026, 10, 4);
+
 describe("ModelInfoView", () => {
   let queryClient: QueryClient;
 
@@ -256,7 +258,7 @@ describe("ModelInfoView", () => {
     render(
       <>
         <ModelInfoView {...DEFAULT_ADMIN_PROPS} />
-        <ModelDeprecationBanner />
+        <ModelDeprecationBanner today={TEST_TODAY} />
       </>,
       { wrapper },
     );

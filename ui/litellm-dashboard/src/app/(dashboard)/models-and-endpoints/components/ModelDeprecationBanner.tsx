@@ -30,7 +30,7 @@ const ModelDeprecationBanner = ({ today = new Date() }: { today?: Date }) => {
   }
 
   const localBuckets = bucketByLocalDate(
-    [...(data.deprecated ?? []), ...(data.imminent ?? [])],
+    [...(data.deprecated ?? []), ...(data.imminent ?? []), ...(data.upcoming ?? [])],
     today,
     data.warn_within_days,
   );
