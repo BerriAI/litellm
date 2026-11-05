@@ -56,7 +56,7 @@ class UsageAlertDelivery:
             for recipient in rule.email_recipients:
                 await send_email(
                     receiver_email=recipient,
-                    subject=f"LiteLLM usage alert: {alert.rule_name}",
+                    subject=f"LiteLLM performance alert: {alert.rule_name}",
                     html=(
                         f"<p>{escape(message).replace(chr(10), '<br>')}</p>"
                         f'<p><a href="{escape(url, quote=True)}">View activity</a></p>'
