@@ -60,6 +60,41 @@ def test_credential_loaded_after_deployment_registration_still_resolves():
     )
 
 
+def _team_deployment(model: str, team_id: str, **litellm_params) -> dict:
+    return {**_flagged_deployment(model, **litellm_params), "model_info": {"team_id": team_id}}
+
+
+def test_proxy_wide_deployment_credentials_skip_a_team_deployment_for_the_proxy_wide_one():
+    llm_router = litellm.Router(
+        model_list=[
+            _team_deployment(
+                "watsonx/ibm/granite-3-8b-instruct",
+                "team-a",
+                api_key="wx-team-a-key",
+                api_base="https://team-a.ml.cloud.ibm.com",
+            ),
+            _flagged_deployment(
+                "watsonx/ibm/granite-3-8b-instruct",
+                api_key="wx-proxy-wide-key",
+                api_base="https://eu-de.ml.cloud.ibm.com",
+            ),
+        ]
+    )
+
+    credentials = _passthrough_router(llm_router).get_proxy_wide_deployment_credentials(custom_llm_provider="watsonx")
+
+    assert credentials is not None
+    assert (credentials.api_key, credentials.api_base) == ("wx-proxy-wide-key", "https://eu-de.ml.cloud.ibm.com")
+
+
+def test_proxy_wide_deployment_credentials_are_none_when_only_a_team_deployment_is_flagged():
+    llm_router = litellm.Router(
+        model_list=[_team_deployment("watsonx/ibm/granite-3-8b-instruct", "team-a", api_key="wx-team-a-key")]
+    )
+
+    assert _passthrough_router(llm_router).get_proxy_wide_deployment_credentials(custom_llm_provider="watsonx") is None
+
+
 def test_credential_rotation_is_reflected_without_deployment_update():
     CredentialAccessor.upsert_credentials([_credential("cred_openai", "sk-before-rotation")])
     llm_router = litellm.Router(
