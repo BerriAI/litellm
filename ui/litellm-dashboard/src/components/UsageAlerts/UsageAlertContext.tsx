@@ -44,10 +44,11 @@ export default function UsageAlertContext({
   const alert = query.data;
   if (alert.scope_type !== scope || alert.scope_id !== entityId)
     return <p className="text-sm text-muted-foreground">This alert belongs to a different entity.</p>;
+  const verb = alert.metric === "requests" || alert.metric === "errors" ? "were" : "was";
   return (
     <p className="text-sm text-muted-foreground">
-      {METRIC_LABELS[alert.metric]} was {formatAlertValue(alert.metric, alert.observed_value)} on {alert.day} UTC. The
-      baseline was {formatAlertValue(alert.metric, alert.baseline_value)}
+      {METRIC_LABELS[alert.metric]} {verb} {formatAlertValue(alert.metric, alert.observed_value)} on {alert.day} UTC.
+      The baseline was {formatAlertValue(alert.metric, alert.baseline_value)}
       {alert.baseline_sample_days ? ` across ${alert.baseline_sample_days} recorded days` : ""}. The alert condition was{" "}
       {alert.direction === "increase" ? "at least" : "at most"} {formatAlertValue(alert.metric, alert.threshold)}.
     </p>

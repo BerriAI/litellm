@@ -27,7 +27,7 @@ import {
   type AlertPage,
   formatAlertValue,
   METRIC_LABELS,
-  SCOPE_LABELS,
+  usageAlertEntity,
   usageAlertHref,
   useUsageAlerts,
 } from "@/components/UsageAlerts/usageAlertApi";
@@ -191,7 +191,9 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
                   <Fragment key={alert.id}>
                     <Separator />
                     <a href={usageAlertHref(alert)} className="block space-y-1 text-sm hover:underline">
-                      <p className="font-medium truncate">{alert.scope_id || SCOPE_LABELS[alert.scope_type]}</p>
+                      <p className="font-medium truncate" title={usageAlertEntity(alert)}>
+                        {usageAlertEntity(alert)}
+                      </p>
                       <p className="text-xs text-muted-foreground">
                         {METRIC_LABELS[alert.metric]} {alert.direction === "increase" ? "increased" : "decreased"} to{" "}
                         {formatAlertValue(alert.metric, alert.observed_value)} · {alert.day}

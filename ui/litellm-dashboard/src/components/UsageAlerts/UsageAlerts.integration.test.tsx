@@ -70,13 +70,13 @@ describe("usage alerts API integration", () => {
   it("shows the saved evidence, links to exact Activity context, and pages server-side", async () => {
     const user = userEvent.setup();
     renderWithProviders(<UsageAlertsPanel />);
-    const link = await screen.findByRole("link", { name: "reporting-test-id" });
+    const link = await screen.findByRole("link", { name: "Key: reporting-test-id" });
     expect(link).toHaveAttribute("href", `/ui${observation.activity_path}`);
     expect(screen.getByText("$120.00")).toBeInTheDocument();
     expect(screen.getByText("$30.00")).toBeInTheDocument();
     expect(screen.getByText("At least $90.00")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Go to next page", exact: true }));
-    expect(await screen.findByRole("link", { name: "second-key" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Key: second-key" })).toBeInTheDocument();
     expect(calls.some((call) => call.path === "/usage/alerts" && call.query.get("offset") === "50")).toBe(true);
   });
 
@@ -90,14 +90,14 @@ describe("usage alerts API integration", () => {
 
   it("hides cached global incidents when the viewer loses global spend access", async () => {
     renderWithProviders(<UsageAlertsPanel />);
-    expect(await screen.findByRole("link", { name: "reporting-test-id" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Key: reporting-test-id" })).toBeInTheDocument();
     await act(async () => {
       testQueryClient.setQueriesData(
         { queryKey: ["currentUser"] },
         { user_id: "test-admin", user_role: "internal_user_viewer" },
       );
     });
-    await waitFor(() => expect(screen.queryByRole("link", { name: "reporting-test-id" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Key: reporting-test-id" })).not.toBeInTheDocument());
   });
 
   it("shows saved evidence on the matching entity without recomputing from a current rule", async () => {

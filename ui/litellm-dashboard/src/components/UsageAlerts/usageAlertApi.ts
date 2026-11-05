@@ -16,6 +16,8 @@ export const METRIC_LABELS = { spend: "Spend", requests: "Requests", latency: "A
 export const SCOPE_LABELS = { deployment: "Deployment", key: "Key", team: "Team", user: "User", model: "Model" };
 
 export const usageAlertHref = (alert: UsageAlert) => uiHref(alert.activity_path);
+export const usageAlertEntity = (alert: UsageAlert) =>
+  alert.scope_id ? `${SCOPE_LABELS[alert.scope_type]}: ${alert.scope_id}` : SCOPE_LABELS[alert.scope_type];
 
 export function formatAlertValue(metric: UsageAlert["metric"], value: number): string {
   if (metric === "spend")

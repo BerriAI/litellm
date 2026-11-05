@@ -13,9 +13,9 @@ import {
   AlertStatus,
   formatAlertValue,
   METRIC_LABELS,
-  SCOPE_LABELS,
   updateAlertStatus,
   UsageAlert,
+  usageAlertEntity,
   usageAlertHref,
   useUsageAlerts,
 } from "./usageAlertApi";
@@ -51,8 +51,12 @@ export default function UsageAlertsPanel() {
         id: "entity",
         header: "Entity",
         cell: ({ row }) => (
-          <a href={usageAlertHref(row.original)} className="font-medium text-primary hover:underline">
-            {row.original.scope_id || SCOPE_LABELS[row.original.scope_type]}
+          <a
+            href={usageAlertHref(row.original)}
+            title={usageAlertEntity(row.original)}
+            className="block max-w-80 truncate font-medium text-primary hover:underline"
+          >
+            {usageAlertEntity(row.original)}
           </a>
         ),
       },
