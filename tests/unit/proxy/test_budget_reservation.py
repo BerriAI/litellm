@@ -3721,3 +3721,12 @@ async def test_unreserved_model_access_group_is_charged_alongside_a_reserved_one
     assert counter_cache.in_memory_cache.get_cache(
         key=model_access_group_spend_counter_key("starter")
     ) == pytest.approx(4.2)
+
+def test_requested_output_tokens_gemini_generation_config() -> None:
+    """Verify generationConfig.maxOutputTokens is properly parsed for Gemini models."""
+    from litellm.proxy.spend_tracking.budget_reservation import _requested_output_tokens
+
+    body = {
+        "generationConfig": {"maxOutputTokens": 4096}
+    }
+    assert _requested_output_tokens(body) == 4096
