@@ -191,10 +191,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
             response_kwargs["usage"] = usage
 
         if not response_kwargs:
-            raise ValueError(
-                "Invalid response format. Received response does not match the expected format. Got: ",
-                response_object,
-            )
+            raise ValueError("Invalid response format. Received response does not match the expected format.")
 
         response: Final = TranscriptionResponse(**response_kwargs)
 

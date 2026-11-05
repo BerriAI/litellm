@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import httpx
 import litellm
 import pytest
+from pydantic import ValidationError
 
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
@@ -199,6 +200,16 @@ def test_mistral_audio_transcription_response_transform_keeps_non_json_body_out_
     raw_response = httpx.Response(200, text='{"text": "sensitive')
 
     with pytest.raises(MistralAudioTranscriptionException, match="non-JSON") as exc_info:
+        MistralAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
+
+    assert "sensitive" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("text", [["sensitive"], {"value": "sensitive"}])
+def test_mistral_audio_transcription_response_transform_keeps_a_malformed_text_field_out_of_the_error(text: object):
+    raw_response = httpx.Response(200, json={"text": text, "segments": [{"text": "sensitive"}]})
+
+    with pytest.raises(ValidationError) as exc_info:
         MistralAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
 
     assert "sensitive" not in str(exc_info.value)

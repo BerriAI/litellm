@@ -129,6 +129,15 @@ def test_transform_audio_transcription_response_keeps_the_body_out_of_malformed_
     assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))
 
 
+def test_transform_audio_transcription_response_names_the_failing_lookup_of_a_malformed_payload():
+    raw_response = httpx.Response(200, json={"text": "sensitive", "words": [None]})
+
+    with pytest.raises(ValueError, match=r"^Error transforming ElevenLabs response: 1 validation error for ") as exc_info:
+        ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
+
+    assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))
+
+
 class TestElevenLabsAudioTranscription:
     @pytest.mark.usefixtures("elevenlabs_api_key_env")
     def test_elevenlabs_diarize_parameter_passthrough(self):
