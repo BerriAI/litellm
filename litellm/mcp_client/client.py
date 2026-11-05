@@ -478,6 +478,13 @@ def _notify_cleanup(callback: Callable[[], None] | None) -> None:
         callback()
 
 
+class _UnvalidatedClientSession(ClientSession):
+    """Skips the SDK's output check, which lists the upstream's tools on a session with no schema cached."""
+
+    async def validate_tool_result(self, name: str, result: MCPCallToolResult) -> None:
+        return None
+
+
 class MCPClient:
     """
     MCP Client supporting:
@@ -505,12 +512,15 @@ class MCPClient:
         elicitation_callback: "ElicitationCallback | None" = None,
         logging_callback: Callable | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
+        skip_tool_output_validation: bool = False,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
     ):
         self.protocol_version: MCPUpstreamProtocol = TypeAdapter[MCPUpstreamProtocol](
             MCPUpstreamProtocol
         ).validate_python(protocol_version)
         validate_mcp_protocol_transport(self.protocol_version, transport_type)
+        # 2026-07-28 lists tools before every call, so its output check adds no list
+        self.skip_tool_output_validation: Final = skip_tool_output_validation and self.protocol_version != "2026-07-28"
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
@@ -546,7 +556,7 @@ class MCPClient:
             "response_hooks": _mcp_response_hooks(),
         }
 
-    def session_settings(self) -> tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool]:
+    def session_settings(self) -> tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool, bool]:
         callbacks: Final = self.session_callbacks()
         return (
             self.transport_type,
@@ -555,6 +565,7 @@ class MCPClient:
             callbacks["sampling_callback"] is not None,
             callbacks["elicitation_callback"] is not None,
             callbacks["logging_callback"] is not None,
+            self.skip_tool_output_validation,
         )
 
     def route_session_callbacks(self, callbacks: _SessionCallbackMap) -> None:
@@ -776,7 +787,10 @@ class MCPClient:
                     )
                     # The SDK drops a response stream that ends without a JSON-RPC reply, so nothing else
                     # ever fails the request.
-                    session_ctx: Final = ClientSession(
+                    session_type: Final = (
+                        _UnvalidatedClientSession if self.skip_tool_output_validation else ClientSession
+                    )
+                    session_ctx: Final = session_type(
                         read_stream,
                         write_stream,
                         read_timeout_seconds=self.timeout,

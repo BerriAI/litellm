@@ -556,9 +556,9 @@ def test_a_global_spend_reset_while_redis_is_down_answers_500_and_the_retry_rese
         _assert_counters_unwritten(isolated.gateway.request("POST", "/global/spend/reset"), "Spend was reset")
         assert _key_spend(key, isolated.database_url) == 0.0
         _assert_served(_chat(isolated.gateway.client, model, key))
-        _landed(lambda: _key_spend(key, isolated.database_url), ONE_CALL_COST)
         isolated.redis.start()
         assert isolated.cache.ping()
+        _landed(lambda: _key_spend(key, isolated.database_url), ONE_CALL_COST)
         _accepted_once_redis_is_back(lambda: isolated.gateway.request("POST", "/global/spend/reset"))
         assert _key_spend(key, isolated.database_url) == 0.0
         assert outlives(_settled(isolated.cache, counter, 0.0))
