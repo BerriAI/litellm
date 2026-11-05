@@ -1556,6 +1556,11 @@ def _chunk_refusal(chunk: object) -> str:
     return refusal if isinstance(refusal, str) else ""
 
 
+def _message_refusal(choice: object) -> str:
+    refusal: Final = _field_of(_field_of(choice, "message"), "refusal")
+    return refusal if isinstance(refusal, str) else ""
+
+
 _NON_TEXT_DELTA_FIELDS: Final = (
     "tool_calls",
     "function_call",
@@ -1906,7 +1911,7 @@ def _assembled_stream_response(
             for field, value in _assembled_message_fields(processor, choice_chunks):
                 choice.message[field] = value
 
-        completion_output = get_content_from_model_response(response)
+        completion_output = get_content_from_model_response(response) + "".join(map(_message_refusal, response.choices))
 
         reasoning_tokens: Final = processor.count_reasoning_tokens(response)
 
