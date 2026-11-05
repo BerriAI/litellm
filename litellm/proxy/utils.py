@@ -168,7 +168,6 @@ from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
     Logging,
-    UsageObservation,
     deployment_pricing_model_info,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -214,6 +213,7 @@ from litellm.proxy.db.db_url_settings import (
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
+    db_write_never_sent,
 )
 from litellm.proxy.db.health_check_latest import (
     LatestHealthCheckRow,
@@ -1805,39 +1805,6 @@ def _failure_fields_to_lift(
         if _prompt_estimate is not None
         else ()
     )
-    from litellm.litellm_core_utils.litellm_logging import UsageCaptureObservation
-
-    _recorded_observation: Final[object] = _model_call_details.get("_accounting_usage_observed")
-    _current_usage: Final = (
-        _current_failure_usage_to_lift(
-            _model_call_details,
-            request_data,
-            _model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
-            _billed,
-            _deployment_id,
-            _base_model,
-            _estimate_call_type,
-        )
-        if Logging.usage_capture_callback is not None
-        and (_billed or _model_call_details.get("combined_usage_object") is not None)
-        else None
-    )
-    _current_observation: Final = (
-        _recorded_observation
-        if isinstance(_recorded_observation, UsageObservation)
-        else UsageObservation.UNKNOWN
-        if _current_usage is None
-        else UsageObservation.KNOWN
-        if _model_call_details.get("combined_usage_object") is not None
-        else UsageObservation.ESTIMATED
-    )
-    _capture_observation: Final = UsageCaptureObservation.from_usage(
-        _current_usage[0] if _current_usage is not None and isinstance(_current_usage[0], Usage) else None,
-        _current_observation,
-        float(_current_usage[1])
-        if _current_usage is not None and isinstance(_current_usage[1], (int, float))
-        else None,
-    )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
         ("first_api_call_start_time", _first_handoff),
@@ -1846,16 +1813,12 @@ def _failure_fields_to_lift(
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
         ("billed_failed_attempts", _earlier_attempts or None),
-        ("_accounting_capture", _model_call_details.get("_accounting_capture")),
         ("_accounting_pricing_snapshot", _model_call_details.get("_accounting_pricing_snapshot")),
         ("_accounting_finalized_cost", _logging_obj.finalized_cost if isinstance(_logging_obj, Logging) else None),
         (
             "_accounting_allocation",
             _logging_obj.cost_allowance_allocation if isinstance(_logging_obj, Logging) else None,
         ),
-        ("_accounting_usage_observed", _current_observation if Logging.usage_capture_callback is not None else None),
-        ("_accounting_usage_snapshot", _capture_observation if Logging.usage_capture_callback is not None else None),
-        ("_accounting_prior_captures", _model_call_details.get("_accounting_prior_captures")),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 
@@ -8841,9 +8804,20 @@ async def update_daily_tag_spend(
 
 def _rollup_batch_never_applied(e: Exception) -> bool:
     """True when a drained rollup batch provably never reached its rows: Postgres had no
-    connection for it (53300) or cancelled it under ``lock_timeout`` before it took the row
-    lock (55P03). Either way re-sending the batch cannot double-count, so it is requeued."""
-    return PrismaDBExceptionHandler.is_database_capacity_error(e) or PrismaDBExceptionHandler.is_lock_timeout_error(e)
+    connection for it (53300), was unreachable or refusing connections (P1001, 57P03), or
+    cancelled it under ``lock_timeout`` before it took the row lock (55P03). In each case
+    re-sending the batch cannot double-count, so it is requeued."""
+    return (
+        PrismaDBExceptionHandler.is_database_capacity_error(e)
+        or db_write_never_sent(e)
+        or PrismaDBExceptionHandler.is_lock_timeout_error(e)
+    )
+
+
+def _rollup_failure_stops_job(e: Exception) -> bool:
+    """True when the database cannot take any write, so the job stops instead of draining
+    the queues after this one into the same failure."""
+    return PrismaDBExceptionHandler.is_database_capacity_error(e) or db_write_never_sent(e)
 
 
 async def update_spend_logs_job(
@@ -8934,12 +8908,12 @@ async def _run_spend_logs_job(
                     *prisma_client.tool_usage_transactions,
                 ]
             verbose_proxy_logger.warning(
-                "Spend tracking - database out of connections or rollup row lock timed out during tool usage "
+                "Spend tracking - database unavailable or rollup row lock timed out during tool usage "
                 "flush, requeued %s tool usage transactions for the next flush: %s",
                 len(tool_usage_to_process),
                 tool_tracking_err,
             )
-            if PrismaDBExceptionHandler.is_database_capacity_error(tool_tracking_err):
+            if _rollup_failure_stops_job(tool_tracking_err):
                 raise
         else:
             verbose_proxy_logger.error(
@@ -8966,12 +8940,12 @@ async def _run_spend_logs_job(
                     *prisma_client.model_usage_transactions,
                 ]
             verbose_proxy_logger.warning(
-                "Spend tracking - database out of connections or rollup row lock timed out during model usage "
+                "Spend tracking - database unavailable or rollup row lock timed out during model usage "
                 "flush, requeued %s model usage transactions for the next flush: %s",
                 len(model_usage_to_process),
                 model_usage_err,
             )
-            if PrismaDBExceptionHandler.is_database_capacity_error(model_usage_err):
+            if _rollup_failure_stops_job(model_usage_err):
                 raise
         else:
             verbose_proxy_logger.error(
@@ -9148,6 +9122,7 @@ def _is_transient_spend_log_write_error(e: Exception) -> bool:
     return (
         PrismaDBExceptionHandler.is_database_transport_error(e)
         or PrismaDBExceptionHandler.is_prisma_engine_internal_error(e)
+        or PrismaDBExceptionHandler.is_database_lifecycle_error(e)
         or PrismaDBExceptionHandler.is_deadlock_error(e)
     )
 

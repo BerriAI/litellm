@@ -7,14 +7,14 @@ import { Page } from "@/components/shared/Page";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
 import { hasCapability } from "@/utils/capabilities";
-import { migrationUrlOptions, migrationUrlParsers, migrationHref } from "./migrationRoute";
+import { migrationUrlParsers, migrationHref } from "./migrationRoute";
 import AlertsInbox from "./AlertsInbox";
 import MigrationDetail from "./MigrationDetail";
 
 export default function ModelAlertsPage() {
   const { accessToken, userRole, isViewOnly } = useAuthorized();
   const allowed = hasCapability(userRole, "viewGlobalSpend");
-  const [params, setParams] = useQueryStates(migrationUrlParsers, migrationUrlOptions);
+  const [params, setParams] = useQueryStates(migrationUrlParsers);
   const alerts = useDeprecationAlerts(accessToken);
   const selected = alerts.data?.find((alert) => alert.usageModel === params.model);
   const loadingDetail = !alerts.isError && Boolean(params.model) && alerts.isPending;
@@ -22,31 +22,33 @@ export default function ModelAlertsPage() {
   const missingDetail = detailReady && !selected;
   if (!allowed)
     return (
-      <Page className="h-full gap-3 p-0 sm:p-0">
+      <Page className="h-full gap-3 overflow-y-auto p-0 sm:p-0">
         <h1 className="text-xl font-semibold">Model deprecations</h1>
         <p>Gateway admin access is required to view affected keys and teams.</p>
       </Page>
     );
   return (
-    <Page className="h-full gap-3 p-0 sm:p-0">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <Bell size={20} />
-            {params.model || "Model deprecations"}
-          </h1>
-          {!params.model && (
-            <p className="mt-1 text-sm text-muted-foreground">
-              Review impact, contact owners, and resolve each model migration.
-            </p>
+    <Page className="h-full gap-3 overflow-y-auto p-0 sm:p-0">
+      {params.model && (
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+              <Bell size={20} />
+              {params.model || "Model deprecations"}
+            </h1>
+            {!params.model && (
+              <p className="mt-1 text-sm text-muted-foreground">
+                Review impact, contact owners, and resolve each model migration.
+              </p>
+            )}
+          </div>
+          {params.model && (
+            <a className={buttonVariants({ variant: "outline" })} href={migrationHref()}>
+              ← Model deprecations
+            </a>
           )}
-        </div>
-        {params.model && (
-          <a className={buttonVariants({ variant: "outline" })} href={migrationHref()}>
-            ← Model deprecations
-          </a>
-        )}
-      </header>
+        </header>
+      )}
       {alerts.isError ? (
         <div role="alert">
           <p>Could not load alerts. No alert status has been changed.</p>

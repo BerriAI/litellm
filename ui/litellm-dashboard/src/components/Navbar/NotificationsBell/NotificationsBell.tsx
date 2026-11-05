@@ -24,6 +24,8 @@ import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDep
 import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
 import { migrationHref } from "@/components/ModelDeprecationAlerts/migrationRoute";
 import React, { Fragment } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
 
 export const AUTO_ROUTER_DOCS_URL = "https://docs.litellm.ai/docs/proxy/auto_routing";
 
@@ -43,14 +45,11 @@ const AUTO_ROUTER_ANNOUNCEMENT: Announcement = {
   href: AUTO_ROUTER_DOCS_URL,
 };
 
-const plural = (count: number, singular: string, pluralForm: string): string =>
-  `${count} ${count === 1 ? singular : pluralForm}`;
-
 const describeRelease = ({ new_features, bug_fixes, other_updates }: LatestReleaseInfo): string =>
   [
-    plural(new_features, "new feature", "new features"),
-    plural(bug_fixes, "fix", "fixes"),
-    `and ${plural(other_updates, "other update", "other updates")}`,
+    i18n.t("shell.notifications.release.newFeatures", { count: new_features }),
+    i18n.t("shell.notifications.release.fixes", { count: bug_fixes }),
+    i18n.t("shell.notifications.release.otherUpdates", { count: other_updates }),
   ].join(", ");
 
 const upgradeAnnouncement = (
@@ -62,14 +61,18 @@ const upgradeAnnouncement = (
   }
   return {
     readKey: `litellm:upgradeBannerDismissed:${latestRelease.version}`,
-    title: `LiteLLM v${latestRelease.version} is available`,
-    description: `${describeRelease(latestRelease)}. Your current version is v${currentVersion}`,
-    linkLabel: "View release notes",
+    title: i18n.t("shell.notifications.upgrade.title", { version: latestRelease.version }),
+    description: i18n.t("shell.notifications.upgrade.description", {
+      summary: describeRelease(latestRelease),
+      current: currentVersion,
+    }),
+    linkLabel: i18n.t("shell.notifications.upgrade.link"),
     href: latestRelease.release_url,
   };
 };
 
 const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announcement }) => {
+  const { t } = useTranslation();
   const read = useAnnouncementRead(announcement.readKey);
   return (
     <article aria-label={announcement.title} className="flex flex-col gap-2">
@@ -95,7 +98,7 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
             className="h-auto px-0! text-xs font-normal text-muted-foreground"
             onClick={() => markAnnouncementRead(announcement.readKey)}
           >
-            Mark as read
+            {t("shell.notifications.announcement.markAsRead")}
           </Button>
         )}
       </div>
@@ -116,13 +119,17 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   deploymentHealthLink,
   deprecationAlerts,
 }) => {
+  const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
   const announcements = upgrade ? [upgrade, AUTO_ROUTER_ANNOUNCEMENT] : [AUTO_ROUTER_ANNOUNCEMENT];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
 
   const openAlerts = (deprecationAlerts ?? []).filter((alert) => effectiveAlertStatus(alert) === AlertStatus.Open);
   const openDeprecations = openAlerts.length;
-  let label = unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications";
+  let label =
+    unreadCount > 0
+      ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
+      : t("shell.notifications.bell.trigger");
   if (openDeprecations > 0) {
     label = `Notifications, ${openDeprecations} model deprecation ${openDeprecations === 1 ? "alert needs" : "alerts need"} attention`;
   }
@@ -147,10 +154,12 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        aria-label="Notifications"
+        aria-label={t("shell.notifications.bell.trigger")}
         className="w-96 max-w-[calc(100vw-1rem)] gap-0 overflow-hidden p-0"
       >
-        <PopoverTitle className="border-b border-border px-4 py-3 text-sm font-semibold">What&apos;s new</PopoverTitle>
+        <PopoverTitle className="border-b border-border px-4 py-3 text-sm font-semibold">
+          {t("shell.notifications.bell.title")}
+        </PopoverTitle>
         <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
           <div className="space-y-4 p-4">
             {openAlerts.length > 0 && (

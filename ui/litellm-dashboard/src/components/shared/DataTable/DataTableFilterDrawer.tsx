@@ -6,6 +6,7 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import i18n from "@/i18n/i18n";
 
 export interface FilterDraft {
   get: (columnId: string) => unknown;
@@ -46,10 +47,10 @@ export function DataTableFilterDrawer<TData>({
   table,
   open,
   onOpenChange,
-  title = "Filters",
+  title = i18n.t("shared.dataTable.filterDrawer.title"),
   description,
-  applyLabel = "Apply Filters",
-  resetLabel = "Reset",
+  applyLabel = i18n.t("shared.dataTable.filterDrawer.apply"),
+  resetLabel = i18n.t("shared.dataTable.filterDrawer.reset"),
   onReset,
   children,
 }: DataTableFilterDrawerProps<TData>) {

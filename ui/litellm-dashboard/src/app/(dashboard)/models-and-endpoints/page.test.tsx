@@ -10,9 +10,6 @@ import ModelsAndEndpointsPage from "./page";
 vi.mock("@/lib/telemetry/uiEvents", () => ({ recordUiEvent: vi.fn(() => Promise.resolve()) }));
 vi.mock("next/navigation", () => ({ usePathname: () => "/ui/models-and-endpoints" }));
 
-vi.mock("@/components/ModelDeprecationAlerts/ModelDeprecationsPanel", () => ({
-  default: () => <div data-testid="panel-deprecations" />,
-}));
 vi.mock("./panels/AllModelsPanel", () => ({ default: () => <div data-testid="panel-all-models" /> }));
 vi.mock("./panels/AddModelPanel", () => ({ default: () => <div data-testid="panel-add" /> }));
 vi.mock("./panels/AutoRoutersTabPanel", () => ({ default: () => <div data-testid="panel-auto-routers" /> }));
@@ -161,7 +158,6 @@ describe("ModelsAndEndpointsPage", () => {
     renderPage();
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Deployed Models",
-      "Model deprecations",
       "Add Model",
       "Auto-Routers Beta",
       "LLM Credentials",
@@ -205,23 +201,16 @@ describe("ModelsAndEndpointsPage", () => {
 
   // Auto-routers are excluded from the Deployed Models table, so this tab is their home: the only
   // place in the product to list, create, edit or delete one.
-  it("should open model deprecations from the bell URL for admins", () => {
-    renderPage({ searchParams: "?tab=model-deprecations" });
-    expect(screen.getByRole("tab", { name: "Model deprecations" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByTestId("panel-deprecations")).toBeInTheDocument();
-  });
-
   describe("Auto-Routers tab", () => {
-    it("should keep Auto-Routers after Add Model and Model deprecations", () => {
+    it("sits third, after Deployed Models and Add Model", () => {
       renderPage();
 
       const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
       expect(tabs[0]).toContain("Deployed Models");
-      expect(tabs[1]).toBe("Model deprecations");
-      expect(tabs[2]).toBe("Add Model");
-      expect(tabs[3]).toContain("Auto-Routers");
+      expect(tabs[1]).toBe("Add Model");
+      expect(tabs[2]).toContain("Auto-Routers");
       // Badged Beta while the tab settles; BetaBadge renders the label text.
-      expect(tabs[3]).toContain("Beta");
+      expect(tabs[2]).toContain("Beta");
     });
 
     it("renders its panel when selected", async () => {

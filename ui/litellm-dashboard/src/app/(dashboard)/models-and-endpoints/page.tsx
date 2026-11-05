@@ -1,10 +1,11 @@
 "use client";
 
-import ModelDeprecationsPanel from "@/components/ModelDeprecationAlerts/ModelDeprecationsPanel";
 import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
@@ -31,7 +32,6 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const MODEL_TAB_SLUGS = [
-  "model-deprecations",
   "add",
   "auto-routers",
   "llm-credentials",
@@ -51,23 +51,20 @@ const TAB_KEYS = [BASE_TAB_KEY, ...MODEL_TAB_SLUGS] as const;
 
 const PREFILL_URL_PARAMS = { provider: parseAsString, litellm_model: parseAsString };
 
-const TAB_LABELS: Record<ModelTabSlug, string> = {
-  "model-deprecations": "Model deprecations",
-  add: "Add Model",
-  "auto-routers": "Auto-Routers",
-  "llm-credentials": "LLM Credentials",
-  "pass-through": "Pass-Through Endpoints",
-  health: "Health Status",
-  "retry-settings": "Model Retry Settings",
-  "model-group-alias": "Model Group Alias",
-  "access-group-budgets": "Model Access Group Budgets",
-  "price-data": "Price Data Reload",
+const TAB_LABELS: Record<ModelTabSlug, ParseKeys> = {
+  add: "modelsAndEndpoints.page.tabs.add",
+  "auto-routers": "modelsAndEndpoints.page.tabs.autoRouters",
+  "llm-credentials": "modelsAndEndpoints.page.tabs.llmCredentials",
+  "pass-through": "modelsAndEndpoints.page.tabs.passThrough",
+  health: "modelsAndEndpoints.page.tabs.health",
+  "retry-settings": "modelsAndEndpoints.page.tabs.retrySettings",
+  "model-group-alias": "modelsAndEndpoints.page.tabs.modelGroupAlias",
+  "access-group-budgets": "modelsAndEndpoints.page.tabs.accessGroupBudgets",
+  "price-data": "modelsAndEndpoints.page.tabs.priceData",
 };
 
 const renderPanel = (key: string) => {
   switch (key) {
-    case "model-deprecations":
-      return <ModelDeprecationsPanel />;
     case BASE_TAB_KEY:
       return <AllModelsPanel />;
     case "auto-routers":
@@ -94,6 +91,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
+  const { t } = useTranslation();
   const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
@@ -124,7 +122,6 @@ export default function ModelsAndEndpointsPage() {
   const visibleSlugs = useMemo<Array<"" | ModelTabSlug>>(
     () => [
       "",
-      ...(isAdmin ? (["model-deprecations"] as const) : []),
       ...(canCreate ? (["add"] as const) : []),
       ...(isAdmin || canViewAutoRouters ? (["auto-routers"] as const) : []),
       // effectiveSessionRole reports proxy_admin_viewer as "Admin", so isAdmin alone would show a
@@ -152,17 +149,19 @@ export default function ModelsAndEndpointsPage() {
     void setPrefillParams({ provider: null, litellm_model: null });
   };
 
-  const allModelsLabel = isAdmin ? "Deployed Models" : "Your Models";
+  const allModelsLabel = isAdmin
+    ? t("modelsAndEndpoints.page.tabs.deployedModels")
+    : t("modelsAndEndpoints.page.tabs.yourModels");
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
     if (!slug) return allModelsLabel;
     if (slug === "auto-routers" || slug === "access-group-budgets") {
       return (
         <span className="flex items-center gap-2">
-          {TAB_LABELS[slug]} <BetaBadge />
+          {t(TAB_LABELS[slug])} <BetaBadge />
         </span>
       );
     }
-    return TAB_LABELS[slug];
+    return t(TAB_LABELS[slug]);
   };
 
   const handleRefreshClick = () => {
@@ -190,29 +189,21 @@ export default function ModelsAndEndpointsPage() {
     );
   }
 
-  const showingDeprecations = activeKey === "model-deprecations";
-
   return (
-    <div className={showingDeprecations ? "flex h-full min-h-0 flex-col p-6" : "mx-4"}>
-      <div
-        className={showingDeprecations ? "flex min-h-0 flex-1 flex-col gap-2" : "mt-2 flex w-full flex-col gap-2 p-8"}
-      >
-        {!showingDeprecations && (
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">Model Management</h2>
-              {isAdmin ? (
-                <p className="text-sm text-muted-foreground">Add and manage models for the proxy</p>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  View your models and manage routers for teams that allow it.
-                </p>
-              )}
-            </div>
+    <div className="mx-4">
+      <div className="mt-2 flex w-full flex-col gap-2 p-8">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">{t("modelsAndEndpoints.page.title")}</h2>
+            {isAdmin ? (
+              <p className="text-sm text-muted-foreground">{t("modelsAndEndpoints.page.adminDescription")}</p>
+            ) : (
+              <p className="text-sm text-muted-foreground">{t("modelsAndEndpoints.page.userDescription")}</p>
+            )}
           </div>
-        )}
+        </div>
 
-        {!showingDeprecations && !isViewOnly && <DecisionModelsBanner />}
+        {!isViewOnly && <DecisionModelsBanner />}
 
         {modelId ? (
           <ModelInfoView
@@ -226,11 +217,7 @@ export default function ModelsAndEndpointsPage() {
             modelAccessGroups={availableModelAccessGroups}
           />
         ) : (
-          <Tabs
-            value={activeKey}
-            onValueChange={handleTabChange}
-            className={showingDeprecations ? "flex min-h-0 flex-1 flex-col" : undefined}
-          >
+          <Tabs value={activeKey} onValueChange={handleTabChange}>
             <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
               <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
                 <TabsList variant="line" className="w-max justify-start">
@@ -246,9 +233,16 @@ export default function ModelsAndEndpointsPage() {
               </div>
               <div className="flex shrink-0 items-center gap-2 pb-1">
                 {lastRefreshed && (
-                  <span className="text-xs text-muted-foreground">Last Refreshed: {lastRefreshed}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {t("modelsAndEndpoints.page.lastRefreshed", { time: lastRefreshed })}
+                  </span>
                 )}
-                <Button variant="ghost" size="icon-sm" onClick={handleRefreshClick} aria-label="Refresh models">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handleRefreshClick}
+                  aria-label={t("modelsAndEndpoints.page.refreshModels")}
+                >
                   <RefreshCw />
                 </Button>
               </div>
@@ -256,11 +250,7 @@ export default function ModelsAndEndpointsPage() {
             {visibleSlugs.map((slug) => {
               const key = slug || BASE_TAB_KEY;
               return (
-                <TabsContent
-                  key={key}
-                  value={key}
-                  className={showingDeprecations ? "flex min-h-0 flex-1 flex-col pt-4" : "pt-4"}
-                >
+                <TabsContent key={key} value={key} className="pt-4">
                   {renderPanel(key)}
                 </TabsContent>
               );

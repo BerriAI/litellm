@@ -14,11 +14,12 @@ import type { components } from "@/lib/http/schema";
 import { keyDetailHref, modelGroupHref } from "@/utils/entityLinks";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
-import { migrationUrlOptions, migrationUrlParsers } from "./migrationRoute";
+import { migrationUrlParsers } from "./migrationRoute";
 import type { DeprecationAlert, deprecationUsageRange } from "@/components/ModelDeprecationAlerts/deprecationAlerts";
 import RecommendedReplacement from "@/components/ModelDeprecationAlerts/RecommendedReplacement";
 import { DeprecationTiming } from "./DeprecationModel";
 import UsageTags from "./UsageTags";
+import ModelUsageChart from "./ModelUsageChart";
 import { affectedTeams } from "./migrationData";
 
 const TABLE_STATE = { sortFields: [], defaultSort: { id: "", desc: false }, defaultPageSize: 50, filterColumns: [] };
@@ -51,7 +52,7 @@ export default function MigrationDetail({
   range: ReturnType<typeof deprecationUsageRange>;
   isViewOnly: boolean;
 }) {
-  const [params, setParams] = useQueryStates(migrationUrlParsers, migrationUrlOptions);
+  const [params, setParams] = useQueryStates(migrationUrlParsers);
   const { data: teams = [] } = useTeams();
   const teamNames = useMemo(
     () => new Map(teams.map((team) => [team.team_id, team.team_alias || team.team_id])),
@@ -269,7 +270,8 @@ export default function MigrationDetail({
           </p>
         </div>
       </div>
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border">
+      <ModelUsageChart model={model} team={params.team} scope={scope} range={range} />
+      <section className="flex h-[480px] shrink-0 flex-col overflow-hidden rounded-xl border">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
           <div>
             <h2 className="font-medium">

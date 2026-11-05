@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
-import ModelAlertsPage from "./ModelDeprecationsPanel";
+import ModelAlertsPage from "@/app/(dashboard)/alerts/page";
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => ({ data: [{ team_id: "support", team_alias: "Support" }] }),
@@ -68,17 +68,17 @@ describe("model migration impact", () => {
   afterEach(() => vi.restoreAllMocks());
   it("should render the inbox with last seen and the recommendation supplied by the API", () => {
     renderWithProviders(<ModelAlertsPage />);
-    expect(screen.getByRole("heading", { name: "Model deprecations" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Alerts" })).toBeInTheDocument();
     expect(screen.getByText("replacement-model")).toBeInTheDocument();
     expect(screen.getByText("2026-11-04")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Review impact →" })).toHaveAttribute(
       "href",
-      "/ui/models-and-endpoints?tab=model-deprecations&deprecation_model=openai%2Fgpt-4-turbo",
+      "/ui/alerts?type=model-deprecations&model=openai%2Fgpt-4-turbo",
     );
   });
   it("should page through all affected keys instead of showing a top-ten sample", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<ModelAlertsPage />, { searchParams: { deprecation_model: "openai/gpt-4-turbo" } });
+    renderWithProviders(<ModelAlertsPage />, { searchParams: { model: "openai/gpt-4-turbo" } });
     expect(await screen.findByRole("link", { name: "support-key-0" })).toBeInTheDocument();
     expect(screen.getByText(/Showing 1-50 of 120/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Go to next page", exact: true }));
@@ -95,7 +95,7 @@ describe("model migration impact", () => {
   it("should resolve the whole model using its global latest-day snapshot even in a team-filtered view", async () => {
     const user = userEvent.setup();
     renderWithProviders(<ModelAlertsPage />, {
-      searchParams: { deprecation_model: "openai/gpt-4-turbo", deprecation_team: "support" },
+      searchParams: { model: "openai/gpt-4-turbo", team: "support" },
     });
     expect(await screen.findByRole("link", { name: "support-key-0" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Mark resolved", exact: true }));

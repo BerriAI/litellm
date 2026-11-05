@@ -210,9 +210,9 @@ describe("model deprecation notifications", () => {
     expect(screen.getByRole("article", { name: /retires in 26 days/ })).toHaveTextContent("Last seen 2026-11-04 UTC");
     expect(screen.getByRole("link", { name: "Review migration" })).toHaveAttribute(
       "href",
-      "/ui/models-and-endpoints?tab=model-deprecations&deprecation_model=anthropic%2Fclaude-sonnet-4-5",
+      "/ui/alerts?type=model-deprecations&model=anthropic%2Fclaude-sonnet-4-5",
     );
-    expect(screen.getByRole("link", { name: "View all 1" })).toHaveAttribute("href", "/ui/models-and-endpoints?tab=model-deprecations");
+    expect(screen.getByRole("link", { name: "View all 1" })).toHaveAttribute("href", "/ui/alerts?type=model-deprecations");
     expect(screen.getByText("recommended-model")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dismiss", exact: true })).not.toBeInTheDocument();
   });
