@@ -1,4 +1,5 @@
 import logging
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -163,3 +164,55 @@ def test_unmatched_successor_logs_below_warning_through_endpoint(client_with_cos
     )
     assert successor_records
     assert all(record.levelno < logging.WARNING for record in successor_records)
+
+
+def test_mixed_successor_group_logs_below_warning_through_endpoint(
+    client_with_cost_map_successors: TestClient,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = proxy_server.llm_router
+    models: Final[tuple[dict[str, object], ...]] = (
+        {
+            "model_name": "mixed-successor-group",
+            "litellm_params": {"model": "retiring-model"},
+            "model_info": {"id": "10", "successor_model": "successor-a"},
+        },
+        {
+            "model_name": "mixed-successor-group",
+            "litellm_params": {"model": "retiring-model"},
+            "model_info": {"id": "11", "successor_model": "successor-b"},
+        },
+        {
+            "model_name": "successor-a",
+            "litellm_params": {"model": "fresh-model"},
+            "model_info": {"id": "12"},
+        },
+        {
+            "model_name": "successor-b",
+            "litellm_params": {"model": "fresh-model"},
+            "model_info": {"id": "13"},
+        },
+    )
+
+    def filtered_model_list(
+        model_name: str | None = None, **_kwargs: object
+    ) -> tuple[dict[str, object], ...]:
+        return models if model_name is None else tuple(model for model in models if model["model_name"] == model_name)
+
+    monkeypatch.setattr(router.get_model_list, "side_effect", filtered_model_list)
+
+    with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+        response = client_with_cost_map_successors.get("/model/deprecations")
+
+    assert response.status_code == 200, response.text
+    successor_records: Final = tuple(
+        record
+        for record in caplog.records
+        if record.name == verbose_logger.name and "successor" in record.getMessage()
+    )
+    assert successor_records
+    assert all(
+        "names several successors" in record.getMessage() and record.levelno < logging.WARNING
+        for record in successor_records
+    )
