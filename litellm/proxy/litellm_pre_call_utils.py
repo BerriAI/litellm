@@ -858,6 +858,22 @@ def strip_client_guardrail_information(data: dict[str, object]) -> None:  # muta
             )
 
 
+_GUARDRAIL_RESERVED_REQUEST_FIELDS: Final = frozenset({"guardrail_choice_index"})
+
+
+def _strip_guardrail_reserved_fields(
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    stripped: Final = tuple(sorted(field for field in _GUARDRAIL_RESERVED_REQUEST_FIELDS if field in data))
+    for field in stripped:
+        data.pop(field, None)
+    if stripped:
+        verbose_proxy_logger.debug(
+            "Stripped guardrail-owned fields from request body: %s. The proxy writes these per round.",
+            ", ".join(stripped),
+        )
+
+
 def _strip_router_reserved_metadata(
     data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
@@ -2853,6 +2869,7 @@ async def add_litellm_data_to_request(
         _strip_client_pricing_overrides(data)
     strip_client_guardrail_information(data)
     _strip_router_reserved_metadata(data)
+    _strip_guardrail_reserved_fields(data)
 
     # Same reason as the strips above: runs after the metadata string-to-dict parse
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.

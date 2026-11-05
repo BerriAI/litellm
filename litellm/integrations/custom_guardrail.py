@@ -149,6 +149,11 @@ def _unified_hook_fields(guardrail: "CustomGuardrail", request_data: Mapping[str
     }
 
 
+def _inspected_choice_index(request_data: Mapping[str, object]) -> int | None:
+    labelled: Final = request_data.get("guardrail_choice_index")
+    return labelled if isinstance(labelled, int) and not isinstance(labelled, bool) else None
+
+
 def _instance_attributes(value: object) -> Mapping[str, object]:
     return vars(value)
 
@@ -1245,6 +1250,16 @@ class CustomGuardrail(CustomLogger):
         """
         return True
 
+    def inspects_choices_separately(self) -> bool:
+        """Whether a stream's choices may be handed over one at a time.
+
+        An n>1 stream carrying tool calls is inspected choice by choice, so a guardrail reads
+        one candidate completion at a time instead of a response no provider would return. A
+        guardrail whose contract is the whole response, like a legacy post-call hook, overrides
+        this to return False and is handed every choice in one call.
+        """
+        return True
+
     def structured_messages_cover_full_request(self) -> bool:
         """Whether returned ``structured_messages`` span the whole request.
 
@@ -1533,6 +1548,7 @@ class CustomGuardrail(CustomLogger):
             end_time=end_time,
             duration=duration,
             masked_entity_count=masked_entity_count,
+            choice_index=_inspected_choice_index(request_data),
             **(tracing_detail or {}),
         )
 
