@@ -32,7 +32,7 @@ export function useDeprecationAlerts(accessToken: string | null) {
       const alerts = usedDeprecationAlerts(models, activity.results ?? []);
       return Promise.all(
         alerts.map(async (alert) => {
-          const { data: state } = await backgroundFetchClient.GET("/model/deprecations/alerts/state", {
+          const { data: state } = await backgroundFetchClient.GET("/alerting/model-deprecations/state", {
             params: { query: { model: alert.usageModel, deprecation_date: alert.model.deprecation_date } },
             signal,
           });
