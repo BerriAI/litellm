@@ -112,7 +112,7 @@ export default function UsageRules({ accessToken }: { accessToken: string | null
               <p className="text-muted-foreground">No alert rules.</p>
             )}
             {query.isSuccess && (
-              <ul className="divide-y">
+              <ul className="min-w-0 divide-y">
                 {query.data.data.map((rule) => (
                   <RuleRow
                     key={rule.id}
