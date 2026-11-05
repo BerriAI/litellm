@@ -64,6 +64,7 @@ const userEditShape = (t: TFunction) => ({
   user_alias: z.string().nullish(),
   user_role: z.string().nullish(),
   models: z.array(z.string()),
+  soft_budget: z.union([z.string(), z.number()]).nullish(),
   budget_duration: z.string().nullish(),
   metadata: z.string().nullish(),
   tpm_limit: rateLimitField(t),
@@ -117,6 +118,7 @@ const toFormValues = (
     user_role: userData.user_info?.user_role,
     models: userData.user_info?.models || [],
     max_budget: isUnlimited ? "" : maxBudget,
+    soft_budget: userData.user_info?.soft_budget ?? "",
     budget_duration: userData.user_info?.budget_duration,
     metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
     ...(canEditMcpPermissions ? buildMcpFieldValues(objectPermission) : {}),
@@ -199,8 +201,15 @@ export function UserEditView({
     const modelBudgets = modelMaxBudgetUpdate(modelMaxBudget, userData.user_info?.model_max_budget);
     const tpmLimit = changedLimit(tpmLimitInput, userData.user_info?.tpm_limit);
     const rpmLimit = changedLimit(rpmLimitInput, userData.user_info?.rpm_limit);
+    const { soft_budget: softBudgetValue, ...formValuesWithoutSoftBudget } = formValues;
+    const softBudgetInput =
+      softBudgetValue === "" || softBudgetValue === undefined || softBudgetValue === null
+        ? null
+        : Number(softBudgetValue);
+    const softBudget = changedLimit(softBudgetInput, userData.user_info?.soft_budget);
     const payload = {
-      ...formValues,
+      ...formValuesWithoutSoftBudget,
+      ...(softBudget !== undefined && { soft_budget: softBudget }),
       ...("metadata" in values ? { metadata: metadata.value } : {}),
       ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
       ...(tpmLimit !== undefined && { tpm_limit: tpmLimit }),
@@ -315,6 +324,25 @@ export function UserEditView({
                 onWheel={(event) => event.currentTarget.blur()}
                 placeholder={t("users.editView.fields.maxBudgetPlaceholder")}
                 disabled={unlimitedBudget}
+              />
+            )}
+          </FormField>
+
+          <FormField
+            control={form.control}
+            name="soft_budget"
+            label={labelWithHint(t("users.editView.fields.softBudget"), t("users.editView.fields.softBudgetHint"))}
+          >
+            {({ ref, value, onChange, ...control }) => (
+              <Input
+                {...control}
+                ref={ref}
+                type="number"
+                step={0.01}
+                value={value ?? ""}
+                onChange={(event) => onChange(event.target.value)}
+                onWheel={(event) => event.currentTarget.blur()}
+                placeholder={t("users.editView.fields.softBudgetPlaceholder")}
               />
             )}
           </FormField>

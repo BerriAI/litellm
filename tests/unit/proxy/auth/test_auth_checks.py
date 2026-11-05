@@ -12,7 +12,7 @@ load_dotenv()
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from types import SimpleNamespace
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest, litellm
@@ -44,6 +44,7 @@ from litellm.proxy.auth.auth_checks import (
     is_model_cost_zero,
     virtual_key_soft_budget_check,
     _team_soft_budget_check,
+    _user_soft_budget_check,
     common_checks,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging
@@ -160,12 +161,15 @@ async def test_team_require_trace_id_accepts_supported_trace_carriers(
 @pytest.mark.parametrize("route", ["/v1/traces", "/v1/logs", "/v1/traces/query"])
 @pytest.mark.asyncio
 async def test_team_require_trace_id_accepts_trace_telemetry_routes(route: str) -> None:
-    assert await _run_team_trace_id_check(
-        route=route,
-        method="POST",
-        request_body={},
-        team_metadata={"require_trace_id": True},
-    ) is True
+    assert (
+        await _run_team_trace_id_check(
+            route=route,
+            method="POST",
+            request_body={},
+            team_metadata={"require_trace_id": True},
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -197,11 +201,14 @@ async def test_team_require_trace_id_rejects_overridden_body_metadata_on_chat() 
 async def test_team_require_trace_id_accepts_effective_metadata_on_responses_route(
     request_body: dict[str, object],
 ) -> None:
-    assert await _run_team_trace_id_check(
-        route="/v1/responses",
-        request_body=request_body,
-        team_metadata={"require_trace_id": True},
-    ) is True
+    assert (
+        await _run_team_trace_id_check(
+            route="/v1/responses",
+            request_body=request_body,
+            team_metadata={"require_trace_id": True},
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -240,12 +247,15 @@ async def test_team_require_trace_id_rejects_fallback_carriers_when_litellm_trac
 
 @pytest.mark.asyncio
 async def test_team_require_trace_id_accepts_header_on_mcp_with_empty_body() -> None:
-    assert await _run_team_trace_id_check(
-        route="/mcp/",
-        request_body={},
-        headers={"x-litellm-trace-id": "trace-mcp-123"},
-        team_metadata={"require_trace_id": True},
-    ) is True
+    assert (
+        await _run_team_trace_id_check(
+            route="/mcp/",
+            request_body={},
+            headers={"x-litellm-trace-id": "trace-mcp-123"},
+            team_metadata={"require_trace_id": True},
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -278,12 +288,15 @@ async def test_team_require_trace_id_rejects_nonheader_carriers_on_pass_through_
 
 @pytest.mark.asyncio
 async def test_team_require_trace_id_accepts_header_on_pass_through_route() -> None:
-    assert await _run_team_trace_id_check(
-        route="/anthropic/v1/messages",
-        request_body={},
-        headers={"x-litellm-trace-id": "trace-provider-123"},
-        team_metadata={"require_trace_id": True},
-    ) is True
+    assert (
+        await _run_team_trace_id_check(
+            route="/anthropic/v1/messages",
+            request_body={},
+            headers={"x-litellm-trace-id": "trace-provider-123"},
+            team_metadata={"require_trace_id": True},
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -329,7 +342,9 @@ async def test_team_require_trace_id_rejects_nonheader_carriers_on_registered_pa
                 "jsonrpc": "2.0",
                 "id": "1",
                 "method": "message/send",
-                "params": {"message": {"messageId": "msg-1", "role": "user", "parts": [{"type": "text", "text": "hi"}]}},
+                "params": {
+                    "message": {"messageId": "msg-1", "role": "user", "parts": [{"type": "text", "text": "hi"}]}
+                },
             },
         ),
     ],
@@ -370,7 +385,9 @@ async def test_team_require_trace_id_rejects_traceparent_on_mcp_and_agent_routes
                 "jsonrpc": "2.0",
                 "id": "1",
                 "method": "message/send",
-                "params": {"message": {"messageId": "msg-1", "role": "user", "parts": [{"type": "text", "text": "hi"}]}},
+                "params": {
+                    "message": {"messageId": "msg-1", "role": "user", "parts": [{"type": "text", "text": "hi"}]}
+                },
                 "metadata": {"trace_id": "trace-body-123"},
             },
         ),
@@ -463,7 +480,7 @@ def test_lens_management_does_not_require_an_inference_user_parameter(route: str
 async def test_get_end_user_object(customer_spend, customer_budget):
     """
     Scenario 1: normal - get_end_user_object returns the cached user
-    Scenario 2: user over budget - NOTE: budget enforcement now happens in 
+    Scenario 2: user over budget - NOTE: budget enforcement now happens in
                 common_checks() via _check_end_user_budget(), not in get_end_user_object()
 
     This test verifies that get_end_user_object correctly retrieves the end user
@@ -591,7 +608,7 @@ async def test_can_key_call_model(model, expect_to_work):
     if expect_to_work:
         await can_key_call_model(**args)
     else:
-        with pytest.raises(Exception, match='is not available for this API key') as e:
+        with pytest.raises(Exception, match="is not available for this API key") as e:
             await can_key_call_model(**args)
 
         print(e)
@@ -908,16 +925,12 @@ async def test_is_valid_fallback_model():
     )
 
     try:
-        await is_valid_fallback_model(
-            model="gpt-3.5-turbo", llm_router=router, user_model=None
-        )
+        await is_valid_fallback_model(model="gpt-3.5-turbo", llm_router=router, user_model=None)
     except Exception as e:
         pytest.fail(f"Expected is_valid_fallback_model to work, got exception: {e}")
 
     with pytest.raises(Exception, match="Invalid") as exc_info:
-        await is_valid_fallback_model(
-            model="gpt-4o", llm_router=router, user_model=None
-        )
+        await is_valid_fallback_model(model="gpt-4o", llm_router=router, user_model=None)
     e = exc_info.value
     assert "Invalid" in str(e)
 
@@ -931,9 +944,7 @@ async def test_is_valid_fallback_model():
     ],
 )
 @pytest.mark.asyncio
-async def test_virtual_key_max_budget_check(
-    token_spend, max_budget, expect_budget_error
-):
+async def test_virtual_key_max_budget_check(token_spend, max_budget, expect_budget_error):
     """
     Test if virtual key budget checks work as expected:
     1. Triggers budget alert for all cases
@@ -1048,9 +1059,7 @@ async def test_can_team_access_model(model, team_models, expect_to_work):
             team_model_aliases=None,
         )
         if not expect_to_work:
-            pytest.fail(
-                f"Expected model access check to fail for model={model}, team_models={team_models}"
-            )
+            pytest.fail(f"Expected model access check to fail for model={model}, team_models={team_models}")
     except Exception as e:
         if expect_to_work:
             pytest.fail(
@@ -1103,9 +1112,9 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
 
     await asyncio.sleep(0.1)  # Allow time for the alert task to complete
 
-    assert (
-        alert_triggered == expect_alert
-    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    assert alert_triggered == expect_alert, (
+        f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1158,9 +1167,7 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
     ],
 )
 @pytest.mark.asyncio
-async def test_team_soft_budget_check(
-    spend, soft_budget, expect_alert, metadata, expected_alert_emails
-):
+async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata, expected_alert_emails):
     """
     Test cases for _team_soft_budget_check:
     1. Spend over soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
@@ -1208,9 +1215,9 @@ async def test_team_soft_budget_check(
 
     await asyncio.sleep(0.1)  # Allow time for the alert task to complete
 
-    assert (
-        alert_triggered == expect_alert
-    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    assert alert_triggered == expect_alert, (
+        f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    )
 
     if expect_alert:
         assert captured_call_info is not None
@@ -1222,10 +1229,7 @@ async def test_team_soft_budget_check(
         if expected_alert_emails is not None:
             assert captured_call_info.alert_emails == expected_alert_emails
         else:
-            assert (
-                captured_call_info.alert_emails is None
-                or captured_call_info.alert_emails == []
-            )
+            assert captured_call_info.alert_emails is None or captured_call_info.alert_emails == []
 
 
 @pytest.mark.asyncio
@@ -1356,9 +1360,7 @@ async def test_get_fuzzy_user_object():
 
     # Test 5: Only email provided (no SSO ID)
     mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, user_email="test@example.com"
-    )
+    result = await _get_fuzzy_user_object(prisma_client=mock_prisma, user_email="test@example.com")
     assert result == test_user
     mock_prisma.db.litellm_usertable.find_first.assert_called_with(
         where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
@@ -1367,9 +1369,7 @@ async def test_get_fuzzy_user_object():
 
     # Test 6: Only SSO ID provided (no email)
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, sso_user_id="sso_123"
-    )
+    result = await _get_fuzzy_user_object(prisma_client=mock_prisma, sso_user_id="sso_123")
     assert result == test_user
     mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
         where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
@@ -1416,7 +1416,7 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
             llm_router=router,
         )
     else:
-        with pytest.raises(Exception, match='is not available for this API key') as e:
+        with pytest.raises(Exception, match="is not available for this API key") as e:
             await can_key_call_model(
                 model=model,
                 llm_model_list=llm_model_list,
@@ -1502,9 +1502,7 @@ async def test_delete_cache_access_object():
     ],
 )
 @pytest.mark.asyncio
-async def test_get_resources_from_access_groups(
-    resource_field, access_group_data, expected
-):
+async def test_get_resources_from_access_groups(resource_field, access_group_data, expected):
     """Test _get_resources_from_access_groups returns correct resource list from access groups."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2094,7 +2092,9 @@ def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_ro
         model_group_alias={"chain-entry": "local-free", "local-free": "paid-gpt"},
     )
     expected: Final = {"chain-entry": True, "local-free": False, "paid-gpt": False}
-    order: Final = ("chain-entry", "local-free", "paid-gpt") if entry_first else ("local-free", "paid-gpt", "chain-entry")
+    order: Final = (
+        ("chain-entry", "local-free", "paid-gpt") if entry_first else ("local-free", "paid-gpt", "chain-entry")
+    )
 
     verdicts: Final = {name: is_model_cost_zero(model=name, llm_router=router) for name in order}
 
@@ -2337,10 +2337,7 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis
     monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
     client = _WedgedPublishRedisClient()
     cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
-    hashed_tokens: Final = tuple(
-        hashlib.sha256(f"token-{index}".encode()).hexdigest()
-        for index in range(600)
-    )
+    hashed_tokens: Final = tuple(hashlib.sha256(f"token-{index}".encode()).hexdigest() for index in range(600))
     for hashed_token in hashed_tokens:
         cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
     seeded: Final = tuple(
@@ -2400,10 +2397,7 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
     monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
     client = _WedgedPublishRedisClient()
-    hashed_tokens: Final = tuple(
-        hashlib.sha256(f"token-{index}".encode()).hexdigest()
-        for index in range(600)
-    )
+    hashed_tokens: Final = tuple(hashlib.sha256(f"token-{index}".encode()).hexdigest() for index in range(600))
     redis = _AuthRedisCache({token: {"token": token} for token in hashed_tokens})
     cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
     cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
@@ -2473,3 +2467,46 @@ async def test_bulk_eviction_broadcasts_while_the_usage_cache_redis_is_wedged(
 
     assert usage_redis.finished
     assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
+
+
+@pytest.mark.parametrize(
+    "spend, soft_budget, expect_alert",
+    [
+        (100, 50, True),
+        (50, 50, True),
+        (25, 50, False),
+        (100, None, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_user_soft_budget_check(spend: float, soft_budget: float | None, expect_alert: bool) -> None:
+    from litellm.models.user import LiteLLM_UserTable
+
+    alerts: list[tuple[str, CallInfo]] = []
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type: str, user_info: CallInfo) -> None:
+            alerts.append((type, user_info))
+
+    user_object: Final = LiteLLM_UserTable(
+        user_id="soft-budget-user",
+        user_email="soft@example.com",
+        max_budget=200,
+        soft_budget=soft_budget,
+        spend=spend,
+    )
+
+    proxy_logging_obj: Final = cast(ProxyLogging, MockProxyLogging())  # cast-ok: test double for budget_alerts
+    _user_soft_budget_check(user_object=user_object, user_spend=spend, proxy_logging_obj=proxy_logging_obj)
+    await asyncio.sleep(0.1)
+
+    assert (len(alerts) == 1) == expect_alert
+    if expect_alert:
+        alert_type, call_info = alerts[0]
+        assert alert_type == "soft_budget"
+        assert call_info.user_id == "soft-budget-user"
+        assert call_info.user_email == "soft@example.com"
+        assert call_info.soft_budget == soft_budget
+        assert call_info.max_budget is None
+        assert call_info.spend == spend
+        assert call_info.event_group == Litellm_EntityType.USER

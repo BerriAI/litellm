@@ -78,6 +78,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         teams: [],
         models: [],
         max_budget: null,
+        soft_budget: null,
         spend: 0,
         metadata: {},
         created_at: null,
@@ -108,6 +109,10 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
 
       if (formValues.max_budget !== null && formValues.max_budget !== undefined) {
         updatePayload.max_budget = formValues.max_budget;
+      }
+
+      if (formValues.soft_budget !== null && formValues.soft_budget !== undefined) {
+        updatePayload.soft_budget = formValues.soft_budget;
       }
 
       if (formValues.models && formValues.models.length > 0) {

@@ -31,6 +31,8 @@ class SoftBudgetAlert(BaseBudgetAlertType):
     def get_id(self, user_info: CallInfo) -> str:
         if user_info.event_group == Litellm_EntityType.TEAM:
             return user_info.team_id or "default_id"
+        if user_info.event_group == Litellm_EntityType.USER:
+            return f"user:{user_info.user_id}" if user_info.user_id else "default_id"
         return user_info.token or "default_id"
 
 

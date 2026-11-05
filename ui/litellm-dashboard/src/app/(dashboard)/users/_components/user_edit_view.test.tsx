@@ -322,6 +322,34 @@ describe("UserEditView", () => {
     expect(callArgs.metadata).toEqual(MOCK_USER_DATA.user_info.metadata);
   });
 
+  it("sends soft_budget only when it changed", async () => {
+    const onSubmitMock = vi.fn();
+    renderWithProviders(
+      <UserEditView
+        {...defaultProps}
+        userData={{ ...MOCK_USER_DATA, user_info: { ...MOCK_USER_DATA.user_info, soft_budget: 40 } }}
+        onSubmit={onSubmitMock}
+      />,
+    );
+
+    const softBudgetInput = await screen.findByLabelText(/soft budget/i);
+    expect(softBudgetInput).toHaveValue(40);
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(onSubmitMock).toHaveBeenCalled());
+    expect(onSubmitMock.mock.calls[0][0]).not.toHaveProperty("soft_budget");
+
+    fireEvent.change(softBudgetInput, { target: { value: "55.5" } });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(onSubmitMock).toHaveBeenCalledTimes(2));
+    expect(onSubmitMock.mock.calls[1][0].soft_budget).toBe(55.5);
+
+    await userEvent.clear(softBudgetInput);
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(onSubmitMock).toHaveBeenCalledTimes(3));
+    expect(onSubmitMock.mock.calls[2][0].soft_budget).toBeNull();
+  });
+
   it("uses No change for an unset reset period in bulk edit", async () => {
     const onSubmit = vi.fn();
     const userDataWithUnsetResetPeriod = {
