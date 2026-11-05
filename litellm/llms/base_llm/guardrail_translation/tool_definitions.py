@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, TypeAlias
 
@@ -32,23 +33,47 @@ def effective_scan_tool_definitions_for_guardrail(guardrail_to_apply: CustomGuar
     return litellm.scan_tool_definitions_in_guardrail
 
 
+_TOOL_SCHEMA_KEYS: Final = ("parameters", "input_schema")
+_SUBSCHEMA_KEYWORDS: Final = ("items", "additionalProperties", "not")
+_SUBSCHEMA_LIST_KEYWORDS: Final = ("items", "prefixItems", "anyOf", "oneOf", "allOf")
+_SUBSCHEMA_MAP_KEYWORDS: Final = ("properties", "patternProperties", "$defs", "definitions")
+
+
 def tool_description_entries(tools: Sequence[JsonValue]) -> tuple[tuple[DescriptionPath, str], ...]:
-    return tuple(_description_entries(list(tools), ()))
+    return tuple(itertools.chain.from_iterable(_tool_entries(tool, (index,)) for index, tool in enumerate(tools)))
 
 
-def _description_entries(node: JsonValue, path: DescriptionPath) -> Iterator[tuple[DescriptionPath, str]]:
-    if isinstance(node, list):
-        for index, item in enumerate(node):
-            yield from _description_entries(item, (*path, index))
+def _tool_entries(tool: JsonValue, path: DescriptionPath) -> Iterator[tuple[DescriptionPath, str]]:
+    if not isinstance(tool, dict):
         return
-    if not isinstance(node, dict):
+    function: Final = tool.get("function")
+    if isinstance(function, dict):
+        yield from _tool_entries(function, (*path, "function"))
+    yield from _own_description(tool, path)
+    for key in _TOOL_SCHEMA_KEYS:
+        yield from _schema_entries(tool.get(key), (*path, key))
+
+
+def _own_description(node: Mapping[str, JsonValue], path: DescriptionPath) -> Iterator[tuple[DescriptionPath, str]]:
+    description: Final = node.get("description")
+    if isinstance(description, str) and description.strip():
+        yield (*path, "description"), description
+
+
+def _schema_entries(schema: JsonValue, path: DescriptionPath) -> Iterator[tuple[DescriptionPath, str]]:
+    if not isinstance(schema, dict):
         return
-    for key, value in node.items():
-        if key == "description" and isinstance(value, str):
-            if value.strip():
-                yield (*path, key), value
-            continue
-        yield from _description_entries(value, (*path, key))
+    yield from _own_description(schema, path)
+    for key in _SUBSCHEMA_KEYWORDS:
+        yield from _schema_entries(schema.get(key), (*path, key))
+    for key in _SUBSCHEMA_LIST_KEYWORDS:
+        if isinstance(children := schema.get(key), list):
+            for index, child in enumerate(children):
+                yield from _schema_entries(child, (*path, key, index))
+    for key in _SUBSCHEMA_MAP_KEYWORDS:
+        if isinstance(named := schema.get(key), dict):
+            for name, child in named.items():
+                yield from _schema_entries(child, (*path, key, name))
 
 
 def with_replaced_descriptions(
