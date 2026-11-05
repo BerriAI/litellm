@@ -4405,7 +4405,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 if isinstance(callback, CustomLogger):  # custom logger class
                     from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
-                    model_call_details: dict = self.model_call_details
+                    model_call_details: dict = (
+                        self._model_call_details_with_request_messages()
+                        if callback.exempt_from_message_redaction()
+                        else self.model_call_details
+                    )
                     ##################################
                     # call redaction hook for custom logger
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
@@ -4968,6 +4972,20 @@ class Logging(LiteLLMLoggingBaseClass):
         cache_hit: bool | None = None,
     ) -> None:
         executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
+
+    def _model_call_details_with_request_messages(self) -> dict:
+        """The success-event payload with the request messages put back where `turn_off_message_logging`
+        redacted them in place, for a callback that routes on the request and never logs it."""
+        standard_logging_object: Final = self.model_call_details.get("standard_logging_object")
+        return {
+            **self.model_call_details,
+            "messages": self.messages,
+            **(
+                {"standard_logging_object": {**standard_logging_object, "messages": self.messages}}
+                if isinstance(standard_logging_object, dict)
+                else {}
+            ),
+        }
 
     def _get_completed_success_callbacks(
         self, *, asynchronous: bool
