@@ -162,7 +162,7 @@ describe("ViewSwitcher", () => {
   );
 
   it.each(["/ui/moyai", "/ui/moyai/sessions/one"])(
-    "should show Moyai's icon at %s and let users switch to Chat",
+    "should identify Moyai at %s and let users switch to Chat",
     async (pathname) => {
       state.pathname = pathname;
       getUiSettingsMock.mockResolvedValue({ values: { enable_chat_ui: true } });
@@ -170,7 +170,7 @@ describe("ViewSwitcher", () => {
       renderSwitcher();
 
       const trigger = screen.getByRole("button", { name: "Switch workspace, current: Moyai" });
-      expect(within(trigger).getByAltText("")).toHaveAttribute("src", expect.stringContaining("moyai-head.svg"));
+      expect(trigger).toHaveTextContent("Moyai");
       await user.click(trigger);
       await user.click(await screen.findByRole("menuitem", { name: "Chat Chat UI for using LLMs, MCPs, Agents" }));
       expect(assignSpy).toHaveBeenCalledWith("/ui/chat");

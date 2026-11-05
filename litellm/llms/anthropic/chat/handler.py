@@ -17,6 +17,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
@@ -38,6 +39,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContentBlockStart,
@@ -68,7 +70,12 @@ from litellm.types.utils import (
 )
 
 from ...base import BaseLLM
-from ..common_utils import AnthropicError, process_anthropic_headers, refusal_provider_specific_fields
+from ..common_utils import (
+    AnthropicError,
+    process_anthropic_headers,
+    refusal_params,
+    stop_reason_provider_specific_fields,
+)
 from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
 
 if TYPE_CHECKING:
@@ -233,7 +240,7 @@ async def make_call(
         raise AnthropicError(status_code=500, message=str(e))
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.aiter_lines(),
+        streaming_response=aiter_sse_lines(response.aiter_text()),
         sync_stream=False,
         json_mode=json_mode,
         speed=speed,
@@ -304,7 +311,7 @@ def make_sync_call(
         )
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.iter_lines(),
+        streaming_response=iter_sse_lines(response.iter_text()),
         sync_stream=True,
         json_mode=json_mode,
         speed=speed,
@@ -505,10 +512,20 @@ class AnthropicChatCompletion(BaseLLM):
             The pair stays mutable because the streaming path rewrites it in
             place (`data["stream"] = True`) before sending.
             """
-            request_headers, data = update_request_with_filtered_beta(
+            request_headers, filtered_data = update_request_with_filtered_beta(
                 headers=headers,
                 request_data=request_data,
                 provider=custom_llm_provider,
+                api_base=api_base,
+            )
+            data: Final = dict(
+                strip_beta_gated_request_body(
+                    filtered_data,
+                    request_headers,
+                    drop_params=litellm_params.get("drop_params"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is the handler's bare dict
+                    model=model,
+                    provider=custom_llm_provider,
+                )
             )
             logging_obj.pre_call(
                 input=messages,
@@ -717,6 +734,7 @@ class ModelResponseIterator:
         self._split_answer_blocks: tuple[str, ...] = ()
         self._withheld_answer_close: str = ""
         self._streamed_answer_keys: frozenset[str] | None = None
+        self._held_prose: str = ""
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
@@ -809,8 +827,13 @@ class ModelResponseIterator:
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
 
         if "text" in content_block["delta"]:
-            text = content_block["delta"]["text"]
-            return text, tool_use, thinking_blocks, provider_specific_fields, reasoning_content
+            return (
+                self._hold_prose(content_block["delta"]["text"]),
+                tool_use,
+                thinking_blocks,
+                provider_specific_fields,
+                reasoning_content,
+            )
         self.content_blocks.append(content_block)
         if "partial_json" in content_block["delta"]:
             # Only emit tool calls if we're in a tool_use or server_tool_use block
@@ -915,6 +938,17 @@ class ModelResponseIterator:
     def _web_search_call_snapshot(self) -> dict[str, object]:
         return dict(self._web_search_calls)
 
+    def _refresh_pending_web_search_call(self, tool_use_id: str) -> bool:
+        if tool_use_id not in self._web_search_calls:
+            return False
+        self._web_search_calls[tool_use_id] = build_web_search_call(
+            tool_use_id,
+            self._server_tool_inputs.get(tool_use_id, {}),
+            {"content": []},
+            status="in_progress",
+        )
+        return True
+
     def _complete_web_search_call(self, result: dict[str, object]) -> None:
         tool_use_id: Final = result.get("tool_use_id")
         if not isinstance(tool_use_id, str) or tool_use_id not in self._web_search_calls:
@@ -997,7 +1031,7 @@ class ModelResponseIterator:
                 if self.current_content_block_type in _THINKING_BLOCK_TYPES:
                     self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
-                    text = self._release_answer_close() + content_block_start["content_block"]["text"]
+                    text = self._release_answer_close() + self._hold_prose(content_block_start["content_block"]["text"])
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
@@ -1117,6 +1151,8 @@ class ModelResponseIterator:
                                 self._server_tool_inputs[self._current_server_tool_id] = json.loads(args)
                             except (json.JSONDecodeError, TypeError):
                                 pass
+                        if self._refresh_pending_web_search_call(self._current_server_tool_id):
+                            provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                         self._current_server_tool_id = None
                 if self.is_response_format_tool:
                     text = self._flush_response_format_buffer()
@@ -1129,9 +1165,9 @@ class ModelResponseIterator:
                 # These are automatically handled by Anthropic API, we just pass them through
                 pass
             elif type_chunk == "message_delta":
-                finish_reason, usage, container, refusal_fields = self._handle_message_delta(chunk)
-                provider_specific_fields.update(refusal_fields)
-                text = self._release_answer_close() + self._drain_split_answer_blocks()
+                finish_reason, usage, container, stop_reason_fields = self._handle_message_delta(chunk)
+                provider_specific_fields.update(stop_reason_fields)
+                text = self._release_answer_close() + self._drain_split_answer_blocks() + self._release_held_prose()
                 if container:
                     provider_specific_fields["container"] = container
                     # Store container_id and re-emit code_interpreter_results
@@ -1165,6 +1201,9 @@ class ModelResponseIterator:
                 start_message: Final = message_start_block["message"]
                 if "model" in start_message:
                     self.served_model = start_message["model"]
+                input_transformations: Final = start_message.get("input_transformations")
+                if input_transformations is not None:
+                    provider_specific_fields["input_transformations"] = input_transformations
                 if "usage" in message_start_block["message"]:
                     usage = self._handle_usage(anthropic_usage_chunk=message_start_block["message"]["usage"])
             elif type_chunk == "error":
@@ -1178,7 +1217,10 @@ class ModelResponseIterator:
                     status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
                 )
 
-            text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
+            text, tool_use = self._handle_json_mode_chunk(
+                text=text + self._settle_held_prose(tool_use), tool_use=tool_use
+            )
+            refusal_fields: Final = refusal_params(provider_specific_fields)
 
             returned_chunk: Final = ModelResponseStream(
                 choices=[
@@ -1190,6 +1232,7 @@ class ModelResponseIterator:
                             provider_specific_fields=(provider_specific_fields if provider_specific_fields else None),
                             thinking_blocks=(thinking_blocks if thinking_blocks else None),
                             reasoning_content=reasoning_content,
+                            **refusal_fields,
                         ),
                         finish_reason=finish_reason,
                     )
@@ -1274,6 +1317,24 @@ class ModelResponseIterator:
         self._response_format_verdict = _envelope_verdict(buffered, schema, RESPONSE_FORMAT_TOOL_NAME)
         return self._withhold_answer_close(buffered) if self._response_format_verdict == "pass_through" else ""
 
+    def _hold_prose(self, text: str) -> str:
+        if not self.json_mode or self.response_format_schema is None:
+            return text
+        self._held_prose += text
+        return ""
+
+    def _settle_held_prose(self, tool_use: ChatCompletionToolCallChunk | None) -> str:
+        if tool_use is None or tool_use.get("id") is None or self.current_content_block_type != "tool_use":
+            return ""
+        held: Final = self._held_prose
+        self._held_prose = ""
+        return "" if tool_use.get("function", {}).get("name") == RESPONSE_FORMAT_TOOL_NAME else held
+
+    def _release_held_prose(self) -> str:
+        held: Final = self._held_prose
+        self._held_prose = ""
+        return "" if self.converted_response_format_tool else held
+
     def _withhold_answer_close(self, text: str) -> str:
         pending: Final = self._withheld_answer_close + text
         body: Final = pending.rstrip()
@@ -1327,7 +1388,9 @@ class ModelResponseIterator:
 
     def cut_stream_chunk(self) -> ModelResponseStream | None:
         unsent: Final = self._flush_response_format_buffer() if self._response_format_buffer.getvalue() else ""
-        text: Final = unsent + self._release_answer_close() + self._drain_split_answer_blocks()
+        text: Final = (
+            unsent + self._release_answer_close() + self._drain_split_answer_blocks() + self._release_held_prose()
+        )
         if not text:
             return None
         return ModelResponseStream(
@@ -1360,7 +1423,7 @@ class ModelResponseIterator:
             self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
         )
         container: Final = message_delta["delta"].get("container")
-        return finish_reason, usage, container, refusal_provider_specific_fields(message_delta["delta"])
+        return finish_reason, usage, container, stop_reason_provider_specific_fields(message_delta["delta"])
 
     def _handle_accumulated_json_chunk(self, data_str: str, is_final: bool = False) -> ModelResponseStream | None:
         """

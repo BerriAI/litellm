@@ -673,7 +673,7 @@ class DualCache(BaseCache):
         if self.redis_cache is not None:
             self.redis_cache.flush_cache()
 
-    def delete_cache(self, key):
+    def delete_cache(self, key: str) -> None:
         """
         Delete a key from the cache
         """

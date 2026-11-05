@@ -40,6 +40,8 @@ env_http_headers = { "x-litellm-api-key" = "LITELLM_API_KEY" }
 
 Replace `https://litellm.example.com` with your proxy URL. A local proxy normally uses `http://localhost:4000/v1`. Launch Codex, sign into ChatGPT if needed, and send a prompt with a model available to your subscription. The selected model must match the name exposed by the gateway.
 
+The `lite` CLI can set up this provider each time it starts Codex, with no `config.toml` edit. Export `LITELLM_PROXY_URL` and `LITELLM_PROXY_API_KEY`, then run `lite codex --subscription`. Run `lite config set codex_subscription true` to make it the default.
+
 For a managed workspace rollout, use OpenAI's [gateway configuration guide](https://learn.chatgpt.com/docs/enterprise/sign-in-with-chatgpt-through-a-gateway).
 
 ## Native compatibility and Pi

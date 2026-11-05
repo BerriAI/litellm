@@ -4,6 +4,7 @@ Tests for restamping the public model on Anthropic Messages streaming chunks.
 
 import json
 from collections.abc import AsyncIterator, Sequence
+from typing import Final
 
 import pytest
 
@@ -44,6 +45,28 @@ def test_restamps_sse_bytes_frame():
     assert isinstance(restamped, bytes)
     assert _model_from_frame(restamped) == "claude-auto-1"
     assert b"event: message_start" in restamped
+
+
+def test_restamps_sse_bytes_frame_holding_a_line_separator() -> None:
+    payload: Final = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5-20251001",
+            "content": [{"type": "text", "text": "alpha\u2028beta"}],
+        },
+    }
+    frame: Final = f"event: message_start\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+
+    restamped: Final = restamp_anthropic_stream_chunk_model(frame, "claude-auto-1")
+
+    assert isinstance(restamped, bytes)
+    data_line: Final = next(line for line in restamped.decode().split("\n") if line.startswith("data:"))
+    message: Final = json.loads(data_line[len("data:") :])["message"]
+    assert message["model"] == "claude-auto-1"
+    assert message["content"] == [{"type": "text", "text": "alpha\u2028beta"}]
 
 
 def test_restamps_event_dict():

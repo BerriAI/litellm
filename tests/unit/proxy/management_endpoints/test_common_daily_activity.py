@@ -2551,3 +2551,211 @@ async def test_get_daily_activity_rejects_non_canonical_dates_before_querying(st
     assert error.value.detail == {"error": "start_date and end_date must be valid YYYY-MM-DD dates"}
     mock_table.count.assert_not_awaited()
     mock_table.find_many.assert_not_awaited()
+
+
+def _provider_record(provider: str, *, model: str, spend: float):
+    base = vars(_spend_record("real-key", model=model, spend=spend))
+    return SimpleNamespace(**{**base, "custom_llm_provider": provider, "api_requests": 1, "successful_requests": 1})
+
+
+def test_per_row_provider_bucket_marks_subscription_backed_providers_only():
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    update_breakdown_metrics(breakdown, _provider_record("chatgpt", model="gpt-5.6-terra", spend=0.0), {}, {}, {})
+    update_breakdown_metrics(breakdown, _provider_record("openai", model="gpt-5.6", spend=0.0), {}, {}, {})
+    update_breakdown_metrics(breakdown, _provider_record("chatgpt", model="gpt-5.6-sol", spend=0.0), {}, {}, {})
+
+    assert breakdown.providers["chatgpt"].metadata == {"subscription_covered": True}
+    assert "subscription_covered" not in breakdown.providers["openai"].metadata
+    assert breakdown.providers["chatgpt"].metrics.api_requests == 2
+    assert "subscription_covered" not in breakdown.models["gpt-5.6-terra"].metadata
+
+
+def test_per_row_provider_marker_keeps_existing_provider_metadata():
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    update_breakdown_metrics(
+        breakdown,
+        _provider_record("chatgpt", model="gpt-5.6-terra", spend=0.0),
+        {},
+        {"chatgpt": {"region": "us"}},
+        {},
+    )
+
+    assert breakdown.providers["chatgpt"].metadata == {"region": "us", "subscription_covered": True}
+
+
+@pytest.mark.parametrize("provider_row_first", [True, False])
+def test_grouping_sets_provider_bucket_marks_subscription_backed_providers_in_any_row_order(provider_row_first):
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_PROVIDER,
+        _GROUP_DATE_PROVIDER_API_KEY,
+        _GROUP_GRAND_TOTAL,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    provider_rows = [
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="chatgpt", spend=0.0),
+        _grouping_row(_GROUP_DATE_PROVIDER_API_KEY, custom_llm_provider="chatgpt", api_key="real-key", spend=0.0),
+    ]
+    ordered_rows = provider_rows if provider_row_first else list(reversed(provider_rows))
+    records = [
+        *ordered_rows,
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="openai", spend=0.0),
+        _grouping_row(_GROUP_DATE_PROVIDER_API_KEY, custom_llm_provider="openai", api_key="real-key", spend=0.0),
+        _grouping_row(_GROUP_GRAND_TOTAL, spend=0.0),
+    ]
+
+    aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+
+    providers = aggregated["results"][0].breakdown.providers
+    assert providers["chatgpt"].metadata == {"subscription_covered": True}
+    assert "real-key" in providers["chatgpt"].api_key_breakdown
+    assert "subscription_covered" not in providers["openai"].metadata
+
+
+@pytest.mark.parametrize("missing", [None, ""])
+def test_missing_dimensions_preserve_all_paginated_metrics(missing: str | None) -> None:
+    records: Final = (
+        _daily_user_spend_record(user_id="user", api_key="", spend=-0.25, model=missing, model_group=missing),
+        _daily_user_spend_record(user_id="user", api_key="", spend=0.0, model=missing, model_group=missing),
+    )
+    result: Final = common_daily_activity_module._aggregate_spend_records_sync(
+        records=records, api_key_metadata={}, entity_id_field="user_id", entity_metadata_field=None
+    )
+    day: Final = result["results"][0]
+    assert day.metrics == result["totals"]
+    for bucket in (
+        day.breakdown.models["unknown-model"],
+        day.breakdown.model_groups["unknown-model-group"],
+        day.breakdown.providers["openai"],
+        day.breakdown.endpoints["/chat/completions"],
+        day.breakdown.entities["user"],
+    ):
+        assert bucket.metrics == day.metrics
+        assert bucket.api_key_breakdown == day.breakdown.api_keys
+    key: Final = day.breakdown.api_keys["unattributed"]
+    assert key.metrics == day.metrics
+    assert key.metadata.model_dump(exclude_none=True) == {"key_alias": "Unattributed", "key_exists": False}
+
+
+def test_normalized_rollups_add_colliding_model_metrics_and_keep_key_identities() -> None:
+    records: Final = (
+        _grouping_row(common_daily_activity_module._GROUP_DATE_MODEL, model=None, spend=1.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_MODEL, model="", spend=2.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_MODEL, model="unknown-model", spend=3.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_MODEL_API_KEY, model=None, api_key="", spend=1.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_MODEL_API_KEY, model="", api_key="", spend=2.0),
+        _grouping_row(
+            common_daily_activity_module._GROUP_DATE_MODEL_API_KEY,
+            model="unknown-model",
+            api_key="unattributed",
+            spend=3.0,
+        ),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_API_KEY, api_key="", spend=3.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_API_KEY, api_key="unattributed", spend=3.0),
+        _grouping_row(common_daily_activity_module._GROUP_DATE_API_KEY, api_key="raw:unattributed", spend=4.0),
+    )
+    result: Final = common_daily_activity_module._aggregate_grouping_sets_records_sync(
+        records=records, api_key_metadata={}
+    )
+    breakdown: Final = result["results"][0].breakdown
+    assert breakdown.models["unknown-model"].metrics.spend == 6.0
+    assert {key: value.metrics.spend for key, value in breakdown.models["unknown-model"].api_key_breakdown.items()} == {
+        "unattributed": 3.0,
+        "raw:unattributed": 3.0,
+    }
+    assert {key: value.metrics.spend for key, value in breakdown.api_keys.items()} == {
+        "unattributed": 3.0,
+        "raw:unattributed": 3.0,
+        "raw:raw:unattributed": 4.0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "group", "expected_group"),
+    [
+        (None, None, "unknown-model-group"),
+        ("", "", "unknown-model-group"),
+        (None, "configured-group", "configured-group"),
+        ("provider-model", "", "provider-model"),
+        ("unknown-model", "", "unknown-model"),
+        (" ", "", " "),
+    ],
+)
+def test_model_group_uses_raw_model_before_unknown_group(
+    model: str | None, group: str | None, expected_group: str
+) -> None:
+    result: Final = common_daily_activity_module._aggregate_spend_records_sync(
+        records=(_daily_user_spend_record(user_id="user", api_key="key", spend=1.0, model=model, model_group=group),),
+        api_key_metadata={},
+        entity_id_field=None,
+        entity_metadata_field=None,
+    )
+    assert tuple(result["results"][0].breakdown.model_groups) == (expected_group,)
+
+
+@pytest.mark.parametrize(
+    ("raw_key", "bucket"),
+    [
+        ("", "unattributed"),
+        ("real-hash", "real-hash"),
+        ("unattributed", "raw:unattributed"),
+        ("raw:unattributed", "raw:raw:unattributed"),
+        ("raw:real-hash", "raw:raw:real-hash"),
+    ],
+)
+def test_reporting_key_filters_round_trip_without_losing_scope(raw_key: str, bucket: str) -> None:
+    from litellm.repositories.daily_activity_buckets import api_key_bucket
+
+    assert api_key_bucket(raw_key) == bucket
+    scope: Final = daily_activity_scope(
+        "litellm_dailyuserspend", "user_id", "user", None, bucket, "2024-01-01", "2024-01-01", None, None
+    )
+    assert scope.api_keys == (raw_key,)
+    assert scope.entity_ids == ("user",)
+
+
+@pytest.mark.parametrize(("raw_key", "bucket_key"), [("", "unattributed"), ("unattributed", "raw:unattributed")])
+def test_mcp_nested_key_metrics_use_reporting_identity(raw_key: str, bucket_key: str) -> None:
+    record: Final = SimpleNamespace(
+        **{
+            **vars(_daily_user_spend_record(user_id="user", api_key=raw_key, spend=0.25, model=None, model_group=None)),
+            "mcp_namespaced_tool_name": "deleted-server/tool",
+        }
+    )
+    result: Final = common_daily_activity_module._aggregate_spend_records_sync(
+        records=(record,), api_key_metadata={}, entity_id_field=None, entity_metadata_field=None
+    )
+    breakdown: Final = result["results"][0].breakdown
+    assert breakdown.mcp_servers["deleted-server/tool"].api_key_breakdown == breakdown.api_keys
+    assert breakdown.mcp_servers["deleted-server/tool"].api_key_breakdown[bucket_key].metrics.spend == 0.25
+
+
+def test_ptu_rows_do_not_create_endpoint_or_mcp_key_buckets(ptu_cost_attribution_enabled: None) -> None:
+    from litellm.constants import PTU_SENTINEL_API_KEY
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    record: Final = SimpleNamespace(
+        **{
+            **vars(_spend_record(PTU_SENTINEL_API_KEY, ptu_flat_cost=2.0)),
+            "mcp_namespaced_tool_name": "server/tool",
+            "endpoint": "/mcp",
+        }
+    )
+    breakdown: Final = common_daily_activity_module.update_breakdown_metrics(BreakdownMetrics(), record, {}, {}, {})
+    assert breakdown.api_keys == {}
+    assert breakdown.endpoints["/mcp"].api_key_breakdown == {}
+    assert breakdown.mcp_servers["server/tool"].api_key_breakdown == {}
+    assert breakdown.endpoints["/mcp"].metrics.flat_cost == 2.0
+    assert breakdown.mcp_servers["server/tool"].metrics.flat_cost == 2.0
+
+
+def test_metric_merges_preserve_every_additive_field() -> None:
+    metrics: Final = SpendMetrics.model_validate(dict.fromkeys(SpendMetrics.model_fields, 2))
+    merged: Final = common_daily_activity_module.sum_spend_metrics((SpendMetrics(), metrics, metrics))
+    assert merged.model_dump() == dict.fromkeys(SpendMetrics.model_fields, 4)

@@ -683,7 +683,7 @@ class TestAddNewModelPtuGate:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_ids.return_value = [model_id]
+        mock_router.registry.return_value.names.return_value = [model_id]
 
         proxy_server = "litellm.proxy.proxy_server"
         endpoints = "litellm.proxy.management_endpoints.model_management_endpoints"

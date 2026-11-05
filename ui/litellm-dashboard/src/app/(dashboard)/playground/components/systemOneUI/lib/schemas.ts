@@ -125,7 +125,7 @@ const noulAnswerSchema = z.looseObject({ type: z.literal("noul"), noul: probabil
 const choiceAnswerShape = {
   type: z.literal("choice"),
   choice: z.string(),
-  confidence: probability.optional(),
+  confidence: probability.nullish(),
   probabilities,
 };
 const choiceAnswerSchema = z.looseObject(choiceAnswerShape);
@@ -133,7 +133,7 @@ const choiceAnswerSchema = z.looseObject(choiceAnswerShape);
 const scoreAnswerShape = {
   type: z.literal("score"),
   score: z.number().finite(),
-  confidence: probability.optional(),
+  confidence: probability.nullish(),
   legend: z.record(z.string(), decisionsJson).optional(),
   probabilities,
 };

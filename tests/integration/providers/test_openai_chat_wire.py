@@ -1,4 +1,3 @@
-import base64
 import json
 import uuid
 from collections.abc import Callable
@@ -547,14 +546,8 @@ def test_azure_gpt_6_bridged_no_cache_function_requests_each_reach_provider_and_
             lambda found: len(found) == 2,
             seconds=70,
         )
-        by_response_id: Final = {
-            (decoded := base64.b64decode(string_value(row["request_id"]).removeprefix("resp_")).decode())
-            .rsplit("response_id:", 1)[1]: (decoded, row)
-            for row in rows
-        }
-        for response_id in response_ids:
-            decoded, row = by_response_id[response_id]
-            assert decoded.startswith("litellm:custom_llm_provider:azure;model_id:"), rows
+        assert sorted(string_value(row["request_id"]) for row in rows) == sorted(response_ids), rows
+        for row in rows:
             assert (
                 string_value(row["status"]),
                 string_value(row["cache_hit"]),
@@ -601,11 +594,7 @@ def test_azure_gpt_6_bridged_function_requests_without_cache_field_still_hit_cac
             seconds=70,
         )
         priced, cached = rows
-        priced_request: Final = base64.b64decode(
-            string_value(priced["request_id"]).removeprefix("resp_")
-        ).decode()
-        assert priced_request.startswith("litellm:custom_llm_provider:azure;model_id:"), rows
-        assert priced_request.endswith(";response_id:resp_cached"), rows
+        assert string_value(priced["request_id"]) == "resp_cached", rows
         assert (
             priced["status"],
             priced["cache_hit"],

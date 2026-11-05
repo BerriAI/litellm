@@ -32,6 +32,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import effective_skip_tool_message_for_guardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import iter_tool_json_fields, map_tool_json_text, walk_user_text
 from litellm.types.guardrails import GuardrailEventHooks
@@ -753,7 +754,12 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         _masked_entity_count.set({})
 
         # Covers multimodal list content + Responses-API input.
-        inspected = walk_user_text(data, self.redact_text, self.redact_tool_payload) + self._redact_prompt(data)
+        inspected = walk_user_text(
+            data,
+            self.redact_text,
+            self.redact_tool_payload,
+            skip_tool_message=effective_skip_tool_message_for_guardrail(self),
+        ) + self._redact_prompt(data)
 
         if inspected == 0:
             # Image-only, empty-text, and unsupported payloads inspected
