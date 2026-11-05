@@ -230,6 +230,7 @@ class TestBedrockNative:
                     model=model,
                     messages=[{"role": "user", "content": WAREHOUSE_PROMPT}],
                     response_format=WAREHOUSE_RESPONSE_FORMAT,
+                    extra_body={"thinking": {"type": "adaptive"}},
                     max_tokens=1500,
                 )
                 .choices[0]

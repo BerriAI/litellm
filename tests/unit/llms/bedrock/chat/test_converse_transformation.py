@@ -7137,6 +7137,10 @@ def test_bedrock_json_mode_fake_stream_preserves_preamble_in_chunks() -> None:
     }
 
     def respond(request: httpx.Request) -> httpx.Response:
+        request_body: Final = cast(RequestObject, json.loads(request.content))
+        tool_config: Final = request_body.get("toolConfig")
+        assert tool_config is not None
+        assert [tool["toolSpec"]["name"] for tool in tool_config["tools"]] == ["json_tool_call"]
         return httpx.Response(200, json=response_json, request=request)
 
     model: Final = "bedrock/us.anthropic.claude-opus-5-5"
@@ -7156,6 +7160,8 @@ def test_bedrock_json_mode_fake_stream_preserves_preamble_in_chunks() -> None:
                 },
             },
         },
+        thinking={"type": "adaptive"},
+        max_tokens=1500,
         stream=True,
         aws_access_key_id="fake",
         aws_secret_access_key="fake",
