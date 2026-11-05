@@ -73,7 +73,7 @@ const columns: ColumnDef<TeamUserSpendRow>[] = [
 
 const TeamUserSpendCard: React.FC<TeamUserSpendCardProps> = ({ accessToken, startTime, endTime, teamIds }) => {
   const hasTeams = teamIds.length > 0;
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["teamSpendByUser", startTime?.toISOString(), endTime?.toISOString(), teamIds],
     queryFn: () =>
       accessToken && startTime && endTime ? teamSpendByUserCall(accessToken, startTime, endTime, teamIds) : null,
@@ -100,15 +100,21 @@ const TeamUserSpendCard: React.FC<TeamUserSpendCardProps> = ({ accessToken, star
       <p className="mb-3 text-xs text-muted-foreground">
         Attributed per request from spend logs, so it includes JWT/SSO traffic that does not use a virtual key
       </p>
-      <DataTable
-        columns={columns}
-        data={rows}
-        getRowId={teamUserSpendRowId}
-        isLoading={isLoading}
-        maxBodyHeight={320}
-        noDataMessage={teamIds.length === 0 ? "Select a team to see spend per user" : "No user spend in this range"}
-        size="compact"
-      />
+      {error !== null ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error instanceof Error ? error.message : "Spend per user failed to load"}
+        </p>
+      ) : (
+        <DataTable
+          columns={columns}
+          data={rows}
+          getRowId={teamUserSpendRowId}
+          isLoading={isLoading}
+          maxBodyHeight={320}
+          noDataMessage={teamIds.length === 0 ? "Select a team to see spend per user" : "No user spend in this range"}
+          size="compact"
+        />
+      )}
     </Panel>
   );
 };

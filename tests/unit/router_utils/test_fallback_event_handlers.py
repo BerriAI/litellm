@@ -1034,7 +1034,12 @@ class TestTriggerCooldownForFailedDeployment:
                     "model_name": "fallback-model",
                     "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
                     "model_info": {"id": "fallback-deployment"},
-                }
+                },
+                {
+                    "model_name": "fallback-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "fallback-sibling"},
+                },
             ],
             allowed_fails=0,
             cooldown_time=60,

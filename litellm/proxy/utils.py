@@ -64,6 +64,7 @@ from litellm.constants import (
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     SPEND_LOG_QUEUE_MAX_BYTES,
+    SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
 )
@@ -180,6 +181,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db import tool_registry_writer
 from litellm.proxy.db.create_views import (
     create_missing_views,
     create_view_tolerating_race,
@@ -187,6 +189,7 @@ from litellm.proxy.db.create_views import (
 )
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_url_settings import (
     DatabaseURLSettings,
     add_missing_query_params,
@@ -5035,6 +5038,39 @@ def jsonify_object(data: dict) -> dict:
 _deprecated_key_cache: Final[LimitedSizeOrderedDict] = LimitedSizeOrderedDict(max_size=1000)
 _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
 _PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
+_SPEND_LOG_READ_STATEMENT_TIMEOUT: Final = timedelta(seconds=SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS)
+_STATEMENT_TIMEOUT_TRANSACTION_GRACE: Final = timedelta(seconds=5)
+
+
+class _ReadTransactionClient(Protocol):
+    @property
+    def read_db(self) -> PrismaWrapper: ...
+
+
+async def query_raw_within_statement_timeout(
+    prisma_client: _ReadTransactionClient,
+    sql: str,
+    *params: object,
+    what: str = "Spend logs",
+    timeout: timedelta = _SPEND_LOG_READ_STATEMENT_TIMEOUT,
+) -> Sequence[Mapping[str, object]]:
+    """One raw read on the read target that Postgres cancels at ``timeout``.
+
+    Prisma's HTTP client gives up on a statement after 30s anyway, so without
+    this the Admin UI's error is the same but Postgres keeps running the scan.
+    A cancelled read surfaces as a 503 asking for a narrower date range.
+    """
+    try:
+        async with prisma_client.read_db.tx(timeout=timeout + _STATEMENT_TIMEOUT_TRANSACTION_GRACE) as transaction:
+            await transaction.execute_raw(f"SET LOCAL statement_timeout = {int(timeout / timedelta(milliseconds=1))}")
+            return await transaction.query_raw(sql, *params)
+    except Exception as e:
+        if not PrismaDBExceptionHandler.is_statement_timeout_error(e):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": f"{what} took longer than {int(timeout.total_seconds())}s. Pick a shorter date range"},
+        ) from e
 
 
 async def _lookup_deprecated_key(
@@ -8287,6 +8323,18 @@ class ProxyUpdateSpend:
         if general_settings.get("disable_spend_updates") is True:
             return True
         return False
+
+
+async def commit_tool_discoveries(prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging) -> None:
+    """Scheduler job writing discovered tools to LiteLLM_ToolTable, on its own lock, next to update_spend."""
+    writer: Final = proxy_logging_obj.db_spend_update_writer
+    await tool_registry_writer.commit_tool_discoveries(
+        prisma_client=prisma_client,
+        tool_discovery_queue=writer.tool_discovery_queue,
+        redis_update_buffer=writer.redis_update_buffer,
+        pod_lock_manager=writer.pod_lock_manager,
+        use_redis_buffer=RedisUpdateBuffer.should_commit_spend_updates_to_redis(),
+    )
 
 
 async def update_spend(

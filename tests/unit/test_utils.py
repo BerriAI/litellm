@@ -969,6 +969,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_1hr_above_100k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_audio_token_cost_batches": {"type": "number"},
+                "cache_read_input_audio_token_cost_flex": {"type": "number"},
+                "cache_read_input_audio_token_cost_priority": {"type": "number"},
+                "input_cost_per_audio_token_above_200k_tokens": {"type": "number"},
+                "input_cost_per_audio_token_above_200k_tokens_batches": {"type": "number"},
+                "input_cost_per_audio_token_above_200k_tokens_flex": {"type": "number"},
+                "input_cost_per_audio_token_above_200k_tokens_priority": {"type": "number"},
+                "input_cost_per_token_above_200k_tokens_flex": {"type": "number"},
+                "output_cost_per_image_token_priority": {"type": "number"},
+                "output_cost_per_token_above_200k_tokens_flex": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
@@ -976,6 +986,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
                 "google_maps_grounding_cost_per_query": {"type": "number"},
                 "input_cost_per_audio_token": {"type": "number"},
+                "input_cost_per_audio_token_flex": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_character": {"type": "number"},
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
@@ -1574,6 +1585,38 @@ def test_get_provider_rerank_config():
         "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
     )
     assert isinstance(config, HostedVLLMRerankConfig)
+
+
+def test_get_provider_video_config_resolves_a_custom_provider_map_base_video_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `BaseVideoConfig` registered in `custom_provider_map` answers for its provider name, a `CustomLLM`
+    registered there does not, and a built-in name still resolves to its built-in config even when a `CustomLLM`
+    shadows it in the map."""
+    from litellm.llms.custom_llm import CustomLLM
+    from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+
+    class QueueVideoConfig(OpenAIVideoConfig):
+        pass
+
+    video_config: Final = QueueVideoConfig()
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [
+            {"provider": "queue-video", "custom_handler": video_config},
+            {"provider": "image-only", "custom_handler": CustomLLM()},
+            {"provider": "openai", "custom_handler": CustomLLM()},
+        ],
+    )
+    monkeypatch.setattr(litellm, "_custom_providers", ["queue-video", "image-only", "openai"])
+
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="queue-video") is video_config
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="image-only") is None
+    assert isinstance(
+        ProviderConfigManager.get_provider_video_config(model="sora-2", provider="openai"), OpenAIVideoConfig
+    )
+    assert ProviderConfigManager.get_provider_video_config(model="seedance-1", provider="not-registered") is None
 
 
 def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
@@ -7662,7 +7705,6 @@ def test_openai_non_text_embedding_3_drop_params_per_call():
         assert "dimensions" not in optional_params
     finally:
         litellm.drop_params = prev_drop_params
-
 
 
 @pytest.mark.usefixtures(

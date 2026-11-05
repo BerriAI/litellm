@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
@@ -57,6 +58,12 @@ def _resolve_oidc_reference(credential: str | None) -> str | None:
         ) from exc
 
 
+@dataclass(frozen=True, slots=True)
+class _PassThroughCredentials:
+    api_key: str
+    api_base: str | None
+
+
 class PassthroughEndpointRouter:
     """
     Use this class to Get credentials for pass-through endpoints
@@ -88,6 +95,35 @@ class PassthroughEndpointRouter:
             custom_llm_provider=custom_llm_provider,
         )
         return _resolve_oidc_reference(get_secret_str(_env_variable_name))
+
+    def get_proxy_wide_deployment_credentials(self, custom_llm_provider: str) -> _PassThroughCredentials | None:
+        llm_router: Final = self.llm_router_getter()
+        if llm_router is None:
+            return None
+        for deployment in llm_router.get_model_list() or ():
+            litellm_params: LiteLLMParamsTypedDict = deployment["litellm_params"]
+            api_key: str | None = self._resolve_matching_deployment_api_key(
+                litellm_params=litellm_params,
+                custom_llm_provider=custom_llm_provider,
+                region_name=None,
+            )
+            if api_key is None:
+                continue
+            resolved_api_key: str | None = _resolve_oidc_reference(api_key)
+            if not resolved_api_key:
+                return None
+            return _PassThroughCredentials(
+                api_key=resolved_api_key,
+                api_base=self._resolve_matching_deployment_api_base(litellm_params),
+            )
+        return None
+
+    def _resolve_matching_deployment_api_base(self, litellm_params: LiteLLMParamsTypedDict) -> str | None:
+        credential_name: Final = litellm_params.get("litellm_credential_name")
+        credential_values: Final = (
+            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else None
+        )
+        return _get_str_value(credential_values, "api_base") or litellm_params.get("api_base")
 
     def _get_deployment_api_key(
         self,

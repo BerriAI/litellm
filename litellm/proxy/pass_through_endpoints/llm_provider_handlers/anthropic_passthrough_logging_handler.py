@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -25,6 +25,7 @@ from litellm.llms.anthropic.pass_through.stream_assembly import (
     collapse_pure_text_chunks,
     split_sse_chunk_into_events,
 )
+from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -53,6 +54,29 @@ else:
     EndpointType = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _event_payload(event: str) -> Mapping[str, object] | None:
+    data_lines: Final = tuple(
+        line.strip()[len("data:") :].strip() for line in event.splitlines() if line.strip().startswith("data:")
+    )
+    if not data_lines or data_lines[0] in ("", "[DONE]"):
+        return None
+    try:
+        return _JSON_OBJECT.validate_json(data_lines[0])
+    except ValidationError:
+        return None
+
+
+def _bedrock_trace_payload(all_chunks: Sequence[str | bytes]) -> Mapping[str, object] | None:
+    payloads: Final = (
+        _event_payload(event)
+        for chunk in reversed(all_chunks)
+        for event in reversed(split_sse_chunk_into_events(chunk))
+    )  # comprehension-ok: chunk then event, read newest first
+    return next(
+        (payload for payload in payloads if payload is not None and BEDROCK_INVOKE_TRACE_FIELD in payload), None
+    )
 
 
 class AnthropicPassthroughLoggingHandler:
@@ -106,6 +130,7 @@ class AnthropicPassthroughLoggingHandler:
             json_mode=False,
             litellm_params={},
         )
+        logging_obj.record_native_bedrock_guardrail(response_body)  # pyright: ignore[reportUnknownArgumentType]  # response_body is an untyped dict param
 
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=litellm_model_response,
@@ -522,6 +547,7 @@ class AnthropicPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": {},
             }
+        litellm_logging_obj.record_native_bedrock_guardrail(_bedrock_trace_payload(all_chunks))
         kwargs: Final = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,

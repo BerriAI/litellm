@@ -1798,3 +1798,4 @@ async def test_redaction_with_metadata_completion_api():
     response = standard_logging_payload["response"]
     assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+

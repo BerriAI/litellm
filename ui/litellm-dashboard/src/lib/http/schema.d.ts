@@ -35048,6 +35048,12 @@ export interface components {
             cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
+            /** Cache Read Input Audio Token Cost Batches */
+            cache_read_input_audio_token_cost_batches?: number | null;
+            /** Cache Read Input Audio Token Cost Flex */
+            cache_read_input_audio_token_cost_flex?: number | null;
+            /** Cache Read Input Audio Token Cost Priority */
+            cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -35123,8 +35129,20 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens */
+            input_cost_per_audio_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Batches */
+            input_cost_per_audio_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Flex */
+            input_cost_per_audio_token_above_200k_tokens_flex?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Priority */
+            input_cost_per_audio_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Audio Token Batches */
             input_cost_per_audio_token_batches?: number | null;
+            /** Input Cost Per Audio Token Flex */
+            input_cost_per_audio_token_flex?: number | null;
+            /** Input Cost Per Audio Token Priority */
+            input_cost_per_audio_token_priority?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Character Above 128K Tokens */
@@ -35157,6 +35175,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Batches */
             input_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Flex */
+            input_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -35264,6 +35284,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Priority */
+            output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -35298,6 +35320,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Batches */
             output_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Flex */
+            output_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -50283,6 +50307,12 @@ export interface components {
             cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
+            /** Cache Read Input Audio Token Cost Batches */
+            cache_read_input_audio_token_cost_batches?: number | null;
+            /** Cache Read Input Audio Token Cost Flex */
+            cache_read_input_audio_token_cost_flex?: number | null;
+            /** Cache Read Input Audio Token Cost Priority */
+            cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -50358,8 +50388,20 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens */
+            input_cost_per_audio_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Batches */
+            input_cost_per_audio_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Flex */
+            input_cost_per_audio_token_above_200k_tokens_flex?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Priority */
+            input_cost_per_audio_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Audio Token Batches */
             input_cost_per_audio_token_batches?: number | null;
+            /** Input Cost Per Audio Token Flex */
+            input_cost_per_audio_token_flex?: number | null;
+            /** Input Cost Per Audio Token Priority */
+            input_cost_per_audio_token_priority?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Character Above 128K Tokens */
@@ -50392,6 +50434,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Batches */
             input_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Flex */
+            input_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -50499,6 +50543,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Priority */
+            output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -50533,6 +50579,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Batches */
             output_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Flex */
+            output_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */

@@ -2444,6 +2444,44 @@ async def test_async_success_handler_runs_async_callbacks_in_the_post_response_p
     assert in_post_response_phase() is False, "the phase must not leak into the request task"
 
 
+@pytest.mark.parametrize("stream", [True, False], ids=["streaming", "non_streaming"])
+def test_reused_logging_obj_does_not_report_the_previous_attempts_first_token(logging_obj, stream: bool):
+    """A fallback reuses the request's logging object but runs in its own window.
+
+    When the first attempt already recorded a first-token time, the fallback must not
+    report it. Otherwise ``completion_start_time`` lands before the attempt's
+    ``start_time``, the callbacks see a negative TTFT, and latency-based routing caches
+    a negative sample that empties its buffer window.
+    """
+    logging_obj.stream = stream
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    first_attempt_start: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
+    logging_obj.update_completion_start_time(first_attempt_start + datetime.timedelta(seconds=1))
+    fallback_start: Final = first_attempt_start + datetime.timedelta(seconds=600)
+    fallback_end: Final = fallback_start + datetime.timedelta(seconds=5)
+
+    observed: dict[str, object] = {}
+
+    class Recorder(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            observed["completion_start_time"] = kwargs.get("completion_start_time")
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[Recorder()]):
+        logging_obj.success_handler(
+            result=_success_response(),
+            start_time=fallback_start,
+            end_time=fallback_end,
+        )
+
+    completion_start_time: Final = observed["completion_start_time"]
+    assert isinstance(completion_start_time, datetime.datetime)
+    assert completion_start_time >= fallback_start, (
+        "the fallback attempt reported a first-token time that predates its own start"
+    )
+
+
 def test_is_sync_litellm_request():
     assert LitellmLogging.is_sync_litellm_request({}) is True
     assert LitellmLogging.is_sync_litellm_request({"acompletion": True}) is False
@@ -12470,3 +12508,88 @@ def test_standard_logging_payload_reports_the_deployment_entry_the_request_was_b
         )
     finally:
         litellm.model_cost.pop(deployment_id, None)
+
+
+def test_record_native_bedrock_guardrail_bills_when_the_metadata_is_none() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-none-metadata",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": None}
+    trace = {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": 2}}}}}}
+
+    logging_obj.record_native_bedrock_guardrail({"trace": trace})
+
+    (entry,) = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+    assert entry["guardrail_usage"] == {"contentPolicyUnits": 2}
+    assert entry["guardrail_cost"] > 0
+
+
+def test_record_native_bedrock_guardrail_bills_nothing_for_a_response_served_from_cache() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-cache-hit",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    trace = {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": 2}}}}}}
+    cached = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi"}}], model="x")
+    setattr(cached, "trace", trace)
+    cached._hidden_params = {"cache_hit": True}
+
+    logging_obj.record_native_bedrock_guardrail(cached)
+    logging_obj.model_call_details["cache_hit"] = True
+    logging_obj.record_native_bedrock_guardrail({"trace": trace})
+
+    assert "standard_logging_guardrail_information" not in logging_obj.model_call_details["litellm_params"]["metadata"]
+
+
+def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_calls_share_one_metadata_dict() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+
+    shared_metadata = {"tag": "x"}
+    traces = tuple(
+        {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": units}}}}}}
+        for units in (1, 2)
+    )
+    costs = []
+    for call_index, trace in enumerate(traces):
+        logging_obj = Logging(
+            model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id=f"call-shared-metadata-{call_index}",
+            function_id="fn",
+        )
+        logging_obj.model_call_details["litellm_params"] = {"metadata": shared_metadata}
+        logging_obj.record_native_bedrock_guardrail({"trace": trace})
+        recorded = logging_obj.model_call_details["litellm_params"]["metadata"][
+            "standard_logging_guardrail_information"
+        ]
+        costs.append(guardrail_information_cost(recorded))
+
+    (first_cost, second_cost) = costs
+    assert second_cost == pytest.approx(2 * first_cost)
+    assert shared_metadata == {"tag": "x"}

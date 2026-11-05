@@ -438,6 +438,7 @@ if TYPE_CHECKING:
         get_num_retries_from_retry_policy,
         reset_retry_policy,
     )
+    from litellm.llms.custom_llm import CustomLLM
     from litellm.types.llms.anthropic import (
         ANTHROPIC_API_ONLY_HEADERS,
         AnthropicThinkingParam,
@@ -6542,6 +6543,13 @@ def get_model_info_helper(
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
                 cache_read_input_audio_token_cost=_model_info.get("cache_read_input_audio_token_cost", None),
+                cache_read_input_audio_token_cost_flex=_model_info.get("cache_read_input_audio_token_cost_flex", None),
+                cache_read_input_audio_token_cost_priority=_model_info.get(
+                    "cache_read_input_audio_token_cost_priority", None
+                ),
+                cache_read_input_audio_token_cost_batches=_model_info.get(
+                    "cache_read_input_audio_token_cost_batches", None
+                ),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
@@ -6608,6 +6616,20 @@ def get_model_info_helper(
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
+                input_cost_per_audio_token_flex=_model_info.get("input_cost_per_audio_token_flex", None),
+                input_cost_per_audio_token_above_200k_tokens=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_flex=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_flex", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_priority=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_priority", None
+                ),
+                input_cost_per_audio_token_above_200k_tokens_batches=_model_info.get(
+                    "input_cost_per_audio_token_above_200k_tokens_batches", None
+                ),
+                input_cost_per_audio_token_priority=_model_info.get("input_cost_per_audio_token_priority", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
                 input_cost_per_audio_token_batches=_model_info.get("input_cost_per_audio_token_batches", None),
@@ -6620,12 +6642,18 @@ def get_model_info_helper(
                 input_cost_per_token_above_200k_tokens_batches=_model_info.get(
                     "input_cost_per_token_above_200k_tokens_batches"
                 ),
+                input_cost_per_token_above_200k_tokens_flex=_model_info.get(
+                    "input_cost_per_token_above_200k_tokens_flex", None
+                ),
                 input_cost_per_token_above_272k_tokens_batches=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_batches"
                 ),
                 output_cost_per_token_batches=_model_info.get("output_cost_per_token_batches"),
                 output_cost_per_token_above_200k_tokens_batches=_model_info.get(
                     "output_cost_per_token_above_200k_tokens_batches"
+                ),
+                output_cost_per_token_above_200k_tokens_flex=_model_info.get(
+                    "output_cost_per_token_above_200k_tokens_flex", None
                 ),
                 output_cost_per_token_above_272k_tokens_batches=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_batches"
@@ -6688,6 +6716,7 @@ def get_model_info_helper(
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
+                output_cost_per_image_token_priority=_model_info.get("output_cost_per_image_token_priority", None),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
@@ -10140,8 +10169,13 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_video_config(
         model: str | None,
-        provider: LlmProviders,
+        provider: LlmProviders | str,
     ) -> BaseVideoConfig | None:
+        if not isinstance(provider, LlmProviders):
+            custom_video_config: Final = ProviderConfigManager.get_custom_provider_video_config(provider)
+            if custom_video_config is not None or provider not in LlmProvidersSet:
+                return custom_video_config
+            return ProviderConfigManager.get_provider_video_config(model=model, provider=LlmProviders(provider))
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 
@@ -10187,6 +10221,34 @@ class ProviderConfigManager:
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIVideoConfig()
         return None
+
+    @staticmethod
+    def get_custom_llm_handler(provider: str | None) -> CustomLLM | None:
+        """The `CustomLLM` registered for `provider` in `litellm.custom_provider_map`, if its handler is one."""
+        from litellm.llms.custom_llm import CustomLLM
+
+        return next(
+            (
+                item["custom_handler"]
+                for item in litellm.custom_provider_map
+                if item["provider"] == provider and isinstance(item["custom_handler"], CustomLLM)
+            ),
+            None,
+        )
+
+    @staticmethod
+    def get_custom_provider_video_config(provider: str) -> BaseVideoConfig | None:
+        """The `BaseVideoConfig` registered for `provider` in `litellm.custom_provider_map`, if its handler is one."""
+        from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+
+        return next(
+            (
+                item["custom_handler"]
+                for item in litellm.custom_provider_map
+                if item["provider"] == provider and isinstance(item["custom_handler"], BaseVideoConfig)
+            ),
+            None,
+        )
 
     @staticmethod
     def get_provider_container_config(

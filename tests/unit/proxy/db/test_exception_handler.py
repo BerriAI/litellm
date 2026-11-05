@@ -951,3 +951,18 @@ def test_is_lock_timeout_error_recognises_a_statement_cancelled_under_lock_timeo
 )
 def test_is_lock_timeout_error_excludes_other_failures(error: Exception) -> None:
     assert PrismaDBExceptionHandler.is_lock_timeout_error(error) is False
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_lock_timeout_error(message="canceling statement due to statement timeout", code="57014"), True),
+        (_lock_timeout_error(message="canceling statement due to statement timeout", code=None), True),
+        (_lock_timeout_error(), False),
+        (_capacity_error("sorry, too many clients already"), False),
+        (RuntimeError("canceling statement due to statement timeout"), False),
+    ],
+    ids=["meta_57014", "message_only", "lock_timeout_55P03", "capacity_53300", "not_prisma"],
+)
+def test_is_statement_timeout_error(error: Exception, expected: bool) -> None:
+    assert PrismaDBExceptionHandler.is_statement_timeout_error(error) is expected

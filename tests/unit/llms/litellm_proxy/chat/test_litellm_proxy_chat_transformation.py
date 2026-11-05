@@ -1,15 +1,16 @@
 import json
+import re
 from io import BytesIO
 from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 from openai import AsyncOpenAI, OpenAI
+from openai._legacy_response import LegacyAPIResponse
 from openai.types import CreateEmbeddingResponse, Embedding
 from openai.types.create_embedding_response import Usage
-import pytest
-import re
 
 import litellm
 from litellm import completion
@@ -17,7 +18,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
 from tests._vcr_conftest_common import rewound_new_episodes_cassette
 from tests.capturing_transport import CapturingTransport
-
 
 _GATEWAY_EMBEDDING_RESPONSE: Final = CreateEmbeddingResponse(
     object="list",
@@ -98,7 +98,7 @@ async def test_litellm_gateway_from_sdk():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions.with_raw_response, "create", new=MagicMock()
+        openai_client, "post", new=MagicMock()
     ) as mock_call:
         try:
             completion(
@@ -114,9 +114,9 @@ async def test_litellm_gateway_from_sdk():
 
         mock_call.assert_called_once()
 
-        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs["body"]))
 
-        assert "hello" in mock_call.call_args.kwargs["extra_body"]
+        assert "hello" in mock_call.call_args.kwargs["options"]["extra_json"]
 
 
 @pytest.mark.parametrize("is_async", (False, True))
@@ -264,7 +264,7 @@ async def test_litellm_gateway_from_sdk_rerank(is_async):
         patch_target = client.post
 
     with patch.object(client, "post", new=mock_method):
-        mock_response = MagicMock()
+        mock_response = MagicMock(spec=LegacyAPIResponse)
 
         # Create a mock response similar to OpenAI's rerank response
         mock_response.text = json.dumps(
@@ -408,7 +408,7 @@ async def test_litellm_gateway_from_sdk_structured_output():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client, "post", new=MagicMock()
     ) as mock_call:
         try:
             litellm.completion(
@@ -427,8 +427,8 @@ async def test_litellm_gateway_from_sdk_structured_output():
 
         mock_call.assert_called_once()
 
-        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
-        json_schema = mock_call.call_args.kwargs["response_format"]
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs["body"]))
+        json_schema = mock_call.call_args.kwargs["body"]["response_format"]
         assert "json_schema" in json_schema
 
 
@@ -486,7 +486,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
     openai_client = OpenAI(api_key="fake-key")
 
     # Create mock response object
-    mock_response = MagicMock()
+    mock_response = MagicMock(spec=LegacyAPIResponse)
     mock_response.headers = {"x-litellm-response-cost": "120"}
     mock_response.parse.return_value = litellm.ModelResponse(
         **{
@@ -528,8 +528,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
     )
 
     with patch.object(
-        openai_client.chat.completions.with_raw_response,
-        "create",
+        openai_client, "post",
         return_value=mock_response,
     ) as mock_call:
         response = litellm.completion(
@@ -564,7 +563,7 @@ async def test_litellm_gateway_image_generation_direct(is_async):
         "created": 1,
         "data": [{"url": "https://example.com/image.png"}],
     }
-    mock_raw_response = MagicMock()
+    mock_raw_response = MagicMock(spec=LegacyAPIResponse)
     mock_raw_response.parse.return_value = mock_openai_response
     mock_raw_response.headers = {}
 

@@ -18,6 +18,11 @@ import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.auth.authorization import OwnedRows
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
+from tests.unit.proxy.db.fake_prisma_engine import (
+    ReadTargetOf,
+    statement_timeout_error,
+    statement_timeout_reads,
+)
 
 
 def _default_date_range():
@@ -256,6 +261,8 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
             return [row for row in ordered[skip : skip + page_size]]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
+
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
@@ -313,6 +320,7 @@ async def test_is_admin_view_safe_exception():
 async def test_can_team_member_view_log_none_team_id():
     # team_id=None should immediately return False
     class MockPrisma:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         class DB:
             class TeamTable:
                 async def find_unique(self, where: dict):
@@ -334,6 +342,7 @@ async def test_can_team_member_view_log_none_team_id():
 async def test_can_team_member_view_log_team_not_found(monkeypatch):
     # Non-existent team should return False
     class MockPrisma:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         class DB:
             class TeamTable:
                 async def find_unique(self, where: dict):
@@ -373,6 +382,7 @@ async def test_can_team_member_view_log_not_admin(monkeypatch):
             }
 
     class MockPrisma:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         class DB:
             class TeamTable:
                 async def find_unique(self, where: dict):
@@ -411,6 +421,7 @@ async def test_can_team_member_view_log_admin(monkeypatch):
             }
 
     class MockPrisma:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         class DB:
             class TeamTable:
                 async def find_unique(self, where: dict):
@@ -476,6 +487,7 @@ def _make_owner_lookup_prisma(rows):
             return _emulate_spend_log_owner_lookup(rows, sql_query, params)
 
     class MockPrisma:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
 
@@ -981,6 +993,7 @@ async def test_ui_view_spend_logs_sort_by_and_sort_order(
         return [row for row in sorted_logs[skip : skip + page_size]]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MagicMock()
             self.db.litellm_spendlogs = MagicMock()
@@ -1042,6 +1055,7 @@ async def test_ui_view_spend_logs_sort_validation_errors(client, monkeypatch, so
         return 0
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MagicMock()
             self.db.litellm_spendlogs = MagicMock()
@@ -1118,6 +1132,7 @@ async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatc
         return [row for row in sorted_logs[skip : skip + page_size]]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MagicMock()
             self.db.litellm_spendlogs = MagicMock()
@@ -1214,6 +1229,7 @@ async def test_ui_view_spend_logs_sort_by_model(client, monkeypatch, sort_order,
         return [row for row in sorted_logs[skip : skip + page_size]]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MagicMock()
             self.db.litellm_spendlogs = MagicMock()
@@ -1326,6 +1342,7 @@ async def test_ui_view_spend_logs_sort_by_ttft_ms(client, monkeypatch):
         return [{k: v for k, v in row.items() if k != "_ttft_ms"} for row in sorted_logs[skip : skip + page_size]]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MagicMock()
             self.db.litellm_spendlogs = MagicMock()
@@ -2046,6 +2063,7 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
             return [mock_spend_logs[0]]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
@@ -2098,6 +2116,7 @@ async def test_ui_view_session_spend_logs_rehydrates_metadata_jsonb_text(client,
             return [dict(raw_row)]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
@@ -2146,6 +2165,7 @@ async def test_ui_view_session_spend_logs_includes_permitted_team_logs(client, m
             ]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
@@ -2623,6 +2643,7 @@ async def test_ui_view_request_response_rejects_foreign_row_inserted_after_owner
             ]
 
     class MockPrisma:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
 
@@ -2654,6 +2675,7 @@ async def test_ui_view_request_response_custom_logger_denies_foreign_payload_own
             return []
 
     class MockPrisma:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
 
@@ -3956,6 +3978,7 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
             ]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
 
@@ -4051,6 +4074,7 @@ async def test_view_spend_logs_bounds_row_count(client, monkeypatch):
             return [{}] * min(kwargs.get("take", 0), self.available_rows)
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
 
@@ -4174,6 +4198,7 @@ def _tag_query_prisma_client(assert_query_raw):
             return assert_query_raw(sql_query, params)
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
 
@@ -4393,6 +4418,7 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
             return mock_summarized_response
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
 
@@ -4455,6 +4481,7 @@ async def test_view_spend_logs_summarize_groups_by_day_in_sql(client, monkeypatc
             return mock_rows
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
 
@@ -4520,6 +4547,7 @@ async def test_view_spend_logs_summarize_empty_rows(client, monkeypatch):
             return []
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
 
@@ -4559,6 +4587,7 @@ async def test_view_spend_logs_summarize_unhashed_api_key_without_padding(client
             return mock_rows
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MockDB()
 
@@ -4873,6 +4902,7 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
             }
         ]
     )
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
 
     result = await _build_ui_spend_logs_response(
         prisma_client=mock_prisma,
@@ -4938,6 +4968,7 @@ async def test_build_ui_spend_logs_response_caps_session_models():
             }
         ]
     )
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
 
     result = await _build_ui_spend_logs_response(
         prisma_client=mock_prisma,
@@ -5002,6 +5033,7 @@ async def test_build_ui_spend_logs_response_key_split_session_gets_per_key_aggre
             },
         ]
     )
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
 
     result = await _build_ui_spend_logs_response(
         prisma_client=mock_prisma,
@@ -5055,6 +5087,7 @@ async def test_build_ui_spend_logs_response_empty_api_key_keeps_session_aggregat
             }
         ]
     )
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
 
     result = await _build_ui_spend_logs_response(
         prisma_client=mock_prisma,
@@ -5110,6 +5143,7 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
             }
         ]
     )
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
 
     result = await _build_ui_spend_logs_response(
         prisma_client=mock_prisma,
@@ -5192,6 +5226,7 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_tokens():
             }
         ]
     )
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
 
     result = await _build_ui_spend_logs_response(
         prisma_client=mock_prisma,
@@ -5272,6 +5307,7 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_duration():
             }
         ]
     )
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
 
     result = await _build_ui_spend_logs_response(
         prisma_client=mock_prisma,
@@ -5295,6 +5331,35 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_duration():
     assert (
         'SUM( COALESCE( request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER ) )' in sql
     )
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_keeps_the_page_when_postgres_cancels_the_session_totals_read():
+    """The page already fetched is returned without session totals, like any other failed enrichment read."""
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    dict_rows = [
+        {"request_id": "req-1", "session_id": "sess-slow", "call_type": "completion", "api_key": "k"},
+        {"request_id": "req-2", "session_id": "sess-slow", "call_type": "completion", "api_key": "k"},
+    ]
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=statement_timeout_error())
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=2,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    assert [row["request_id"] for row in result["data"]] == ["req-1", "req-2"]
+    assert all(row["session_total_count"] == 1 for row in result["data"])
 
 
 @pytest.mark.asyncio
@@ -5330,6 +5395,7 @@ async def test_build_ui_spend_logs_response_session_cache_hit_count():
             }
         ]
     )
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
 
     result = await _build_ui_spend_logs_response(
         prisma_client=mock_prisma,
@@ -5376,6 +5442,7 @@ async def test_can_team_member_view_log_with_spend_logs_permission(monkeypatch):
             }
 
     class MockPrisma:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         class DB:
             class TeamTable:
                 async def find_unique(self, where: dict):
@@ -5412,6 +5479,7 @@ async def test_can_team_member_view_log_without_spend_logs_permission(monkeypatc
             }
 
     class MockPrisma:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         class DB:
             class TeamTable:
                 async def find_unique(self, where: dict):
@@ -6101,6 +6169,7 @@ async def test_ui_view_spend_logs_rehydrates_metadata_jsonb_text(client, monkeyp
         return [{**raw_row, "total_count": 1}]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MagicMock()
             self.db.litellm_spendlogs = MagicMock()
@@ -6185,6 +6254,7 @@ async def test_ui_view_spend_logs_metadata_invalid_json_falls_back_to_empty_dict
         return [{**raw_row, "total_count": 1}]
 
     class MockPrismaClient:
+        read_db = property(lambda self: ReadTargetOf(self.db))
         def __init__(self):
             self.db = MagicMock()
             self.db.litellm_spendlogs = MagicMock()
@@ -6529,6 +6599,7 @@ _SCOPED_SPEND_REPORT_PATHS = [
 def _spend_report_mock_prisma(query_raw_returns=None, team_rows=None, user_row=None):
     pc = MagicMock()
     pc.db.query_raw = AsyncMock(return_value=query_raw_returns if query_raw_returns is not None else [])
+    statement_timeout_reads(pc, pc.db.query_raw)
     pc.db.litellm_teamtable.find_many = AsyncMock(return_value=team_rows if team_rows is not None else [])
     pc.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
     return pc
@@ -7105,6 +7176,7 @@ def _session_grouped_mock_prisma(session_page_rows, session_total, representativ
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
     mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
     return mock_prisma
 
 
@@ -7150,6 +7222,7 @@ def _session_grouped_paginating_prisma(sessions, counted_total=None):
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
     mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
     return mock_prisma
 
 
@@ -7473,6 +7546,7 @@ async def test_ui_view_spend_logs_group_by_session_offset_for_non_starttime_sort
         return []
 
     mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     monkeypatch.setattr(
         "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
@@ -7523,6 +7597,7 @@ async def test_ui_view_spend_logs_search_returns_flat_rows_when_grouping_by_sess
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
     mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
