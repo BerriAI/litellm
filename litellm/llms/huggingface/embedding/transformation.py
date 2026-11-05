@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -37,6 +38,10 @@ class _TokenEncoding(Protocol):
     """Tokenizer handle the caller passes in; only `encode` is used, to count completion tokens."""
 
     def encode(self, text: str, /) -> Sequence[object]: ...
+
+
+def _header_value(headers: Mapping[str, str], key: str, default: str) -> str:
+    return headers.get(key, default)
 
 
 tgi_models_cache = None
@@ -353,7 +358,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         api_key: str | None = None,
     ) -> list[dict[str, str]]:
         streamed_response: Final = CustomStreamWrapper(
-            completion_stream=response.iter_lines(),
+            completion_stream=iter_sse_lines(response.iter_text()),
             model=model,
             custom_llm_provider="huggingface",
             logging_obj=logging_obj,
@@ -443,14 +448,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         except Exception:
             # this should remain non blocking we should not block a response returning if calculating usage fails
             pass
-        output_text: Final = model_response["choices"][0]["message"].get("content", "")
+        first_message: Final = model_response.choices[0].message
+        output_text: Final = first_message.content
         if output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
                 if encoding is not None:
-                    completion_tokens = len(
-                        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-                    )  ##[TODO] use the llama2 tokenizer here
+                    completion_tokens = len(encoding.encode(output_text))  ##[TODO] use the llama2 tokenizer here
             except Exception:
                 # this should remain non blocking we should not block a response returning if calculating usage fails
                 pass
@@ -485,7 +489,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
         task: Final = litellm_params.get("task", None)
         is_streamed = False
-        if raw_response.__dict__["headers"].get("Content-Type", "") == "text/event-stream":
+        if _header_value(raw_response.headers, "Content-Type", "") == "text/event-stream":
             is_streamed = True
 
         # iterate over the complete streamed response, and return the final answer

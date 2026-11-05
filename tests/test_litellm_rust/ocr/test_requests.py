@@ -3,6 +3,7 @@ from typing import Final
 
 import pytest
 
+import litellm
 from tests.test_litellm_rust.ocr.data import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
@@ -20,7 +21,6 @@ pytestmark = pytest.mark.requires_rust_extension
 @pytest.mark.parametrize("model", ["mistral/mistral-ocr-latest", "azure_ai/mistral-ocr-latest", "reducto/parse-v3"])
 async def test_ocr_contract_native_format_supported(
     server: RecordingServer,
-    ocr_backend: bool,
     asynchronous: bool,
     model: str,
 ) -> None:
@@ -43,15 +43,13 @@ async def test_ocr_contract_native_format_supported(
     assert response.pages[0].markdown == "native OCR response"
     assert response.get_provider_native_response() == payload
     assert len(server.requests) == 1
-    if ocr_backend:
-        assert_served_natively(server, response)
+    assert_served_natively(server, response)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_ocr_contract_unknown_reducto_model_reaches_provider(
     server: RecordingServer,
-    ocr_backend: bool,
     asynchronous: bool,
 ) -> None:
     server.default_response = ResponseSpec(body={"result": {"chunks": [{"content": "future model response"}]}})
@@ -105,3 +103,32 @@ def test_native_ocr_encodes_python_file_input_and_drops_unknown_arguments(server
         "model": "mistral-ocr-latest",
         "document": {"type": "image_url", "image_url": "data:image/png;base64,YWJj"},
     }
+
+
+@pytest.mark.parametrize(
+    "drop_params,global_drop_params",
+    [(True, False), (" TRUE ", False), (None, True), (False, True)],
+    ids=["per_call", "per_call_spelled", "global", "global_wins"],
+)
+def test_azure_document_intelligence_drop_params_drops_an_unsupported_output_content_format(
+    server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    drop_params: object,
+    global_drop_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    server.default_response = ResponseSpec(
+        body={"status": "succeeded", "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}}
+    )
+
+    response: Final = call_ocr(
+        server,
+        model="azure_ai/doc-intelligence/prebuilt-layout",
+        outputContentFormat="html",
+        drop_params=drop_params,
+    )
+
+    assert_served_natively(server, response)
+    assert response.pages[0].markdown == "hello"
+    assert "outputContentFormat" not in server.requests[0].path
+    assert "drop_params" not in server.requests[0].path

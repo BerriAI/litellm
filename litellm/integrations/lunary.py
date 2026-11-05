@@ -3,9 +3,14 @@
 import importlib
 import traceback
 from datetime import datetime, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import packaging
+
+if TYPE_CHECKING:
+    from openai.types.chat.chat_completion_message_custom_tool_call import Custom
+
+    from litellm.types.utils import ChatCompletionCustomToolCallPayload, ChatCompletionDeltaCustomToolCallPayload
 
 
 # convert to {completion: xx, tokens: xx}
@@ -21,7 +26,9 @@ def parse_tool_calls(tool_calls):
         return None
 
     def clean_tool_call(tool_call):
-        custom: Final = getattr(tool_call, "custom", None)
+        custom: Final[
+            ChatCompletionCustomToolCallPayload | ChatCompletionDeltaCustomToolCallPayload | Custom | None
+        ] = getattr(tool_call, "custom", None)
         if custom is not None:
             name, arguments = custom.name, custom.input
         else:

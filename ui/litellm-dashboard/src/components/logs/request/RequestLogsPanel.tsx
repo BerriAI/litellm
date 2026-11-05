@@ -6,6 +6,7 @@ import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } fr
 import moment from "moment";
 import { parseAsString, useQueryStates } from "nuqs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
 import { Button } from "@/components/ui/button";
@@ -50,6 +51,7 @@ interface RequestLogsPanelProps {
 }
 
 export default function RequestLogsPanel({ accessToken, token, userRole, userID, isActive }: RequestLogsPanelProps) {
+  const { t } = useTranslation();
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
   const [localFilters, setLocalFilters] = useState<ColumnFiltersState>([]);
@@ -355,7 +357,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         keyData={selectedKeyInfo}
         teams={allTeams ?? []}
         onClose={() => setSelectedKeyIdInfoView(null)}
-        backButtonText="Back to Logs"
+        backButtonText={t("logs.request.panel.backToLogs")}
       />
     );
   }
@@ -366,6 +368,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         data={rows}
         rowCount={rowCount}
         isLoading={logsQuery.isLoading}
+        isError={logsQuery.isError}
+        errorMessage={logsQuery.error instanceof Error ? logsQuery.error.message : undefined}
         isRefreshing={logsQuery.isFetching}
         pagination={effectivePagination}
         onPaginationChange={handlePaginationChange}
@@ -384,19 +388,23 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         toolbarChildren={
           <LogsToolbar>
             <LogsTimeRangePicker value={timeRange} onValueChange={handleTimeRangeChange} />
-            <LogsToolbarSwitch label="Live Tail" checked={isLiveTail} onCheckedChange={setIsLiveTail} />
+            <LogsToolbarSwitch
+              label={t("logs.request.panel.liveTail")}
+              checked={isLiveTail}
+              onCheckedChange={setIsLiveTail}
+            />
             {isLiveTail && effectivePagination.pageIndex === 0 && (
               <span role="status" className="whitespace-nowrap text-xs text-muted-foreground">
-                Refreshing every 15s
+                {t("logs.request.panel.refreshingEvery15s")}
               </span>
             )}
             <LogsToolbarSwitch
-              label="Hide Health Checks"
+              label={t("logs.request.panel.hideHealthChecks")}
               checked={excludeInternalHealthChecks}
               onCheckedChange={handleExcludeInternalHealthChecksChange}
             />
             <Button variant="outline" size="sm" onClick={handleResetFilters}>
-              Reset Filters
+              {t("logs.request.panel.resetFilters")}
             </Button>
           </LogsToolbar>
         }

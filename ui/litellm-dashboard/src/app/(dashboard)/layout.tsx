@@ -1,18 +1,24 @@
 "use client";
 
 import React, { Suspense, useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/currentUser/useCurrentUser";
+import { redirectToLogin } from "@/app/(dashboard)/hooks/redirectToLogin";
+import { clearTokenCookies } from "@/utils/cookieUtils";
+import { decodeToken } from "@/utils/jwtUtils";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   createDeploymentHealthHandle,
   DeploymentHealthBanner,
   DeploymentHealthIcon,
+  DeploymentHealthLink,
 } from "@/components/DeploymentHealth/DeploymentHealth";
 import { DeploymentHealthPanel } from "@/components/DeploymentHealth/DeploymentHealthPanel";
 import { UserBanner } from "@/components/UserBanner";
@@ -39,6 +45,7 @@ function PluginModeProviderWithAuth({ children }: { children: React.ReactNode })
 }
 
 export function AgentControlPlaneView() {
+  const { t } = useTranslation();
   const { activePlugin } = usePluginMode();
   const activePluginName = activePlugin?.name;
   const agentPlatformUrl = activePlugin?.url ?? "";
@@ -83,8 +90,8 @@ export function AgentControlPlaneView() {
     return (
       <div className="flex flex-1 items-center justify-center text-muted-foreground">
         <div className="text-center">
-          <p className="text-lg font-medium mb-2">Plugin</p>
-          <p className="text-sm">Configure the plugin URL in settings</p>
+          <p className="text-lg font-medium mb-2">{t("shell.agentControlPlane.plugin")}</p>
+          <p className="text-sm">{t("shell.agentControlPlane.configure")}</p>
         </div>
       </div>
     );
@@ -102,7 +109,7 @@ export function AgentControlPlaneView() {
         flex: 1,
         minHeight: "calc(100vh - 56px)",
       }}
-      title={activePlugin?.display_name ?? "Plugin"}
+      title={activePlugin?.display_name ?? t("shell.agentControlPlane.plugin")}
       allow="clipboard-write"
     />
   );
@@ -111,6 +118,7 @@ export function AgentControlPlaneView() {
 const FULL_BLEED_SEGMENTS = new Set(["logs"]);
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation();
   const { accessToken } = useAuth();
   const { mode } = usePluginMode();
   const pathname = usePathname();
@@ -147,6 +155,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           accessToken={accessToken}
           isPublicPage={false}
           deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+          deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
         />
         <DeploymentHealthBanner handle={deploymentHealthHandle} />
         <DeploymentHealthPanel handle={deploymentHealthHandle} />
@@ -162,28 +171,28 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   // sidebar owns its own scroll and the content column scrolls independently,
   // so the page can't be dragged past the end of the nav.
   return (
-    <div className="flex h-screen overflow-hidden bg-background max-md:h-dvh">
-      <div className="hidden h-full md:flex">
-        <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
-      </div>
-      <Sheet
-        handle={mobileNavigationHandle}
-        open={mobileNavigationOpen}
-        onOpenChange={(open) => setMobileNavigationKey(open ? navigationKey : null)}
-      >
-        <SheetContent
-          side="left"
-          showCloseButton={false}
-          className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
-          onClickCapture={(event) => {
-            if (event.target instanceof Element && event.target.closest("a[href]")) setMobileNavigationKey(null);
-          }}
+    <LiteAdminFrame>
+      <div className="flex h-screen overflow-hidden bg-background max-md:h-dvh">
+        <div className="hidden h-full md:flex">
+          <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
+        </div>
+        <Sheet
+          handle={mobileNavigationHandle}
+          open={mobileNavigationOpen}
+          onOpenChange={(open) => setMobileNavigationKey(open ? navigationKey : null)}
         >
-          <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
-        </SheetContent>
-      </Sheet>
-      <LiteAdminFrame>
+          <SheetContent
+            side="left"
+            showCloseButton={false}
+            className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
+            onClickCapture={(event) => {
+              if (event.target instanceof Element && event.target.closest("a[href]")) setMobileNavigationKey(null);
+            }}
+          >
+            <SheetTitle className="sr-only">{t("shell.dashboardShell.navigation")}</SheetTitle>
+            <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
+          </SheetContent>
+        </Sheet>
         <CommandPaletteProvider>
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
             <DashboardHeader
@@ -192,25 +201,37 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
                 <SheetTrigger
                   handle={mobileNavigationHandle}
                   render={
-                    <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation" />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-11 md:hidden"
+                      aria-label={t("shell.dashboardShell.openNavigation")}
+                    />
                   }
                 >
                   <Menu />
                 </SheetTrigger>
               }
               deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+              deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
             />
             <DeploymentHealthBanner handle={deploymentHealthHandle} />
             <DeploymentHealthPanel handle={deploymentHealthHandle} />
             <UserBanner accessToken={accessToken} />
-            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+            <main
+              className={
+                routeSegment === "aria"
+                  ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+                  : "min-h-0 min-w-0 flex-1 overflow-y-auto"
+              }
+            >
               <TelemetryEnvBanner />
               {children}
             </main>
           </div>
         </CommandPaletteProvider>
-      </LiteAdminFrame>
-    </div>
+      </div>
+    </LiteAdminFrame>
   );
 }
 
@@ -218,8 +239,14 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  const { accessToken, authLoading, passwordResetRequired } = useAuth();
+  const { accessToken, token, authLoading, passwordResetRequired } = useAuth();
+  const session = decodeToken(token);
+  const { isLoading: currentUserLoading, isError: currentUserFailed } = useCurrentUser(
+    session?.key ?? null,
+    session?.auth_header_name,
+  );
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
+  const identityPending = currentUserLoading || currentUserFailed;
 
   // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
   // /onboarding route. Redirect once ui-config has loaded so uiHref resolves the SERVER_ROOT_PATH base.
@@ -237,7 +264,13 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     }
   }, [authLoading, passwordResetRequired, pathname, router]);
 
-  if (authLoading || isInvitationFlow) {
+  useEffect(() => {
+    if (!currentUserFailed || isInvitationFlow) return;
+    clearTokenCookies();
+    redirectToLogin();
+  }, [currentUserFailed, isInvitationFlow]);
+
+  if (authLoading || identityPending || isInvitationFlow) {
     return <LoadingScreen />;
   }
 

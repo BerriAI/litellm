@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import threading
 import time
@@ -419,7 +420,16 @@ def test_s3_v2_object_rejected_with_a_bucket_wide_code_is_delivered_once_the_fau
 def test_s3_v2_terminal_object_is_put_once_and_dropped_by_default(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3toolarge" + uuid.uuid4().hex[:8]
     sink: Final = RejectingS3Sink(reject_marker=f"{marker}-huge", reject_status=400, reject_code="EntityTooLarge")
-    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+    flushing: Final = threading.Event()
+    release: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        if f"{marker}-held".encode() in request.body:
+            flushing.set()
+            assert release.wait(timeout=60), "the held flush was never released"
+        return sink.respond(request)
+
+    with wire_server(_chat_reply) as provider, wire_server(respond) as bucket:
         config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
         with (
             owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
@@ -427,11 +437,16 @@ def test_s3_v2_terminal_object_is_put_once_and_dropped_by_default(gateway: Gatew
         ):
             model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
             key: Final = scenario.key(models=[model])
+            _send(candidate, model, key, f"{marker}-held")
+            eventually(flushing.is_set, bool, seconds=30)
             _send(candidate, model, key, f"{marker}-huge")
-            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-sibling")
+            _send(candidate, model, key, f"{marker}-sibling")
+            release.set()
+            eventually(sink.landed_ids, lambda landed: f"{marker}-sibling" in landed, seconds=60)
             _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-second-flush")
             _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-third-flush")
-    assert sum(1 for r in provider.drain() if r.method == "POST") == 4
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 5
+    assert sink.landed_ids() == {f"{marker}-{name}" for name in ("held", "sibling", "second-flush", "third-flush")}
     assert sink.rejected_attempts == 1, (
         f"an EntityTooLarge object was PUT {sink.rejected_attempts} times next to delivered siblings; "
         "with the default s3_drop_on_terminal_error it must be attempted once and dropped"
@@ -518,16 +533,20 @@ def test_s3_v2_failing_sink_trims_the_oldest_failed_events_past_the_queue_cap(ga
         ):
             model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
             key: Final = scenario.key(models=[model])
-            sink.fail_until = time.time() + 15
+            sink.fail_until = math.inf
             _send(owned.gateway, model, key, f"{marker}-probe")
             eventually(lambda: owned.log.read_text(), lambda text: "S3BatchUploadError" in text, seconds=30)
             for index in range(24):
                 _send(owned.gateway, model, key, f"{marker}-{index}")
+            sent: Final = len(owned.log.read_text())
             eventually(
                 lambda: owned.log.read_text(),
-                lambda text: "after a failed flush, dropped" in text,
+                lambda text: (
+                    "after a failed flush, dropped" in text and text[sent:].count("async_send_batch raised") >= 2
+                ),
                 seconds=30,
             )
+            sink.fail_until = time.time()
             payloads: Final = collect_payloads(sink, 4, seconds=90)
             landed: Final = frozenset(payload["id"] for payload in payloads)
     assert sum(1 for r in provider.drain() if r.method == "POST") == 25

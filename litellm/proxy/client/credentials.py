@@ -75,7 +75,7 @@ class CredentialsManagementClient:
         credential_values: Mapping[str, object],
         return_request: bool = False,
         display_name: str | None = None,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Create a new credential.
 
@@ -121,7 +121,7 @@ class CredentialsManagementClient:
         self,
         credential_name: str,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Delete a credential by name.
 
@@ -182,7 +182,7 @@ class CredentialsManagementClient:
         self,
         credential_name: str,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Get a credential by name.
 

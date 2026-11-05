@@ -1,6 +1,7 @@
 use std::{io::Write, time::Duration};
 
 use flate2::{Compression, write::GzEncoder};
+use litellm_error::Source;
 use litellm_http::Client;
 
 use crate::{Connection, Error, valid_identifier};
@@ -34,11 +35,13 @@ pub async fn insert_encoded_rows(
         return Err(Error::InvalidTable);
     }
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(encoded.as_bytes())
-        .map_err(|_| Error::InvalidRow)?;
-    let body = encoder.finish().map_err(|_| Error::InvalidRow)?;
+    encoder.write_all(encoded.as_bytes()).map_err(invalid_row)?;
+    let body = encoder.finish().map_err(invalid_row)?;
     insert_compressed_rows(client, connection, database, table, token, body).await
+}
+
+fn invalid_row(error: std::io::Error) -> Error {
+    Error::InvalidRow(Source::new(error))
 }
 
 pub async fn insert_compressed_rows(
@@ -91,7 +94,7 @@ pub async fn insert_compressed_rows(
         .body(body)
         .send()
         .await
-        .map_err(|_| Error::Transport)?;
+        .map_err(litellm_http::Error::from)?;
     if !response.status().is_success() {
         return Err(Error::InsertFailed(response.status().as_u16()));
     }

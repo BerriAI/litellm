@@ -14,6 +14,8 @@ from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, ev
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import OwnedProxy, owned_proxy_process
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 PREFERENCES: Final = ("available", "auto_install", "required")
 INVALID_PREFERENCES: Final[tuple[JsonValue, ...]] = (
     "",

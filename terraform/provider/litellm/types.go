@@ -120,6 +120,7 @@ type LiteLLMParams struct {
 	VertexProject                  string                 `json:"vertex_project,omitempty"`
 	VertexLocation                 string                 `json:"vertex_location,omitempty"`
 	VertexCredentials              string                 `json:"vertex_credentials,omitempty"`
+	AdditionalDropParams           interface{}            `json:"additional_drop_params,omitempty"`
 }
 
 // ModelInfo represents information about a model.
@@ -206,6 +207,15 @@ type MCPServerRequest struct {
 	Command         string            `json:"command,omitempty"`
 	Args            []string          `json:"args,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
+	Credentials     *MCPCredentials   `json:"credentials,omitempty"`
+}
+
+// MCPCredentials is the secret material the proxy uses against an MCP server.
+// The proxy encrypts it at rest and redacts it on read, so it is never read back.
+type MCPCredentials struct {
+	AuthValue    string `json:"auth_value,omitempty"`
+	ClientID     string `json:"client_id,omitempty"`
+	ClientSecret string `json:"client_secret,omitempty"`
 }
 
 // MCPServerResponse represents a response from the API containing MCP server information.

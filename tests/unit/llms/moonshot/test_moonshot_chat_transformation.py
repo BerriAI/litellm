@@ -763,3 +763,20 @@ class TestMoonshotReasoningEffort:
         )
 
         assert "reasoning_effort" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/moonshot/v1",
+        "https://gateway.example.com/moonshot/v1/",
+        "https://gateway.example.com/moonshot/v1/chat/completions/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        MoonshotChatConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="kimi-k3", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/moonshot/v1/chat/completions"
+    )

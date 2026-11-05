@@ -1,10 +1,9 @@
 from typing import Final
 
 import litellm
-from litellm.rust_bridge.catalog import Route
 from tests.test_litellm_rust.support.gaps import gap
 from tests.test_litellm_rust.support.recording_server import RecordingServer
-from tests.test_litellm_rust.support.routing import call_natively
+from tests.test_litellm_rust.support.routing import call_public
 
 MESSAGES_MODEL: Final = "anthropic/claude-sonnet-5"
 MESSAGES: Final = ({"role": "user", "content": "Hello"},)
@@ -50,8 +49,7 @@ RATE_LIMITED: Final = _error("rate_limit_error")
 
 
 async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: object) -> object:
-    return await call_natively(
-        Route.MESSAGES,
+    return await call_public(
         litellm.anthropic.messages.create,
         litellm.anthropic.messages.acreate,
         REQUEST,

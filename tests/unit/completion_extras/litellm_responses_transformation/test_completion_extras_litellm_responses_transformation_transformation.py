@@ -1,14 +1,19 @@
+import asyncio
 import copy
 import datetime
 import json
 import os
+import queue
 import unittest
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseOutputMessage,
@@ -23,14 +28,533 @@ import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
-from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
+from litellm.types.utils import ModelResponse, StandardLoggingPayload, TextCompletionResponse
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
     from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 
-    from litellm.types.llms.openai import ResponsesAPIResponse
-    from litellm.types.utils import ModelResponse
+
+def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_search() -> None:
+    response_body: Final = {
+        "id": "resp_tool_search_bridge",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_tool_search_bridge",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    tools: Final = [
+        {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+            "defer_loading": True,
+        },
+    ]
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+
+        litellm.completion(
+            model="openai/responses/gpt-5.5",
+            messages=[{"role": "user", "content": "Find a tool"}],
+            tools=tools,
+            api_key="sk-test",
+            cache={"no-cache": True},
+        )
+
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert request_body["tools"][0] == {"type": "tool_search", "execution": "server"}
+
+
+_MANTLE_RESPONSES_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"reasoning_effort": "low", "reasoningSummary": "auto"},
+        {"reasoning_effort": {"effort": "low"}, "reasoning_summary": "auto"},
+    ],
+    ids=["string-effort", "dict-effort"],
+)
+@pytest.mark.parametrize(
+    ("model", "url", "model_info"),
+    [
+        ("openai/gpt-5.4", "https://api.openai.com/v1/responses", None),
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, {"mode": "chat"}),
+    ],
+    ids=["openai", "mantle-chat-pin"],
+)
+def test_a_summary_alias_beside_an_extra_body_effort_reaches_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+    extra_body: Mapping[str, object],
+    model: str,
+    url: str,
+    model_info: Mapping[str, object] | None,
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    response_body: Final = {
+        "id": "resp_nested_effort_summary",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_nested_effort_summary",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url).mock(return_value=httpx.Response(200, json=response_body))
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            extra_body=dict(extra_body),
+            model_info=model_info,
+            api_key="test-key",
+            aws_region_name="us-east-1",
+        )
+
+    assert json.loads(upstream.calls.last.request.content)["reasoning"] == {"effort": "low", "summary": "auto"}
+
+
+@pytest.mark.parametrize(
+    ("model", "url", "expected_summary"),
+    [
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, "auto"),
+        ("openai/responses/gpt-5.5", "https://api.openai.com/v1/responses", "detailed"),
+    ],
+)
+@pytest.mark.parametrize("endpoint", ["chat_completions", "responses"])
+def test_auto_summary_sends_the_level_the_target_accepts(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, expected_summary: str, endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    response_body: Final = {
+        "id": "resp_auto_summary",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_auto_summary",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url).mock(return_value=httpx.Response(200, json=response_body))
+        if endpoint == "chat_completions":
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                reasoning_effort="low",
+                api_key="test-key",
+                aws_region_name="us-east-1",
+            )
+        else:
+            litellm.responses(
+                model=model, input="ping", reasoning_effort="low", api_key="test-key", aws_region_name="us-east-1"
+            )
+
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert request_body["reasoning"] == {"effort": "low", "summary": expected_summary}
+
+
+@dataclass(frozen=True, slots=True)
+class _LoggedSuccess:
+    call_type: str
+    payload: StandardLoggingPayload
+    response_obj: object
+    complete_streaming_response: object
+
+
+class _LoggedCallTypes(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_by_caller: Final = MappingProxyType(
+            {
+                "completion": queue.SimpleQueue[_LoggedSuccess](),
+                "acompletion": queue.SimpleQueue[_LoggedSuccess](),
+            }
+        )
+
+    @staticmethod
+    def _logged(kwargs: Mapping[str, object], response_obj: object, streaming_key: str) -> _LoggedSuccess:
+        return _LoggedSuccess(
+            call_type=str(kwargs["call_type"]),
+            payload=cast(StandardLoggingPayload, kwargs["standard_logging_object"]),
+            response_obj=response_obj,
+            complete_streaming_response=kwargs.get(streaming_key),
+        )
+
+    def log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.seen_by_caller["completion"].put(self._logged(kwargs, response_obj, "complete_streaming_response"))
+
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.seen_by_caller["acompletion"].put(
+            self._logged(kwargs, response_obj, "async_complete_streaming_response")
+        )
+
+
+_GET_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+_BRIDGED_PROVIDERS: Final = pytest.mark.parametrize(
+    ("model", "url", "provider_kwargs"),
+    [
+        ("openai/gpt-5.3-codex", "https://api.openai.com/v1/responses", {}),
+        (
+            "azure/gpt-6-sol",
+            "https://example.invalid/openai/responses",
+            {"api_base": "https://example.invalid", "api_version": "2025-04-01-preview"},
+        ),
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, {"aws_region_name": "us-east-1"}),
+    ],
+    ids=["openai-responses-only", "azure-tools", "bedrock-mantle-tools"],
+)
+
+
+_PONG_MESSAGE: Final[Mapping[str, object]] = {
+    "type": "message",
+    "id": "msg_logged_call_type",
+    "status": "completed",
+    "role": "assistant",
+    "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+}
+
+
+def _searched_responses_body(model: str) -> Mapping[str, object]:
+    return {
+        "id": "resp_logged_call_type",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "web_search_call",
+                "id": "ws_logged_call_type",
+                "status": "completed",
+                "action": {"type": "search", "query": "weather"},
+            },
+            _PONG_MESSAGE,
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _responses_sse(response_body: Mapping[str, object]) -> str:
+    events: Final = (
+        {"type": "response.created", "response": {**response_body, "status": "in_progress", "output": [], "usage": None}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_logged_call_type",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "pong",
+        },
+        {"type": "response.completed", "response": response_body},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+def _bridged_request(model: str, provider_kwargs: Mapping[str, object], stream: bool) -> Mapping[str, object]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "tools": [_GET_WEATHER_TOOL],
+        "api_key": "test-key",
+        "cache": {"no-cache": True},
+        "stream": stream,
+        **provider_kwargs,
+    }
+
+
+async def _served_chunk_ids(caller: str, request: Mapping[str, object]) -> frozenset[str]:
+    if caller == "acompletion":
+        async_stream: Final = await litellm.acompletion(**request)
+        assert isinstance(async_stream, CustomStreamWrapper)
+        return frozenset([chunk.id async for chunk in async_stream])
+    sync_stream: Final = litellm.completion(**request)
+    assert isinstance(sync_stream, CustomStreamWrapper)
+    return frozenset(chunk.id for chunk in sync_stream)
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@_BRIDGED_PROVIDERS
+@pytest.mark.asyncio
+async def test_bridged_chat_call_is_logged_with_the_callers_call_type(
+    monkeypatch: pytest.MonkeyPatch, caller: str, model: str, url: str, provider_kwargs: Mapping[str, object]
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = _searched_responses_body(model)
+    request: Final = _bridged_request(model, provider_kwargs, stream=False)
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith=url).mock(return_value=httpx.Response(200, json=response_body))
+        if caller == "acompletion":
+            await litellm.acompletion(**request)
+        else:
+            litellm.completion(**request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert (logged.call_type, logged.payload["call_type"]) == (caller, caller)
+    assert isinstance(logged.response_obj, ModelResponse)
+    assert logged.response_obj.id == response_body["id"]
+    assert logged.response_obj.choices[0].message.content == "pong"
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == "pong"
+    assert logged.payload["response_cost"] == litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate(response_body), model=model
+    )
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@_BRIDGED_PROVIDERS
+@pytest.mark.asyncio
+async def test_bridged_chat_stream_is_logged_as_the_chat_completion_it_streamed(
+    monkeypatch: pytest.MonkeyPatch, caller: str, model: str, url: str, provider_kwargs: Mapping[str, object]
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = _searched_responses_body(model)
+    request: Final = _bridged_request(model, provider_kwargs, stream=True)
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith=url).mock(
+            return_value=httpx.Response(
+                200, text=_responses_sse(response_body), headers={"content-type": "text/event-stream"}
+            )
+        )
+        served_ids: Final = await _served_chunk_ids(caller, request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert isinstance(logged.complete_streaming_response, ModelResponse)
+    assert logged.response_obj is logged.complete_streaming_response
+    assert served_ids == {logged.complete_streaming_response.id}
+    assert logged.complete_streaming_response.choices[0].message.content == "pong"
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == "pong"
+    assert logged.payload["response_cost"] == litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate(response_body), model=model
+    )
+
+
+def _json_message(item_id: str, document: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "id": item_id,
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": json.dumps(document), "annotations": []}],
+    }
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_bridged_structured_output_call_is_logged_with_the_json_document_the_client_got(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = {
+        **_searched_responses_body("openai/gpt-5.3-codex"),
+        "output": [_json_message("msg_first", {"answer": "pong"}), _json_message("msg_second", {"answer": "again"})],
+    }
+    request: Final = {
+        **_bridged_request("openai/gpt-5.3-codex", {}, stream=False),
+        "response_format": {"type": "json_object"},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        served: Final = await litellm.acompletion(**request) if caller == "acompletion" else litellm.completion(**request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert isinstance(served, ModelResponse)
+    assert isinstance(logged.response_obj, ModelResponse)
+    served_message: Final = served.choices[0].message
+    logged_message: Final = logged.response_obj.choices[0].message
+    assert json.loads(served_message.content) == {"answer": "pong"}
+    assert logged_message.content == served_message.content
+    assert logged_message.provider_specific_fields == served_message.provider_specific_fields
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == served_message.content
+
+
+async def _logged_text_completion(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> tuple[TextCompletionResponse, _LoggedSuccess, Mapping[str, object]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = _searched_responses_body("openai/gpt-5.3-codex")
+    request: Final = {"model": "openai/gpt-5.3-codex", "prompt": "ping", "api_key": "test-key"}
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        served: Final = (
+            await litellm.atext_completion(**request) if caller == "acompletion" else litellm.text_completion(**request)
+        )
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+    assert isinstance(served, TextCompletionResponse)
+    return served, logged, response_body
+
+
+@pytest.mark.parametrize(("caller", "call_type"), [("completion", "text_completion"), ("acompletion", "atext_completion")])
+@pytest.mark.asyncio
+async def test_bridged_text_completion_is_logged_and_priced_under_the_callers_call_type(
+    monkeypatch: pytest.MonkeyPatch, caller: str, call_type: str
+) -> None:
+    served, logged, response_body = await _logged_text_completion(monkeypatch, caller)
+
+    assert (logged.call_type, logged.payload["call_type"]) == (call_type, call_type)
+    assert getattr(logged.response_obj, "id") == served.id == response_body["id"]
+    assert logged.payload["response_cost"] == litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate(response_body), model="openai/gpt-5.3-codex"
+    )
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_bridged_text_completion_is_logged_as_the_text_completion_it_served(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> None:
+    served, logged, _ = await _logged_text_completion(monkeypatch, caller)
+
+    assert isinstance(logged.response_obj, TextCompletionResponse)
+    assert logged.response_obj.choices[0].text == served.choices[0].text == "pong"
+    assert logged.payload["response"]["object"] == served.object == "text_completion"
+    assert logged.payload["response"]["choices"][0]["text"] == "pong"
+
+
+def _served_message_start_id(events: Sequence[bytes]) -> object:
+    lines: Final = b"".join(events).decode().splitlines()
+    starts: Final = tuple(
+        json.loads(line.removeprefix("data:")) for line in lines if line.startswith("data:") and '"message_start"' in line
+    )
+    assert len(starts) == 1
+    return starts[0]["message"]["id"]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+@pytest.mark.asyncio
+async def test_bridged_messages_call_is_logged_as_anthropic_messages_under_the_id_the_client_got(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = {**_searched_responses_body("openai/gpt-5.3-codex"), "output": [_PONG_MESSAGE]}
+    upstream: Final = (
+        httpx.Response(200, text=_responses_sse(response_body), headers={"content-type": "text/event-stream"})
+        if stream
+        else httpx.Response(200, json=response_body)
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(return_value=upstream)
+        served: Final = await litellm.anthropic.messages.acreate(
+            model="openai/gpt-5.3-codex",
+            max_tokens=64,
+            messages=[{"role": "user", "content": "ping"}],
+            api_key="test-key",
+            stream=stream,
+        )
+        served_id: Final = (
+            _served_message_start_id([event async for event in cast(AsyncIterator[bytes], served)])
+            if stream
+            else cast(Mapping[str, object], served)["id"]
+        )
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller["acompletion"].get, timeout=10)
+
+    assert (logged.call_type, logged.payload["call_type"]) == ("anthropic_messages", "anthropic_messages")
+    assert logged.payload["id"] == served_id
+    assert logged.payload["response"]["choices"][0]["message"]["content"] == "pong"
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_bridged_chat_stream_keeps_the_upstream_headers_when_its_output_cannot_be_translated(
+    monkeypatch: pytest.MonkeyPatch, caller: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = {**_searched_responses_body("openai/gpt-5.3-codex"), "output": []}
+    request: Final = _bridged_request("openai/gpt-5.3-codex", {}, stream=True)
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                text=_responses_sse(response_body),
+                headers={"content-type": "text/event-stream", "x-request-id": "req_upstream"},
+            )
+        )
+        await _served_chunk_ids(caller, request)
+        logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
+
+    assert isinstance(logged.complete_streaming_response, ModelResponse)
+    assert logged.complete_streaming_response.id == response_body["id"]
+    assert logged.payload["hidden_params"]["additional_headers"]["llm_provider-x-request-id"] == "req_upstream"
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
@@ -260,6 +784,45 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.function_call is None
 
 
+def test_bridged_reasoning_summary_parts_rebuild_into_the_one_choice_they_streamed_on():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    events = (
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 0},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "First part.",
+            "output_index": 0,
+            "summary_index": 0,
+        },
+        {"type": "response.reasoning_summary_part.done", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 1},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Second part.",
+            "output_index": 0,
+            "summary_index": 1,
+        },
+        {"type": "response.reasoning_summary_part.added", "output_index": 1, "summary_index": 0},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Next item.",
+            "output_index": 1,
+            "summary_index": 0,
+        },
+        {"type": "response.output_text.delta", "delta": "Answer", "output_index": 2, "content_index": 0},
+    )
+
+    rebuilt = litellm.stream_chunk_builder(chunks=[iterator.chunk_parser(event) for event in events])
+
+    assert [(choice.index, choice.message.reasoning_content, choice.message.content) for choice in rebuilt.choices] == [
+        (0, "First part. Second part. Next item.", "Answer")
+    ]
+
+
 def test_chunk_parser_string_output_text_delta_produces_text():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
@@ -329,6 +892,222 @@ def test_chunk_parser_function_call_added_produces_tool_use():
     assert tool_call.function.name == "fn"
     assert tool_call.function.arguments == '{"key": "value"}'
     assert choice.finish_reason is None
+
+
+def test_streamed_function_call_namespace_replays_on_next_turn():
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    streamed = iterator.chunk_parser(
+        {
+            "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            "item": {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call-ns",
+                "arguments": '{"city": "Paris"}',
+                "namespace": "get_weather",
+            },
+        }
+    )
+    tool_call = streamed.choices[0].delta.tool_calls[0].model_dump(exclude_none=True)
+
+    request = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[
+            {"role": "user", "content": "weather in Paris"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call-ns", "content": "sunny"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    function_calls = [item for item in request["input"] if item.get("type") == "function_call"]
+    assert [call["namespace"] for call in function_calls] == ["get_weather"]
+
+
+def test_function_level_namespace_replays_when_tool_call_level_is_missing():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    tool_call = {
+        "id": "call-ns",
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+            "provider_specific_fields": {"namespace": "get_weather"},
+        },
+    }
+
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "weather in Paris"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call-ns", "content": "sunny"},
+        ],
+        include_namespace=True,
+    )
+
+    function_calls = [item for item in input_items if item.get("type") == "function_call"]
+    assert [call["namespace"] for call in function_calls] == ["get_weather"]
+
+
+def test_shared_converter_leaves_tool_search_items_and_namespace_out_by_default():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    tool_call = {
+        "id": "call-ns",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": "{}"},
+        "provider_specific_fields": {"namespace": "weather"},
+    }
+    search_items = [
+        {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["weather"]}},
+        {"type": "tool_search_output", "id": "tso_1", "tools": [{"type": "function", "name": "get_weather"}]},
+    ]
+
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "weather in Paris"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [tool_call],
+                "provider_specific_fields": {"tool_search_items": search_items},
+            },
+            {"role": "tool", "tool_call_id": "call-ns", "content": "sunny"},
+        ]
+    )
+
+    assert input_items == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "weather in Paris"}]},
+        {"type": "function_call", "call_id": "call-ns", "name": "get_weather", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call-ns", "output": [{"type": "input_text", "text": "sunny"}]},
+    ]
+
+
+def test_streamed_tool_search_turn_replays_with_its_reasoning_item():
+    from unittest.mock import Mock
+
+    import litellm
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    function_call = {
+        "type": "function_call",
+        "id": "fc_1",
+        "name": "get_weather",
+        "call_id": "call-ts",
+        "arguments": '{"city": "Paris"}',
+        "namespace": "get_weather",
+        "status": "completed",
+    }
+    tool_search_call = {
+        "type": "tool_search_call",
+        "id": "tsc_1",
+        "arguments": {"paths": ["get_weather"]},
+        "call_id": None,
+        "created_by": None,
+        "execution": "server",
+        "status": "completed",
+    }
+    tool_search_output = {
+        "type": "tool_search_output",
+        "id": "tso_1",
+        "call_id": None,
+        "execution": "server",
+        "status": "completed",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {}, "defer_loading": True}],
+    }
+    reasoning = {"type": "reasoning", "id": "rs_1", "encrypted_content": "enc", "summary": []}
+    later_reasoning = {"type": "reasoning", "id": "rs_2", "encrypted_content": "enc_2", "summary": []}
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks = [
+        iterator.chunk_parser({"type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "item": function_call}),
+        iterator.chunk_parser(
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [reasoning, tool_search_call, tool_search_output, later_reasoning, function_call],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+            }
+        ),
+    ]
+    user = {"role": "user", "content": "weather in Paris"}
+    message = litellm.stream_chunk_builder(chunks, messages=[user]).choices[0].message
+
+    request = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[user, message.model_dump(), {"role": "tool", "tool_call_id": "call-ts", "content": "sunny"}],
+        optional_params={"tools": [{"type": "tool_search"}]},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert [(item["type"], item.get("id")) for item in request["input"][1:-1]] == [
+        ("reasoning", "rs_1"),
+        ("tool_search_call", "tsc_1"),
+        ("tool_search_output", "tso_1"),
+        ("reasoning", "rs_2"),
+        ("function_call", None),
+    ]
+    assert request["input"][2] == {key: value for key, value in tool_search_call.items() if value is not None}
+    assert request["input"][5]["namespace"] == "get_weather"
+
+
+@pytest.mark.parametrize(
+    "answer_item",
+    [
+        ResponseFunctionToolCall(
+            type="function_call", id="fc_1", call_id="call_weather", name="get_weather", arguments="{}"
+        ),
+        ResponseOutputMessage(
+            type="message",
+            id="msg_1",
+            role="assistant",
+            status="completed",
+            content=[ResponseOutputText(type="output_text", text="Rain.", annotations=[])],
+        ),
+    ],
+    ids=["tool-call", "message"],
+)
+def test_every_reasoning_item_before_an_answer_reaches_an_openai_chat_message(answer_item: object) -> None:
+    reasoning: Final = tuple(
+        ResponseReasoningItem(
+            type="reasoning",
+            id=f"rs_{name}",
+            summary=[Summary(type="summary_text", text=f"{name.title()}.")],
+            encrypted_content=f"enc_{name}",
+        )
+        for name in ("first", "second")
+    )
+
+    message: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        [*reasoning, answer_item], replay_openai_history=True
+    )[0].message
+
+    assert [item["id"] for item in message.reasoning_items] == ["rs_first", "rs_second"]
+    assert message.reasoning_content == "First. Second."
 
 
 def test_transform_response_with_reasoning_and_output():
@@ -763,6 +1542,24 @@ def test_recover_output_items_merges_text_only_items_at_distinct_indices():
     assert recovered[1]["content"][0]["text"] == "From OUTPUT_TEXT_DONE only"
 
 
+def test_recover_output_items_keeps_an_item_whose_text_holds_unicode_line_separators() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    item: Final = {
+        "type": "message",
+        "id": "msg_item_0",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "From\u2028OUTPUT_ITEM\u2029DONE", "annotations": []}],
+    }
+    event: Final = {"type": "response.output_item.done", "output_index": 0, "item": item}
+    raw_sse: Final = f"data: {json.dumps(event, ensure_ascii=False)}\ndata: [DONE]\n"
+
+    assert LiteLLMResponsesTransformationHandler._recover_output_items_from_raw_sse(raw_sse) == [item]
+
+
 def test_transform_response_prefers_completed_output_from_raw_sse():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -913,9 +1710,7 @@ def test_transform_request_forwards_defer_loading_only_beside_tool_search(
     [{"type": "tool_search", "execution": "client"}, {"type": "tool_search"}],
     ids=["client-only", "hosted-and-client"],
 )
-def test_transform_request_drops_defer_loading_beside_client_tool_search(
-    deferred_tool, drop_params, tool_search_tool
-):
+def test_transform_request_drops_defer_loading_beside_client_tool_search(deferred_tool, drop_params, tool_search_tool):
     tool_search_tools: Final = (
         [tool_search_tool]
         if tool_search_tool.get("execution") == "client"
@@ -1059,6 +1854,51 @@ def test_transform_request_system_only_message_maps_to_system_input_item():
     ]
     # System content lives in input only; not duplicated into instructions.
     assert not result.get("instructions")
+
+
+_JSON_SYSTEM_PROMPT: Final = "You output JSON objects."
+_PLAIN_USER_ITEM: Final = {
+    "type": "message",
+    "role": "user",
+    "content": [{"type": "input_text", "text": "List three colors."}],
+}
+_COLORS_SCHEMA: Final = {
+    "type": "json_schema",
+    "json_schema": {"name": "colors", "schema": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize(
+    ("response_format", "expected_input", "expected_instructions"),
+    [
+        (
+            {"type": "json_object"},
+            [
+                {"type": "message", "role": "system", "content": [{"type": "input_text", "text": _JSON_SYSTEM_PROMPT}]},
+                _PLAIN_USER_ITEM,
+            ],
+            None,
+        ),
+        (_COLORS_SCHEMA, [_PLAIN_USER_ITEM], _JSON_SYSTEM_PROMPT),
+    ],
+    ids=["json_object_keeps_system_in_input", "json_schema_keeps_system_in_instructions"],
+)
+def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_check_reads_it(
+    response_format, expected_input, expected_instructions
+):
+    result = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.4-mini",
+        messages=[
+            {"role": "system", "content": _JSON_SYSTEM_PROMPT},
+            {"role": "user", "content": "List three colors."},
+        ],
+        optional_params={"response_format": response_format},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert (result["input"], result.get("instructions")) == (expected_input, expected_instructions), result
 
 
 def test_transform_request_single_char_keys_not_matched():
@@ -2635,6 +3475,38 @@ def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
             {"type": "custom", "name": "ApplyPatch"},
         ),
         ({"type": "custom"}, {"type": "custom"}),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [
+                        {"type": "function", "function": {"name": "get_time"}},
+                        {"type": "custom", "custom": {"name": "apply_patch"}},
+                        {"type": "mcp", "server_label": "docs"},
+                        {"type": "function", "name": "already_flat"},
+                    ],
+                },
+            },
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [
+                    {"type": "function", "name": "get_time"},
+                    {"type": "custom", "name": "apply_patch"},
+                    {"type": "mcp", "server_label": "docs"},
+                    {"type": "function", "name": "already_flat"},
+                ],
+            },
+        ),
+        (
+            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}},
+            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}},
+        ),
+        (
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+        ),
     ],
 )
 def test_normalize_tool_choice_for_responses_api(tool_choice, expected):
@@ -3676,6 +4548,16 @@ def test_output_item_done_with_stream_map_keeps_empty_delta():
         ({"type": "required"}, "required"),
         ("auto", "auto"),
         ({"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "name": "get_weather"}),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+                },
+            },
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+        ),
     ],
 )
 async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
@@ -3748,6 +4630,7 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
     post_kwargs = mock_post.call_args.kwargs
     request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
     assert request_body["tool_choice"] == expected_wire_tool_choice
+    assert [tool["name"] for tool in request_body["tools"]] == ["get_weather"]
 
 
 def _make_incomplete_responses_api_response(
@@ -3855,6 +4738,211 @@ def test_transform_response_incomplete_reasoning_only_returns_empty_length_choic
     assert result.usage.completion_tokens == 16
     assert result.usage.total_tokens == 53
     assert result.usage.completion_tokens_details.reasoning_tokens == 16
+
+
+@pytest.mark.parametrize(
+    ("status", "incomplete_reason", "finish_reason"),
+    [("completed", None, "stop"), ("incomplete", "max_output_tokens", "length")],
+)
+def test_search_only_turn_keeps_tool_search_items_for_the_next_request(status, incomplete_reason, finish_reason):
+    search_items = [
+        {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["get_weather"]}, "status": "completed"},
+        {"type": "tool_search_output", "id": "tso_1", "status": "completed", "tools": [{"name": "get_weather"}]},
+    ]
+    raw_response = _make_incomplete_responses_api_response(
+        incomplete_reason,
+        [{"type": "reasoning", "id": "rs_raw", "summary": []}, _make_reasoning_only_output_item(), *search_items],
+        status=status,
+    )
+
+    choice = _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response).choices[0]
+
+    stored = choice.message.provider_specific_fields["tool_search_items"]
+    assert [item["id"] for item in stored] == ["rs_raw", "rs_incomplete", "tsc_1", "tso_1"]
+    assert stored[2:] == search_items
+    assert [item["id"] for item in choice.message.reasoning_items] == ["rs_raw", "rs_incomplete"]
+    assert choice.finish_reason == finish_reason
+    replayed, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [choice.message.model_dump()], replay_tool_search=True
+    )
+    assert [item["id"] for item in replayed] == ["rs_raw", "rs_incomplete", "tsc_1", "tso_1"]
+
+
+_CLIENT_SEARCH_CALL: Final = {
+    "type": "tool_search_call",
+    "id": "tsc_client",
+    "arguments": {"query": "weather"},
+    "call_id": "call_search",
+    "execution": "client",
+    "status": "completed",
+}
+
+
+def _non_streamed_client_search_turn() -> "ModelResponse":
+    raw_response = _make_incomplete_responses_api_response(None, [_CLIENT_SEARCH_CALL], status="completed")
+    return _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response)
+
+
+def _streamed_client_search_turn() -> "ModelResponse":
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    completed: Final = iterator.chunk_parser(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_client_search",
+                "status": "completed",
+                "output": [_CLIENT_SEARCH_CALL],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        }
+    )
+    built: Final = litellm.stream_chunk_builder([completed], messages=[{"role": "user", "content": "weather in Paris"}])
+    assert isinstance(built, litellm.ModelResponse)
+    return built
+
+
+@pytest.mark.parametrize(
+    "client_search_turn",
+    [_non_streamed_client_search_turn, _streamed_client_search_turn],
+    ids=["non-streaming", "streaming"],
+)
+def test_client_search_turn_returns_its_call_and_replays_with_the_client_output(client_search_turn):
+    choice: Final = client_search_turn().choices[0]
+    client_output: Final = {
+        "type": "tool_search_output",
+        "call_id": "call_search",
+        "execution": "client",
+        "status": "completed",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {}, "defer_loading": True}],
+    }
+
+    assert choice.finish_reason == "stop"
+    assert choice.message.provider_specific_fields["tool_search_items"] == [_CLIENT_SEARCH_CALL]
+    answered: Final = {
+        **choice.message.model_dump(),
+        "provider_specific_fields": {"tool_search_items": [_CLIENT_SEARCH_CALL, client_output]},
+    }
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "weather in Paris"}, answered],
+        optional_params={"tools": [{"type": "tool_search", "execution": "client"}]},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    assert request["input"][1:3] == [_CLIENT_SEARCH_CALL, client_output]
+
+
+def test_reasoning_after_a_tool_search_replays_after_the_search_it_followed():
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseFunctionToolCall
+
+    search_items = [
+        {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["get_weather"]}, "status": "completed"},
+        {"type": "tool_search_output", "id": "tso_1", "status": "completed", "tools": [{"name": "get_weather"}]},
+    ]
+    function_calls = [
+        ResponseFunctionToolCall(
+            type="function_call", id=f"fc_{city}", call_id=f"call_{city}", name="get_weather", arguments="{}"
+        )
+        for city in ("paris", "berlin")
+    ]
+    raw_response = _make_incomplete_responses_api_response(
+        None,
+        [
+            {"type": "reasoning", "id": "rs_search", "summary": [], "encrypted_content": "enc_1"},
+            *search_items,
+            {"type": "reasoning", "id": "rs_call", "summary": [], "encrypted_content": "enc_2"},
+            *function_calls,
+        ],
+        status="completed",
+    )
+    message = _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response).choices[0].message
+
+    request = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[
+            {"role": "user", "content": "weather in Paris and Berlin"},
+            message.model_dump(),
+            {"role": "tool", "tool_call_id": "call_paris", "content": "sunny"},
+            {"role": "tool", "tool_call_id": "call_berlin", "content": "rainy"},
+        ],
+        optional_params={"tools": [{"type": "tool_search"}]},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert [(item["type"], item.get("id", item.get("call_id"))) for item in request["input"][1:]] == [
+        ("reasoning", "rs_search"),
+        ("tool_search_call", "tsc_1"),
+        ("tool_search_output", "tso_1"),
+        ("reasoning", "rs_call"),
+        ("function_call", "call_paris"),
+        ("function_call", "call_berlin"),
+        ("function_call_output", "call_paris"),
+        ("function_call_output", "call_berlin"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tools", "replayed_types"),
+    [
+        (
+            [{"type": "tool_search"}],
+            ["message", "tool_search_call", "tool_search_output", "function_call", "function_call_output"],
+        ),
+        (
+            [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            ["message", "function_call", "function_call_output"],
+        ),
+    ],
+    ids=["tool_search_requested", "tool_search_not_requested"],
+)
+def test_tool_search_items_replay_only_to_a_request_that_carries_tool_search(tools, replayed_types):
+    from unittest.mock import Mock
+
+    messages: Final = [
+        {"role": "user", "content": "weather in Paris"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                }
+            ],
+            "provider_specific_fields": {
+                "tool_search_items": [
+                    {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["get_weather"]}},
+                    {
+                        "type": "tool_search_output",
+                        "id": "tso_1",
+                        "tools": [{"type": "function", "name": "get_weather"}],
+                    },
+                ]
+            },
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5-mini",
+        messages=messages,
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert [item["type"] for item in request["input"]] == replayed_types
 
 
 def test_transform_response_incomplete_content_filter_maps_finish_reason():
@@ -4805,6 +5893,38 @@ def test_transform_request_strips_the_breakpoint_when_the_served_providers_row_o
     ]
 
 
+@pytest.mark.parametrize(
+    ("sibling_flag", "model_info", "keeps_the_breakpoint"),
+    [
+        (True, {"id": "flagless"}, False),
+        (True, {"id": "opted-out", "supports_prompt_cache_breakpoint": False}, False),
+        (False, {"id": "opted-in", "supports_prompt_cache_breakpoint": True}, True),
+    ],
+    ids=["flagless", "opted-out", "opted-in"],
+)
+def test_transform_request_reads_the_routed_deployments_own_flag_not_a_siblings_on_the_shared_key(
+    monkeypatch: pytest.MonkeyPatch,
+    sibling_flag: bool,
+    model_info: Mapping[str, object],
+    keeps_the_breakpoint: bool,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock_mantle/qa-mantle-shared",
+        {**_MANTLE_GPT_ROW, "supports_prompt_cache_breakpoint": sibling_flag},
+    )
+
+    system_content: Final = _bridged_input_for_served_provider(
+        "qa-mantle-shared", "bedrock_mantle", model_info=model_info
+    )[0]["content"]
+
+    assert system_content == [
+        {**_MARKED_SYSTEM_PART, "type": "input_text"}
+        if keeps_the_breakpoint
+        else {"type": "input_text", "text": "Stable prefix"}
+    ]
+
+
 def test_transform_request_strips_the_breakpoint_for_a_served_provider_without_a_row_of_its_own(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5250,9 +6370,9 @@ _HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS: Final = (
 )
 
 
-def test_convert_chat_completion_messages_to_responses_api_drops_malformed_prompt_cache_breakpoint_under_drop_params():
-    """OpenAI's Responses API answered "Supported values are: '30m'" for a 1h breakpoint ttl on 2026-10-07,
-    so an unsupported ttl drops the marker as a unit while an unknown key is dropped from a valid one."""
+def test_convert_chat_completion_messages_to_responses_api_drops_only_an_unreadable_prompt_cache_breakpoint_under_drop_params():
+    """The target's Responses config decides which ttl and keys its API takes, so the bridge keeps every marker
+    whose mode some target reads."""
     handler = LiteLLMResponsesTransformationHandler()
     messages = [{"role": "user", "content": list(_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS)}]
 
@@ -5265,12 +6385,12 @@ def test_convert_chat_completion_messages_to_responses_api_drops_malformed_promp
         None,
         None,
         None,
-        None,
-        {"mode": "explicit"},
+        {"mode": "explicit", "ttl": "1h"},
+        {"mode": "explicit", "scope": "all"},
         {"mode": "explicit", "ttl": "30m"},
         {"mode": "explicit"},
     ]
-    assert all("prompt_cache_breakpoint" not in block for block in content[:4])
+    assert all("prompt_cache_breakpoint" not in block for block in content[:3])
 
 
 def test_convert_chat_completion_messages_to_responses_api_keeps_malformed_prompt_cache_breakpoint_by_default():
@@ -5301,6 +6421,41 @@ def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_
     )
 
     assert "prompt_cache_breakpoint" not in result["input"][0]["content"][0]
+
+
+_TTL_MARKED_CONTENT: Final = (
+    {"type": "text", "text": "unsupported ttl", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+    {"type": "text", "text": "well formed", "prompt_cache_breakpoint": {"mode": "explicit"}},
+)
+
+
+@pytest.mark.parametrize(
+    "global_drop_params,deployment_drop_params,expected",
+    [
+        ("true", None, [None, {"mode": "explicit"}]),
+        (False, True, [{"mode": "explicit", "ttl": "1h"}, {"mode": "explicit"}]),
+        (True, None, [{"mode": "explicit", "ttl": "1h"}, {"mode": "explicit"}]),
+    ],
+    ids=("string-global-target-keeps-raw-markers", "deployment-drop-params", "global-drop-params"),
+)
+def test_transform_request_hands_a_marker_to_the_target_whole_only_when_the_target_trims_it(
+    monkeypatch: pytest.MonkeyPatch,
+    global_drop_params: object,
+    deployment_drop_params: bool | None,
+    expected: list[object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-6.1-sol",
+        messages=[{"role": "user", "content": list(_TTL_MARKED_CONTENT)}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", "drop_params": deployment_drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    (item,) = cast(list[dict[str, object]], request["input"])  # cast-ok: the bridge emits message item mappings
+    parts: Final = cast(list[dict[str, object]], item["content"])  # cast-ok: message items carry content parts
+    assert [part.get("prompt_cache_breakpoint") for part in parts] == expected
 
 
 def test_convert_response_output_folds_two_messages_and_function_call_into_one_choice() -> None:

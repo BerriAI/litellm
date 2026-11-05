@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock
@@ -6,6 +7,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy.db import rollup_lock_timeout
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import (
@@ -16,6 +18,7 @@ from litellm.proxy.db.model_usage_rollup import (
     model_usage_task_type,
 )
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 
 class _FakeBatcher:
@@ -153,6 +156,27 @@ async def test_flush_aggregates_each_rollup_row_into_one_upsert() -> None:
         "failed_requests": {"increment": 1},
     }
     assert upserts["claude"]["create"]["request_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_background_response_billing_row_adds_spend_but_no_request() -> None:
+    """A background response is billed by a later event, not by the create the client sent, so
+    model insights counts its spend and tokens once and its request once, from the create."""
+    batcher = _FakeBatcher()
+    prisma = _prisma(MagicMock(return_value=batcher))
+    create = build_model_usage_transaction(_payload(spend=0.0))
+    billing = build_model_usage_transaction(
+        _payload(spend=0.5, metadata=json.dumps({INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}))
+    )
+    assert create is not None and billing is not None
+
+    await flush_model_usage_transactions(prisma_client=prisma, transactions=[create, billing])
+
+    (upsert,) = batcher.litellm_dailymodelusage.upsert.call_args_list
+    created = upsert.kwargs["data"]["create"]
+    assert created["spend"] == 0.5
+    assert created["prompt_tokens"] == 20
+    assert (created["request_count"], created["successful_requests"], created["failed_requests"]) == (1, 1, 0)
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
+from typing import Final
+
 import httpx
+from integration._support.client import JSON_OBJECT
 from integration.cost_calculation.conftest import (
     CostBreakdown,
     CostRow,
@@ -8,6 +12,47 @@ from integration.cost_calculation.conftest import (
     assert_total_is_sum_of_components,
 )
 from integration.cost_calculation.cost_tracking_case import ExactExpected, RecountExpected
+from pydantic import JsonValue
+
+STREAMED_COST_ENDPOINTS: Final = frozenset({"/v1/chat/completions", "/v1/completions", "/v1/responses"})
+
+
+def _data_frames(response_text: str) -> Iterator[Mapping[str, JsonValue]]:
+    for line in response_text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line.removeprefix("data:").strip()
+        if payload != "[DONE]":
+            yield JSON_OBJECT.validate_json(payload)
+
+
+def _frame_usage(frame: Mapping[str, JsonValue]) -> Mapping[str, JsonValue] | None:
+    usage: Final = frame.get("usage")
+    if isinstance(usage, dict):
+        return usage
+    nested: Final = frame.get("response")
+    nested_usage: Final = nested.get("usage") if isinstance(nested, dict) else None
+    return nested_usage if isinstance(nested_usage, dict) else None
+
+
+def streamed_usage(response_text: str) -> Mapping[str, JsonValue] | None:
+    """The last streamed frame's usage object, the only place a streaming client can read a cost from."""
+    usages: Final = tuple(usage for usage in map(_frame_usage, _data_frames(response_text)) if usage is not None)
+    return usages[-1] if usages else None
+
+
+def assert_streamed_usage_cost(case_name: str, endpoint: str, response_text: str, spend: float) -> None:
+    usage: Final = streamed_usage(response_text)
+    if usage is None:
+        return
+    cost: Final = usage.get("cost")
+    seen: Final = float(cost) if isinstance(cost, (int, float)) else None
+    if endpoint in STREAMED_COST_ENDPOINTS and spend != 0:
+        assert seen is not None and approx_equal(seen, spend), (
+            f"{case_name}: streamed usage.cost {seen} != spend {spend}"
+        )
+    elif seen is not None:
+        assert approx_equal(seen, spend), f"{case_name}: streamed usage.cost {seen} != spend {spend}"
 
 
 def assert_breakdown(
@@ -113,9 +158,17 @@ def assert_exact(
     )
     if breakdown is not None:
         assert_total_is_sum_of_components(row, breakdown, case_name)
+    if response is not None and response_content_type == "text/event-stream":
+        assert_streamed_usage_cost(case_name, response.request.url.path, response.text, expected.spend)
 
 
-def assert_recount(case_name: str, expected: RecountExpected, row: CostRow) -> None:
+def assert_recount(
+    case_name: str,
+    response_content_type: str,
+    expected: RecountExpected,
+    row: CostRow,
+    response: httpx.Response | None,
+) -> None:
     assert row.prompt_tokens is not None and row.prompt_tokens > 0, (
         f"{case_name}: recount case counted no input tokens: prompt_tokens={row.prompt_tokens}"
     )
@@ -146,3 +199,5 @@ def assert_recount(case_name: str, expected: RecountExpected, row: CostRow) -> N
     )
     assert row.breakdown is not None, f"{case_name}: no cost_breakdown persisted"
     assert_total_is_sum_of_components(row, row.breakdown, case_name)
+    if response is not None and response_content_type == "text/event-stream":
+        assert_streamed_usage_cost(case_name, response.request.url.path, response.text, row.spend)

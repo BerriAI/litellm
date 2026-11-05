@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
