@@ -147,12 +147,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         output_config_format: Final = (
             json_object_or_none(output_config.get("format")) if output_config is not None else None
         )
-        output_format: Final = (
-            legacy_output_format if legacy_output_format is not None else output_config_format
-        )
-        if output_format is None or (
-            bedrock_native_output_format(model, output_format, model_info=model_info) is None
-        ):
+        output_format: Final = legacy_output_format if legacy_output_format is not None else output_config_format
+        if output_format is None or (bedrock_native_output_format(model, output_format, model_info=model_info) is None):
             return None
         retry_params: Final = without_bedrock_native_output_opt_in({"model_info": model_info})
         retry_model_info: Final = _MODEL_INFO.validate_python(retry_params.get("model_info"))
