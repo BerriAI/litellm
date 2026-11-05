@@ -121,6 +121,7 @@ _TableRowT: Final = TypeVar("_TableRowT", bound=BaseModel)
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT: Final = 5.0
 
 UNRECOGNIZED_REQUESTED_MODEL_LABEL: Final = "other"
+OVERFLOW_MODEL_TOOL_NAME_LABEL: Final = "other"
 
 _NON_ENUM_METRIC_LABELS: Final[frozenset[str]] = frozenset(
     (
@@ -647,6 +648,7 @@ class PrometheusLogger(CustomLogger):
             _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
             self._bounded_prometheus_series_tracker = BoundedPrometheusSeriesTracker()
+            self._admitted_model_tool_names: set[str] = set()  # mutable-ok: names admitted under the tool_name cap
             _multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
             self._series_cap_tracker = (
                 BoundedPrometheusSeriesTracker()
@@ -2275,9 +2277,24 @@ class PrometheusLogger(CustomLogger):
     def _increment_model_tool_call_metrics(self, response_obj: object, enum_values: UserAPIKeyLabelValues) -> None:
         from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 
-        tool_names: Final = response_tool_call_names(response_obj)
+        tool_names: Final = tuple(
+            self._bounded_model_tool_name(name) for name in response_tool_call_names(response_obj)
+        )
         for tool_name, amount in Counter(tool_names).items():
             self._inc_model_tool_call_counter(replace(enum_values, tool_name=tool_name), amount=amount)
+
+    def _bounded_model_tool_name(self, tool_name: str) -> str:
+        """The model picks tool names, from tools the caller declared or not, so
+        only the first ``prometheus_model_tool_name_max_values`` distinct names
+        get their own series; later names count under ``other``. Concurrent
+        callbacks may admit a few names past the cap, which still bounds it."""
+        max_values: Final = litellm.prometheus_model_tool_name_max_values
+        if max_values is None or tool_name in self._admitted_model_tool_names:
+            return tool_name
+        if len(self._admitted_model_tool_names) >= max_values:
+            return OVERFLOW_MODEL_TOOL_NAME_LABEL
+        self._admitted_model_tool_names.add(tool_name)
+        return tool_name
 
     def _inc_model_tool_call_counter(self, tool_enum_values: UserAPIKeyLabelValues, amount: int) -> None:
         PrometheusLogger._inc_labeled_counter(

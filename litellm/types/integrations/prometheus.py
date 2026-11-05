@@ -678,7 +678,7 @@ class PrometheusMetricLabels:
 
     litellm_video_duration_seconds_metric = litellm_output_tokens_metric
     litellm_images_generated_metric = litellm_output_tokens_metric
-    litellm_model_tool_calls_total = [*litellm_output_tokens_metric, UserAPIKeyLabelNames.MODEL_TOOL_NAME.value]
+    litellm_model_tool_calls_total = litellm_output_tokens_metric + [UserAPIKeyLabelNames.MODEL_TOOL_NAME.value]
 
     litellm_deployment_state = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
