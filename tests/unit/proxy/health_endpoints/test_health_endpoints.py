@@ -6355,7 +6355,10 @@ async def test_test_model_turns_pick_up_the_keys_guardrails_and_the_pinned_team_
         hooks=hooks,
     )
 
-    with pytest.raises(HTTPException, match="stopped before the provider"):
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        pytest.raises(HTTPException, match="stopped before the provider"),
+    ):
         await call(CHAT_COMPLETIONS_SCRIPT, CHAT_COMPLETIONS.turn_1, "turn-a")
 
     assert hooks.guardrails == (["key-prompt-guard", "pii-mask"],)
