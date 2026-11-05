@@ -270,10 +270,6 @@ class TestAzureOpenAIGPT5ConfigIsModelGpt5Model:
             )
 
 
-# ---------------------------------------------------------------------------
-# Cost-map capability routing (LIT-8530)
-# ---------------------------------------------------------------------------
-
 COST_MAP_ONLY_SERIES: Final = "gpt-7-nova"
 COST_MAP_ONLY_SERIES_ROW: Final = {
     "mode": "chat",
@@ -300,19 +296,21 @@ def cost_map_only_series(monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 class TestCostMapRoutesToReasoningConfig:
-    def test_series_known_only_to_the_cost_map_selects_the_reasoning_config(self, cost_map_only_series: str):
+    def test_series_known_only_to_the_cost_map_selects_the_reasoning_config(self, cost_map_only_series: str) -> None:
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
 
         assert OpenAIGPT5Config.is_model_gpt_5_model(cost_map_only_series)
         assert AzureOpenAIGPT5Config.is_model_gpt_5_model(cost_map_only_series)
-        openai_config = ProviderConfigManager.get_provider_chat_config(cost_map_only_series, LlmProviders.OPENAI)
-        azure_config = ProviderConfigManager.get_provider_chat_config(cost_map_only_series, LlmProviders.AZURE)
+        openai_config: Final = ProviderConfigManager.get_provider_chat_config(cost_map_only_series, LlmProviders.OPENAI)
+        azure_config: Final = ProviderConfigManager.get_provider_chat_config(cost_map_only_series, LlmProviders.AZURE)
         assert isinstance(openai_config, OpenAIGPT5Config)
         assert isinstance(azure_config, AzureOpenAIGPT5Config)
 
-    def test_series_known_only_to_the_cost_map_keeps_reasoning_effort_none_with_tools(self, cost_map_only_series: str):
-        optional_params = litellm.get_optional_params(
+    def test_series_known_only_to_the_cost_map_keeps_reasoning_effort_none_with_tools(
+        self, cost_map_only_series: str
+    ) -> None:
+        optional_params: Final = litellm.get_optional_params(
             model=cost_map_only_series,
             custom_llm_provider="openai",
             reasoning_effort="none",
@@ -335,18 +333,34 @@ class TestCostMapRoutesToReasoningConfig:
     )
     def test_row_without_a_supported_effort_level_stays_on_the_plain_config(
         self, monkeypatch: pytest.MonkeyPatch, row: dict[str, object]
-    ):
+    ) -> None:
         monkeypatch.setitem(litellm.model_cost, "nova-chat", row)
         monkeypatch.setitem(litellm.model_cost, "azure/nova-chat", {**row, "litellm_provider": "azure"})
         assert not OpenAIGPT5Config.is_model_gpt_5_model("nova-chat")
         assert not AzureOpenAIGPT5Config.is_model_gpt_5_model("nova-chat")
 
-    @pytest.mark.parametrize("model", ["gpt-5-chat", "gpt-5-chat-latest", "computer-use-preview", "o3", "o4-mini"])
-    def test_real_rows_with_supports_reasoning_alone_stay_off_the_reasoning_config(self, model: str):
+    @pytest.mark.parametrize(
+        ("model", "row"),
+        [
+            pytest.param("gpt-5-chat-nova", COST_MAP_ONLY_SERIES_ROW, id="gpt-5-chat-name"),
+            pytest.param(
+                "nova-computer-use", {**COST_MAP_ONLY_SERIES_ROW, "mode": "responses"}, id="responses-only-row"
+            ),
+            pytest.param("o3-nova", COST_MAP_ONLY_SERIES_ROW, id="o-series-name"),
+        ],
+    )
+    def test_excluded_names_and_rows_stay_off_the_reasoning_config(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, row: dict[str, object]
+    ) -> None:
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
 
-        assert litellm.model_cost[model]["supports_reasoning"] is True
+        monkeypatch.setitem(litellm.model_cost, model, row)
+        monkeypatch.setitem(litellm.model_cost, f"azure/{model}", {**row, "litellm_provider": "azure"})
+        monkeypatch.setattr(litellm, "open_ai_chat_completion_models", [*litellm.open_ai_chat_completion_models, model])
         assert not isinstance(
             ProviderConfigManager.get_provider_chat_config(model, LlmProviders.OPENAI), OpenAIGPT5Config
+        )
+        assert not isinstance(
+            ProviderConfigManager.get_provider_chat_config(model, LlmProviders.AZURE), AzureOpenAIGPT5Config
         )
