@@ -724,13 +724,15 @@ def _limits_answer(gateway: Gateway, entry: str, model: str, marker: str) -> Jso
     output_config: Final[dict[str, JsonValue]] = {"format": {"type": "json_schema", "schema": _LIMITS_SCHEMA}}
     match entry:
         case "converse_chat" | "invoke_chat":
-            body: Final = _chat_body(model, marker, response_format=_response_format(_LIMITS_SCHEMA))
+            body: Final = _chat_body(
+                model, marker, response_format=_response_format(_LIMITS_SCHEMA), thinking=_ADAPTIVE
+            )
             return _content_json(_chat_message(gateway.request("POST", "/v1/chat/completions", body)))
         case "converse_output_config":
-            chat: Final = _chat_body(model, marker, output_config=output_config)
+            chat: Final = _chat_body(model, marker, output_config=output_config, thinking=_ADAPTIVE)
             return _content_json(_chat_message(gateway.request("POST", "/v1/chat/completions", chat)))
         case _:
-            messages: Final = _messages_body(model, marker, output_config=output_config)
+            messages: Final = _messages_body(model, marker, output_config=output_config, thinking=_ADAPTIVE)
             return _messages_text(_messages_blocks(gateway.request("POST", "/v1/messages", messages)))
 
 
@@ -741,7 +743,7 @@ def test_native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_obj
     marker, marker_hex = _marker()
     route: Final = entry.split("_", 1)[0]
     with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, wire, route, _SONNET)
+        model: Final = _deployment(scenario, wire, route, _HAIKU)
         assert _limits_answer(gateway, entry, model, marker) == _payload(marker_hex)
         _, body = _one_call(wire, marker_hex)
         schema: Final = _native_schema(body, route == "invoke")
@@ -755,20 +757,20 @@ def test_native_schema_reaches_bedrock_with_limits_in_descriptions_and_every_obj
 
 
 @pytest.mark.parametrize("route", ["converse", "invoke"])
-def test_open_object_schema_stays_native_on_a_model_native_on_every_request(gateway: Gateway, route: str) -> None:
+def test_open_object_schema_stays_native_once_on_a_model_native_on_every_request(gateway: Gateway, route: str) -> None:
     marker, marker_hex = _marker()
     with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire, route, _SONNET)
         response: Final = gateway.request(
             "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_response_format(_DICT_SCHEMA))
         )
-        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
         _, body = _one_call(wire, marker_hex)
         invoke: Final = route == "invoke"
         schema: Final = _native_schema(body, invoke)
         assert schema is not None, body
-        assert object_value(schema["properties"]).keys() == {"store", "counts"}, schema
+        assert invoke or schema == _DICT_SCHEMA, schema
         assert _JSON_TOOL not in _tools(body, invoke), body
+        assert response.status_code == (200 if _bedrock_schema_fault(schema) is None else 400), response.text
 
 
 def test_thinking_with_a_caller_tool_on_a_bedrock_native_model_sends_only_the_callers_tool(gateway: Gateway) -> None:

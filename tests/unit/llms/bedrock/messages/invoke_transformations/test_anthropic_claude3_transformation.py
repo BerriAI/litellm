@@ -3305,10 +3305,11 @@ def test_bedrock_messages_forwards_the_callers_schema_unchanged_on_a_legacy_nati
 ):
     model: Final = "us.anthropic.claude-sonnet-4-6"
     set_native_structured_output(model, "legacy")
+    sent_by_caller: Final = copy.deepcopy(schema)
 
     result: Final = _bedrock_messages_request_with_schema(model, schema)
 
-    assert result["output_config"]["format"]["schema"] == schema
+    assert result["output_config"]["format"]["schema"] == sent_by_caller
 
 
 def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(local_model_cost_map):
