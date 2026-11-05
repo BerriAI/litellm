@@ -28375,6 +28375,14 @@ export interface components {
             /** Input Reference */
             input_reference?: string | null;
         };
+        /** BoundedDailyActivityResponse */
+        BoundedDailyActivityResponse: {
+            metadata: components["schemas"]["DailySpendMetadata"];
+            /** @description When requested, includes the highest-spend models across the full date range and an explicit aggregate of all remaining models. Daily totals always cover the complete activity scope. Other per-day dimension breakdowns are omitted. */
+            model_breakdown?: components["schemas"]["DailyActivityModelBreakdown"] | null;
+            /** Results */
+            results: components["schemas"]["DailySpendData"][];
+        };
         /** BoxAnswer */
         BoxAnswer: {
             box: components["schemas"]["DecisionsBox"];
@@ -32129,6 +32137,28 @@ export interface components {
         DailyActivityKeySearchResponse: {
             /** Api Keys */
             api_keys: components["schemas"]["KeyActivityRow"][];
+        };
+        /** DailyActivityModelBreakdown */
+        DailyActivityModelBreakdown: {
+            /** Limit */
+            limit: number;
+            /** Models */
+            models: components["schemas"]["DailyActivityModelContribution"][];
+            other?: components["schemas"]["DailyActivityOtherModels"] | null;
+            /** Total Models */
+            total_models: number;
+        };
+        /** DailyActivityModelContribution */
+        DailyActivityModelContribution: {
+            metrics: components["schemas"]["SpendMetrics"];
+            /** Model */
+            model: string;
+        };
+        /** DailyActivityOtherModels */
+        DailyActivityOtherModels: {
+            metrics: components["schemas"]["SpendMetrics"];
+            /** Model Count */
+            model_count: number;
         };
         /** DailyActivityUserPageResponse */
         DailyActivityUserPageResponse: {
@@ -53323,6 +53353,9 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                bounded?: boolean;
+                include_model_breakdown?: boolean;
+                model_limit?: number;
                 agent_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -53343,7 +53376,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"] | components["schemas"]["BoundedDailyActivityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -58974,6 +59007,9 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                bounded?: boolean;
+                include_model_breakdown?: boolean;
+                model_limit?: number;
                 end_user_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -58994,7 +59030,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"] | components["schemas"]["BoundedDailyActivityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -60025,6 +60061,9 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                bounded?: boolean;
+                include_model_breakdown?: boolean;
+                model_limit?: number;
                 end_user_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -60045,7 +60084,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"] | components["schemas"]["BoundedDailyActivityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -69385,6 +69424,9 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                bounded?: boolean;
+                include_model_breakdown?: boolean;
+                model_limit?: number;
                 organization_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -69405,7 +69447,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"] | components["schemas"]["BoundedDailyActivityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -75257,6 +75299,9 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                bounded?: boolean;
+                include_model_breakdown?: boolean;
+                model_limit?: number;
                 start_date?: string | null;
                 end_date?: string | null;
                 model?: string | null;
@@ -75276,7 +75321,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"] | components["schemas"]["BoundedDailyActivityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -75947,6 +75992,9 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                bounded?: boolean;
+                include_model_breakdown?: boolean;
+                model_limit?: number;
                 team_ids?: string | null;
                 start_date?: string | null;
                 end_date?: string | null;
@@ -75967,7 +76015,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"] | components["schemas"]["BoundedDailyActivityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -78370,6 +78418,9 @@ export interface operations {
         parameters: {
             query?: {
                 api_key_limit?: number;
+                bounded?: boolean;
+                include_model_breakdown?: boolean;
+                model_limit?: number;
                 /** @description Start date in YYYY-MM-DD format */
                 start_date?: string | null;
                 /** @description End date in YYYY-MM-DD format */
@@ -78397,7 +78448,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"] | components["schemas"]["BoundedDailyActivityResponse"];
                 };
             };
             /** @description Validation Error */
